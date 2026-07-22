@@ -10,8 +10,20 @@ Depends on ``lab_commons.units`` (tier 1) for ``Q_``/``get_quantity_type``/``ure
 never the reverse.
 
 Provenance: extracted from motronics-studio's ``core/units.py``.
+
+**Exception injection (plan-lab-commons-standalone.md §7, "clean end-state"):** the ~30
+quantity ``NewType``s (and the two point types built from them) are constructed by
+:func:`build_em_types`, parameterized by which exception class a validation failure raises
+(via ``get_quantity_type``'s ``quantity_exception`` kwarg). The module-level names below
+(``LengthType``, ``TorqueType``, ...) are ``build_em_types()``'s DEFAULT build (raises the
+shared ``lab_commons.exceptions.QuantityException``) -- every existing ``from lab_commons.em
+import TorqueType`` keeps resolving to the exact same object, unchanged. A consumer with its
+own exception hierarchy (e.g. wdg-lab's ``WdgError``-based ``QuantityException``) calls
+``build_em_types(quantity_exception=WdgQuantityException)`` for its OWN vocabulary instead of
+forking these definitions.
 """
 
+from types import SimpleNamespace
 from typing import Annotated, NewType
 
 import numpy as np
@@ -109,22 +121,143 @@ __all__ = [
     'VoltageType',
     'VolumeType',
     'array2list_2Dpoint',
+    'build_em_types',
     'is_equal_2DPoint',
 ]
 
-# Geometry
+
+def build_em_types(*, quantity_exception: type[Exception] | None = None) -> SimpleNamespace:
+    """Build one complete, independent copy of the EM quantity ``NewType`` vocabulary.
+
+    Args:
+        quantity_exception: forwarded to :func:`~lab_commons.units.get_quantity_type` for
+            every ``NewType`` built here. ``None`` (default) binds every type to the shared
+            ``lab_commons.exceptions.QuantityException`` -- BYTE-IDENTICAL to the module-level
+            names below, which are exactly this default build. Pass a consumer's own exception
+            class to get a full parallel vocabulary whose validation failures raise it instead.
+
+    Returns:
+        A :class:`~types.SimpleNamespace` with every ``*Type`` NewType plus
+        ``Cartesian2DPoint``/``Polar2DPoint`` (built from ``LengthType``/``AngleType``, so they
+        must come from the SAME build). The ``Q_*`` value constants, the array point types, and
+        the free functions below are exception-independent (no validation happens through a
+        bare ``Quantity`` value) and are shared module-level singletons, not part of this
+        per-vocabulary build.
+    """
+
+    def qt(unit: str):
+        return get_quantity_type(unit, quantity_exception=quantity_exception)
+
+    ns = SimpleNamespace()
+    # Geometry
+    ns.LengthType = NewType('LengthType', qt('mm'))
+    ns.AreaType = NewType('AreaType', qt('mm^2'))
+    ns.VolumeType = NewType('VolumeType', qt('mm^3'))
+    ns.AngleType = NewType('AngleType', qt('deg'))
+    ns.AngleSpeedType = NewType('AngleSpeedType', qt('rad/s'))
+    # Physics
+    ns.TimeType = NewType('TimeType', qt('s'))
+    ns.MassType = NewType('MassType', qt('kg'))
+    ns.TemperatureType = NewType('TemperatureType', qt('K'))
+    ns.PerTemperatureType = NewType('PerTemperatureType', qt('1/K'))
+    ns.DensityType = NewType('DensityType', qt('g/cm^3'))
+    ns.FrequencyType = NewType('FrequencyType', qt('Hz'))
+    ## Mechanics
+    ns.ForceType = NewType('ForceType', qt('N'))
+    ns.TorqueType = NewType('TorqueType', qt('N*m'))
+    ## Power / loss power
+    ns.PowerType = NewType('PowerType', qt('W'))
+    ns.PowerPerMassType = NewType('PowerPerMassType', qt('W/kg'))
+    ## Energy / loss
+    ns.EnergyType = NewType('EnergyType', qt('J'))
+    ## Electromagnetics
+    ns.VoltageType = NewType('VoltageType', qt('V'))
+    ns.CurrentType = NewType('CurrentType', qt('A'))
+    ### Current density
+    ns.CurrentDensityType = NewType('CurrentDensityType', qt('A/mm^2'))
+    ### Flux density B
+    ns.FluxDensityType = NewType('FluxDensityType', qt('T'))
+    ### Field intensity H
+    ns.MagFieldIntensityType = NewType('MagFieldIntensityType', qt('A/m'))
+    ### MMF
+    ns.MMFType = NewType('MMFType', qt('A*turn'))
+    ### Magnetic vector potential A
+    ns.MagVectorPotentialType = NewType('MagVectorPotentialType', qt('Wb/m'))
+    ### Conductivity
+    ns.ElecConductivityType = NewType('ElecConductivityType', qt('MS/m'))
+    ### Resistivity
+    ns.ResistivityType = NewType('ResistivityType', qt('ohm*m'))
+    ### Permeability
+    ns.PermeabilityType = NewType('PermeabilityType', qt('H/m'))
+    ### Flux linkage
+    ns.FluxLinkageType = NewType('FluxLinkageType', qt('Wb'))
+    ### Inductance
+    ns.InductanceType = NewType('InductanceType', qt('H'))
+    ### Resistance
+    ns.ResistanceType = NewType('ResistanceType', qt('ohm'))
+
+    # Coordinate units can differ, so this doesn't use np.array.
+    # Fixed-length 2-element points: `list[X, Y]` was the "declaration that lies" pattern
+    # (list is homogeneous, single-type-argument only) -- `tuple[X, Y]` is the type that
+    # actually says "exactly two, positionally typed". Pydantic still accepts a JSON/TOML
+    # list on the wire (coerced to a tuple); json_schema_extra keeps the wire schema a list.
+    ns.Cartesian2DPoint = Annotated[
+        tuple[ns.LengthType, ns.LengthType],
+        Field(..., json_schema_extra={'type': 'list', 'items': {'minItems': 2, 'maxItems': 2}}),
+    ]
+    ns.Polar2DPoint = Annotated[
+        tuple[ns.LengthType, ns.AngleType],
+        Field(..., json_schema_extra={'type': 'list', 'items': {'minItems': 2, 'maxItems': 2}}),
+    ]
+    return ns
+
+
+# The default build: every name bound to the shared QuantityException, exactly the objects
+# that existed here before build_em_types was introduced. `from lab_commons.em import
+# TorqueType` (etc.) resolves to these, unchanged.
+_default = build_em_types()
+LengthType = _default.LengthType
+AreaType = _default.AreaType
+VolumeType = _default.VolumeType
+AngleType = _default.AngleType
+AngleSpeedType = _default.AngleSpeedType
+TimeType = _default.TimeType
+MassType = _default.MassType
+TemperatureType = _default.TemperatureType
+PerTemperatureType = _default.PerTemperatureType
+DensityType = _default.DensityType
+FrequencyType = _default.FrequencyType
+ForceType = _default.ForceType
+TorqueType = _default.TorqueType
+PowerType = _default.PowerType
+PowerPerMassType = _default.PowerPerMassType
+EnergyType = _default.EnergyType
+VoltageType = _default.VoltageType
+CurrentType = _default.CurrentType
+CurrentDensityType = _default.CurrentDensityType
+FluxDensityType = _default.FluxDensityType
+MagFieldIntensityType = _default.MagFieldIntensityType
+MMFType = _default.MMFType
+MagVectorPotentialType = _default.MagVectorPotentialType
+ElecConductivityType = _default.ElecConductivityType
+ResistivityType = _default.ResistivityType
+PermeabilityType = _default.PermeabilityType
+FluxLinkageType = _default.FluxLinkageType
+InductanceType = _default.InductanceType
+ResistanceType = _default.ResistanceType
+Cartesian2DPoint = _default.Cartesian2DPoint
+Polar2DPoint = _default.Polar2DPoint
+
+# Q_* value constants: plain Quantity instances, no validation involved -- exception-independent,
+# shared module-level singletons regardless of which vocabulary build a consumer uses.
 Q_1 = Q_(1.0)
-LengthType = NewType('LengthType', get_quantity_type('mm'))
 Q_0mm = Q_(0.0, 'mm')
 Q_1mm = Q_(1.0, 'mm')
-AreaType = NewType('AreaType', get_quantity_type('mm^2'))
 Q_0mm2 = Q_(0.0, 'mm^2')
 Q_1mm2 = Q_(1.0, 'mm^2')
 Q_1m2 = Q_(1.0, 'm^2')
-VolumeType = NewType('VolumeType', get_quantity_type('mm^3'))
 Q_0mm3 = Q_(0.0, 'mm^3')
 Q_1mm3 = Q_(1.0, 'mm^3')
-AngleType = NewType('AngleType', get_quantity_type('deg'))
 Q_360deg = Q_(360.0, 'deg')
 Q_180deg = Q_(180.0, 'deg')
 Q_90deg = Q_(90.0, 'deg')
@@ -132,103 +265,45 @@ Q_0deg = Q_(0.0, 'deg')
 Q_1rad = Q_(1.0, 'rad')
 Q_2pi = Q_360deg.to('rad')
 Q_pi = Q_180deg.to('rad')
-AngleSpeedType = NewType('AngleSpeedType', get_quantity_type('rad/s'))
 Q_0rpm = Q_(0.0, 'rpm')
-# Physics
-TimeType = NewType('TimeType', get_quantity_type('s'))
 Q_0s = Q_(0.0, 's')
-MassType = NewType('MassType', get_quantity_type('kg'))
 Q_0kg = Q_(0.0, 'kg')
 Q_1kg = Q_(1.0, 'kg')
-TemperatureType = NewType('TemperatureType', get_quantity_type('K'))
 Q_0degC = Q_(0.0, 'degC')
 Q_20degC = Q_(20.0, 'degC')
-PerTemperatureType = NewType('PerTemperatureType', get_quantity_type('1/K'))
-DensityType = NewType('DensityType', get_quantity_type('g/cm^3'))
-FrequencyType = NewType('FrequencyType', get_quantity_type('Hz'))
 Q_0Hz = Q_(0.0, 'Hz')
 Q_1Hz = Q_(1.0, 'Hz')
 Q_50Hz = Q_(50.0, 'Hz')
-## Mechanics
-ForceType = NewType('ForceType', get_quantity_type('N'))
 Q_1N = Q_(1.0, 'N')
-TorqueType = NewType('TorqueType', get_quantity_type('N*m'))
 Q_0Nm = Q_(0.0, 'N*m')
 Q_1Nm = Q_(1.0, 'N*m')
-## Power / loss power
-PowerType = NewType('PowerType', get_quantity_type('W'))
 Q_0W = Q_(0.0, 'W')
 Q_1W = Q_(1.0, 'W')
-PowerPerMassType = NewType('PowerPerMassType', get_quantity_type('W/kg'))
-
-## Energy / loss
-EnergyType = NewType('EnergyType', get_quantity_type('J'))
 Q_0J = Q_(0.0, 'J')
 Q_1J = Q_(1.0, 'J')
-## Electromagnetics
-VoltageType = NewType('VoltageType', get_quantity_type('V'))
 Q_1V = Q_(1.0, 'V')
-
-CurrentType = NewType('CurrentType', get_quantity_type('A'))
 Q_0A = Q_(0.0, 'A')
 Q_1A = Q_(1.0, 'A')
 Q_5A = Q_(5.0, 'A')
 Q_10A = Q_(10.0, 'A')
 Q_20A = Q_(20.0, 'A')
 Q_100A = Q_(100.0, 'A')
-
-### Current density
-CurrentDensityType = NewType('CurrentDensityType', get_quantity_type('A/mm^2'))
 Q_0A_per_mm2 = Q_(0.0, 'A/mm^2')
 Q_1A_per_mm2 = Q_(1.0, 'A/mm^2')
-### Flux density B
-FluxDensityType = NewType('FluxDensityType', get_quantity_type('T'))
 Q_0T = Q_(0.0, 'T')
 Q_1T = Q_(1.0, 'T')
-### Field intensity H
-MagFieldIntensityType = NewType('MagFieldIntensityType', get_quantity_type('A/m'))
 Q_0A_per_m = Q_(0.0, 'A/m')
-### MMF
-MMFType = NewType('MMFType', get_quantity_type('A*turn'))
 Q_1At = Q_(1.0, 'A*turn')
-### Magnetic vector potential A
-MagVectorPotentialType = NewType('MagVectorPotentialType', get_quantity_type('Wb/m'))
 Q_0Wb_per_m = Q_(0.0, 'Wb/m')
 Q_1Wb_per_m = Q_(1.0, 'Wb/m')
-### Conductivity
-ElecConductivityType = NewType('ElecConductivityType', get_quantity_type('MS/m'))
 Q_0MS_per_m = Q_(0.0, 'MS/m')
-### Resistivity
-ResistivityType = NewType('ResistivityType', get_quantity_type('ohm*m'))
 Q_0ohm_m = Q_(0.0, 'ohm*m')
-### Permeability
-PermeabilityType = NewType('PermeabilityType', get_quantity_type('H/m'))
-### Flux linkage
-FluxLinkageType = NewType('FluxLinkageType', get_quantity_type('Wb'))
 Q_0Wb = Q_(0.0, 'Wb')
 Q_1Wb = Q_(1.0, 'Wb')
 Q_10Wb = Q_(10.0, 'Wb')
-### Inductance
-InductanceType = NewType('InductanceType', get_quantity_type('H'))
 Q_0H = Q_(0.0, 'H')
-### Resistance
-ResistanceType = NewType('ResistanceType', get_quantity_type('ohm'))
 Q_0ohm = Q_(0.0, 'ohm')
 Q_1ohm = Q_(1.0, 'ohm')
-
-# Coordinate units can differ, so this doesn't use np.array.
-# Fixed-length 2-element points: `list[X, Y]` was the "declaration that lies" pattern
-# (list is homogeneous, single-type-argument only) -- `tuple[X, Y]` is the type that
-# actually says "exactly two, positionally typed". Pydantic still accepts a JSON/TOML
-# list on the wire (coerced to a tuple); json_schema_extra keeps the wire schema a list.
-Cartesian2DPoint = Annotated[
-    tuple[LengthType, LengthType],
-    Field(..., json_schema_extra={'type': 'list', 'items': {'minItems': 2, 'maxItems': 2}}),
-]
-Polar2DPoint = Annotated[
-    tuple[LengthType, AngleType],
-    Field(..., json_schema_extra={'type': 'list', 'items': {'minItems': 2, 'maxItems': 2}}),
-]
 
 
 # `np.ndarray[LengthType]` was parametrizing ndarray's SHAPE type variable with a unit

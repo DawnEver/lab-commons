@@ -44,37 +44,70 @@ Q_ = ureg.Quantity
 """Converts a string/dict/tuple into a ``Quantity``; integer magnitudes are cast to float."""
 
 
-class PydanticQuantity:
-    """Lets Pydantic validate/serialize a pint ``Quantity``."""
+def _build_pydantic_quantity(quantity_exception: type[Exception]) -> type:
+    """Build a ``PydanticQuantity``-shaped marker class whose ``validate`` raises
+    ``quantity_exception`` (instead of MRO/inheritance tricks -- see :func:`get_quantity_type`).
 
-    @classmethod
-    def __get_pydantic_core_schema__(cls, _, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls.validate,
-            handler(Q_),
-            serialization=core_schema.to_string_ser_schema(),
-        )
+    Each call returns a fresh class; the RAISE site is a plain closure over
+    ``quantity_exception``, so this is unaffected by the ``__init__``/``super()`` MRO trap that
+    makes multiple-inheritance bridging of two independent exception hierarchies unsafe (a
+    subclass's ``__init__`` chain can silently skip ``Exception.__init__`` and corrupt
+    ``str(exc)`` -- measured in wdg-lab's own ``QuantityException``/``WdgError``).
+    """
 
-    @classmethod
-    def validate(cls, v) -> PintQuantityType:
-        """Args:
-            v: value to validate.
-        Returns:
-            PintQuantityType: the validated value.
-        Raises:
-            QuantityException: if ``v`` is not a ``Quantity``.
+    class _PydanticQuantity:
+        """Lets Pydantic validate/serialize a pint ``Quantity``."""
 
-        """
-        if not isinstance(v, PintQuantityType):
-            msg = 'Expected pint.Quantity'
-            raise QuantityException(msg)
-        return v
+        @classmethod
+        def __get_pydantic_core_schema__(cls, _, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+            return core_schema.no_info_after_validator_function(
+                cls.validate,
+                handler(Q_),
+                serialization=core_schema.to_string_ser_schema(),
+            )
+
+        @classmethod
+        def validate(cls, v) -> PintQuantityType:
+            """Args:
+                v: value to validate.
+            Returns:
+                PintQuantityType: the validated value.
+            Raises:
+                quantity_exception: if ``v`` is not a ``Quantity``.
+
+            """
+            if not isinstance(v, PintQuantityType):
+                msg = 'Expected pint.Quantity'
+                raise quantity_exception(msg)
+            return v
+
+    return _PydanticQuantity
+
+
+# The default marker, bound to the shared QuantityException -- every existing consumer
+# (motronics, optimi-lab, and anything importing lab_commons.units/em directly) keeps this
+# EXACT class, unchanged behavior. A consumer with its own exception hierarchy (e.g. wdg-lab's
+# WdgError-based QuantityException) gets its own marker via get_quantity_type's
+# ``quantity_exception`` kwarg -- never by subclassing this one.
+PydanticQuantity = _build_pydantic_quantity(QuantityException)
 
 
 def get_quantity_type(
     default_unit: str,
+    *,
+    quantity_exception: type[Exception] | None = None,
 ) -> type[PintQuantityType]:
     """Build an ``Annotated`` type for a physical quantity carrying a default unit.
+
+    Args:
+        default_unit: reference/wire unit recorded in the field's JSON schema.
+        quantity_exception: exception class raised when pydantic validation sees a
+            non-``Quantity`` value, AFTER the ``BeforeValidator(Q_)`` step. ``None`` (default)
+            uses the shared :data:`PydanticQuantity` marker (raises the shared
+            ``QuantityException``) -- BYTE-IDENTICAL to every call site before this parameter
+            existed. Pass a consumer's own exception class (e.g. a ``WdgError`` subclass) to
+            get a field whose validation failures raise that class instead -- built via
+            :func:`_build_pydantic_quantity`, not by subclassing the shared marker.
 
     NOTE (ported from motronics, MANUAL-20260717-386 ratchet): the declared return type is
     deliberately NOT what this returns at runtime (an ``Annotated[...]`` special form,
@@ -87,11 +120,12 @@ def get_quantity_type(
     (if imprecise) declared type, with a suppression here rather than a cast that would
     hide the mismatch entirely -- greppable, and this docstring is the ceiling.
     """
+    marker = PydanticQuantity if quantity_exception is None else _build_pydantic_quantity(quantity_exception)
     return Annotated[  # pyright: ignore[reportReturnType]
         PintQuantityType,
         BeforeValidator(Q_),
         Field(..., json_schema_extra={'unit': default_unit}),  # base unit
-        PydanticQuantity,
+        marker,
     ]
 
 
