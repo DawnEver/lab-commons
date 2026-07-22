@@ -15,6 +15,18 @@ adds an opt-in structlog/JSON sink and secret redaction on top of the SAME named
 v1 attaches to -- purely additive, the v1 stdlib path is unchanged.
 """
 
+from lab_commons.exceptions import (
+    ParameterException,
+    QuantityException,
+    deprecated,
+    not_implemented,
+)
+from lab_commons.file_io import (
+    check_path,
+    list_files_in_dir,
+    read_toml,
+    save_toml,
+)
 from lab_commons.log import (
     add_handle,
     get_logger,
@@ -40,21 +52,29 @@ from lab_commons.structured import (
 )
 
 __all__ = [
+    'ParameterException',
+    'QuantityException',
     'SecretHashingFormatter',
     'add_handle',
     'bind_run_dir',
     'bootstrap',
+    'check_path',
     'config_root',
+    'deprecated',
     'get_logger',
     'get_structured_logger',
     'hash_secret',
+    'list_files_in_dir',
     'log',
     'log_decorator',
+    'not_implemented',
     'output_root',
+    'read_toml',
     'resolve_home',
     'run_date',
     'run_output_dir',
     'run_stamp',
+    'save_toml',
     'timer',
     'unique_run_dir',
 ]
