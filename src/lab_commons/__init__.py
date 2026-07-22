@@ -1,18 +1,24 @@
-"""lab-commons — shared, project-agnostic logging + paths surface.
+"""lab-commons — shared, project-agnostic infrastructure surface.
 
-Tier 1 (this package's core): infrastructure that carries NO concept from any single
-lab's domain -- logging (stdlib + structlog/JSON), secret redaction, and
-platformdirs-backed path/run-directory resolution, all parameterized by ``app_name``.
-Any lab building something unrelated (chemistry, finance, ...) could use this package
-unchanged; a symbol naming a specific solver, winding, optimizer, or vendor tool does
-not belong here (see the two-tier rule in this repo's README).
+Tier 1 (re-exported here at top level): infrastructure that carries NO concept from any
+single lab's domain -- logging (stdlib + structlog/JSON), secret redaction,
+platformdirs-backed path/run-directory resolution (all parameterized by ``app_name``),
+TOML file I/O, generic exceptions, and the pint<->pydantic ``Annotated`` quantity
+machinery (``lab_commons.units``). Any lab building something unrelated (chemistry,
+finance, ...) could use this package unchanged; a symbol naming a specific solver,
+winding, optimizer, or vendor tool does not belong here (see the two-tier rule in this
+repo's README).
 
-Provenance: extracted from motronics-studio's ``mylab_logging`` package (itself already
-``app_name``-parameterized, not motronics-specific) -- the strongest of six near-identical
-copies duplicated across motronics-studio / optimi-lab / wdg-lab (+3 forks). v1
-(``log.py`` / ``paths.py``) is a faithful, renamed-only extraction; v2 (``structured.py``)
-adds an opt-in structlog/JSON sink and secret redaction on top of the SAME named logger
-v1 attaches to -- purely additive, the v1 stdlib path is unchanged.
+Tier 2 (NOT imported here -- opt in explicitly): ``lab_commons.em`` holds the EM/physical
+quantity vocabulary (``LengthType``, ``TorqueType``, ``Q_0Nm``, ...) shared across the
+motronics/optimi-lab/wdg-lab family. Import it directly:
+``from lab_commons.em import TorqueType``. Importing this package, or ``lab_commons.units``
+alone, never pulls ``em`` in.
+
+Provenance: extracted from motronics-studio's ``mylab_logging`` package (logging/paths)
+and ``core/units.py`` (the maintainer-designated canonical pint design) -- the strongest
+of near-identical copies duplicated across motronics-studio / optimi-lab / wdg-lab
+(+3 forks).
 """
 
 from lab_commons.exceptions import (
@@ -50,9 +56,20 @@ from lab_commons.structured import (
     get_structured_logger,
     hash_secret,
 )
+from lab_commons.units import (
+    Q_,
+    BaseModel_with_q,
+    PydanticQuantity,
+    get_quantity_type,
+    pydantic_config_dict_with_q,
+    ureg,
+)
 
 __all__ = [
+    'Q_',
+    'BaseModel_with_q',
     'ParameterException',
+    'PydanticQuantity',
     'QuantityException',
     'SecretHashingFormatter',
     'add_handle',
@@ -62,6 +79,7 @@ __all__ = [
     'config_root',
     'deprecated',
     'get_logger',
+    'get_quantity_type',
     'get_structured_logger',
     'hash_secret',
     'list_files_in_dir',
@@ -69,6 +87,7 @@ __all__ = [
     'log_decorator',
     'not_implemented',
     'output_root',
+    'pydantic_config_dict_with_q',
     'read_toml',
     'resolve_home',
     'run_date',
@@ -77,4 +96,5 @@ __all__ = [
     'save_toml',
     'timer',
     'unique_run_dir',
+    'ureg',
 ]
