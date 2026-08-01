@@ -14,10 +14,12 @@ bootstrap -> bind_run_dir transport on top of the SAME named logger this module 
 
 import functools
 import logging
+import sys
 import time
 
 __all__ = [
     'add_handle',
+    'emit',
     'get_logger',
     'log',
     'log_decorator',
@@ -60,6 +62,22 @@ def set_active_logger(logger: logging.Logger) -> None:
 def _log_level_from_str(level: str) -> int:
     """Map a config-level string to a logging constant, defaulting to INFO."""
     return getattr(logging, level.upper(), logging.INFO)
+
+
+def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
+    """Write ONE line to a real stream -- the shared ``print`` replacement for CLI
+    tools whose stdout IS the product (gate verdicts, bootstrap diagnoses, lane reports).
+
+    Why this exists: the family never waives ruff's T201, so every CLI script needs the
+    same one-line idiom; keeping it here makes the idiom single, tested, and visible to
+    consumers that otherwise have no reason to import ``sys``. Non-strings are formatted
+    exactly like ``print`` (``format(text, '')`` falls back to ``str``). The stream is
+    read at call time, so pytest's capsys captures it.
+    """
+    stream = sys.stderr if err else sys.stdout
+    stream.write(f'{text}\n')
+    if flush:
+        stream.flush()
 
 
 def add_handle(
