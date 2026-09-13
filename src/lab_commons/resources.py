@@ -44,6 +44,10 @@ constraint disappears".
       travels in the RETURN VALUE: :attr:`Grant.basis` says per dimension what the ceiling rested
       on, and :attr:`Grant.conservative` / :attr:`Grant.is_fully_measured` let a caller, a gate and
       a report all tell without parsing prose.
+    - A CEILING HELD AT THE CONSERVATIVE VALUE AND A CEILING NOBODY APPLIED ARE DIFFERENT FACTS,
+      and :attr:`Grant.unbounded` is the second one. Collapsing them made ``conservative`` itself a
+      declaration that lies (see :class:`Enforcement`), which is the defect this module spends
+      most of its length refusing elsewhere.
 
 WHAT IT DOES NOT DECIDE. Cross-MACHINE arbitration is deliberately out of scope; every mechanism
 here is per-box, and the box is the thing that crashes.
@@ -85,6 +89,7 @@ __all__ = [
     'CapacityRegistry',
     'CeilingExceeded',
     'Dimension',
+    'Enforcement',
     'Exhausted',
     'Grant',
     'Holder',
@@ -114,8 +119,30 @@ class Accounting(Enum):
     #: reading ALREADY subtracts every live process, so this is cross-process by construction and
     #: sees a job this broker never admitted.
     BOX_GLOBAL = 'box_global'
-    #: Not a stock at all but a duration -- wall-clock. Recorded and used to bound, never summed.
+    #: Not a stock at all but a duration -- wall-clock. Recorded, never summed across holders.
     ELAPSED = 'elapsed'
+
+
+class Enforcement(Enum):
+    """WHAT actually bounds a dimension at admission -- which is not the same question as how it
+    depletes, and conflating the two is how a dimension came to be declared ``COUNTED`` while
+    nothing counted it.
+
+    :data:`NONE` is the load-bearing member. A dimension can be perfectly well DEFINED and still
+    have nothing able to check it, and saying so is the whole difference between a ceiling held at
+    a conservative value and a ceiling nobody looked at. Both used to surface identically in
+    :attr:`Grant.conservative`, which made that attribute a declaration that lies: measured
+    2026-09-13, a demand of ninety-nine CORES was admitted on a box whose conservative cpu ceiling
+    is one, and the grant reported cpu as "conservative".
+    """
+
+    #: Bounded by summing the LIVE reservation records on this box -- seats, cores.
+    RECORDS = 'records'
+    #: Bounded by a reading of the box itself, which already counts processes we never admitted.
+    OS_READING = 'os_reading'
+    #: NOTHING bounds it here. The demand is recorded and reported in :attr:`Grant.unbounded`, and
+    #: the caller owns the fact. Never silently believed.
+    NONE = 'none'
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,21 +152,20 @@ class Dimension:
     name: str
     unit: str
     accounting: Accounting
-    #: The value an UNMEASURED box gets: the direction that cannot crash it. ``None`` means this
-    #: dimension has the SHAPE but no enforceable default -- see :data:`DISK` / :data:`GPU`.
+    enforcement: Enforcement
+    #: The value an UNMEASURED box gets: the direction that cannot crash it. ``None`` exactly when
+    #: :attr:`enforcement` is :data:`Enforcement.NONE` -- there is no conservative value to hold a
+    #: dimension at when nothing can check it. That correspondence is not a convention here: it is
+    #: asserted at import, below, so the narrowings that depend on it cannot silently stop holding.
     conservative: int | None
     note: str = ''
-
-    @property
-    def is_enforceable(self) -> bool:
-        """Whether this broker can actually bound the dimension, as opposed to merely record it."""
-        return self.accounting is not Accounting.ELAPSED and self.conservative is not None
 
 
 SEATS: Final = Dimension(
     'seats',
     'count',
     Accounting.COUNTED,
+    Enforcement.RECORDS,
     conservative=1,
     note='concurrent jobs, or licence seats. An unmeasured box SERIALISES: one at a time.',
 )
@@ -147,6 +173,7 @@ MEMORY: Final = Dimension(
     'memory',
     'bytes',
     Accounting.BOX_GLOBAL,
+    Enforcement.OS_READING,
     conservative=1,
     note='resident bytes. An unmeasured box demands CONSERVATIVE_MEMORY_SHARE of TOTAL be free.',
 )
@@ -154,28 +181,91 @@ CPU: Final = Dimension(
     'cpu',
     'cores',
     Accounting.COUNTED,
+    Enforcement.RECORDS,
     conservative=1,
     note='cores a job expects to saturate. An unmeasured box grants the minimum width, never a guess.',
 )
+#: WALLCLOCK is ENFORCEMENT.NONE and that is not an omission. It is a DURATION, not a stock: it is
+#: never summed across holders, so there is nothing for admission to compare a demand against. It
+#: is recorded -- a consumer can hand it to a timeout -- and reported in :attr:`Grant.unbounded`
+#: so nobody reads its presence in the registry as a bound this module is applying.
 WALLCLOCK: Final = Dimension(
     'wallclock',
     'seconds',
     Accounting.ELAPSED,
+    Enforcement.NONE,
     conservative=None,
-    note='how long the job expects to run. Recorded and used to BOUND; never a stock to be summed.',
+    note='how long the job expects to run. RECORDED, never enforced here: a duration is not a stock.',
 )
 #: DISK and GPU have the SHAPE and no values, deliberately. There is no portable stdlib reader for
 #: either that would answer on every box in this family, and a dimension with a reader that works
-#: on some machines is the silent-degradation defect this module exists to refuse. Declaring them
-#: means a consumer can demand them and SEE, in :attr:`Grant.conservative`, that nothing bounded
-#: them -- which is strictly better than the demand being a ``KeyError`` or, worse, silently
-#: believed.
-DISK: Final = Dimension('disk', 'bytes', Accounting.BOX_GLOBAL, conservative=None, note='shape only; no reader')
-GPU: Final = Dimension('gpu', 'count', Accounting.COUNTED, conservative=None, note='shape only; no reader')
+#: on SOME machines is the silent-degradation defect this module exists to refuse. Declaring them
+#: means a consumer can demand them and SEE, in :attr:`Grant.unbounded`, that nothing bounded them
+#: -- which is strictly better than the demand being a ``KeyError`` or, worse, silently believed.
+#: DECLARING A VALUE FOR THEM DOES NOT MAKE THEM BOUNDED: a number nobody can check is not a
+#: ceiling, and letting a declaration flip the flag would move the same lie one level up.
+DISK: Final = Dimension(
+    'disk', 'bytes', Accounting.BOX_GLOBAL, Enforcement.NONE, conservative=None, note='shape only; no reader'
+)
+GPU: Final = Dimension(
+    'gpu', 'count', Accounting.COUNTED, Enforcement.NONE, conservative=None, note='shape only; no reader'
+)
 
 DIMENSIONS: Final[Mapping[str, Dimension]] = {
     dimension.name: dimension for dimension in (SEATS, MEMORY, CPU, WALLCLOCK, DISK, GPU)
 }
+
+
+def _conservative_floor(dimension: Dimension) -> int:
+    """The conservative value of an ENFORCED dimension, as a plain ``int``.
+
+    THIS IS THE NARROWING, AND IT IS NOT A FALLBACK. ``Dimension.conservative`` is ``int | None``
+    because the shape-only dimensions genuinely have no value, which is what made a type checker
+    flag every site that reached ``int(...)`` or ``min(key=)`` through it. Rather than suppressing
+    the checker or defaulting the miss away, the correspondence it was complaining about --
+    enforced implies valued -- is CHECKED HERE, at import, for every dimension at once.
+
+    So a future dimension added with :data:`Enforcement.RECORDS` and no conservative value fails
+    at import rather than at the first admission on an unmeasured box, and the call sites below get
+    an ``int`` the type system agrees is an ``int``. ``.claude/rules/taste.md``: if a miss falls
+    back, remove the FALLBACK.
+    """
+    value = dimension.conservative
+    if value is None:
+        msg = (
+            f'{dimension.name} declares enforcement={dimension.enforcement.value} but no conservative '
+            f'value, so an unmeasured box would have nothing to hold it at. An enforced dimension '
+            f'MUST name the value that cannot crash the box; a dimension with no such value is '
+            f'Enforcement.NONE and is reported in Grant.unbounded instead.'
+        )
+        raise ValueError(msg)
+    return value
+
+
+def _check_dimension_table(dimensions: Iterable[Dimension]) -> None:
+    """Assert enforced-implies-valued, BOTH WAYS, over the whole table. Run at import.
+
+    A RATCHET HAS TWO SIDES. Forwards: a dimension enforced with no conservative value would leave
+    an unmeasured box nothing to hold it at, and is what makes the narrowings below unreachable
+    rather than merely unlikely. Backwards: a dimension nothing enforces must NOT carry a
+    conservative value, because a value in the table reads as a ceiling this module applies -- and
+    that reading is exactly the defect :class:`Enforcement` was added to end.
+
+    Taking an argument rather than closing over :data:`DIMENSIONS` is what lets the guard itself be
+    tested on a planted table, instead of being a loop nobody can drive.
+    """
+    for dimension in dimensions:
+        if dimension.enforcement is not Enforcement.NONE:
+            _conservative_floor(dimension)
+        elif dimension.conservative is not None:
+            msg = (
+                f'{dimension.name} is enforced by nothing yet declares conservative='
+                f'{dimension.conservative}, which reads as a ceiling this module applies and does not.'
+            )
+            raise ValueError(msg)
+
+
+_check_dimension_table(DIMENSIONS.values())
 
 #: What share of TOTAL physical RAM must be free before an UNMEASURED pool may start.
 #:
@@ -304,13 +394,18 @@ class CapacityRegistry:
             raise KeyError(msg)
         here = hostname or _hostname()
         declared = self._table.get((pool, dimension), [])
-        applicable = [
-            candidate
+        # PAIRED WITH THE NARROWED VALUE rather than filtered and then re-read. `min(key=lambda c:
+        # c.value)` over a `Capacity` whose `value` is `int | None` is a TypeError waiting for the
+        # first valueless declaration, and a filter two lines earlier does not tell a type checker
+        # -- or the next reader -- that it cannot happen. Carrying the narrowed `int` INTO the
+        # comparison makes the impossibility structural rather than incidental.
+        applicable: list[tuple[int, Capacity]] = [
+            (candidate.value, candidate)
             for candidate in declared
             if candidate.value is not None and (candidate.basis is Basis.STRUCTURAL or candidate.measured_on == here)
         ]
         if applicable:
-            return min(applicable, key=lambda candidate: candidate.value)
+            return min(applicable, key=lambda pair: pair[0])[1]
         return _conservative(dimension, pool=pool, hostname=here, rejected=declared)
 
 
@@ -582,12 +677,37 @@ class Grant:
 
     @property
     def conservative(self) -> tuple[str, ...]:
-        """The dimensions granted on a conservative default because nobody measured this box.
+        """The dimensions BOUNDED at a conservative default because nobody measured this box.
 
-        Non-empty is not an error -- the job ran -- but it IS a fact the caller now owns, and the
-        remedy it names is to measure the box.
+        Non-empty is not an error -- the job ran, under a real ceiling -- but it IS a fact the
+        caller now owns, and the remedy it names is to measure the box.
+
+        DISJOINT FROM :attr:`unbounded` by construction. The two used to be the same attribute,
+        and that made it a declaration that lies: a dimension nothing checked reported identically
+        to one held at the value that cannot crash the box.
         """
-        return tuple(sorted(name for name, basis in self.basis.items() if basis is Basis.CONSERVATIVE_DEFAULT))
+        return tuple(
+            sorted(
+                name
+                for name, basis in self.basis.items()
+                if basis is Basis.CONSERVATIVE_DEFAULT and name not in self.unbounded
+            )
+        )
+
+    @property
+    def unbounded(self) -> tuple[str, ...]:
+        """The demanded dimensions NOTHING checked -- admission applied no ceiling to these at all.
+
+        Not a warning and not an error: it is the honest statement of what this broker can and
+        cannot do, handed to the caller in the return value so a gate or a report can act on it.
+        A consumer that needs one of these bounded owns that enforcement itself; what it must not
+        do is believe this broker bounded it.
+
+        IT IS A PROPERTY OF THE DIMENSION, NEVER OF THE DECLARATION. Declaring a value for `disk`
+        does not make disk bounded, because no reader exists to compare a demand against -- and a
+        number nobody can check is not a ceiling.
+        """
+        return tuple(sorted(name for name in self.demands if DIMENSIONS[name].enforcement is Enforcement.NONE))
 
     def explain(self) -> str:
         """One line a report or a gate can print. Never the only place the fact is available."""
@@ -595,9 +715,15 @@ class Grant:
         tail = (
             f' CONSERVATIVE on {", ".join(self.conservative)} -- this box was never measured for them.'
             if self.conservative
-            else ' every ceiling measured on this box.'
+            else ' Every ceiling applied was measured on this box.'
         )
-        return f'{self.pool}: {self.what or "a job"} admitted on [{parts}].{tail}'
+        loose = (
+            f' UNBOUNDED: {", ".join(self.unbounded)} -- nothing here checked those, and a declared '
+            f'value for them would not change it.'
+            if self.unbounded
+            else ''
+        )
+        return f'{self.pool}: {self.what or "a job"} admitted on [{parts}].{tail}{loose}'
 
     # -- defect 1b: track the JOB ---------------------------------------------------------------
 
@@ -921,6 +1047,7 @@ class Broker:
         started = time.monotonic()
         try:
             self._await_memory(pool, wanted, ceilings, what=what, wait_s=wait_s, poll_s=poll_s, started=started)
+            self._await_cores(pool, wanted, ceilings, what=what, wait_s=wait_s, poll_s=poll_s, started=started)
             path = self._take_seats(pool, wanted, ceilings, what=what, wait_s=wait_s, poll_s=poll_s, started=started)
         finally:
             with contextlib.suppress(OSError):
@@ -1033,6 +1160,57 @@ class Broker:
             return max(declared, int(CONSERVATIVE_MEMORY_SHARE * reading.total_bytes))
         return declared
 
+    def _await_cores(
+        self,
+        pool: str,
+        wanted: Mapping[str, int],
+        ceilings: Mapping[str, Capacity],
+        *,
+        what: str,
+        wait_s: float,
+        poll_s: float,
+        started: float,
+    ) -> None:
+        """Bound the cores in flight for *pool* by SUMMING what live holders declared.
+
+        WHY THIS EXISTS AS ITS OWN STEP. ``cpu`` was declared an :data:`Accounting.COUNTED`
+        dimension from the start and nothing counted it: only seats were ever enforced. So a
+        demand of ninety-nine cores was ADMITTED on a box whose conservative cpu ceiling is one,
+        and -- worse than the admission -- the grant reported cpu among its "conservative"
+        dimensions, which reads as a ceiling that was applied. Found 2026-09-13 by driving the
+        shape-only dimensions through the real ``admit()`` after a type checker pointed at them.
+
+        A COUNT OF SEATS CANNOT SUBSTITUTE. Two jobs is not a width: one may want a single core
+        and the next may want every core the box has, which is exactly the distinction axis 2
+        exists to make. Cores are summed across live holders; seats are counted.
+
+        The sum is over the same records seats use, so it is cross-process for the same reason,
+        and a dead holder contributes nothing for the same reason.
+        """
+        ceiling = ceilings.get(CPU.name)
+        if ceiling is None:
+            return
+        limit = ceiling.value if ceiling.value is not None else _conservative_floor(CPU)
+        needed = wanted.get(CPU.name, 0)
+        deadline = started + max(0.0, wait_s)
+        while True:
+            peers = self._peers(pool)
+            in_flight = sum(int(holder.demands.get(CPU.name, 0)) for holder in peers)
+            if in_flight + needed <= limit:
+                return
+            if time.monotonic() >= deadline:
+                raise Exhausted(
+                    pool,
+                    CPU.name,
+                    needed=needed,
+                    available=limit - in_flight,
+                    basis=ceiling.basis,
+                    holders=peers,
+                    what=what,
+                    waited_s=time.monotonic() - started,
+                )
+            time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+
     def _peers(self, pool: str) -> list[Holder]:
         """Live holders and claims OTHER than this call's own claim file."""
         mine = f'{pool}.claim.{os.getpid()}.{threading.get_ident()}.json'
@@ -1063,10 +1241,16 @@ class Broker:
         ``continue`` rather than a failure because the next index may still be free.
         """
         ceiling = ceilings[SEATS.name]
-        limit = ceiling.value if ceiling.value is not None else SEATS.conservative
+        # NARROWED, NOT DEFAULTED. `ceiling.value` is `int | None` because the shape-only
+        # dimensions have no value; seats always does, and `_conservative_floor` is the assertion
+        # of that -- checked at import for every enforced dimension, so this branch is unreachable
+        # rather than merely unlikely. Written as an explicit `is None` and never `value or FLOOR`
+        # because ZERO IS A MEANINGFUL DECLARATION -- "this box may not run this at all" -- and
+        # `or` would silently promote it to one, which is the permissive direction.
+        limit = ceiling.value if ceiling.value is not None else _conservative_floor(SEATS)
         deadline = started + max(0.0, wait_s)
         while True:
-            for index in range(int(limit)):
+            for index in range(limit):
                 path = self.resource_dir() / f'{pool}.{index}.slot'
                 if self._holder_of(path) is not None:
                     continue
@@ -1087,7 +1271,7 @@ class Broker:
                     pool,
                     SEATS.name,
                     needed=wanted.get(SEATS.name, 1),
-                    available=int(limit) - len(holders),
+                    available=limit - len(holders),
                     basis=ceiling.basis,
                     holders=holders,
                     what=what,

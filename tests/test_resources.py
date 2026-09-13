@@ -24,15 +24,19 @@ from lab_commons.resources import (
     MEMORY,
     SEATS,
     WALLCLOCK,
+    Accounting,
     Basis,
     Broker,
     Capacity,
     CapacityRegistry,
     CeilingExceeded,
+    Dimension,
+    Enforcement,
     Exhausted,
     JobHandle,
     MemoryUnreadable,
     SystemMemory,
+    _check_dimension_table,
 )
 
 GIB = 1024**3
@@ -456,3 +460,154 @@ class TestTheRecordDoesNotDependOnTheCallerRevision:
         broker.resource_dir().joinpath('tool.0.slot').write_text('not json at all', encoding='utf-8')
         with broker.admit('tool', {SEATS.name: 1}) as grant:
             assert grant.pool == 'tool'
+
+
+class TestADimensionNobodyEnforcesSaysSo:
+    """The arm a type checker pointed at, and the defect underneath it.
+
+    Pyright flagged three sites where an ``int | None`` reached ``min(key=)`` or ``int(...)``,
+    because DISK and GPU are declared with ``conservative=None``. The crash it predicted is NOT
+    reachable -- ``TestTheValuelessCapacityArmsAreNarrowed`` below plants each arm and shows why,
+    rather than arguing it. But driving those dimensions through the REAL ``admit()`` to find that
+    out exposed something worse: a demand of 99 CORES was admitted on a box whose conservative cpu
+    ceiling is 1, and the grant reported ``conservative == ('cpu', ...)`` -- which READS as
+    "bounded at the value that cannot crash the box" and was in fact "not bounded at all".
+
+    ``conservative`` was itself a declaration that lies: it could not distinguish a ceiling held
+    AT the conservative value from a dimension nothing ever looked at.
+    """
+
+    def test_a_disk_demand_is_admitted_rather_than_crashing(self, broker):
+        with broker.admit('tool', {DISK.name: 10 * GIB}) as grant:
+            assert grant.pool == 'tool'
+
+    def test_a_disk_demand_is_reported_unbounded(self, broker):
+        with broker.admit('tool', {DISK.name: 10 * GIB}) as grant:
+            assert DISK.name in grant.unbounded
+            assert grant.is_fully_measured is False
+
+    def test_a_gpu_demand_is_reported_unbounded(self, broker):
+        with broker.admit('tool', {GPU.name: 2}) as grant:
+            assert GPU.name in grant.unbounded
+
+    def test_wallclock_is_recorded_and_reported_unbounded(self, broker):
+        # It is a DURATION, not a stock: it is never summed across holders, so admission cannot
+        # bound it and must not imply that it did.
+        with broker.admit('tool', {WALLCLOCK.name: 3600}) as grant:
+            assert WALLCLOCK.name in grant.unbounded
+            assert grant.demands[WALLCLOCK.name] == 3600
+
+    def test_a_bounded_dimension_is_not_reported_unbounded(self, broker, registry):
+        registry.declare('tool', Capacity.measured(SEATS.name, 2, on=broker.hostname))
+        with broker.admit('tool', {SEATS.name: 1, MEMORY.name: 1 * GIB}) as grant:
+            assert grant.unbounded == ()
+
+    def test_unbounded_is_not_the_same_fact_as_conservative(self, broker):
+        # The distinction the old `conservative` could not draw: seats IS enforced, at the
+        # conservative value; disk is not enforced at all.
+        with broker.admit('tool', {DISK.name: 1, SEATS.name: 1}) as grant:
+            assert SEATS.name in grant.conservative
+            assert SEATS.name not in grant.unbounded
+            assert DISK.name in grant.unbounded
+
+    def test_the_explanation_names_what_nothing_bounded(self, broker):
+        with broker.admit('tool', {DISK.name: 1}) as grant:
+            assert 'unbounded' in grant.explain().lower()
+            assert DISK.name in grant.explain()
+
+    def test_a_declared_disk_value_is_STILL_unbounded_because_nothing_can_read_it(self, broker, registry):
+        # A number nobody can check is not a ceiling. Letting a declared value flip `unbounded`
+        # off would be the same lie one level up -- the registry would be claiming an enforcement
+        # the code does not have.
+        registry.declare('tool', Capacity.measured(DISK.name, 500 * GIB, on=broker.hostname))
+        with broker.admit('tool', {DISK.name: 10 * GIB}) as grant:
+            assert DISK.name in grant.unbounded
+
+    def test_the_table_guard_refuses_an_enforced_dimension_with_no_conservative_value(self):
+        # Planted on a table of its own, so the guard is DRIVEN rather than merely running at
+        # import over a table that happens to be correct.
+        planted = Dimension('seats', 'count', Accounting.COUNTED, Enforcement.RECORDS, conservative=None)
+        with pytest.raises(ValueError, match='conservative'):
+            _check_dimension_table([planted])
+
+    def test_the_table_guard_refuses_a_value_on_a_dimension_nothing_enforces(self):
+        # The other side of the ratchet: a value in the table reads as a ceiling that is applied.
+        planted = Dimension('disk', 'bytes', Accounting.BOX_GLOBAL, Enforcement.NONE, conservative=4)
+        with pytest.raises(ValueError, match='enforced by nothing'):
+            _check_dimension_table([planted])
+
+    def test_the_real_table_passes_its_own_guard(self):
+        _check_dimension_table(DIMENSIONS.values())
+
+    def test_every_enforced_dimension_declares_a_conservative_value(self):
+        # The floor under the scan: without it this would be vacuous, and it is what makes the
+        # seat-limit narrowing below UNREACHABLE rather than merely untested.
+        enforced = [dimension for dimension in DIMENSIONS.values() if dimension.enforcement is not Enforcement.NONE]
+        assert enforced, 'no dimension is enforced at all -- the broker would bound nothing'
+        for dimension in enforced:
+            assert isinstance(dimension.conservative, int), f'{dimension.name} is enforced with no conservative value'
+
+
+class TestCoresAreEnforcedLikeSeats:
+    """CPU was declared a COUNTED dimension while nothing counted it."""
+
+    def test_cores_aggregate_across_live_holders(self, broker, registry):
+        registry.declare('tool', Capacity.measured(SEATS.name, 8, on=broker.hostname))
+        registry.declare('tool', Capacity.measured(CPU.name, 4, on=broker.hostname))
+        with (
+            broker.admit('tool', {CPU.name: 2}, what='wide-A'),
+            broker.admit('tool', {CPU.name: 2}),
+            pytest.raises(Exhausted) as excinfo,
+            broker.admit('tool', {CPU.name: 2}),
+        ):
+            pass
+        assert excinfo.value.dimension == CPU.name
+        assert 'wide-A' in str(excinfo.value)
+
+    def test_a_job_wider_than_this_box_is_refused_outright(self, broker, registry):
+        registry.declare('tool', Capacity.measured(CPU.name, 4, on=broker.hostname))
+        with pytest.raises(Exhausted) as excinfo, broker.admit('tool', {CPU.name: 16}):
+            pass
+        assert excinfo.value.dimension == CPU.name
+
+    def test_an_unmeasured_box_grants_the_minimum_width_and_refuses_a_wide_job(self, broker):
+        # The measured defect: `{cpu: 99}` was ADMITTED on a box declaring nothing, while the
+        # grant reported cpu as "conservative".
+        with pytest.raises(Exhausted) as excinfo, broker.admit('never-measured', {CPU.name: 99}):
+            pass
+        assert excinfo.value.dimension == CPU.name
+        assert excinfo.value.needed == 99
+
+    def test_cores_are_released_with_the_grant(self, broker, registry):
+        registry.declare('tool', Capacity.measured(CPU.name, 4, on=broker.hostname))
+        with broker.admit('tool', {CPU.name: 4}):
+            pass
+        with broker.admit('tool', {CPU.name: 4}) as grant:
+            assert grant.basis[CPU.name] is Basis.MEASURED
+
+
+class TestTheValuelessCapacityArmsAreNarrowed:
+    """The three sites a type checker flagged. Each is PLANTED here, so "unreachable" is a
+    measurement rather than a claim -- and the code is narrowed so the type says it too."""
+
+    def test_a_valueless_declaration_never_reaches_the_compose_minimum(self, registry):
+        # `min(..., key=lambda c: c.value)` over a None would raise TypeError. It cannot: the
+        # filter drops valueless candidates BEFORE the minimum.
+        registry.declare('tool', Capacity(dimension=SEATS.name, value=None, basis=Basis.CONSERVATIVE_DEFAULT))
+        registry.declare('tool', Capacity.measured(SEATS.name, 4, on='thisbox'))
+        assert registry.capacity('tool', SEATS.name, hostname='thisbox').value == 4
+
+    def test_only_valueless_declarations_fall_to_the_conservative_default(self, registry):
+        registry.declare('tool', Capacity(dimension=SEATS.name, value=None, basis=Basis.CONSERVATIVE_DEFAULT))
+        found = registry.capacity('tool', SEATS.name, hostname='thisbox')
+        assert found.basis is Basis.CONSERVATIVE_DEFAULT
+        assert found.value == 1
+
+    def test_a_declared_limit_of_zero_refuses_every_job(self, broker, registry):
+        # Why the narrowing is an explicit `is None` and not `value or FLOOR`: zero is a MEANINGFUL
+        # declaration -- "this box may not run this at all" -- and `or` would silently promote it
+        # to one, which is the permissive direction.
+        registry.declare('tool', Capacity.measured(SEATS.name, 0, on=broker.hostname))
+        with pytest.raises(Exhausted) as excinfo, broker.admit('tool', {SEATS.name: 1}):
+            pass
+        assert excinfo.value.dimension == SEATS.name
