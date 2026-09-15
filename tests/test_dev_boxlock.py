@@ -1,9 +1,9 @@
 """``lab_commons.dev.boxlock`` — one CPU-saturating run at a time, refusing by name.
 
 The lock is the broker that already ships in this package, so what is tested here is the POLICY:
-that the pool name is the exclusion, that a per-box seat measurement cannot lift it, and that a
-refusal arrives as the broker's own ``Exhausted`` -- carrying the holder's name -- rather than as a
-second exception class that a caller would have to learn.
+that a BOX-scoped seat is the exclusion whoever's pool name the run carries, that a per-box seat
+measurement cannot lift it, and that a refusal arrives as the broker's own ``Exhausted`` -- carrying
+the holder's name -- rather than as a second exception class that a caller would have to learn.
 
 The slot root is redirected per test, because "box-wide" is the property under test and cannot be
 mocked away without testing nothing.
@@ -15,6 +15,7 @@ import pytest
 
 from lab_commons.dev.boxlock import BOX_POOL, BoxLock
 from lab_commons.resources import (
+    BOX_SEATS,
     MEMORY,
     SEATS,
     Basis,
@@ -34,6 +35,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def slots(tmp_path, monkeypatch):
     monkeypatch.setenv('LAB_COMMONS_RESOURCE_DIR', str(tmp_path / 'slots'))
     return tmp_path / 'slots'
+
+
+def seat(pool: str, index: int = 0) -> str:
+    """A POOL-scoped seat file's name, written out rather than imported.
+
+    The layout is the shared medium between processes on different revisions of this package, so a
+    test that plants a holder plants it where a peer -- not merely this build -- would look.
+    """
+    return f'{pool}.{SEATS.name}.{index}.slot'
+
+
+def box_seat(index: int = 0) -> str:
+    """The BOX-scoped seat file's name. It carries NO pool, and that absence is the mechanism: a
+    name with a pool in it is exactly the string a consumer could have opted out of."""
+    return f'{BOX_SEATS.name}.{index}.slot'
 
 
 def _take_a_second_seat(what: str, broker: Broker | None = None) -> None:
@@ -64,7 +80,7 @@ class TestTheExclusion:
 
     def test_a_dead_holders_record_is_free_not_held(self, slots):
         """The worst outcome of any crash is a file nobody counts, never a box nobody can use."""
-        dead = slots / f'{BOX_POOL}.0.slot'
+        dead = slots / seat(BOX_POOL)
         dead.parent.mkdir(parents=True, exist_ok=True)
         dead.write_text('{"job_kind": "pid", "job_ident": "999999999", "demands": {}}', encoding='utf-8')
         with BoxLock('after a crash').held():
@@ -76,9 +92,11 @@ class TestTheExclusion:
 
 
 class TestWhatTheLockDeclares:
-    def test_the_seat_rests_on_a_structural_constant_not_on_a_box_measurement(self, slots):
+    def test_the_seats_rest_on_structural_constants_not_on_a_box_measurement(self, slots):
         """The rule is a property of the TOOL -- one at a time, everywhere -- not of this machine."""
         with BoxLock('gate').held() as grant:
+            assert grant.basis[BOX_SEATS.name] is Basis.STRUCTURAL
+            assert grant.capacity[BOX_SEATS.name].value == 1
             assert grant.basis[SEATS.name] is Basis.STRUCTURAL
             assert grant.capacity[SEATS.name].value == 1
 
@@ -92,6 +110,19 @@ class TestWhatTheLockDeclares:
             with pytest.raises(Exhausted):
                 _take_a_second_seat('heavy', broker)
         assert conceded == 1
+
+    def test_a_larger_measurement_of_the_box_seat_under_ANOTHER_POOL_cannot_lift_it(self, slots):
+        """A box-scoped ceiling is declared FOR THE BOX, so no pool keeps one to itself.
+
+        This is the declaration half of the scope: with the ceiling keyed by pool, a consumer could
+        have raised the box seat by declaring it under a name of its own -- the same opt-out the
+        shared pool string allowed, one level down.
+        """
+        registry = CapacityRegistry()
+        registry.declare('some-other-pool', Capacity.measured(BOX_SEATS.name, 8, on=Broker().hostname))
+        registry.declare('some-other-pool', Capacity.structural(BOX_SEATS.name, 1, note='one at a time'))
+        with BoxLock('gate', broker=Broker(registry)).held() as grant:
+            assert grant.capacity[BOX_SEATS.name].value == 1
 
     def test_the_lock_demands_no_cores_so_a_wide_run_is_not_refused_by_its_own_lock(self, slots):
         """An unmeasured box's cpu ceiling is one, and a CPU-saturating run wants the whole width.
@@ -133,39 +164,65 @@ class TestAskingIsNotTaking:
         assert REPO_ROOT not in BoxLock.resource_dir().parents
 
 
-class TestWhatTheLockInheritsFromTheBroker:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            'Broker.admit creates the seat file with O_EXCL and writes its RECORD afterwards, so '
-            'between os.close and Grant._write_record the file is EMPTY. _holder_of reads an '
-            "unparseable record as ABSENT (json.loads('') raises, and the OSError/ValueError arm "
-            'returns None), and _take_seats UNLINKS what it read as absent before trying O_EXCL -- '
-            'so a peer can delete a seat another process has just taken and take the same index. '
-            'The conservative rule the module already applies to an opaque job handle ("cannot '
-            'tell" is HELD, never free) is exactly what an unreadable record needs. Fix in '
-            'lab_commons/resources.py, not here: this test is the pin, and it is strict so a fix '
-            'that lands forces this row to be deleted rather than left to rot.'
-        ),
-    )
-    def test_an_acquisition_in_progress_is_not_read_as_a_free_seat(self, slots):
-        """An empty seat file is exactly what ``os.open(O_CREAT | O_EXCL)`` leaves behind."""
-        slots.mkdir(parents=True, exist_ok=True)
-        (slots / f'{BOX_POOL}.0.slot').write_text('', encoding='utf-8')
+class TestAnUnreadableSeatIsHeldNotTaken:
+    """The condition PLANTED at both namespaces the lock contends on, and the REAL guard called.
+
+    An empty seat file is not a contrived fixture: it is exactly what the acquisition path left
+    behind for an instant while the record was written after the exclusive create, and a peer that
+    read it as "nobody is here" DELETED a live seat and took its index -- two holders on a lock that
+    admits one (measured 2026-09-15). So the assertions are two: the guard refuses, and the file it
+    refused over is STILL THERE. Unlinking it is the theft the fix forbids, and a test that only
+    checked the refusal would pass on a fix that stole the seat a moment later.
+    """
+
+    def test_an_empty_pool_seat_is_not_read_as_free(self, slots):
+        planted = slots / seat(BOX_POOL)
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_text('', encoding='utf-8')
         assert len(BoxLock.holders()) == 1
+        with pytest.raises(Exhausted) as refusal, BoxLock('heavy:feat/structural').held():
+            pass
+        assert refusal.value.dimension == SEATS.name
+        assert planted.exists(), 'the unreadable seat was DELETED -- that is the theft, not a fix'
+        assert not (slots / box_seat()).exists(), 'a refused admission left a seat behind'
+
+    def test_an_empty_box_seat_is_not_read_as_free(self, slots):
+        planted = slots / box_seat()
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_text('not a record at all', encoding='utf-8')
+        assert len(BoxLock.holders()) == 1
+        with pytest.raises(Exhausted) as refusal, BoxLock('heavy:feat/structural').held():
+            pass
+        assert refusal.value.dimension == BOX_SEATS.name
+        assert planted.exists()
 
 
-class TestWhatThePoolNameIs:
-    def test_a_different_pool_name_does_not_contend(self, slots):
-        """THE FINDING, demonstrated: "box-wide" is not something the broker can enforce.
+class TestWhatMakesTheLockBoxWide:
+    def test_a_second_POOL_cannot_take_the_box_while_the_lock_holds_it(self, slots):
+        """THE BOX-WIDE CLAIM, MADE TRUE. "Box-wide" used to be a property of every caller passing
+        the same pool string, so a consumer that named its own pool silently opted out of contending
+        -- and nothing in the broker could tell it so.
 
-        The broker rations PER POOL, and a pool is a string. A consumer that passes its own name has
-        silently opted out of contending with the others, and nothing in the broker can tell it so --
-        which is why ``BOX_POOL`` is a constant this module owns and publishes.
+        This is the same run, under a pool name of its own, and it is refused: the exclusion is
+        ``BOX_SEATS``, a dimension whose record files are the BOX's rather than any pool's, so it
+        does not depend on a spelling. The other side of the same ratchet -- that a POOL-scoped
+        dimension still does not contend across pools -- is pinned in ``test_resources``.
         """
         broker = Broker()
         with (
             BoxLock('the kit').held(),
-            broker.admit('some-other-pool', {SEATS.name: 1}, what='a run that opted out'),
+            pytest.raises(Exhausted) as refusal,
+            broker.admit('some-other-pool', {BOX_SEATS.name: 1}, what='a run that opted out'),
         ):
-            assert len(BoxLock.holders()) == 1
+            pass
+        assert refusal.value.dimension == BOX_SEATS.name
+        assert 'the kit' in str(refusal.value)
+
+    def test_the_box_seat_is_free_again_once_the_holder_releases_it(self, slots):
+        """A box-wide exclusion that outlives its holder would be a box nobody can use."""
+        broker = Broker()
+        with BoxLock('first').held():
+            pass
+        with broker.admit('some-other-pool', {BOX_SEATS.name: 1}, what='a peer') as grant:
+            assert grant.demands[BOX_SEATS.name] == 1
+            assert grant.basis[BOX_SEATS.name] is Basis.CONSERVATIVE_DEFAULT

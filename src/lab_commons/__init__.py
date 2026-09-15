@@ -60,6 +60,7 @@ from lab_commons.proc import (
     working_set_bytes,
 )
 from lab_commons.resources import (
+    BOX_SEATS,
     CPU,
     DIMENSIONS,
     DISK,
@@ -80,6 +81,7 @@ from lab_commons.resources import (
     JobObservation,
     JobWatch,
     MemoryUnreadable,
+    Scope,
 )
 from lab_commons.structured import (
     SecretHashingFormatter,
@@ -98,6 +100,7 @@ from lab_commons.units import (
 )
 
 __all__ = [
+    'BOX_SEATS',
     'CPU',
     'DIMENSIONS',
     'DISK',
@@ -123,6 +126,7 @@ __all__ = [
     'ParameterException',
     'PydanticQuantity',
     'QuantityException',
+    'Scope',
     'SecretHashingFormatter',
     'SystemMemory',
     'add_handle',

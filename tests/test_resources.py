@@ -57,6 +57,16 @@ def roomy(total=64 * GIB, available=32 * GIB):
     return lambda: SystemMemory(total_bytes=total, available_bytes=available)
 
 
+def seat(pool: str, index: int = 0) -> str:
+    """The record file one indexed seat of *pool* lives in, by the broker's own naming rule.
+
+    Written out rather than imported: the LAYOUT is the shared medium between processes on
+    different revisions of this package, so a test that plants a holder must plant it where a peer
+    -- not merely this build -- would look for it.
+    """
+    return f'{pool}.{SEATS.name}.{index}.slot'
+
+
 class TestDimensionsAreData:
     """Axis 1 — resource dimensions are registry data, not branches on a kind."""
 
@@ -147,14 +157,14 @@ class TestAnUnmeasuredBoxIsConservativeAndVisible:
 
     def test_the_caller_can_tell_the_grant_rested_on_a_default(self, broker):
         with broker.admit('never-measured', {SEATS.name: 1}) as grant:
-            assert grant.is_fully_measured is False
+            assert grant.is_fully_declared is False
             assert grant.conservative == (SEATS.name,)
             assert grant.basis[SEATS.name] is Basis.CONSERVATIVE_DEFAULT
 
     def test_a_measured_grant_says_so(self, broker, registry):
         registry.declare('tool', Capacity.measured(SEATS.name, 4, on=broker.hostname))
         with broker.admit('tool', {SEATS.name: 1}) as grant:
-            assert grant.is_fully_measured is True
+            assert grant.is_fully_declared is True
             assert grant.conservative == ()
 
     def test_the_admission_explains_itself_in_one_line(self, broker):
@@ -193,7 +203,7 @@ class TestSeatsAreEnforcedAcrossProcesses:
         # Staleness is asked of the OS, never of a clock: the worst outcome of any crash is a
         # file nobody counts, never a box that refuses everything until a human cleans up.
         registry.declare('tool', Capacity.measured(SEATS.name, 1, on=broker.hostname))
-        broker.resource_dir().joinpath('tool.0.slot').write_text(
+        broker.resource_dir().joinpath(seat('tool')).write_text(
             '{"job_kind": "pid", "job_ident": "424242", "what": "a corpse", "pool": "tool", "demands": {}}',
             encoding='utf-8',
         )
@@ -228,7 +238,7 @@ class TestTheReservationTracksTheJobNotTheClient:
         # The measured incident, reconstructed: the client gave up, its `finally` released the
         # seat, and the vendor process ran on for an hour with six live processes in the census.
         registry.declare('tool', Capacity.measured(SEATS.name, 1, on=broker.hostname))
-        broker.resource_dir().joinpath('tool.0.slot').write_text(
+        broker.resource_dir().joinpath(seat('tool')).write_text(
             f'{{"job_kind": "pid", "job_ident": "{os.getpid()}", "what": "an orphaned solve", '
             f'"pool": "tool", "demands": {{}}}}',
             encoding='utf-8',
@@ -247,7 +257,7 @@ class TestTheReservationTracksTheJobNotTheClient:
 
         registry.declare('tool', Capacity.measured(SEATS.name, 1, on='thisbox'))
         alive = Broker(registry, read_memory=roomy(), liveness=liveness, hostname='thisbox')
-        alive.resource_dir().joinpath('tool.0.slot').write_text(
+        alive.resource_dir().joinpath(seat('tool')).write_text(
             '{"job_kind": "queue", "job_ident": "job-1774", "what": "a queued deck", "pool": "tool", "demands": {}}',
             encoding='utf-8',
         )
@@ -261,7 +271,7 @@ class TestTheReservationTracksTheJobNotTheClient:
         monkeypatch.setenv('LAB_COMMONS_RESOURCE_DIR', str(tmp_path / 'slots'))
         registry.declare('tool', Capacity.measured(SEATS.name, 1, on='thisbox'))
         unknown = Broker(registry, read_memory=roomy(), liveness=lambda _job: None, hostname='thisbox')
-        unknown.resource_dir().joinpath('tool.0.slot').write_text(
+        unknown.resource_dir().joinpath(seat('tool')).write_text(
             '{"job_kind": "queue", "job_ident": "job-1", "what": "unknowable", "pool": "tool", "demands": {}}',
             encoding='utf-8',
         )
@@ -447,7 +457,7 @@ class TestTheRecordDoesNotDependOnTheCallerRevision:
         # Forward compatibility is the whole point of a box-global shared medium: a holder written
         # by a NEWER broker must not be read as a free seat by an older one.
         registry.declare('tool', Capacity.measured(SEATS.name, 1, on=broker.hostname))
-        broker.resource_dir().joinpath('tool.0.slot').write_text(
+        broker.resource_dir().joinpath(seat('tool')).write_text(
             f'{{"job_kind": "pid", "job_ident": "{os.getpid()}", "what": "x", "pool": "tool", '
             f'"demands": {{}}, "from_2030": true}}',
             encoding='utf-8',
@@ -455,11 +465,23 @@ class TestTheRecordDoesNotDependOnTheCallerRevision:
         with pytest.raises(Exhausted), broker.admit('tool', {SEATS.name: 1}):
             pass
 
-    def test_an_unparseable_record_is_ignored_rather_than_crashing_every_admission(self, broker, registry):
+    def test_an_unparseable_record_is_HELD_rather_than_stolen_or_crashed_on(self, broker, registry):
+        """A record that exists and cannot be read is a HOLDER, and the guard REFUSES on it.
+
+        The condition is PLANTED, and it is not a contrived one: a seat file with no readable
+        record is exactly what the acquisition path used to leave behind for an instant, and what a
+        peer found there was a free index to delete and take (measured 2026-09-15 -- two holders on
+        a one-seat pool). Reading it as ABSENT is the defect; the old subject -- admission must not
+        CRASH on a stray file -- survives as the refusal being the broker's own, not a ValueError
+        out of ``json.loads``.
+        """
         registry.declare('tool', Capacity.measured(SEATS.name, 1, on=broker.hostname))
-        broker.resource_dir().joinpath('tool.0.slot').write_text('not json at all', encoding='utf-8')
-        with broker.admit('tool', {SEATS.name: 1}) as grant:
-            assert grant.pool == 'tool'
+        planted = broker.resource_dir() / seat('tool')
+        planted.write_text('not json at all', encoding='utf-8')
+        with pytest.raises(Exhausted) as refusal, broker.admit('tool', {SEATS.name: 1}):
+            pass
+        assert refusal.value.dimension == SEATS.name
+        assert planted.exists(), 'the unreadable seat was DELETED -- that is the theft, not a fix'
 
 
 class TestADimensionNobodyEnforcesSaysSo:
@@ -484,7 +506,7 @@ class TestADimensionNobodyEnforcesSaysSo:
     def test_a_disk_demand_is_reported_unbounded(self, broker):
         with broker.admit('tool', {DISK.name: 10 * GIB}) as grant:
             assert DISK.name in grant.unbounded
-            assert grant.is_fully_measured is False
+            assert grant.is_fully_declared is False
 
     def test_a_gpu_demand_is_reported_unbounded(self, broker):
         with broker.admit('tool', {GPU.name: 2}) as grant:

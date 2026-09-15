@@ -21,7 +21,10 @@ returns; wrapping them in pint here would put a conversion between a syscall and
 the one path whose job is to be cheap enough to poll.
 
 THE FOUR AXES IT IMPLEMENTS
-    1. Resource DIMENSIONS are registry data, not branches on a kind (:data:`DIMENSIONS`).
+    1. Resource DIMENSIONS are registry data, not branches on a kind (:data:`DIMENSIONS`) -- and
+       each names its SCOPE, the pool's own stock or one the whole BOX contends for
+       (:class:`Scope`). A pool is a key and a key is a string, so "one at a time, everywhere" is
+       not a fact a shared pool NAME can carry; a box-scoped dimension is how it becomes one.
     2. A job DECLARES its cost; it does not request a slot (:meth:`Broker.admit` takes *demands*).
        Admission is a per-dimension headroom check against capacity minus what live peers claim,
        which is what lets four small jobs and two large ones be told apart -- a count never can.
@@ -30,6 +33,13 @@ THE FOUR AXES IT IMPLEMENTS
     4. A per-box MEASUREMENT and an everywhere-identical STRUCTURAL CONSTANT are different KINDS
        (:class:`Basis`). The registry models both; declaring a structural fact per-box is what
        makes it RAISE on every machine nobody remembered to declare.
+
+A SEAT FILE IS CREATED WITH ITS RECORD OR NOT AT ALL (:meth:`Broker._take_indexed`). The indexed
+file IS the exclusion, so a peer reads it to learn who is there -- which means a seat that exists
+and cannot be read yet is a HOLDER, never a free index. Measured 2026-09-15: with the record
+written after the exclusive create, the seat was empty for that instant, `_holder_of` read the
+empty file as absent, and a peer DELETED a live seat and took its index -- two holders on a lock
+that admits one.
 
 THE UNMEASURED BOX GETS A CONSERVATIVE DEFAULT PLUS FORCED VISIBILITY (user decision 2026-09-13),
 re-arguing the three positions the origin tree held at once -- one mechanism REFUSED, one defaulted
@@ -42,7 +52,7 @@ constraint disappears".
     - VISIBLE cannot be a log warning. ``taste.md``: "a warning on an unchanged success return is
       the forbidden shape -- the test is whether the CALLER can tell." So the un-measured fact
       travels in the RETURN VALUE: :attr:`Grant.basis` says per dimension what the ceiling rested
-      on, and :attr:`Grant.conservative` / :attr:`Grant.is_fully_measured` let a caller, a gate and
+      on, and :attr:`Grant.conservative` / :attr:`Grant.is_fully_declared` let a caller, a gate and
       a report all tell without parsing prose.
     - A CEILING HELD AT THE CONSERVATIVE VALUE AND A CEILING NOBODY APPLIED ARE DIFFERENT FACTS,
       and :attr:`Grant.unbounded` is the second one. Collapsing them made ``conservative`` itself a
@@ -72,6 +82,7 @@ from typing import Final
 from lab_commons.proc import SystemMemory, kill_process_tree, system_memory, working_set_bytes
 
 __all__ = [
+    'BOX_SEATS',
     'CONSERVATIVE_MEMORY_SHARE',
     'CPU',
     'DEFAULT_POLL_S',
@@ -97,6 +108,7 @@ __all__ = [
     'JobObservation',
     'JobWatch',
     'MemoryUnreadable',
+    'Scope',
     'SystemMemory',
 ]
 
@@ -123,6 +135,25 @@ class Accounting(Enum):
     ELAPSED = 'elapsed'
 
 
+class Scope(Enum):
+    """WHOSE contention a dimension rations: one pool's, or every pool on this box.
+
+    A POOL IS A KEY AND A KEY IS A STRING, which is the whole reason this exists. The broker
+    rations per pool, so two consumers that name different pools never meet -- and the broker
+    cannot tell them so, because nothing in a name says whether the author MEANT a smaller
+    namespace or was opting out of the bigger one. A dimension that declares its scope as BOX is
+    the mechanism that does not depend on anyone's spelling: its records are one set per box, and
+    every pool demanding it lands on them.
+    """
+
+    #: Rationed per pool: two pools do not contend, which is what a pool is FOR. The pool's name is
+    #: the namespace its record files live in.
+    POOL = 'pool'
+    #: Rationed for the whole box: the record files are named by the DIMENSION, so every pool that
+    #: demands it contends with every other, whatever string each one calls itself.
+    BOX = 'box'
+
+
 class Enforcement(Enum):
     """WHAT actually bounds a dimension at admission -- which is not the same question as how it
     depletes, and conflating the two is how a dimension came to be declared ``COUNTED`` while
@@ -136,8 +167,13 @@ class Enforcement(Enum):
     is one, and the grant reported cpu as "conservative".
     """
 
-    #: Bounded by summing the LIVE reservation records on this box -- seats, cores.
+    #: Bounded by summing the LIVE reservation records on this box -- how cores are counted.
     RECORDS = 'records'
+    #: Bounded by an EXCLUSIVE record file per unit in an indexed range -- seats, box seats. The OS
+    #: arbitrates the race (a create that fails while the name is taken), so the count is EXACT
+    #: rather than checked and then acted on, and the file the OS refuses for is the holder's own
+    #: record -- which is what makes "unreadable" a state this module can refuse to resolve.
+    INDEXED = 'indexed'
     #: Bounded by a reading of the box itself, which already counts processes we never admitted.
     OS_READING = 'os_reading'
     #: NOTHING bounds it here. The demand is recorded and reported in :attr:`Grant.unbounded`, and
@@ -159,15 +195,34 @@ class Dimension:
     #: asserted at import, below, so the narrowings that depend on it cannot silently stop holding.
     conservative: int | None
     note: str = ''
+    #: WHOSE contention this rations, and therefore where its record files live. See :class:`Scope`.
+    scope: Scope = Scope.POOL
 
 
 SEATS: Final = Dimension(
     'seats',
     'count',
     Accounting.COUNTED,
-    Enforcement.RECORDS,
+    Enforcement.INDEXED,
     conservative=1,
     note='concurrent jobs, or licence seats. An unmeasured box SERIALISES: one at a time.',
+)
+#: The BOX's seat: one CPU-saturating run at a time, everywhere on this machine.
+#:
+#: WHY A DIMENSION AND NOT A SHARED POOL NAME. "Box-wide" was previously a property of every caller
+#: passing the SAME string -- so a consumer that named its own pool silently opted out of
+#: contending, and nothing in the broker could tell it so. A pool-scoped dimension cannot fix that
+#: (its records are the pool's own by construction); this one can, because it is not the pool's:
+#: its record files are named by the dimension, one set per box, and any pool that demands it meets
+#: every other. The scope is the mechanism; the pool name stops being one.
+BOX_SEATS: Final = Dimension(
+    'box_seats',
+    'count',
+    Accounting.COUNTED,
+    Enforcement.INDEXED,
+    conservative=1,
+    note='the whole box, one at a time, for every pool that demands it.',
+    scope=Scope.BOX,
 )
 MEMORY: Final = Dimension(
     'memory',
@@ -212,7 +267,7 @@ GPU: Final = Dimension(
 )
 
 DIMENSIONS: Final[Mapping[str, Dimension]] = {
-    dimension.name: dimension for dimension in (SEATS, MEMORY, CPU, WALLCLOCK, DISK, GPU)
+    dimension.name: dimension for dimension in (SEATS, BOX_SEATS, MEMORY, CPU, WALLCLOCK, DISK, GPU)
 }
 
 
@@ -266,6 +321,26 @@ def _check_dimension_table(dimensions: Iterable[Dimension]) -> None:
 
 
 _check_dimension_table(DIMENSIONS.values())
+
+
+def _namespaced(pool: str, dimension: Dimension) -> str:
+    """The name an INDEXED dimension's record files are built from -- the pool, or the dimension.
+
+    The record directory IS the box (see :meth:`Broker.resource_dir`), so a box-scoped dimension
+    needs no box in its name and a pool-scoped one needs no dimension in it:
+
+    | scope | a seat file | whose contention |
+    |---|---|---|
+    | ``POOL`` | ``{pool}.{dimension}.{index}.slot`` | that pool's alone |
+    | ``BOX`` | ``{dimension}.{index}.slot`` | every pool's |
+
+    THE TWO SHAPES CANNOT COLLIDE, and that is by construction rather than by luck: a pool-scoped
+    name has four dot-separated parts and a box-scoped one has three, so no pool name -- not even
+    one spelled like a dimension -- can produce another's file. That is what makes the box namespace
+    safe to allocate without a registry of reserved words.
+    """
+    return f'{pool}.{dimension.name}' if dimension.scope is Scope.POOL else dimension.name
+
 
 #: What share of TOTAL physical RAM must be free before an UNMEASURED pool may start.
 #:
@@ -388,12 +463,18 @@ class CapacityRegistry:
         A MEASUREMENT FROM ANOTHER BOX IS REFUSED, NOT BELIEVED -- and refusing it means falling
         to the conservative default, not raising, so the machine still runs and the caller can see
         in :attr:`Basis` that nobody measured it.
+
+        A BOX-SCOPED DIMENSION IS DECLARED FOR THE BOX, so the *pool* argument does not narrow it:
+        every pool's declarations for it compose, and a pool that declares it cannot declare its
+        way out of what another pool declared. Keying a box-scoped declaration by the pool would
+        put the whole mechanism back on the string it exists to replace -- the running job would
+        contend box-wide while the ceiling it was judged by came from one pool's name.
         """
         if dimension not in DIMENSIONS:
             msg = f'{dimension!r} is not a declared dimension; known: {sorted(DIMENSIONS)}'
             raise KeyError(msg)
         here = hostname or _hostname()
-        declared = self._table.get((pool, dimension), [])
+        declared = self._declared(pool, dimension)
         # PAIRED WITH THE NARROWED VALUE rather than filtered and then re-read. `min(key=lambda c:
         # c.value)` over a `Capacity` whose `value` is `int | None` is a TypeError waiting for the
         # first valueless declaration, and a filter two lines earlier does not tell a type checker
@@ -408,18 +489,34 @@ class CapacityRegistry:
             return min(applicable, key=lambda pair: pair[0])[1]
         return _conservative(dimension, pool=pool, hostname=here, rejected=declared)
 
+    def _declared(self, pool: str, dimension: str) -> list[Capacity]:
+        """Every declaration that can bind *pool* in *dimension*.
+
+        Pool-scoped is the ordinary case: exactly one key. Box-scoped gathers the dimension's
+        declarations from EVERY pool, in a deterministic order so that two equally-small ceilings
+        resolve to the same one on every box.
+        """
+        if DIMENSIONS[dimension].scope is Scope.BOX:
+            found: list[Capacity] = []
+            for key in sorted(self._table):
+                if key[1] == dimension:
+                    found.extend(self._table[key])
+            return found
+        return self._table.get((pool, dimension), [])
+
 
 def _conservative(dimension: str, *, pool: str, hostname: str, rejected: Iterable[Capacity]) -> Capacity:
     """The ceiling an UNMEASURED box gets, saying in its own note why it is the one in force."""
+    subject = _namespaced(pool, DIMENSIONS[dimension])
     elsewhere = sorted({candidate.measured_on for candidate in rejected if candidate.measured_on})
     if elsewhere:
         why = (
-            f'{pool}.{dimension} was measured on {", ".join(elsewhere)} and NOT on {hostname}. A '
+            f'{subject} was measured on {", ".join(elsewhere)} and NOT on {hostname}. A '
             f'measurement is a statement about one machine, so the value is not carried across; '
             f'measure this box to lift the conservative default.'
         )
     else:
-        why = f'{pool}.{dimension} has never been measured on {hostname}; running at the value that cannot crash it.'
+        why = f'{subject} has never been measured on {hostname}; running at the value that cannot crash it.'
     return Capacity(
         dimension=dimension, value=DIMENSIONS[dimension].conservative, basis=Basis.CONSERVATIVE_DEFAULT, note=why
     )
@@ -513,6 +610,28 @@ class Holder:
         return (
             f'{self.what or "unnamed"} [{self.job.kind}:{self.job.ident}]{f" since {self.since}" if self.since else ""}'
         )
+
+
+#: What a holder whose record cannot be read is CALLED in a refusal. A refusal that said "unnamed"
+#: would send its reader looking for a name that is not in the file; this one says where to look.
+_UNREADABLE_WHAT: Final = 'a record that exists and cannot be read'
+
+
+def _unreadable(path: Path) -> Holder:
+    """A record that EXISTS and cannot be read, as a holder this broker can only say is there.
+
+    It declares nothing, so it subtracts nothing from a memory or a core sum -- what it does is
+    refuse a seat, which is the conservative direction and the only one available. Nobody can say
+    whether the writer is gone, and unlinking the file is the theft that put two holders on a
+    one-seat lock in the first place. The holder is returned WITHOUT asking the liveness hook,
+    deliberately: a hook answers about handles of a kind its owner knows, and this is not one.
+    """
+    return Holder(
+        pool=path.name.split('.')[0],
+        job=JobHandle('unreadable', path.name),
+        what=_UNREADABLE_WHAT,
+        demands={},
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -646,6 +765,59 @@ class JobWatch:
 # --------------------------------------------------------------------------------------------
 
 
+#: The prefix of a record being STAGED before it is published. It carries no dot, so it can never
+#: match the ``{pool}.*`` scans a peer runs while looking for holders.
+_STAGED_PREFIX: Final = 'staged-'
+
+
+def _record(pool: str, what: str, job: JobHandle, demands: Mapping[str, int], observed_bytes: int | None) -> dict:
+    """One holder's record: WHO holds it and what that holder declared.
+
+    ONE WRITER FOR THE SHAPE. The file a peer reads a microsecond after the seat appears and the
+    file it reads an hour later are published from this function, so the acquisition record and
+    every later update cannot drift into two shapes a reader would have to know about.
+    """
+    return {
+        'pool': pool,
+        'what': what,
+        'job_kind': job.kind,
+        'job_ident': job.ident,
+        'demands': dict(demands),
+        'since': time.strftime('%Y-%m-%dT%H:%M:%S'),
+        'observed_bytes': observed_bytes,
+        'client_pid': os.getpid(),
+    }
+
+
+def _stage(path: Path, record: Mapping[str, object]) -> Path:
+    """*record* as JSON, in a temporary file IN *path*'s OWN directory.
+
+    NOT in the system temp directory: publishing is a link and a replace, and neither can cross a
+    filesystem -- the staged name and the published one have to be on the same one.
+    """
+    handle, staged = tempfile.mkstemp(dir=str(path.parent), prefix=_STAGED_PREFIX)
+    with os.fdopen(handle, 'w', encoding='utf-8') as stream:
+        json.dump(record, stream)
+    return Path(staged)
+
+
+def _publish(path: Path, record: Mapping[str, object]) -> None:
+    """Replace the record at *path* ATOMICALLY: a reader sees the whole old record or the whole new.
+
+    WHY NOT ``path.write_text``, which this module used. It opens with O_TRUNC, so every update
+    emptied the file for the length of the write -- the same observable state the acquisition path
+    used to leave, and the same state a peer reads as "nobody is here". An update is now as
+    invisible-until-complete as a create.
+    """
+    staged = _stage(path, record)
+    try:
+        os.replace(staged, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            staged.unlink()
+        raise
+
+
 @dataclass
 class Grant:
     """An admitted job's ticket: what it may use, what that rested on, and what it actually did.
@@ -663,7 +835,10 @@ class Grant:
     waited_s: float
     job: JobHandle
     _broker: Broker
-    _path: Path | None = None
+    #: Every record file this grant holds -- one per INDEXED dimension it demanded, which is more
+    #: than one as soon as a box-scoped seat is in play. Each carries this holder's record, so a
+    #: peer refusing on ANY of them can name who is in the way.
+    _paths: list[Path] = field(default_factory=list)
     _read_working_set: Callable[[int], int | None] = working_set_bytes
     _peak_bytes: int | None = None
     _watches: list[JobWatch] = field(default_factory=list)
@@ -671,8 +846,17 @@ class Grant:
     # -- axis 2 / decision 2: what the caller can TELL ------------------------------------------
 
     @property
-    def is_fully_measured(self) -> bool:
-        """Whether EVERY dimension this job was judged on rested on a real measurement."""
+    def is_fully_declared(self) -> bool:
+        """Whether EVERY dimension this job was judged on rested on a ceiling that was DECLARED.
+
+        TWO KINDS OF DECLARED CEILING COUNT, and neither is a guess: a MEASUREMENT of this box, and
+        a STRUCTURAL constant that holds on every box. A structural constant is not a measurement of
+        this machine -- there is nothing here to measure, and measuring would not move it -- so this
+        property does not claim one; what it claims is that no dimension fell back to
+        :data:`Basis.CONSERVATIVE_DEFAULT`, which is the state a caller can act on by measuring the
+        box. Reading STRUCTURAL as "unmeasured" would collapse it into the fallback, which is the
+        distinction :class:`Enforcement` was added to stop collapsing.
+        """
         return not self.conservative
 
     @property
@@ -715,7 +899,10 @@ class Grant:
         tail = (
             f' CONSERVATIVE on {", ".join(self.conservative)} -- this box was never measured for them.'
             if self.conservative
-            else ' Every ceiling applied was measured on this box.'
+            # NOT "every ceiling was measured on this box": a STRUCTURAL ceiling was not measured
+            # here and measuring would not move it. The line a report prints must not claim the one
+            # kind of declared ceiling it is most likely to be looking at.
+            else ' Every ceiling here was DECLARED: measured on this box, or structural on every box.'
         )
         loose = (
             f' UNBOUNDED: {", ".join(self.unbounded)} -- nothing here checked those, and a declared '
@@ -858,27 +1045,16 @@ class Grant:
     # -- bookkeeping ----------------------------------------------------------------------------
 
     def _write_record(self) -> None:
-        if self._path is None:
-            return
-        record = {
-            'pool': self.pool,
-            'what': self.what,
-            'job_kind': self.job.kind,
-            'job_ident': self.job.ident,
-            'demands': dict(self.demands),
-            'since': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            'observed_bytes': self._peak_bytes,
-            'client_pid': os.getpid(),
-        }
-        with contextlib.suppress(OSError):
-            self._path.write_text(json.dumps(record), encoding='utf-8')
+        for path in self._paths:
+            with contextlib.suppress(OSError):
+                _publish(path, _record(self.pool, self.what, self.job, self.demands, self._peak_bytes))
 
     def _release(self) -> None:
         for watch in self._watches:
             watch.stop()
-        if self._path is not None:
+        for path in self._paths:
             with contextlib.suppress(OSError):
-                self._path.unlink()
+                path.unlink()
 
 
 # --------------------------------------------------------------------------------------------
@@ -945,24 +1121,65 @@ class Broker:
     # -- reading the box ------------------------------------------------------------------------
 
     def holders(self, pool: str) -> list[Holder]:
-        """Every LIVE holder of a *pool* seat on this box, for a refusal, a report or a diagnosis."""
-        found = []
-        for path in sorted(self.resource_dir().glob(f'{pool}.*')):
-            holder = self._holder_of(path)
-            if holder is not None:
-                found.append(holder)
+        """Every LIVE holder a *pool* query must be told about, for a refusal, a report or a diagnosis.
+
+        THE POOL'S OWN, PLUS EVERY BOX-SCOPED ONE. A box-scoped dimension is held on the BOX, so a
+        reader asking who is in the way is owed that answer whatever pool the holder named -- the
+        alternative is a refusal that prints "nothing this broker recorded" while a peer sits on the
+        machine. Pool-scoped records stay exactly as they were: those are the pool's own business.
+
+        ONE LINE PER RUN ACROSS NAMESPACES, and one line per SEAT within one. A job holds its pool's
+        seat and may also hold a box-scoped one; that is one job to act on and one line to read, so
+        a holder already named for the pool is not named again for the box. Two seats of the SAME
+        dimension are not that case -- they are two holdings of one stock, which is the number a
+        count reports, and collapsing them would under-report a pool that is genuinely full.
+        """
+        found = self._live(f'{pool}.*')
+        named = {(holder.pool, holder.job) for holder in found}
+        for dimension in DIMENSIONS.values():
+            if dimension.scope is Scope.BOX:
+                # The rule above, applied to ONE namespace at a time rather than to the whole
+                # listing: seen-in-another-namespace is the only thing that folds.
+                box_scoped = self._live(f'{_namespaced(pool, dimension)}.*')
+                fresh = [holder for holder in box_scoped if (holder.pool, holder.job) not in named]
+                named.update((holder.pool, holder.job) for holder in fresh)
+                found.extend(fresh)
         return found
 
+    def _live(self, pattern: str) -> list[Holder]:
+        """The live holders among the records matching *pattern*, in a stable order."""
+        root = self.resource_dir()
+        return [
+            holder for holder in (self._holder_of(path) for path in sorted(root.glob(pattern))) if holder is not None
+        ]
+
     def _holder_of(self, path: Path) -> Holder | None:
-        """The LIVE holder recorded in *path*, or ``None``. A dead holder is not a holder."""
+        """The LIVE holder recorded in *path*, or ``None`` when the path holds no live job.
+
+        AN UNREADABLE RECORD IS A HOLDER, and it is the rule this module already applies to an
+        opaque job handle: "cannot tell" is HELD, never free. Reading it as ABSENT was measured on
+        2026-09-15 to admit TWO holders to a one-seat pool -- a record is written a moment after the
+        seat file appears, that instant is unparseable, and the peer that read it as nobody deleted
+        a live seat and took its index. A record that EXISTS and cannot be read says one thing: a
+        holder is there, and no name for it. The only safe responses are to wait and to refuse; the
+        unsafe one is the one this used to take.
+
+        A MISSING file is a different fact and keeps its old meaning. It is also what a peer that
+        finished between the glob and the read leaves behind, so treating it as held would make a
+        released seat un-takeable.
+        """
         try:
-            record = json.loads(path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            # An unparseable record cannot name a live job, and crashing every admission on one
-            # would convert a stray file into a box-wide outage. It is treated as absent.
+            text = path.read_text(encoding='utf-8')
+        except FileNotFoundError:
             return None
+        except OSError:
+            return _unreadable(path)
+        try:
+            record = json.loads(text)
+        except ValueError:
+            return _unreadable(path)
         if not isinstance(record, dict):
-            return None
+            return _unreadable(path)
         # Read by KEY and never by shape: a record written by a NEWER broker carries fields this
         # one does not know, and refusing to read it would make an older worktree see a free seat
         # where a live job is. Unknown keys are ignored; the known ones are enough to count.
@@ -1014,6 +1231,10 @@ class Broker:
         blocks a peer that only needed the seat, and the count is the cheap check that should only
         be paid once the expensive one is satisfied.
 
+        EVERY INDEXED DIMENSION THE JOB DEMANDED IS TAKEN, not only ``seats``. That is how a
+        box-scoped seat is enforced by the same code path as a pool's: the dimension says whether
+        its record files are the pool's or the box's, and this call does not care which.
+
         THE WAIT IS BOUNDED. Queueing forever converts a crash into a hang, which is not an
         improvement -- and an unbounded wait outlives the thing it waits for.
 
@@ -1045,10 +1266,26 @@ class Broker:
 
         claim = self._write_claim(pool, wanted, what)
         started = time.monotonic()
+        taken: list[Path] = []
         try:
             self._await_memory(pool, wanted, ceilings, what=what, wait_s=wait_s, poll_s=poll_s, started=started)
             self._await_cores(pool, wanted, ceilings, what=what, wait_s=wait_s, poll_s=poll_s, started=started)
-            path = self._take_seats(pool, wanted, ceilings, what=what, wait_s=wait_s, poll_s=poll_s, started=started)
+            for name in sorted(wanted):
+                dimension = DIMENSIONS[name]
+                if dimension.enforcement is Enforcement.INDEXED:
+                    taken.append(
+                        self._take_indexed(
+                            pool, dimension, wanted, ceilings, what=what, wait_s=wait_s, poll_s=poll_s, started=started
+                        )
+                    )
+        except BaseException:
+            # A seat already taken by a dimension that is not the one that failed is RELEASED here:
+            # there is no grant yet, so nothing else would ever unlink it and the box would lose
+            # that seat to a job that never started.
+            for path in taken:
+                with contextlib.suppress(OSError):
+                    path.unlink()
+            raise
         finally:
             with contextlib.suppress(OSError):
                 claim.unlink()
@@ -1062,10 +1299,9 @@ class Broker:
             waited_s=time.monotonic() - started,
             job=JobHandle.for_client(),
             _broker=self,
-            _path=path,
+            _paths=taken,
             _read_working_set=read_working_set,
         )
-        grant._write_record()
         try:
             yield grant
         finally:
@@ -1077,22 +1313,12 @@ class Broker:
         Without this the memory check is check-then-start: two waiters both read the same free
         bytes and both pass. A claim is counted for memory and NOT for seats, so nobody holds a
         seat while queueing for RAM.
+
+        PUBLISHED ATOMICALLY for the reason every record is: a peer reads this file to decide
+        whether there is room, and a half-written claim is a claim that reads as nothing.
         """
         path = self.resource_dir() / f'{pool}.claim.{os.getpid()}.{threading.get_ident()}.json'
-        path.write_text(
-            json.dumps(
-                {
-                    'pool': pool,
-                    'what': what or sys.argv[0],
-                    'job_kind': 'client',
-                    'job_ident': str(os.getpid()),
-                    'demands': dict(wanted),
-                    'since': time.strftime('%Y-%m-%dT%H:%M:%S'),
-                    'client_pid': os.getpid(),
-                }
-            ),
-            encoding='utf-8',
-        )
+        _publish(path, _record(pool, what or sys.argv[0], JobHandle.for_client(), wanted, None))
         return path
 
     def _await_memory(
@@ -1212,7 +1438,13 @@ class Broker:
             time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
 
     def _peers(self, pool: str) -> list[Holder]:
-        """Live holders and claims OTHER than this call's own claim file."""
+        """Live holders and claims OTHER than this call's own claim file.
+
+        POOL-SCOPED, deliberately, and not the wider reading :meth:`holders` takes: this is the
+        arithmetic behind a memory and a core comparison, and those sums are over what the CALLER's
+        pool declared. Widening it would charge one pool for another's declaration -- a different
+        question with a different answer, not a better one.
+        """
         mine = f'{pool}.claim.{os.getpid()}.{threading.get_ident()}.json'
         found = []
         for path in sorted(self.resource_dir().glob(f'{pool}.*')):
@@ -1223,9 +1455,10 @@ class Broker:
                 found.append(holder)
         return found
 
-    def _take_seats(
+    def _take_indexed(
         self,
         pool: str,
+        dimension: Dimension,
         wanted: Mapping[str, int],
         ceilings: Mapping[str, Capacity],
         *,
@@ -1234,43 +1467,66 @@ class Broker:
         poll_s: float,
         started: float,
     ) -> Path:
-        """Claim an indexed seat file by ``O_EXCL``, or refuse naming the holders.
+        """Claim one unit of an INDEXED dimension by CREATING its record, or refuse naming the holders.
 
-        The indexed-file technique is carried over unchanged from the origin tree because it is
-        already cross-process and already correct: the OS arbitrates the race, and losing it is a
-        ``continue`` rather than a failure because the next index may still be free.
+        THE RACE THIS CLOSES, measured 2026-09-15. The record used to be written AFTER
+        ``os.open(O_CREAT | O_EXCL)`` returned, so for that instant the seat EXISTED and was EMPTY
+        -- a state ``_holder_of`` read as nobody, and the allocator then DELETED before taking the
+        index. A peer could therefore remove a seat another process had just taken and take it, and
+        two holders ran on a lock that admits one. It is closed at the cause here: the record is
+        written to a staging file first and the seat is created by ``os.link``, which makes the name
+        only if it is free and only WITH the record already in it. There is no instant at which the
+        seat exists and cannot be read, so the unreadable-is-held rule below is a backstop against a
+        mixed-version box rather than the mechanism -- and an unreadable seat is never deleted.
+
+        WHY ``os.link`` AND NOT A STAGED RECORD PLUS ``os.rename``. ``os.rename`` REPLACES the
+        destination silently on POSIX (``os.replace`` is the same call with the intent spelled out),
+        so as an acquisition it admits every racer: two processes rename their records onto one
+        index and both believe they won. Measured on this box the same call refuses on Windows --
+        so the exclusion would depend on the platform, and a lock that silently admits two holders
+        on Linux is worse than the window it was meant to close. ``os.link`` is the one stdlib call
+        that fails with ``FileExistsError`` on EVERY platform: the property an index needs.
+
+        The indexed-file technique itself is carried over unchanged from the origin tree because it
+        is already cross-process and already correct -- the OS arbitrates the race, and losing it is
+        a ``continue`` rather than a failure because the next index may still be free.
         """
-        ceiling = ceilings[SEATS.name]
+        namespace = _namespaced(pool, dimension)
+        ceiling = ceilings[dimension.name]
         # NARROWED, NOT DEFAULTED. `ceiling.value` is `int | None` because the shape-only
-        # dimensions have no value; seats always does, and `_conservative_floor` is the assertion
-        # of that -- checked at import for every enforced dimension, so this branch is unreachable
-        # rather than merely unlikely. Written as an explicit `is None` and never `value or FLOOR`
-        # because ZERO IS A MEANINGFUL DECLARATION -- "this box may not run this at all" -- and
-        # `or` would silently promote it to one, which is the permissive direction.
-        limit = ceiling.value if ceiling.value is not None else _conservative_floor(SEATS)
+        # dimensions have no value; an INDEXED dimension always does, and `_conservative_floor` is
+        # the assertion of that -- checked at import for every enforced dimension, so this branch is
+        # unreachable rather than merely unlikely. Written as an explicit `is None` and never
+        # `value or FLOOR` because ZERO IS A MEANINGFUL DECLARATION -- "this box may not run this at
+        # all" -- and `or` would silently promote it to one, which is the permissive direction.
+        limit = ceiling.value if ceiling.value is not None else _conservative_floor(dimension)
         deadline = started + max(0.0, wait_s)
         while True:
+            # Rebuilt per poll rather than once before it: the record's `since` is what a refusal
+            # prints, and a job that queued for five minutes would otherwise announce itself as
+            # having held the seat since a time it was still waiting for it.
+            record = _record(pool, what, JobHandle.for_client(), wanted, None)
             for index in range(limit):
-                path = self.resource_dir() / f'{pool}.{index}.slot'
+                path = self.resource_dir() / f'{namespace}.{index}.slot'
+                if self._create_seat(path, record):
+                    return path
                 if self._holder_of(path) is not None:
+                    # A LIVE holder, or a record that cannot be read -- which is a holder this
+                    # broker cannot name. Either way the index is somebody's already.
                     continue
                 with contextlib.suppress(OSError):
-                    # A record whose job is dead is not held, so removing it is not stealing.
+                    # A record whose job is dead is not a holder, so removing it is not stealing.
                     path.unlink()
-                try:
-                    handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                except FileExistsError:
-                    # LOST THE RACE between our read and our open. Another process took this seat
-                    # in the gap; the next index may still be free.
-                    continue
-                os.close(handle)
-                return path
+                if self._create_seat(path, record):
+                    return path
+                # LOST the reclaim to a peer that took the index between the removal and the
+                # create: not an error, the next index may still be free.
             if time.monotonic() >= deadline:
-                holders = self.holders(pool)
+                holders = self._live(f'{namespace}.*')
                 raise Exhausted(
                     pool,
-                    SEATS.name,
-                    needed=wanted.get(SEATS.name, 1),
+                    dimension.name,
+                    needed=wanted.get(dimension.name, 1),
                     available=limit - len(holders),
                     basis=ceiling.basis,
                     holders=holders,
@@ -1278,3 +1534,28 @@ class Broker:
                     waited_s=time.monotonic() - started,
                 )
             time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+
+    @staticmethod
+    def _create_seat(path: Path, record: Mapping[str, object]) -> bool:
+        """Create *path* holding *record*, atomically and exclusively. ``False`` if it is taken.
+
+        THE WHOLE FIX IN ONE CALL, and the reason the seat is never observable in a state that
+        reads as free: ``os.link`` publishes a name for an ALREADY-WRITTEN file, so ``FileExistsError``
+        is the OS saying "somebody else's name is on this index" -- the same arbitration ``O_EXCL``
+        gave, with the record no longer arriving later.
+
+        IT NEEDS A FILESYSTEM WITH HARD LINKS -- measured on this box's NTFS, and ``link(2)`` is
+        fundamental on every POSIX one this family runs on (ext4, APFS, tmpfs). THERE IS NO FALLBACK
+        to create-then-write when a directory cannot: that is the code this fix removed, and a lock
+        that quietly weakens itself on an unusual mount is worse than one that reports it cannot run
+        there. A record root that cannot be linked is a root this broker cannot ration on.
+        """
+        staged = _stage(path, record)
+        try:
+            os.link(staged, path)
+        except FileExistsError:
+            return False
+        finally:
+            with contextlib.suppress(OSError):
+                staged.unlink()
+        return True
