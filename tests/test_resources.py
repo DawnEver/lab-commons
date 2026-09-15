@@ -10,6 +10,7 @@ without testing nothing.
 """
 
 import os
+import tempfile
 import threading
 import time
 
@@ -449,8 +450,6 @@ class TestTheRecordDoesNotDependOnTheCallerRevision:
         # Per-box runtime state naming a pid, shared by every worktree on the box REGARDLESS of
         # which revision each has checked out. The tree is not where machine state goes.
         monkeypatch.delenv('LAB_COMMONS_RESOURCE_DIR', raising=False)
-        import tempfile
-
         assert str(Broker(registry).resource_dir()).startswith(tempfile.gettempdir())
 
     def test_a_record_written_by_an_unknown_future_version_is_still_counted(self, broker, registry):

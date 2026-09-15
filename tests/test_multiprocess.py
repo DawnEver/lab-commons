@@ -8,6 +8,7 @@ re-import them in the child process -- see ``_worker_ok`` / ``_worker_boom`` bel
 
 import pytest
 
+from lab_commons.exceptions import ParameterException
 from lab_commons.multiprocess import (
     MultiProcessing,
     MultiProcessingParameters,
@@ -80,8 +81,6 @@ def test_run_num_process_zero_returns_empty_without_spawning():
 
 
 def test_init_raises_without_args_or_kwds():
-    from lab_commons.exceptions import ParameterException
-
     with pytest.raises(ParameterException):
         MultiProcessing(_worker_ok)
 

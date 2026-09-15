@@ -1198,7 +1198,10 @@ class Broker:
 
     def _job_alive(self, job: JobHandle) -> bool:
         """Whether the recorded JOB is still running. The one staleness test."""
-        from lab_commons.proc import pid_alive  # local import keeps the module's import graph flat
+        # DEFERRED ON PURPOSE: `proc` reads this box's process table and is the heavier half of the
+        # pair, while this module is imported by anything that wants a resource record. A top-level
+        # import would make every importer pay for a lookup only the staleness test performs.
+        from lab_commons.proc import pid_alive  # noqa: PLC0415
 
         pid = job.pid
         if pid is not None:

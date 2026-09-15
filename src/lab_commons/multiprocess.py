@@ -60,9 +60,12 @@ def default_init_worker():
     ``Quantity`` crossing the process boundary would fail to compare/operate against values
     built in the parent.
     """
-    from pint import set_application_registry
+    # DEFERRED ON PURPOSE, and the reason is the process boundary rather than cost: this runs in a
+    # freshly spawned worker, and the registry it installs must be the one THAT process imports. A
+    # top-level import would bind the parent's module objects at fork/spawn time instead.
+    from pint import set_application_registry  # noqa: PLC0415
 
-    from lab_commons.units import ureg
+    from lab_commons.units import ureg  # noqa: PLC0415
 
     set_application_registry(ureg)
 

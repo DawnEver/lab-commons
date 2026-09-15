@@ -77,7 +77,7 @@ def test_units_import_does_not_pull_in_em():
     """Importing lab_commons.units alone must not drag in the tier-2 em module."""
     sys.modules.pop('lab_commons.em', None)
     sys.modules.pop('lab_commons.units', None)
-    import lab_commons.units  # noqa: F401
+    import lab_commons.units  # noqa: F401, PLC0415 -- the import IS the measurement, after the pop
 
     assert 'lab_commons.em' not in sys.modules
 
