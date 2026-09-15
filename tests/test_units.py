@@ -70,7 +70,9 @@ def test_pydantic_model_dump_and_reload_round_trips():
     m = Model(length=Q_(5.0, 'mm'))
     dumped = m.model_dump(mode='json')
     reloaded = Model.model_validate(dumped)
-    assert reloaded.length.to('mm').magnitude == pytest.approx(5.0)
+    # abs=0.0: the CLAIM is that a dump/reload round trip loses nothing, and 5.0 mm survives JSON
+    # exactly. Any absolute floor here would let the round trip drop a digit and still read green.
+    assert reloaded.length.to('mm').magnitude == pytest.approx(5.0, abs=0.0)
 
 
 def test_units_import_does_not_pull_in_em():

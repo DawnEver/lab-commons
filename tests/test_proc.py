@@ -40,7 +40,10 @@ class TestSystemMemory:
     def test_used_is_derived_not_read_twice(self):
         reading = SystemMemory(total_bytes=8, available_bytes=3)
         assert reading.used_bytes == 5
-        assert reading.used_fraction == pytest.approx(5 / 8)
+        # abs=0.0 IS the floor, stated rather than defaulted: 5/8 is exactly representable in binary
+        # and used_bytes/total_bytes is one division of two small exact ints, so there is no rounding
+        # path to absorb. A non-zero floor here would forgive an arithmetic change that cannot happen.
+        assert reading.used_fraction == pytest.approx(5 / 8, abs=0.0)
 
     def test_reports_bytes_not_gigabytes(self):
         # A pool sizer divides by a per-worker footprint; a value pre-rounded to 0.1 GB has thrown

@@ -360,7 +360,9 @@ class TestObservingARunningJob:
             for _ in range(3):
                 grant.observe()
             assert grant.peak_bytes == 9 * GIB
-            assert grant.declared_ratio(MEMORY.name) == pytest.approx(9 / 4)
+            # abs=0.0: a DIMENSIONLESS ratio of two exact GiB multiples, 9/4 = 2.25 exactly in binary.
+            # The ratio is the thing a declaration is judged by, so it gets no absolute slack at all.
+            assert grant.declared_ratio(MEMORY.name) == pytest.approx(9 / 4, abs=0.0)
 
     def test_an_unobserved_job_has_no_ratio_rather_than_a_flattering_one(self, broker):
         with broker.admit('tool', {MEMORY.name: 4 * GIB}) as grant:

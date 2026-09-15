@@ -33,12 +33,16 @@ def test_machine_cores_is_a_positive_int():
 
 
 def test_default_params_timeout_is_60s():
-    assert global_mp_params.timeout.to('s').magnitude == pytest.approx(60.0)
+    # FLOOR IN SECONDS: a nanosecond, far below the resolution any process timeout is honoured at,
+    # and far above the ulp of 60.0. It is a default read back unconverted, so nothing can perturb it.
+    assert global_mp_params.timeout.to('s').magnitude == pytest.approx(60.0, abs=1e-9)
 
 
 def test_params_accept_a_time_quantity():
     params = MultiProcessingParameters(timeout=Q_(5, 'min'))
-    assert params.timeout.to('s').magnitude == pytest.approx(300.0)
+    # Same second-valued floor as the default above; the 5 min -> 300 s conversion is an exact
+    # multiply by 60, so the nanosecond floor is slack the arithmetic never uses.
+    assert params.timeout.to('s').magnitude == pytest.approx(300.0, abs=1e-9)
 
 
 def test_params_field_itself_is_permissive_but_m_as_s_enforces_the_dimension():

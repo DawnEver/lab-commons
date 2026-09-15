@@ -37,7 +37,10 @@ def test_torque_type_and_constant_are_newton_meter_dimensioned():
 
 def test_angle_type_and_q_360deg():
     assert AngleType.__supertype__.__metadata__[1].json_schema_extra == {'unit': 'deg'}
-    assert Q_360deg.to('rad').magnitude == pytest.approx(2 * np.pi)
+    # FLOOR IN RADIANS, the unit of the left-hand side: 1e-12 rad is ~2e-7 arcsecond, orders below
+    # any angle a motor geometry resolves, while the deg->rad conversion's own error is one ulp of
+    # 6.28 (~1e-15). A floor stated in degrees here would have been 1000x looser than it reads.
+    assert Q_360deg.to('rad').magnitude == pytest.approx(2 * np.pi, abs=1e-12)
 
 
 def test_angle_speed_type_and_q_0rpm():
@@ -61,7 +64,10 @@ def test_is_equal_2d_point():
 
 
 def test_constants_vacuum_permeability():
-    assert CONSTANTS.vacuum_permeability.to('H/m').magnitude == pytest.approx(4 * np.pi * 1e-7)
+    # The VALUE is 1.2566e-6 H/m, so a floor must be scaled to it rather than to 1: 1e-18 H/m is
+    # 1e-12 of the constant. A habitual abs=1e-12 would have been 1e-6 RELATIVE here and would have
+    # accepted a permeability wrong in its seventh digit -- the exact inversion this rule names.
+    assert CONSTANTS.vacuum_permeability.to('H/m').magnitude == pytest.approx(4 * np.pi * 1e-7, abs=1e-18)
     assert CONSTANTS.miu_0 is CONSTANTS.vacuum_permeability
 
 
