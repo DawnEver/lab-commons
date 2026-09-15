@@ -11,17 +11,29 @@ EM quantity types/constants (``LengthType``, ``TorqueType``, ``Q_0Nm``, ...) are
 in ``lab_commons.em``, which imports FROM this module and never the reverse.
 """
 
+import re
 import warnings
+from argparse import ArgumentTypeError
 from typing import Annotated
 
 import numpy as np
+from pint import DefinitionSyntaxError as pint_DefinitionSyntaxError
 from pint import Quantity as PintQuantityType
+from pint import UndefinedUnitError as pint_UndefinedUnitError
 from pint import UnitStrippedWarning as pint_UnitStrippedWarning
 from pint import get_application_registry
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, GetCoreSchemaHandler
 from pydantic_core import core_schema
 
 from lab_commons.exceptions import QuantityException
+
+# Whether a CLI string carries a unit is a SYNTACTIC question, never a dimensional one: pint reads
+# both `12.5` and `12.5 rad` as dimensionless, so asking `is_dimensionless()` would silently rewrite
+# an angle into millimetres. Strip the leading number -- exponent notation included, because `1e-3`
+# has an `e` in it and is not a unit -- and ask whether anything alphabetic is left.
+_LEADING_NUMBER = re.compile(r'^\s*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?\s*')
+_HAS_ALPHA = re.compile(r'[A-Za-z]')
+_HAS_DIGIT = re.compile(r'\d')
 
 # UnitStrippedWarning fires whenever a Quantity is downcast to ndarray -- routine
 # at the SI boundary, so silence it here where pint integration lives.
@@ -33,6 +45,7 @@ __all__ = [
     'PydanticQuantity',
     'get_quantity_type',
     'pydantic_config_dict_with_q',
+    'quantity_parser',
     'ureg',
 ]
 
@@ -127,6 +140,53 @@ def get_quantity_type(
         Field(..., json_schema_extra={'unit': default_unit}),  # base unit
         marker,
     ]
+
+
+def quantity_parser(default_unit: str):
+    """An argparse ``type=`` callable that reads a physical quantity and keeps the unit in the VALUE.
+
+    THE HALF THIS FAMILY WAS MISSING, and the reason it is load-bearing rather than a convenience.
+    A CLI flag spelled ``--slot-pitch-mm`` teaches the reader the unit and hands pint nothing: the
+    value crosses the boundary as a bare ``float`` and every unit conversion downstream is a
+    convention nobody checks. The obvious repair -- drop ``-mm`` from the name -- deletes the unit
+    instead of moving it, which is worse. This puts it in the value, so the name can be silent and
+    the unit is still known.
+
+    A BARE NUMBER IS STILL ACCEPTED, and that is what makes an existing ``type=float`` call site a
+    SUBSTITUTION rather than a breaking change for whoever types the command: ``12.5`` means 12.5
+    *default_unit*, and ``12.5mm`` / ``0.0125 m`` mean what they say. So a flag can be migrated to
+    quantities and its current users keep typing what they typed.
+
+    Raises:
+        ArgumentTypeError: the text is not a quantity pint can read. That class rather than
+            ``ValueError`` because argparse DISCARDS a bare ``ValueError``'s message and prints
+            ``invalid <callable name> value`` instead -- a refusal that does not say what was wrong
+            with the input is a refusal nobody can act on.
+
+    """
+    unit = default_unit.strip()
+    if not unit:
+        msg = (
+            'a quantity parser with no default unit cannot read a bare number, and a bare number is the '
+            'one thing every existing call site already passes.'
+        )
+        raise ValueError(msg)
+    ureg.Unit(unit)  # refuses a misspelled unit HERE, at import, not on a user's first run
+
+    def parse(text: str) -> PintQuantityType:
+        if not _HAS_DIGIT.search(text):
+            msg = f'{text!r} carries no number, so it is not a quantity in {unit!r}.'
+            raise ArgumentTypeError(msg)
+        rest = _LEADING_NUMBER.sub('', text)
+        try:
+            return Q_(text) if _HAS_ALPHA.search(rest) else Q_(float(text), unit)
+        except (pint_UndefinedUnitError, pint_DefinitionSyntaxError, ValueError, TypeError) as exc:
+            msg = f'{text!r} is not a quantity in {unit!r} -- give a number (12.5) or a quantity (12.5mm).'
+            raise ArgumentTypeError(msg) from exc
+
+    parse.__name__ = f'quantity[{unit}]'
+    parse.__doc__ = f'Reads a pint quantity, bare numbers defaulting to {unit!r}.'
+    return parse
 
 
 pydantic_config_dict_with_q = ConfigDict(

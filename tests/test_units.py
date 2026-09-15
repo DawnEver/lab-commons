@@ -5,9 +5,12 @@ the tier-1 subset (no EM vocabulary -- that's ``test_em.py``). Also pins the tie
 boundary itself: importing this module must never import ``lab_commons.em``.
 """
 
+import argparse
 import sys
+from argparse import ArgumentTypeError
 
 import pytest
+from pint import UndefinedUnitError as pint_UndefinedUnitError
 
 from lab_commons.exceptions import QuantityException
 from lab_commons.units import (
@@ -15,6 +18,7 @@ from lab_commons.units import (
     BaseModel_with_q,
     PydanticQuantity,
     get_quantity_type,
+    quantity_parser,
     ureg,
 )
 
@@ -76,3 +80,66 @@ def test_units_import_does_not_pull_in_em():
     import lab_commons.units  # noqa: F401
 
     assert 'lab_commons.em' not in sys.modules
+
+
+# ---------------------------------------------------------------------------------------------
+# quantity_parser: the CLI half of "the unit lives in the VALUE".
+#
+# It exists because banning a unit from a NAME is only half a rule. A flag spelled
+# `--slot-pitch-mm` with `type=float` teaches the reader the unit and hands pint nothing; the
+# obvious repair -- drop `-mm` -- DELETES the unit instead of moving it. This is where it moves.
+# ---------------------------------------------------------------------------------------------
+
+
+def test_a_bare_number_takes_the_default_unit() -> None:
+    """The compatibility direction: an existing `type=float` call site keeps accepting what it did."""
+    parse = quantity_parser('mm')
+    assert parse('12.5') == Q_(12.5, 'mm')
+    assert parse(' 12.5 ') == Q_(12.5, 'mm')
+    assert parse('1e-3') == Q_(0.001, 'mm'), 'exponent notation has an `e` in it and is not a unit'
+
+
+def test_a_written_unit_wins_over_the_default() -> None:
+    """The direction that makes the migration worth doing: the value carries its own unit."""
+    parse = quantity_parser('mm')
+    assert parse('12.5mm') == Q_(12.5, 'mm')
+    assert parse('0.0125 m') == Q_(12.5, 'mm'), 'and it converts, which a bare float never could'
+    assert parse('25um') == Q_(0.025, 'mm')
+
+
+def test_an_angle_is_not_silently_rewritten_as_a_length() -> None:
+    """THE CASE THAT FORCES A SYNTACTIC CHECK. `12.5` and `12.5 rad` are BOTH dimensionless to pint,
+    so asking `is_dimensionless()` would read `12.5 rad` as a bare number and return 12.5 mm."""
+    parse = quantity_parser('mm')
+    assert parse('12.5 rad') == Q_(12.5, 'rad')
+    assert parse('12.5 deg') == Q_(12.5, 'deg')
+    assert not parse('12.5 rad').check('[length]'), 'an angle must not come back as a length'
+
+
+def test_a_refusal_says_what_was_wrong_with_the_input() -> None:
+    """ArgumentTypeError rather than ValueError: argparse DISCARDS a bare ValueError's message."""
+    parse = quantity_parser('mm')
+    for bad in ('hello', '12.5 furlongs_per_fortnight_ish', ''):
+        with pytest.raises(ArgumentTypeError) as raised:
+            parse(bad)
+        assert str(raised.value), f'{bad!r} was refused without saying why'
+
+
+def test_a_misspelled_default_unit_is_refused_at_construction_not_on_a_users_run() -> None:
+    """A parser built with a typo must fail where it is WRITTEN, not the first time a user types."""
+    with pytest.raises(pint_UndefinedUnitError):
+        quantity_parser('metres_typo')
+    with pytest.raises(ValueError, match='no default unit'):
+        quantity_parser('   ')
+
+
+def test_the_parser_is_usable_as_an_argparse_type() -> None:
+    """The contract is argparse's `type=` protocol, so drive it through a real ArgumentParser."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--slot-pitch', type=quantity_parser('mm'), default=None)
+    args = parser.parse_args(['--slot-pitch', '12.5'])
+    assert args.slot_pitch == Q_(12.5, 'mm')
+    args = parser.parse_args(['--slot-pitch', '1.25cm'])
+    assert args.slot_pitch == Q_(12.5, 'mm')
+    with pytest.raises(SystemExit):
+        parser.parse_args(['--slot-pitch', 'banana'])
