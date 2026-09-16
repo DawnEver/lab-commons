@@ -79,7 +79,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Final
 
-from lab_commons.proc import SystemMemory, kill_process_tree, system_memory, working_set_bytes
+from lab_commons._records import publish as _publish
+from lab_commons._records import record as _record
+from lab_commons._records import stage as _stage
+from lab_commons.liveness import CreationClock, creation_stamp, still_the_same_process
+from lab_commons.proc import SystemMemory, kill_process_tree, pid_alive, system_memory, working_set_bytes
 
 __all__ = [
     'BOX_SEATS',
@@ -765,59 +769,6 @@ class JobWatch:
 # --------------------------------------------------------------------------------------------
 
 
-#: The prefix of a record being STAGED before it is published. It carries no dot, so it can never
-#: match the ``{pool}.*`` scans a peer runs while looking for holders.
-_STAGED_PREFIX: Final = 'staged-'
-
-
-def _record(pool: str, what: str, job: JobHandle, demands: Mapping[str, int], observed_bytes: int | None) -> dict:
-    """One holder's record: WHO holds it and what that holder declared.
-
-    ONE WRITER FOR THE SHAPE. The file a peer reads a microsecond after the seat appears and the
-    file it reads an hour later are published from this function, so the acquisition record and
-    every later update cannot drift into two shapes a reader would have to know about.
-    """
-    return {
-        'pool': pool,
-        'what': what,
-        'job_kind': job.kind,
-        'job_ident': job.ident,
-        'demands': dict(demands),
-        'since': time.strftime('%Y-%m-%dT%H:%M:%S'),
-        'observed_bytes': observed_bytes,
-        'client_pid': os.getpid(),
-    }
-
-
-def _stage(path: Path, record: Mapping[str, object]) -> Path:
-    """*record* as JSON, in a temporary file IN *path*'s OWN directory.
-
-    NOT in the system temp directory: publishing is a link and a replace, and neither can cross a
-    filesystem -- the staged name and the published one have to be on the same one.
-    """
-    handle, staged = tempfile.mkstemp(dir=str(path.parent), prefix=_STAGED_PREFIX)
-    with os.fdopen(handle, 'w', encoding='utf-8') as stream:
-        json.dump(record, stream)
-    return Path(staged)
-
-
-def _publish(path: Path, record: Mapping[str, object]) -> None:
-    """Replace the record at *path* ATOMICALLY: a reader sees the whole old record or the whole new.
-
-    WHY NOT ``path.write_text``, which this module used. It opens with O_TRUNC, so every update
-    emptied the file for the length of the write -- the same observable state the acquisition path
-    used to leave, and the same state a peer reads as "nobody is here". An update is now as
-    invisible-until-complete as a create.
-    """
-    staged = _stage(path, record)
-    try:
-        os.replace(staged, path)
-    except OSError:
-        with contextlib.suppress(OSError):
-            staged.unlink()
-        raise
-
-
 @dataclass
 class Grant:
     """An admitted job's ticket: what it may use, what that rested on, and what it actually did.
@@ -1047,7 +998,17 @@ class Grant:
     def _write_record(self) -> None:
         for path in self._paths:
             with contextlib.suppress(OSError):
-                _publish(path, _record(self.pool, self.what, self.job, self.demands, self._peak_bytes))
+                _publish(
+                    path,
+                    _record(
+                        self.pool,
+                        self.what,
+                        self.job,
+                        self.demands,
+                        self._peak_bytes,
+                        clock=self._broker._creation_clock,
+                    ),
+                )
 
     def _release(self) -> None:
         for watch in self._watches:
@@ -1088,6 +1049,7 @@ class Broker:
         read_memory: Callable[[], SystemMemory | None] = system_memory,
         liveness: Callable[[JobHandle], bool | None] | None = None,
         resource_dir: Path | None = None,
+        creation_clock: CreationClock = creation_stamp,
     ) -> None:
         """
         Args:
@@ -1101,6 +1063,10 @@ class Broker:
                 which is read as STILL HELD: freeing a seat wrongly is the over-subscription this
                 whole mechanism exists to prevent, so "I do not know" takes the conservative side.
             resource_dir: override the record root; ``$LAB_COMMONS_RESOURCE_DIR`` otherwise.
+            creation_clock: reads a pid's creation stamp, the discriminator that makes a recorded
+                pid an IDENTITY rather than a number. Injected for the reason *read_memory* is: pid
+                REUSE cannot be planted by asking this box to recycle a number to order, so the
+                condition is planted through this hook and the REAL guard is called.
 
         """
         self.registry = registry if registry is not None else CapacityRegistry()
@@ -1108,6 +1074,7 @@ class Broker:
         self._read_memory = read_memory
         self._liveness = liveness
         self._resource_dir = resource_dir
+        self._creation_clock = creation_clock
 
     # -- where the records live -----------------------------------------------------------------
 
@@ -1184,7 +1151,8 @@ class Broker:
         # one does not know, and refusing to read it would make an older worktree see a free seat
         # where a live job is. Unknown keys are ignored; the known ones are enough to count.
         job = JobHandle(str(record.get('job_kind', 'client')), str(record.get('job_ident', '')))
-        if not self._job_alive(job):
+        created = record.get('created')
+        if not self._job_alive(job, created if isinstance(created, int) else None):
             return None
         demands = record.get('demands') or {}
         return Holder(
@@ -1196,16 +1164,18 @@ class Broker:
             observed_bytes=record.get('observed_bytes'),
         )
 
-    def _job_alive(self, job: JobHandle) -> bool:
-        """Whether the recorded JOB is still running. The one staleness test."""
-        # DEFERRED ON PURPOSE: `proc` reads this box's process table and is the heavier half of the
-        # pair, while this module is imported by anything that wants a resource record. A top-level
-        # import would make every importer pay for a lookup only the staleness test performs.
-        from lab_commons.proc import pid_alive  # noqa: PLC0415
+    def _job_alive(self, job: JobHandle, created: int | None = None) -> bool:
+        """Whether the recorded JOB is still running. The one staleness test.
 
+        A PID-KIND HANDLE IS TESTED AGAINST ITS RECORDED CREATION STAMP and not against the number
+        alone; :func:`lab_commons.liveness.still_the_same_process` holds that comparison and the
+        two incidents that decide its direction. *created* defaults to ``None`` -- "no
+        discriminator recorded" -- which is exactly how a record written by an older broker on this
+        box must read, and which keeps the old behaviour for it rather than freeing its seat.
+        """
         pid = job.pid
         if pid is not None:
-            return pid_alive(pid)
+            return still_the_same_process(pid, created, alive=pid_alive, clock=self._creation_clock)
         if self._liveness is None:
             return True  # an opaque handle nobody can resolve is HELD, never free
         verdict = self._liveness(job)
@@ -1321,7 +1291,9 @@ class Broker:
         whether there is room, and a half-written claim is a claim that reads as nothing.
         """
         path = self.resource_dir() / f'{pool}.claim.{os.getpid()}.{threading.get_ident()}.json'
-        _publish(path, _record(pool, what or sys.argv[0], JobHandle.for_client(), wanted, None))
+        _publish(
+            path, _record(pool, what or sys.argv[0], JobHandle.for_client(), wanted, None, clock=self._creation_clock)
+        )
         return path
 
     def _await_memory(
@@ -1508,7 +1480,7 @@ class Broker:
             # Rebuilt per poll rather than once before it: the record's `since` is what a refusal
             # prints, and a job that queued for five minutes would otherwise announce itself as
             # having held the seat since a time it was still waiting for it.
-            record = _record(pool, what, JobHandle.for_client(), wanted, None)
+            record = _record(pool, what, JobHandle.for_client(), wanted, None, clock=self._creation_clock)
             for index in range(limit):
                 path = self.resource_dir() / f'{namespace}.{index}.slot'
                 if self._create_seat(path, record):
