@@ -29,7 +29,23 @@ from lab_commons.liveness import CreationClock, creation_stamp
 if TYPE_CHECKING:
     from lab_commons.resources import JobHandle
 
-__all__ = ['publish', 'record', 'stage']
+__all__ = ['publish', 'record', 'stage', 'unpublish']
+
+#: How hard a release INSISTS on removing its own record, and how long it pauses between tries.
+#:
+#: WHY A RELEASE CAN FAIL AT ALL, and why it is Windows that made it matter. A reader opens a record
+#: to parse it; on Windows an open handle refuses the unlink underneath it (`FILE_SHARE_DELETE` is
+#: not what CPython's `open` asks for), so a seat whose holder released while somebody was mid-read
+#: survives -- naming a pid that is genuinely ALIVE. It then reads as HELD, which is the
+#: conservative direction everywhere else and here is starvation: the process that just released is
+#: refused by its own leaked record for the rest of its life.
+#:
+#: MEASURED 2026-09-16, driving motronics' gate lock (a `BoxLock` adapter) through a take/release
+#: loop beside a concurrent poll storm: the loop wedged on its own seat within a few seconds. A
+#: reader holds the file for microseconds, so insisting for a fraction of a second is the whole fix
+#: -- and it is a RETRY rather than a lease, so nothing here consults a clock about a holder.
+_UNLINK_ATTEMPTS: Final = 40
+_UNLINK_BACKOFF_S: Final = 0.005
 
 #: The prefix of a record being STAGED before it is published. It carries no dot, so it can never
 #: match the ``{pool}.*`` scans a peer runs while looking for holders.
@@ -98,3 +114,30 @@ def publish(path: Path, payload: Mapping[str, object]) -> None:
         with contextlib.suppress(OSError):
             staged.unlink()
         raise
+
+
+def unpublish(path: Path) -> bool:
+    """Remove the record at *path*, INSISTING briefly against a reader's open handle.
+
+    Returns ``True`` when the record is gone -- including when it was already gone, which is the
+    ordinary outcome for a claim a peer reclaimed. ``False`` means a live record was left behind,
+    and the caller is the only party that can say whether that matters; nothing is raised, because
+    a release runs in a ``finally`` and an exception there would replace one leak with two.
+
+    A SEAT IS NOT AN ORDINARY FILE, which is why this is not `contextlib.suppress(OSError)`. A
+    leaked seat names a LIVE pid, so every later reader must treat it as a holder -- the failure is
+    invisible, permanent for that process's lifetime, and points the wrong way from every other
+    "cannot tell" in this package.
+    """
+    for attempt in range(_UNLINK_ATTEMPTS):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            if attempt + 1 == _UNLINK_ATTEMPTS:
+                return False
+            time.sleep(_UNLINK_BACKOFF_S)
+        else:
+            return True
+    return False

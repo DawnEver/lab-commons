@@ -82,6 +82,7 @@ from typing import Final
 from lab_commons._records import publish as _publish
 from lab_commons._records import record as _record
 from lab_commons._records import stage as _stage
+from lab_commons._records import unpublish as _unpublish
 from lab_commons.liveness import CreationClock, creation_stamp, still_the_same_process
 from lab_commons.proc import SystemMemory, kill_process_tree, pid_alive, system_memory, working_set_bytes
 
@@ -1014,8 +1015,7 @@ class Grant:
         for watch in self._watches:
             watch.stop()
         for path in self._paths:
-            with contextlib.suppress(OSError):
-                path.unlink()
+            _unpublish(path)
 
 
 # --------------------------------------------------------------------------------------------
