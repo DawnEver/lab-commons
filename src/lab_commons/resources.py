@@ -1253,15 +1253,14 @@ class Broker:
                     )
         except BaseException:
             # A seat already taken by a dimension that is not the one that failed is RELEASED here:
-            # there is no grant yet, so nothing else would ever unlink it and the box would lose
-            # that seat to a job that never started.
+            # there is no grant yet, so nothing else would ever unlink it and the box would lose that
+            # seat to a job that never started. IT INSISTS as `Grant._release` does: a suppressed
+            # refusal leaks a record naming a LIVE pid, which is a permanent phantom holder.
             for path in taken:
-                with contextlib.suppress(OSError):
-                    path.unlink()
+                _unpublish(path)
             raise
         finally:
-            with contextlib.suppress(OSError):
-                claim.unlink()
+            _unpublish(claim)
 
         grant = Grant(
             pool=pool,
@@ -1283,12 +1282,13 @@ class Broker:
     def _write_claim(self, pool: str, wanted: Mapping[str, int], what: str) -> Path:
         """Record the INTENTION before waiting, so a peer's headroom check can see it.
 
-        Without this the memory check is check-then-start: two waiters both read the same free
-        bytes and both pass. A claim is counted for memory and NOT for seats, so nobody holds a
-        seat while queueing for RAM.
+        Without this the memory check is check-then-start: two waiters both read the same free bytes
+        and both pass. A claim is counted for memory and NOT for seats, so nobody holds a seat while
+        queueing for RAM.
 
-        PUBLISHED ATOMICALLY for the reason every record is: a peer reads this file to decide
-        whether there is room, and a half-written claim is a claim that reads as nothing.
+        PUBLISHED ATOMICALLY: a half-written claim reads as nothing. The name repeats per
+        (pid, thread), so take two renames onto take one's file -- the one a polling peer has open.
+        `_records.publish` insists, and argues why its `False` is deliberately not a refusal here.
         """
         path = self.resource_dir() / f'{pool}.claim.{os.getpid()}.{threading.get_ident()}.json'
         _publish(
@@ -1489,9 +1489,9 @@ class Broker:
                     # A LIVE holder, or a record that cannot be read -- which is a holder this
                     # broker cannot name. Either way the index is somebody's already.
                     continue
-                with contextlib.suppress(OSError):
-                    # A record whose job is dead is not a holder, so removing it is not stealing.
-                    path.unlink()
+                # A dead job's record is not a holder, so removing it is not stealing -- and it
+                # INSISTS, so a reader's handle cannot make a reclaimable index permanently held.
+                _unpublish(path)
                 if self._create_seat(path, record):
                     return path
                 # LOST the reclaim to a peer that took the index between the removal and the
