@@ -332,7 +332,14 @@ class TestMemoryAdmission:
         readings = iter([SystemMemory(64 * GIB, 1 * GIB), SystemMemory(64 * GIB, 40 * GIB)])
         freeing = Broker(registry, read_memory=lambda: next(readings, SystemMemory(64 * GIB, 40 * GIB)))
         with freeing.admit('tool', {MEMORY.name: 16 * GIB}, wait_s=2.0, poll_s=0.01) as grant:
-            assert grant.waited_s > 0
+            # THE EVIDENCE IS THE SECOND READING, NOT THE CLOCK. This asserted `waited_s > 0`, and
+            # that instrument cannot express the claim on Windows: `time.monotonic()` ticks at about
+            # 15.6ms there while this loop polls at 10ms, so a wait that really happened measures
+            # 0.0 and the test fails for a reason that is not about the broker. The iterator being
+            # EXHAUSTED says the loop came back and read again, which is exactly what the name
+            # claims; the sibling test above still pins elapsed time, where its 0.3s wait carries it.
+            assert next(readings, None) is None, 'the broker admitted without polling a second time'
+            assert grant.waited_s >= 0
 
 
 class TestObservingARunningJob:
