@@ -70,3 +70,30 @@ class TestTheKey:
     def test_a_zero_length_key_is_refused(self):
         with pytest.raises(ValueError, match='floor'):
             env_key(('a==1',), length=0)
+
+
+class TestAGitInstallIsNamedByItsCommit:
+    """The property that kept a second implementation of this module alive in motronics.
+
+    The manifest reads the distribution VERSION and nothing else, so the claim that it can tell
+    two checkouts of one declared version apart is a claim about what pip writes there. Planted
+    rather than asserted in prose: a docstring saying ``direct_url.json`` is unnecessary is a
+    declaration that lies unless something fails when it stops being true.
+    """
+
+    def test_two_checkouts_of_ONE_declared_version_key_differently(self):
+        """pip writes a VCS install's version as ``<declared>+<sha>``, so the commit is in the line."""
+        before = env_key(env_manifest([_Dist('lab-commons', '0.4.0+1a2b3c4')]))
+        after = env_key(env_manifest([_Dist('lab-commons', '0.4.0+9f8e7d6')]))
+        assert before != after, (
+            'two git checkouts of one declared version keyed identically, so a verdict earned on '
+            'one commit of a sibling package would be served against another.'
+        )
+
+    def test_the_commit_is_LEGIBLE_in_the_manifest_not_only_in_the_hash(self):
+        """A reader diffing two manifests must be able to SEE which commit moved."""
+        assert 'lab-commons==0.4.0+1a2b3c4' in env_manifest([_Dist('lab-commons', '0.4.0+1a2b3c4')])
+
+    def test_a_plain_release_install_still_keys(self):
+        """The other side: a version with no local segment is ordinary, not a degraded reading."""
+        assert 'lab-commons==0.4.0' in env_manifest([_Dist('lab-commons', '0.4.0')])
