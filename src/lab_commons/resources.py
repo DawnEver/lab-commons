@@ -160,9 +160,10 @@ class Scope(Enum):
 
 
 class Enforcement(Enum):
-    """WHAT actually bounds a dimension at admission -- which is not the same question as how it
-    depletes, and conflating the two is how a dimension came to be declared ``COUNTED`` while
-    nothing counted it.
+    """WHAT actually bounds a dimension at admission.
+
+    Not the same question as how it depletes, and conflating the two is how a dimension came to be
+    declared ``COUNTED`` while nothing counted it.
 
     :data:`NONE` is the load-bearing member. A dimension can be perfectly well DEFINED and still
     have nothing able to check it, and saying so is the whole difference between a ceiling held at
@@ -406,6 +407,7 @@ class Capacity:
     note: str = ''
 
     def __post_init__(self) -> None:
+        """Refuse an undeclared dimension, at construction."""
         if self.dimension not in DIMENSIONS:
             msg = f'{self.dimension!r} is not a declared dimension; known: {sorted(DIMENSIONS)}'
             raise KeyError(msg)
@@ -448,6 +450,7 @@ class CapacityRegistry:
     """
 
     def __init__(self, declarations: Iterable[tuple[str, Capacity]] = ()) -> None:
+        """Build the registry, declaring each ``(pool, capacity)`` pair given."""
         self._table: dict[tuple[str, str], list[Capacity]] = {}
         for pool, capacity in declarations:
             self.declare(pool, capacity)
@@ -570,8 +573,10 @@ class JobHandle:
 
     @classmethod
     def for_client(cls, pid: int | None = None) -> JobHandle:
-        """This interpreter. The HONEST default before a job exists -- and the thing every grant
-        must be moved off, via :meth:`Grant.track`, the moment the real job has an identity.
+        """A handle on THIS interpreter.
+
+        The HONEST default before a job exists -- and the thing every grant must be moved off, via
+        :meth:`Grant.track`, the moment the real job has an identity.
         """
         return cls('client', str(os.getpid() if pid is None else pid))
 
@@ -612,6 +617,7 @@ class Holder:
         return declared if self.observed_bytes is None else max(0, declared - self.observed_bytes)
 
     def describe(self) -> str:
+        """The holder as one greppable line: what, which job, and since when."""
         return (
             f'{self.what or "unnamed"} [{self.job.kind}:{self.job.ident}]{f" since {self.since}" if self.since else ""}'
         )
@@ -665,6 +671,7 @@ class Exhausted(RuntimeError):
         what: str = '',
         waited_s: float = 0.0,
     ) -> None:
+        """Keep the pool, dimension and reading this refusal is about."""
         self.pool = pool
         self.dimension = dimension
         self.needed = needed
@@ -692,7 +699,7 @@ class Exhausted(RuntimeError):
 
 
 class MemoryUnreadable(RuntimeError):
-    """This machine's memory cannot be read, so the floor cannot be respected.
+    """The machine's memory cannot be read, so the floor cannot be respected.
 
     NOT TREATED AS "NO CONSTRAINT", which is the whole reason the class exists. A caller that reads
     ``None`` and proceeds has silently dropped the ceiling it was written to honour, and the drop
@@ -709,6 +716,7 @@ class CeilingExceeded(RuntimeError):
     """
 
     def __init__(self, pool: str, job: JobHandle, ceiling_bytes: int, held_bytes: int) -> None:
+        """Keep the pool, job, ceiling and the reading that breached it."""
         self.pool = pool
         self.job = job
         self.ceiling_bytes = ceiling_bytes
@@ -748,6 +756,7 @@ class JobWatch:
     """
 
     def __init__(self, thread: threading.Thread, stopping: threading.Event, state: dict) -> None:
+        """Keep the watching thread and the event that stops it."""
         self.thread = thread
         self._stopping = stopping
         self._state = state
@@ -762,6 +771,7 @@ class JobWatch:
         self._stopping.set()
 
     def join(self, timeout: float | None = None) -> None:
+        """Wait for the watching thread, bounded by *timeout*."""
         self.thread.join(timeout)
 
 
@@ -1007,7 +1017,7 @@ class Grant:
                         self.job,
                         self.demands,
                         self._peak_bytes,
-                        clock=self._broker._creation_clock,
+                        clock=self._broker._creation_clock,  # noqa: SLF001 -- one module, one owner
                     ),
                 )
 
@@ -1051,22 +1061,23 @@ class Broker:
         resource_dir: Path | None = None,
         creation_clock: CreationClock = creation_stamp,
     ) -> None:
-        """
+        """Build a broker over *registry*.
+
         Args:
-            registry: the declared capacities. An empty one is legitimate and means every pool is
-                conservative-and-visible, which is a working box rather than a refusing one.
-            hostname: override the detected hostname (tests and cross-box diagnosis only).
-            read_memory: the reading backend. Injected so the low-memory condition can be PLANTED
-                and the REAL guard called.
-            liveness: resolves a job handle whose *kind* this module does not own -- a scheduler
-                ticket, a queue id, a licence checkout. Returning ``None`` means "cannot tell",
-                which is read as STILL HELD: freeing a seat wrongly is the over-subscription this
-                whole mechanism exists to prevent, so "I do not know" takes the conservative side.
-            resource_dir: override the record root; ``$LAB_COMMONS_RESOURCE_DIR`` otherwise.
-            creation_clock: reads a pid's creation stamp, the discriminator that makes a recorded
-                pid an IDENTITY rather than a number. Injected for the reason *read_memory* is: pid
-                REUSE cannot be planted by asking this box to recycle a number to order, so the
-                condition is planted through this hook and the REAL guard is called.
+        registry: the declared capacities. An empty one is legitimate and means every pool is
+            conservative-and-visible, which is a working box rather than a refusing one.
+        hostname: override the detected hostname (tests and cross-box diagnosis only).
+        read_memory: the reading backend. Injected so the low-memory condition can be PLANTED
+            and the REAL guard called.
+        liveness: resolves a job handle whose *kind* this module does not own -- a scheduler
+            ticket, a queue id, a licence checkout. Returning ``None`` means "cannot tell",
+            which is read as STILL HELD: freeing a seat wrongly is the over-subscription this
+            whole mechanism exists to prevent, so "I do not know" takes the conservative side.
+        resource_dir: override the record root; ``$LAB_COMMONS_RESOURCE_DIR`` otherwise.
+        creation_clock: reads a pid's creation stamp, the discriminator that makes a recorded
+            pid an IDENTITY rather than a number. Injected for the reason *read_memory* is: pid
+            REUSE cannot be planted by asking this box to recycle a number to order, so the
+            condition is planted through this hook and the REAL guard is called.
 
         """
         self.registry = registry if registry is not None else CapacityRegistry()
@@ -1277,7 +1288,7 @@ class Broker:
         try:
             yield grant
         finally:
-            grant._release()
+            grant._release()  # noqa: SLF001 -- one module, one owner
 
     def _write_claim(self, pool: str, wanted: Mapping[str, int], what: str) -> Path:
         """Record the INTENTION before waiting, so a peer's headroom check can see it.

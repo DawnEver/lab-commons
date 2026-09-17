@@ -166,7 +166,7 @@ def publish(path: Path, payload: Mapping[str, object]) -> bool:
     refusal naming a cause that is not true sends its reader somewhere there is nothing to find.
     """
     staged = stage(path, payload)
-    if _insist(lambda: os.replace(staged, path), missing=False):
+    if _insist(lambda: staged.replace(path), missing=False):
         return True
     with contextlib.suppress(OSError):
         staged.unlink()

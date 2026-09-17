@@ -89,7 +89,9 @@ _run_stamp: str | None = None
 
 def _now_stamp() -> str:
     """The current wall-clock time as a filesystem-safe ``HH-MM-SS`` (patchable in tests)."""
-    return datetime.datetime.now().strftime(r'%H-%M-%S')
+    # DTZ005 waived: a run directory is read by a human on the box that wrote it, so LOCAL wall
+    # clock is the correct reading; a UTC stamp would name a time nobody at that box observed.
+    return datetime.datetime.now().strftime(r'%H-%M-%S')  # noqa: DTZ005
 
 
 def run_stamp() -> str:
@@ -110,7 +112,7 @@ _run_date: tuple[str, str, str] | None = None
 
 def _now_date() -> tuple[str, str, str]:
     """Current date as ``(yy, mm, dd)`` filesystem segments (patchable in tests)."""
-    now = datetime.datetime.now()
+    now = datetime.datetime.now()  # noqa: DTZ005 -- local wall clock, for the same reason as _now_stamp
     return now.strftime(r'%y'), now.strftime(r'%m'), now.strftime(r'%d')
 
 
@@ -184,6 +186,7 @@ def unique_run_dir(parent: Path, stem: str) -> Path:
         candidate = parent / (base if n == 1 else f'{base}-{n}')
         try:
             candidate.mkdir(exist_ok=False)
-            return candidate
         except FileExistsError:
             n += 1
+        else:
+            return candidate

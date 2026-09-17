@@ -14,8 +14,10 @@ bootstrap -> bind_run_dir transport on top of the SAME named logger this module 
 
 import functools
 import logging
+import os
 import sys
 import time
+from collections.abc import Callable
 
 __all__ = [
     'add_handle',
@@ -65,8 +67,10 @@ def _log_level_from_str(level: str) -> int:
 
 
 def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
-    """Write ONE line to a real stream -- the shared ``print`` replacement for CLI
-    tools whose stdout IS the product (gate verdicts, bootstrap diagnoses, lane reports).
+    """Write ONE line to a real stream.
+
+    The shared ``print`` replacement for CLI tools whose stdout IS the product (gate verdicts,
+    bootstrap diagnoses, lane reports).
 
     Why this exists: the family never waives ruff's T201, so every CLI script needs the
     same one-line idiom; keeping it here makes the idiom single, tested, and visible to
@@ -83,7 +87,7 @@ def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
 def add_handle(
     logger: logging.Logger,
     *,
-    log_file,
+    log_file: str | os.PathLike[str],
     level: int,
     file_format: str,
     console_format: str,
@@ -118,7 +122,8 @@ def log(msg: str, level: str = 'INFO') -> None:
     Args:
     ----
         msg (str): Log message
-        level (str): Log level
+        level (str): Log level -- DEBUG, INFO, WARNING, ERROR or CRITICAL
+
     Returns:
         None
 
@@ -147,7 +152,7 @@ def log(msg: str, level: str = 'INFO') -> None:
         raise ValueError(error_msg)
 
 
-def log_decorator(msg: str, level: str = 'INFO'):
+def log_decorator(msg: str, level: str = 'INFO') -> Callable[[Callable], Callable]:
     """Logging decorator.
 
     Args:
@@ -164,8 +169,8 @@ def log_decorator(msg: str, level: str = 'INFO'):
 
     """
 
-    def wrapper(func):
-        def exc(*args, **kwargs):
+    def wrapper(func: Callable) -> Callable:
+        def exc(*args: object, **kwargs: object) -> object:
             result = func(*args, **kwargs)
             log(msg, level)
             return result
@@ -175,7 +180,7 @@ def log_decorator(msg: str, level: str = 'INFO'):
     return wrapper
 
 
-def timer(func):
+def timer(func: Callable) -> Callable:
     """Timer decorator to record function execution time.
 
     Args:
@@ -192,7 +197,7 @@ def timer(func):
     """
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object) -> object:
         start = time.time()
         result = func(*args, **kwargs)
         end = time.time()
@@ -207,7 +212,8 @@ def timer(func):
     return wrapper
 
 
-def prettier_dict(d: dict, indent=0, text: str = '') -> str:
+def prettier_dict(d: dict, indent: int = 0, text: str = '') -> str:
+    """Render a nested mapping as indented ``key:`` / value lines."""
     for key, value in d.items():
         text += ' ' * indent + f'{key}:\n'
         if isinstance(value, dict):

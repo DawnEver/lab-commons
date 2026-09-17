@@ -47,7 +47,7 @@ def hash_secret(value: object) -> str:
     return f'sha256:{digest[:_HASH_DISPLAY_CHARS]}'
 
 
-def redact_secrets_processor(logger, method_name, event_dict):  # noqa: ARG001
+def redact_secrets_processor(logger: object, method_name: str, event_dict: dict) -> dict:  # noqa: ARG001
     """Structlog processor: replace any sensitive-KEY value with its hash label."""
     for key, value in event_dict.items():
         if SECRET_KEY_PATTERN.search(key):
@@ -75,6 +75,7 @@ class SecretHashingFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        """Render *record*, appending the caller-supplied ``extra=`` fields as structured data."""
         extras = {key: value for key, value in vars(record).items() if key not in _STD_RECORD_ATTRS}
         if not extras:
             return super().format(record)

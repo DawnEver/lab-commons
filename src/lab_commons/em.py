@@ -143,9 +143,10 @@ def build_em_types(*, quantity_exception: type[Exception] | None = None) -> Simp
         the free functions below are exception-independent (no validation happens through a
         bare ``Quantity`` value) and are shared module-level singletons, not part of this
         per-vocabulary build.
+
     """
 
-    def qt(unit: str):
+    def qt(unit: str) -> type:
         return get_quantity_type(unit, quantity_exception=quantity_exception)
 
     ns = SimpleNamespace()
@@ -321,8 +322,15 @@ Polar2DPoint_Array = Annotated[
 ]
 
 
-def Q_list2array(
-    Q_list: list[PintQuantityType], Q_unit: str | Unit, has_unit: bool = True
+# N802/N803 here and on the two functions below: `Q_` is pint's OWN spelling for a quantity and
+# `2D` is the domain's, and these three names are IMPORTED BY NAME in wdg-lab
+# (`wdg_lab/utils/quantities.py`). A rename is therefore a cross-repo move and belongs to the
+# stage that re-points the consumers, not to a lint pass in this tree.
+def Q_list2array(  # noqa: N802
+    Q_list: list[PintQuantityType],  # noqa: N803
+    Q_unit: str | Unit,  # noqa: N803
+    *,
+    has_unit: bool = True,
 ) -> PintQuantityType | np.ndarray:
     """Convert a list of ``Quantity`` into an array, coercing to float.
 
@@ -342,21 +350,28 @@ def Q_list2array(
     return q_array
 
 
-def array2list_2Dpoint(
+def array2list_2Dpoint(  # noqa: N802
     point_array: Cartesian2DPoint_Array | Polar2DPoint_Array,
 ) -> list[Cartesian2DPoint | Polar2DPoint]:
     """Convert a numpy-friendly coordinate array into a list of coordinate points."""
     return [(point_array[0][idx], point_array[1][idx]) for idx, _ in enumerate(point_array[0])]
 
 
-def is_equal_2DPoint(v1: Cartesian2DPoint | Polar2DPoint, v2: Cartesian2DPoint | Polar2DPoint):
+def is_equal_2DPoint(  # noqa: N802
+    v1: Cartesian2DPoint | Polar2DPoint,
+    v2: Cartesian2DPoint | Polar2DPoint,
+) -> bool:
     """Check whether two 2D coordinate points are equal, within tolerance.
+
     (Cannot compare directly with ``v1 == v2`` due to floating-point error.)
+
     Args:
         v1: first value to check.
         v2: second value to check.
+
     Returns:
         bool: whether they are equal.
+
     """
     return np.allclose(
         [v1[0].to_base_units().magnitude, v1[1].to_base_units().magnitude],
@@ -366,9 +381,11 @@ def is_equal_2DPoint(v1: Cartesian2DPoint | Polar2DPoint, v2: Cartesian2DPoint |
 
 class CONSTANTS:
     """Physical constants.
+
     Args:
         vacuum_permeability (PermeabilityType): vacuum permeability, in H/m.
         miu_0 (PermeabilityType): vacuum permeability, in H/m.
+
     """
 
     vacuum_permeability: PermeabilityType = Q_(4 * np.pi * 1e-7, 'H/m')

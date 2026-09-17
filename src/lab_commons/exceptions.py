@@ -7,6 +7,9 @@ project-specific and stays in motronics; wdg-lab's ``ErrorCode`` catalog / ``Wdg
 class is its own project-specific extension and is likewise out of scope for this module.
 """
 
+from collections.abc import Callable
+from typing import Never
+
 from lab_commons.log import log
 
 __all__ = ['ParameterException', 'QuantityException', 'deprecated', 'not_implemented']
@@ -15,10 +18,12 @@ __all__ = ['ParameterException', 'QuantityException', 'deprecated', 'not_impleme
 class QuantityException(Exception):
     """Exception for unexpected parameters, read quantity in pint."""
 
-    def __init__(self, message='') -> None:
+    def __init__(self, message: str = '') -> None:
+        """Keep *message* as the refusal text this exception renders."""
         self.message = message
 
     def __str__(self) -> str:
+        """Render the refusal AND log it, so a caught-and-printed error still reaches the log."""
         msg = f'QuantityException: {self.message}'
         log(msg, level='ERROR')
         return msg
@@ -27,25 +32,31 @@ class QuantityException(Exception):
 class ParameterException(Exception):
     """Exception for unexpected parameters."""
 
-    def __init__(self, message='') -> None:
+    def __init__(self, message: str = '') -> None:
+        """Keep *message* as the refusal text this exception renders."""
         self.message = message
 
     def __str__(self) -> str:
+        """Render the refusal AND log it, so a caught-and-printed error still reaches the log."""
         msg = f'ParameterException: {self.message}'
         log(msg, level='ERROR')
         return msg
 
 
-def not_implemented(func):
-    def wrapper(*_, **__):
+def not_implemented(func: Callable[..., object]) -> Callable[..., Never]:
+    """Replace *func* with one that raises ``NotImplementedError`` naming it."""
+
+    def wrapper(*_: object, **__: object) -> Never:
         msg = f'{func.__name__} is not implemented yet.'
         raise NotImplementedError(msg)
 
     return wrapper
 
 
-def deprecated(func):
-    def wrapper(*_, **__):
+def deprecated(func: Callable[..., object]) -> Callable[..., Never]:
+    """Replace *func* with one that raises ``DeprecationWarning`` naming it."""
+
+    def wrapper(*_: object, **__: object) -> Never:
         msg = f'{func.__name__} has been deprecated.'
         raise DeprecationWarning(msg)
 

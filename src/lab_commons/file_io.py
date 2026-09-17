@@ -71,8 +71,9 @@ def save_toml(file_path: Path, dict_data: dict) -> None:
         raise OSError(msg) from e
 
 
-def check_path(target_path: Path, default_path: Path | None = None, is_dir: bool = False) -> bool:
-    """Check whether a path exists. Create parent directories if missing.
+def check_path(target_path: Path, default_path: Path | None = None, *, is_dir: bool = False) -> bool:
+    """Check whether a path exists, creating parent directories if missing.
+
     If target_path does not exist and default_path is provided, the default file
     will be copied to target_path.
 
@@ -117,9 +118,9 @@ def list_files_in_dir(dir_path: Path, file_name_suffix: str | None = None) -> li
     valid_file_list = []
     if check_path(dir_path, is_dir=True):
         for _, _, files in os.walk(dir_path):
-            for file in files:
-                if file_name_suffix is None or file.endswith(file_name_suffix):
-                    valid_file_list.append(file)
+            valid_file_list.extend(
+                file for file in files if file_name_suffix is None or file.endswith(file_name_suffix)
+            )
     else:
         msg = f'{dir_path} does not exist!'
         log(msg=msg, level='WARNING')

@@ -17,6 +17,7 @@ coupling.
 """
 
 import multiprocessing as mp
+import multiprocessing.pool
 import os
 from collections.abc import Callable
 
@@ -39,6 +40,7 @@ class MultiProcessingParameters(BaseModel_with_q):
         timeout(TimeType): Timeout duration.
         retry_timeout(bool): Whether to retry timed-out tasks.
         retry_error(bool): Whether to retry failed tasks.
+
     """
 
     num_cores: int = machine_cores
@@ -52,7 +54,7 @@ class MultiProcessingParameters(BaseModel_with_q):
 global_mp_params = MultiProcessingParameters()
 
 
-def default_init_worker():
+def default_init_worker() -> None:
     """Initialize a worker process: give it the same pint application registry as the parent.
 
     A pint ``Quantity`` unpickles against whatever registry is active in the process that
@@ -71,9 +73,12 @@ def default_init_worker():
 
 
 class MultiProcessing:
-    def __init__(
+    """A pool runner: one task function over a list of argument tuples, with a per-task timeout."""
+
+    def __init__(  # noqa: C901, PLR0912 -- a flat chain of "if x is None: take the declared default" -- one branch per knob, and merging them would hide which knob defaulted
         self,
         task_func: Callable,
+        *,
         args_list: list[list] | None = None,
         kwds_list: list[dict] | None = None,
         base_mp_params: MultiProcessingParameters | dict | None = None,
@@ -100,11 +105,14 @@ class MultiProcessing:
             timeout(TimeType): Timeout duration.
             retry_timeout(bool): Retry timed-out tasks.
             retry_error(bool): Retry failed tasks.
+
         """
         self._task_func = task_func
         if args_list is not None:
             if kwds_list is not None:
-                assert len(kwds_list) == len(args_list), 'args_list and kwds_list lengths do not match'
+                if len(kwds_list) != len(args_list):
+                    msg = 'args_list and kwds_list lengths do not match'
+                    raise ValueError(msg)
                 args_list = [args + list(kwds.values()) for args, kwds in zip(args_list, kwds_list, strict=False)]
         elif kwds_list is not None:
             args_list = [list(kwds.values()) for kwds in kwds_list]
@@ -132,7 +140,9 @@ class MultiProcessing:
         self._retry_error = retry_error
 
         self._num_tasks = num_tasks = len(self._args_list)
-        assert num_tasks > 0, 'args_list cannot be empty'
+        if num_tasks <= 0:
+            msg = 'args_list cannot be empty'
+            raise ValueError(msg)
         if num_cores is None:
             num_cores = base_mp_params.num_cores
         self._num_cores = min(num_cores, machine_cores)
@@ -141,7 +151,7 @@ class MultiProcessing:
             num_process = base_mp_params.num_process
         self._num_process = min(num_cores, num_process, self._num_tasks)
 
-    def _try_get_result(self, p, *args, **kwargs):
+    def _try_get_result(self, p: mp.pool.AsyncResult) -> dict:
         debug = True  # Whether to run in debug mode (surface exceptions instead of tagging them)
         timeout = self._timeout
         if debug:
@@ -156,7 +166,7 @@ class MultiProcessing:
                 return {
                     'solution_type': 'TIMEOUT',
                 }
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 -- a worker may raise anything; the tag IS the report
                 log(msg=f'Task failed: {e}.', level='ERROR')
                 return {
                     'solution_type': 'ERROR',
@@ -164,12 +174,13 @@ class MultiProcessing:
         return result
 
     @timer
-    def run(self) -> list[dict]:
+    def run(self) -> list[dict]:  # noqa: C901, PLR0912 -- one branch per outcome of a pool task (ok / timeout / error / retry), and each names its own report
         """Run the pool.
 
         Returns:
             results(list[dict]): one result dict per task, in `args_list` order
                 `[{"solution_type":"ERROR",...}, {"solution_type":"ERROR",...}, ...]`.
+
         """
         if self._num_process == 0:
             log(msg='num_process is 0, exiting.', level='WARNING')

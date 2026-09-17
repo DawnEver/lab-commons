@@ -14,6 +14,7 @@ in ``lab_commons.em``, which imports FROM this module and never the reverse.
 import re
 import warnings
 from argparse import ArgumentTypeError
+from collections.abc import Callable
 from typing import Annotated
 
 import numpy as np
@@ -58,8 +59,9 @@ Q_ = ureg.Quantity
 
 
 def _build_pydantic_quantity(quantity_exception: type[Exception]) -> type:
-    """Build a ``PydanticQuantity``-shaped marker class whose ``validate`` raises
-    ``quantity_exception`` (instead of MRO/inheritance tricks -- see :func:`get_quantity_type`).
+    """Build a ``PydanticQuantity``-shaped marker class raising ``quantity_exception``.
+
+    Used instead of MRO/inheritance tricks -- see :func:`get_quantity_type`.
 
     Each call returns a fresh class; the RAISE site is a plain closure over
     ``quantity_exception``, so this is unaffected by the ``__init__``/``super()`` MRO trap that
@@ -72,7 +74,7 @@ def _build_pydantic_quantity(quantity_exception: type[Exception]) -> type:
         """Lets Pydantic validate/serialize a pint ``Quantity``."""
 
         @classmethod
-        def __get_pydantic_core_schema__(cls, _, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        def __get_pydantic_core_schema__(cls, _: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
             return core_schema.no_info_after_validator_function(
                 cls.validate,
                 handler(Q_),
@@ -80,11 +82,15 @@ def _build_pydantic_quantity(quantity_exception: type[Exception]) -> type:
             )
 
         @classmethod
-        def validate(cls, v) -> PintQuantityType:
-            """Args:
+        def validate(cls, v: object) -> PintQuantityType:
+            """Validate *v* as a pint quantity.
+
+            Args:
                 v: value to validate.
+
             Returns:
                 PintQuantityType: the validated value.
+
             Raises:
                 quantity_exception: if ``v`` is not a ``Quantity``.
 
@@ -132,6 +138,7 @@ def get_quantity_type(
     because it trusted the DECLARED return type, not the real one. Kept as the honest
     (if imprecise) declared type, with a suppression here rather than a cast that would
     hide the mismatch entirely -- greppable, and this docstring is the ceiling.
+
     """
     marker = PydanticQuantity if quantity_exception is None else _build_pydantic_quantity(quantity_exception)
     return Annotated[  # pyright: ignore[reportReturnType]
@@ -142,7 +149,7 @@ def get_quantity_type(
     ]
 
 
-def quantity_parser(default_unit: str):
+def quantity_parser(default_unit: str) -> Callable[[str], PintQuantityType]:
     """An argparse ``type=`` callable that reads a physical quantity and keeps the unit in the VALUE.
 
     THE HALF THIS FAMILY WAS MISSING, and the reason it is load-bearing rather than a convenience.
@@ -197,13 +204,15 @@ pydantic_config_dict_with_q = ConfigDict(
 )
 
 
-class BaseModel_with_q(BaseModel):
+class BaseModel_with_q(BaseModel):  # noqa: N801 -- imported BY NAME in wdg-lab; renaming is cross-repo
     """Pydantic ``BaseModel`` supporting pint quantity validation and ``np.ndarray`` serialization."""
 
     model_config = pydantic_config_dict_with_q
 
-    def model_dump(self, **kwargs):
-        """``mode='python'`` will serialize ``np.ndarray`` to a list but not a Quantity's unit.
+    def model_dump(self, **kwargs: object) -> dict[str, object]:
+        """Dump the model, converting every ``np.ndarray`` to a list.
+
+        ``mode='python'`` will serialize ``np.ndarray`` to a list but not a Quantity's unit;
         ``mode='json'`` serializes a Quantity's unit but not ``np.ndarray`` to a list.
         """
         data = super().model_dump(**kwargs)

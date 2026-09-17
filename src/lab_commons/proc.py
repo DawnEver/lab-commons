@@ -59,12 +59,14 @@ __all__ = [
 _KILL_SIGNAL = getattr(signal, 'SIGKILL', signal.SIGTERM)
 
 _STILL_ACTIVE = 259
+#: A ``/proc/meminfo`` or ``/proc/<pid>/status`` line in kB is exactly ``<value> kB`` -- two tokens.
+_KB_LINE_TOKENS = 2
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _TH32CS_SNAPPROCESS = 0x00000002
 
 
-def _kernel32():
+def _kernel32() -> object | None:
     """``kernel32``, or ``None`` off Windows.
 
     Reached by ``getattr`` rather than as ``ctypes.windll.kernel32``: ``windll`` does not exist
@@ -95,16 +97,20 @@ class SystemMemory:
 
     @property
     def used_bytes(self) -> int:
-        """What is not available. DERIVED, never read separately -- a ``used`` the OS reports
-        alongside ``available`` need not sum to ``total``, and two readings of one quantity that
-        disagree is a third number neither backend produced.
+        """What is not available.
+
+        DERIVED, never read separately -- a ``used`` the OS reports alongside ``available`` need not
+        sum to ``total``, and two readings of one quantity that disagree is a third number neither
+        backend produced.
         """
         return self.total_bytes - self.available_bytes
 
     @property
     def used_fraction(self) -> float:
-        """Occupied share of total, in ``[0, 1]``. Unitless on purpose -- a percent is a
-        presentation choice and belongs where the number is rendered, not where it is read.
+        """Occupied share of total, in ``[0, 1]``.
+
+        Unitless on purpose -- a percent is a presentation choice and belongs where the number is
+        rendered, not where it is read.
         """
         return self.used_bytes / self.total_bytes
 
@@ -181,7 +187,7 @@ def _system_memory_procfs() -> SystemMemory | None:
     for line in text.splitlines():
         key, _, rest = line.partition(':')
         parts = rest.split()
-        if len(parts) == 2 and parts[1] == 'kB':
+        if len(parts) == _KB_LINE_TOKENS and parts[1] == 'kB':
             fields[key.strip()] = int(parts[0]) * 1024
     total, available = fields.get('MemTotal'), fields.get('MemAvailable')
     if total is None or available is None or total <= 0:
@@ -189,7 +195,7 @@ def _system_memory_procfs() -> SystemMemory | None:
     return SystemMemory(total_bytes=total, available_bytes=available)
 
 
-class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):  # noqa: N801 -- mirrors the psapi struct name
     """The ``psapi`` struct. ``cb`` MUST be ``sizeof`` before the call, as with ``_MEMORYSTATUSEX``."""
 
     _fields_ = (
@@ -223,7 +229,7 @@ def working_set_bytes(pid: int) -> int | None:
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
-    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)  # noqa: FBT003 -- bInheritHandle, positional per the Win32 signature
     if not handle:
         return None
     try:
@@ -248,7 +254,7 @@ def _working_set_bytes_procfs(pid: int) -> int | None:
         key, _, rest = line.partition(':')
         if key.strip() == 'VmRSS':
             parts = rest.split()
-            if len(parts) == 2 and parts[1] == 'kB':
+            if len(parts) == _KB_LINE_TOKENS and parts[1] == 'kB':
                 return int(parts[0]) * 1024
     return None
 
@@ -258,7 +264,7 @@ def _working_set_bytes_procfs(pid: int) -> int | None:
 # --------------------------------------------------------------------------------------------
 
 
-def pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:  # noqa: PLR0911 -- one return per platform branch, each naming its own answer
     """Whether *pid* is a RUNNING process. THE ONLY STALENESS TEST -- never a clock.
 
     A clock cannot tell a long solve from a dead one, and a transient FEA run legitimately takes
@@ -274,7 +280,7 @@ def pid_alive(pid: int) -> bool:
         kernel32 = _kernel32()
         if kernel32 is None:
             return False
-        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)  # noqa: FBT003 -- bInheritHandle, positional per the Win32 signature
         if not handle:
             return False
         try:
@@ -375,7 +381,7 @@ def _creation_time(pid: int) -> int | None:
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
-    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)  # noqa: FBT003 -- bInheritHandle, positional per the Win32 signature
     if not handle:
         return None
     try:
@@ -475,7 +481,7 @@ def kill_pid(pid: int) -> bool:
         kernel32 = _kernel32()
         if kernel32 is None:
             return False
-        handle = kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+        handle = kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)  # noqa: FBT003 -- bInheritHandle, positional per the Win32 signature
         if not handle:
             return False
         try:
