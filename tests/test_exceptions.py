@@ -5,6 +5,8 @@ package's import path. Only the project-agnostic subset lives here: ``FEMMExcept
 (vendor-solver domain) stays in motronics and is not tested here.
 """
 
+from typing import Never
+
 import pytest
 
 from lab_commons.exceptions import (
@@ -16,29 +18,31 @@ from lab_commons.exceptions import (
 
 
 class TestParameterException:
-    def test_str_includes_message(self):
+    def test_str_includes_message(self) -> None:
         exc = ParameterException('bad value')
         assert str(exc) == 'ParameterException: bad value'
 
-    def test_raises_and_is_caught_as_exception(self):
+    def test_raises_and_is_caught_as_exception(self) -> Never:
+        msg = 'bad value'
         with pytest.raises(ParameterException):
-            raise ParameterException('bad value')
+            raise ParameterException(msg)
 
 
 class TestQuantityException:
-    def test_str_includes_message(self):
+    def test_str_includes_message(self) -> None:
         exc = QuantityException('bad unit')
         assert str(exc) == 'QuantityException: bad unit'
 
-    def test_raises_and_is_caught_as_exception(self):
+    def test_raises_and_is_caught_as_exception(self) -> Never:
+        msg = 'bad unit'
         with pytest.raises(QuantityException):
-            raise QuantityException('bad unit')
+            raise QuantityException(msg)
 
 
 class TestNotImplementedDecorator:
-    def test_wrapper_raises_not_implemented_error(self):
+    def test_wrapper_raises_not_implemented_error(self) -> None:
         @not_implemented
-        def func():
+        def func() -> str:
             return 'never reached'
 
         with pytest.raises(NotImplementedError, match='func is not implemented yet'):
@@ -46,9 +50,9 @@ class TestNotImplementedDecorator:
 
 
 class TestDeprecatedDecorator:
-    def test_wrapper_raises_deprecation_warning(self):
+    def test_wrapper_raises_deprecation_warning(self) -> None:
         @deprecated
-        def func():
+        def func() -> str:
             return 'never reached'
 
         with pytest.raises(DeprecationWarning, match='func has been deprecated'):

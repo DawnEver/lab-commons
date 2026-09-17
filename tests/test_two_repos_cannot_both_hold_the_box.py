@@ -107,7 +107,7 @@ def _checkout(parent: Path, name: str, package: str) -> Path:
     (root / 'pyproject.toml').write_text(_PYPROJECT.format(name=name), encoding='utf-8')
     (root / 'src' / package / '__init__.py').write_text(_MODULE, encoding='utf-8')
     (root / 'tests' / 'test_smoke.py').write_text(_TEST.format(package=package), encoding='utf-8')
-    subprocess.run(['git', 'init', '-q'], cwd=root, check=True, capture_output=True)
+    subprocess.run(['git', 'init', '-q'], cwd=root, check=True, capture_output=True)  # noqa: S607 -- git through PATH
     return root
 
 

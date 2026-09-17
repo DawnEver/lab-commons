@@ -28,14 +28,14 @@ from lab_commons.exceptions import QuantityException
 from lab_commons.units import Q_, BaseModel_with_q
 
 
-def test_torque_type_and_constant_are_newton_meter_dimensioned():
+def test_torque_type_and_constant_are_newton_meter_dimensioned() -> None:
     assert TorqueType.__supertype__.__metadata__[1].json_schema_extra == {'unit': 'N*m'}
     q = Q_0Nm
     assert q.to('N*m').magnitude == 0.0
     assert q.dimensionality == Q_(1.0, 'N*m').dimensionality
 
 
-def test_angle_type_and_q_360deg():
+def test_angle_type_and_q_360deg() -> None:
     assert AngleType.__supertype__.__metadata__[1].json_schema_extra == {'unit': 'deg'}
     # FLOOR IN RADIANS, the unit of the left-hand side: 1e-12 rad is ~2e-7 arcsecond, orders below
     # any angle a motor geometry resolves, while the deg->rad conversion's own error is one ulp of
@@ -43,27 +43,30 @@ def test_angle_type_and_q_360deg():
     assert Q_360deg.to('rad').magnitude == pytest.approx(2 * np.pi, abs=1e-12)
 
 
-def test_angle_speed_type_and_q_0rpm():
+def test_angle_speed_type_and_q_0rpm() -> None:
     assert AngleSpeedType.__supertype__.__metadata__[1].json_schema_extra == {'unit': 'rad/s'}
     assert Q_0rpm.to('rad/s').magnitude == 0.0
 
 
-def test_is_equal_2d_point():
-    Q_0m = Q_(0, 'm')
-    Q_1m = Q_(1, 'm')
-    Q_1000mm = Q_(1000, 'mm')
+def test_is_equal_2d_point() -> None:
+    # N806 waived five times here: `Q_<magnitude><unit>` is pint's own spelling for a quantity
+    # literal, and it is the family's -- wdg-lab imports `Q_0deg` BY THAT NAME. Lower-casing these
+    # would make the fixture read like an ordinary float, which is the confusion pint exists to end.
+    Q_0m = Q_(0, 'm')  # noqa: N806
+    Q_1m = Q_(1, 'm')  # noqa: N806
+    Q_1000mm = Q_(1000, 'mm')  # noqa: N806
     p1 = [Q_0m, Q_1m]
     p2 = [Q_0mm, Q_1000mm]
     assert is_equal_2DPoint(p1, p2)
 
-    Q_180deg = Q_(180, 'deg')
-    Q_pi_rad = Q_(np.pi, 'rad')
+    Q_180deg = Q_(180, 'deg')  # noqa: N806
+    Q_pi_rad = Q_(np.pi, 'rad')  # noqa: N806
     p3 = [Q_0m, Q_180deg]
     p4 = [Q_0mm, Q_pi_rad]
     assert is_equal_2DPoint(p3, p4)
 
 
-def test_constants_vacuum_permeability():
+def test_constants_vacuum_permeability() -> None:
     # The VALUE is 1.2566e-6 H/m, so a floor must be scaled to it rather than to 1: 1e-18 H/m is
     # 1e-12 of the constant. A habitual abs=1e-12 would have been 1e-6 RELATIVE here and would have
     # accepted a permeability wrong in its seventh digit -- the exact inversion this rule names.
@@ -71,9 +74,11 @@ def test_constants_vacuum_permeability():
     assert CONSTANTS.miu_0 is CONSTANTS.vacuum_permeability
 
 
-def test_module_level_names_are_the_default_build_captured_at_import():
-    """The module-level names (``TorqueType``, ...) ARE ``build_em_types()``'s default build
-    (``em._default``), captured once at import time -- not merely equivalent to one, THE one.
+def test_module_level_names_are_the_default_build_captured_at_import() -> None:
+    """The module-level names ARE ``build_em_types()``'s default build.
+
+    (``TorqueType``, ...) come from ``em._default``, captured once at import time -- not merely
+    equivalent to one, THE one.
     """
     assert em._default.TorqueType is TorqueType
     assert em._default.AngleType is AngleType
@@ -85,9 +90,10 @@ def _unit_of(quantity_newtype) -> dict:
     return quantity_newtype.__supertype__.__metadata__[-2].json_schema_extra
 
 
-def test_build_em_types_is_independent_per_call():
-    """Two independent ``build_em_types()`` calls produce two independent vocabularies (new
-    ``NewType`` objects each time) -- required for injection: a consumer's custom-exception
+def test_build_em_types_is_independent_per_call() -> None:
+    """Two independent ``build_em_types()`` calls produce two independent vocabularies.
+
+    New ``NewType`` objects each time -- required for injection: a consumer's custom-exception
     build must never alias or mutate the shared default (or another consumer's) vocabulary.
     """
     first = build_em_types()
@@ -99,9 +105,10 @@ def test_build_em_types_is_independent_per_call():
     assert _unit_of(first.TorqueType) == _unit_of(second.TorqueType) == _unit_of(TorqueType) == {'unit': 'N*m'}
 
 
-def _pydantic_quantity_marker(quantity_newtype):
-    """Extract the ``PydanticQuantity``-shaped marker class from a ``NewType``'s ``Annotated``
-    supertype -- the same class-method-level access the existing
+def _pydantic_quantity_marker(quantity_newtype) -> type:
+    """Extract the ``PydanticQuantity``-shaped marker class from a ``NewType``.
+
+    Read off its ``Annotated`` supertype -- the same class-method-level access the existing
     ``test_pydantic_quantity_validate``/``test_pydantic_quantity_rejects_a_raw_non_quantity...``
     tests in ``test_units.py`` use, and for the same documented reason: ``BeforeValidator(Q_)``
     runs first in a real model field and ``Q_`` accepts (wraps, doesn't reject) almost any input
@@ -110,10 +117,12 @@ def _pydantic_quantity_marker(quantity_newtype):
     return quantity_newtype.__supertype__.__metadata__[-1]
 
 
-def test_build_em_types_injects_a_custom_quantity_exception():
-    """The whole point of the injection: a vocabulary built with a CUSTOM exception class
-    raises THAT class (not the shared ``QuantityException``) on a non-``Quantity`` value --
-    proves the raise site is routed to the injected class, not bridged via MRO/inheritance.
+def test_build_em_types_injects_a_custom_quantity_exception() -> None:
+    """The whole point of the injection.
+
+    A vocabulary built with a CUSTOM exception class raises THAT class (not the shared
+    ``QuantityException``) on a non-``Quantity`` value -- which proves the raise site is routed to the injected class,
+    not bridged via MRO/inheritance.
     """
 
     class CustomQuantityException(Exception):
@@ -139,7 +148,7 @@ def test_build_em_types_injects_a_custom_quantity_exception():
     assert m.torque.to('N*m').magnitude == 0.0
 
 
-def test_units_import_does_not_pull_in_em():
+def test_units_import_does_not_pull_in_em() -> None:
     """Importing lab_commons.units alone must not drag in the tier-2 em module."""
     sys.modules.pop('lab_commons.em', None)
     sys.modules.pop('lab_commons.units', None)

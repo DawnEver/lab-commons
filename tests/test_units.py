@@ -23,23 +23,23 @@ from lab_commons.units import (
 )
 
 
-def test_q_round_trip():
+def test_q_round_trip() -> None:
     q = Q_(1.0, 'mm')
     assert q.to('m').magnitude == 0.001
 
 
-def test_ureg_is_the_registry_backing_q():
+def test_ureg_is_the_registry_backing_q() -> None:
     assert Q_ is ureg.Quantity
 
 
-def test_pydantic_quantity_validate():
+def test_pydantic_quantity_validate() -> None:
     q = Q_(0.0, 'mm')
     assert PydanticQuantity.validate(q) == q
     with pytest.raises(QuantityException, match=r'Expected pint\.Quantity'):
         PydanticQuantity.validate(1)
 
 
-def test_get_quantity_type_builds_an_annotated_field_model():
+def test_get_quantity_type_builds_an_annotated_field_model() -> None:
     class Model(BaseModel_with_q):
         length: get_quantity_type('mm')
 
@@ -47,9 +47,11 @@ def test_get_quantity_type_builds_an_annotated_field_model():
     assert m.length.to('m').magnitude == 0.005
 
 
-def test_pydantic_quantity_rejects_a_raw_non_quantity_at_the_class_level():
-    """The field itself is permissive: ``get_quantity_type``'s ``BeforeValidator(Q_)`` runs
-    FIRST, and ``Q_`` (pint's parser) accepts most inputs (int/str/list) by construction --
+def test_pydantic_quantity_rejects_a_raw_non_quantity_at_the_class_level() -> None:
+    """The field itself is permissive.
+
+    ``get_quantity_type``'s ``BeforeValidator(Q_)`` runs FIRST, and ``Q_`` (pint's parser) accepts most inputs
+    (int/str/list) by construction --
     so ``PydanticQuantity.validate`` (the piece that actually raises ``QuantityException`` on
     a non-``Quantity``) never sees a rejectable value once a model field has run.  The
     rejection contract is real, but only demonstrable at the class-method level (matches
@@ -63,7 +65,7 @@ def test_pydantic_quantity_rejects_a_raw_non_quantity_at_the_class_level():
         PydanticQuantity.validate('not-a-quantity')
 
 
-def test_pydantic_model_dump_and_reload_round_trips():
+def test_pydantic_model_dump_and_reload_round_trips() -> None:
     class Model(BaseModel_with_q):
         length: get_quantity_type('mm')
 
@@ -75,7 +77,7 @@ def test_pydantic_model_dump_and_reload_round_trips():
     assert reloaded.length.to('mm').magnitude == pytest.approx(5.0, abs=0.0)
 
 
-def test_units_import_does_not_pull_in_em():
+def test_units_import_does_not_pull_in_em() -> None:
     """Importing lab_commons.units alone must not drag in the tier-2 em module."""
     sys.modules.pop('lab_commons.em', None)
     sys.modules.pop('lab_commons.units', None)
@@ -110,8 +112,11 @@ def test_a_written_unit_wins_over_the_default() -> None:
 
 
 def test_an_angle_is_not_silently_rewritten_as_a_length() -> None:
-    """THE CASE THAT FORCES A SYNTACTIC CHECK. `12.5` and `12.5 rad` are BOTH dimensionless to pint,
-    so asking `is_dimensionless()` would read `12.5 rad` as a bare number and return 12.5 mm."""
+    """THE CASE THAT FORCES A SYNTACTIC CHECK.
+
+    `12.5` and `12.5 rad` are BOTH dimensionless to pint, so asking `is_dimensionless()` would read `12.5 rad` as a
+    bare number and return 12.5 mm.
+    """
     parse = quantity_parser('mm')
     assert parse('12.5 rad') == Q_(12.5, 'rad')
     assert parse('12.5 deg') == Q_(12.5, 'deg')

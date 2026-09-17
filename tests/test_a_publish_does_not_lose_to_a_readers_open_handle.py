@@ -1,4 +1,4 @@
-"""A record must be PUBLISHED, even while a peer holds the destination open to read it.
+r"""A record must be PUBLISHED, even while a peer holds the destination open to read it.
 
 THE OTHER HALF OF THE HAZARD ``3509d2a`` FIXED. That commit made the RELEASE insist: on Windows an
 open handle refuses the ``unlink`` underneath it, so a release that met a reader leaked a seat naming
@@ -31,6 +31,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import Never
 
 import lab_commons._records as records
 from lab_commons._records import publish
@@ -45,7 +46,7 @@ def test_a_publish_that_meets_a_transient_refusal_still_lands(tmp_path: Path, mo
     refusals = {'left': 3}
     real_replace = os.replace
 
-    def flaky(src, dst, **kwargs):
+    def flaky(src, dst, **kwargs: object) -> None:
         if Path(dst) == path and refusals['left']:
             refusals['left'] -= 1
             msg = 'the process cannot access the file because it is being used by another process'
@@ -67,7 +68,7 @@ def test_a_publish_that_can_NEVER_land_REPORTS_rather_than_raising(tmp_path: Pat
     """
     path = tmp_path / 'pool.claim.1.2.json'
 
-    def always(*_args, **_kwargs):
+    def always(*_args: object, **_kwargs: object) -> Never:
         msg = 'permanently locked'
         raise PermissionError(msg)
 

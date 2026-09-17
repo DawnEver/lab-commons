@@ -28,6 +28,7 @@ up immediately must RED here, which is the state this file was written against.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Never
 
 import pytest
 
@@ -43,7 +44,7 @@ def test_a_release_that_meets_a_transient_refusal_still_removes_the_record(tmp_p
     refusals = {'left': 3}
     real_unlink = Path.unlink
 
-    def flaky(self: Path, *args, **kwargs):
+    def flaky(self: Path, *args: object, **kwargs: object) -> None:
         if self == seat and refusals['left']:
             refusals['left'] -= 1
             msg = 'the process cannot access the file because it is being used by another process'
@@ -65,7 +66,7 @@ def test_a_release_that_can_NEVER_remove_the_record_says_so_rather_than_raising(
     seat = tmp_path / 'box_seats.0.slot'
     seat.write_text('{}', encoding='utf-8')
 
-    def always(*_args, **_kwargs):
+    def always(*_args: object, **_kwargs: object) -> Never:
         msg = 'permanently locked'
         raise PermissionError(msg)
 
@@ -89,7 +90,7 @@ def test_the_box_is_TAKEABLE_AGAIN_after_a_release_that_met_a_refusal(tmp_path: 
     real_unlink = Path.unlink
     refusals = {'left': 2}
 
-    def flaky(self: Path, *args, **kwargs):
+    def flaky(self: Path, *args: object, **kwargs: object) -> None:
         if self.suffix == '.slot' and refusals['left']:
             refusals['left'] -= 1
             msg = 'the process cannot access the file because it is being used by another process'

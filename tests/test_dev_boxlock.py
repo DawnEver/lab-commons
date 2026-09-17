@@ -32,7 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def slots(tmp_path, monkeypatch):
+def slots(tmp_path, monkeypatch) -> Path:
     monkeypatch.setenv('LAB_COMMONS_RESOURCE_DIR', str(tmp_path / 'slots'))
     return tmp_path / 'slots'
 
@@ -47,8 +47,11 @@ def seat(pool: str, index: int = 0) -> str:
 
 
 def box_seat(index: int = 0) -> str:
-    """The BOX-scoped seat file's name. It carries NO pool, and that absence is the mechanism: a
-    name with a pool in it is exactly the string a consumer could have opted out of."""
+    """The BOX-scoped seat file's name.
+
+    It carries NO pool, and that absence is the mechanism: a name with a pool in it is exactly the
+    string a consumer could have opted out of.
+    """
     return f'{BOX_SEATS.name}.{index}.slot'
 
 
@@ -64,21 +67,24 @@ def _take_a_second_seat(what: str, broker: Broker | None = None) -> None:
 
 
 class TestTheExclusion:
-    def test_a_second_holder_is_refused_and_the_refusal_names_the_first(self, slots):
-        """THE DECISIVE ONE. "Busy" sends its reader to the process table to guess, and guessing
-        wrong kills somebody's evidence."""
+    def test_a_second_holder_is_refused_and_the_refusal_names_the_first(self, slots) -> None:
+        """THE DECISIVE ONE.
+
+        "Busy" sends its reader to the process table to guess, and guessing wrong kills somebody's
+        evidence.
+        """
         with BoxLock('gate:integrate/main').held(), pytest.raises(Exhausted) as refusal:
             _take_a_second_seat('heavy:feat/structural')
         assert 'gate:integrate/main' in str(refusal.value)
         assert refusal.value.pool == BOX_POOL
 
-    def test_the_seat_is_free_again_once_the_holder_releases_it(self, slots):
+    def test_the_seat_is_free_again_once_the_holder_releases_it(self, slots) -> None:
         with BoxLock('first').held():
             pass
         with BoxLock('second').held() as grant:
             assert grant.pool == BOX_POOL
 
-    def test_a_dead_holders_record_is_free_not_held(self, slots):
+    def test_a_dead_holders_record_is_free_not_held(self, slots) -> None:
         """The worst outcome of any crash is a file nobody counts, never a box nobody can use."""
         dead = slots / seat(BOX_POOL)
         dead.parent.mkdir(parents=True, exist_ok=True)
@@ -86,13 +92,13 @@ class TestTheExclusion:
         with BoxLock('after a crash').held():
             pass
 
-    def test_a_holder_with_no_name_is_refused_at_construction(self):
+    def test_a_holder_with_no_name_is_refused_at_construction(self) -> None:
         with pytest.raises(ValueError, match='cannot be acted on'):
             BoxLock('   ')
 
 
 class TestWhatTheLockDeclares:
-    def test_the_seats_rest_on_structural_constants_not_on_a_box_measurement(self, slots):
+    def test_the_seats_rest_on_structural_constants_not_on_a_box_measurement(self, slots) -> None:
         """The rule is a property of the TOOL -- one at a time, everywhere -- not of this machine."""
         with BoxLock('gate').held() as grant:
             assert grant.basis[BOX_SEATS.name] is Basis.STRUCTURAL
@@ -100,7 +106,7 @@ class TestWhatTheLockDeclares:
             assert grant.basis[SEATS.name] is Basis.STRUCTURAL
             assert grant.capacity[SEATS.name].value == 1
 
-    def test_a_per_box_measurement_of_four_seats_cannot_lift_it(self, slots):
+    def test_a_per_box_measurement_of_four_seats_cannot_lift_it(self, slots) -> None:
         """Declarations compose by taking the SMALLEST, so the structural constant always wins."""
         registry = CapacityRegistry()
         registry.declare(BOX_POOL, Capacity.measured(SEATS.name, 4, on=Broker().hostname))
@@ -111,7 +117,7 @@ class TestWhatTheLockDeclares:
                 _take_a_second_seat('heavy', broker)
         assert conceded == 1
 
-    def test_a_larger_measurement_of_the_box_seat_under_ANOTHER_POOL_cannot_lift_it(self, slots):
+    def test_a_larger_measurement_of_the_box_seat_under_ANOTHER_POOL_cannot_lift_it(self, slots) -> None:
         """A box-scoped ceiling is declared FOR THE BOX, so no pool keeps one to itself.
 
         This is the declaration half of the scope: with the ceiling keyed by pool, a consumer could
@@ -124,7 +130,7 @@ class TestWhatTheLockDeclares:
         with BoxLock('gate', broker=Broker(registry)).held() as grant:
             assert grant.capacity[BOX_SEATS.name].value == 1
 
-    def test_the_lock_demands_no_cores_so_a_wide_run_is_not_refused_by_its_own_lock(self, slots):
+    def test_the_lock_demands_no_cores_so_a_wide_run_is_not_refused_by_its_own_lock(self, slots) -> None:
         """An unmeasured box's cpu ceiling is one, and a CPU-saturating run wants the whole width.
 
         Demanding cores would refuse exactly the runs this lock exists to serialise, so the seat is
@@ -133,7 +139,7 @@ class TestWhatTheLockDeclares:
         with BoxLock('gate').held() as grant:
             assert 'cpu' not in grant.demands
 
-    def test_a_caller_can_declare_what_else_it_expects_to_consume(self, slots):
+    def test_a_caller_can_declare_what_else_it_expects_to_consume(self, slots) -> None:
         """The lock excludes; it does not decide what a consumer's run costs. That is passed on."""
         roomy = Broker(read_memory=lambda: SystemMemory(total_bytes=64 * GIB, available_bytes=48 * GIB))
         with BoxLock('gate', demands={MEMORY.name: 4096}, broker=roomy).held() as grant:
@@ -141,25 +147,30 @@ class TestWhatTheLockDeclares:
 
 
 class TestAskingIsNotTaking:
-    def test_holders_reports_the_live_holder(self, slots):
+    def test_holders_reports_the_live_holder(self, slots) -> None:
         assert BoxLock.holders() == ()
         with BoxLock('gate:integrate/main').held():
             named = BoxLock.holders()
         assert len(named) == 1
         assert named[0].what == 'gate:integrate/main'
 
-    def test_reading_the_holders_does_not_make_the_reader_a_holder(self, slots):
-        """A probe that tested takeability by ACQUIRING became a writer of the state it reported,
-        and two agents reading it refused each other over a phantom holder."""
+    def test_reading_the_holders_does_not_make_the_reader_a_holder(self, slots) -> None:
+        """A probe that tested takeability by ACQUIRING became a writer of the state it reported.
+
+        Two agents reading it then refused each other over a phantom holder.
+        """
         BoxLock.holders()
         BoxLock.holders()
         assert BoxLock.holders() == ()
         with BoxLock('gate').held():
             pass
 
-    def test_the_records_live_outside_any_repository(self, slots):
-        """Per-box runtime state naming a pid is not a tree's business, and it is what makes every
-        worktree on the box contend through ONE set of records whatever revision it has checked out."""
+    def test_the_records_live_outside_any_repository(self, slots) -> None:
+        """Per-box runtime state naming a pid is not a tree's business.
+
+        It is what makes every worktree on the box contend through ONE set of records, whatever
+        revision it has checked out.
+        """
         assert BoxLock.resource_dir() == slots
         assert REPO_ROOT not in BoxLock.resource_dir().parents
 
@@ -175,7 +186,7 @@ class TestAnUnreadableSeatIsHeldNotTaken:
     checked the refusal would pass on a fix that stole the seat a moment later.
     """
 
-    def test_an_empty_pool_seat_is_not_read_as_free(self, slots):
+    def test_an_empty_pool_seat_is_not_read_as_free(self, slots) -> None:
         planted = slots / seat(BOX_POOL)
         planted.parent.mkdir(parents=True, exist_ok=True)
         planted.write_text('', encoding='utf-8')
@@ -186,7 +197,7 @@ class TestAnUnreadableSeatIsHeldNotTaken:
         assert planted.exists(), 'the unreadable seat was DELETED -- that is the theft, not a fix'
         assert not (slots / box_seat()).exists(), 'a refused admission left a seat behind'
 
-    def test_an_empty_box_seat_is_not_read_as_free(self, slots):
+    def test_an_empty_box_seat_is_not_read_as_free(self, slots) -> None:
         planted = slots / box_seat()
         planted.parent.mkdir(parents=True, exist_ok=True)
         planted.write_text('not a record at all', encoding='utf-8')
@@ -198,9 +209,11 @@ class TestAnUnreadableSeatIsHeldNotTaken:
 
 
 class TestWhatMakesTheLockBoxWide:
-    def test_a_second_POOL_cannot_take_the_box_while_the_lock_holds_it(self, slots):
-        """THE BOX-WIDE CLAIM, MADE TRUE. "Box-wide" used to be a property of every caller passing
-        the same pool string, so a consumer that named its own pool silently opted out of contending
+    def test_a_second_POOL_cannot_take_the_box_while_the_lock_holds_it(self, slots) -> None:
+        """THE BOX-WIDE CLAIM, MADE TRUE.
+
+        "Box-wide" used to be a property of every caller passing the same pool string, so a consumer that named its
+        own pool silently opted out of contending
         -- and nothing in the broker could tell it so.
 
         This is the same run, under a pool name of its own, and it is refused: the exclusion is
@@ -218,7 +231,7 @@ class TestWhatMakesTheLockBoxWide:
         assert refusal.value.dimension == BOX_SEATS.name
         assert 'the kit' in str(refusal.value)
 
-    def test_the_box_seat_is_free_again_once_the_holder_releases_it(self, slots):
+    def test_the_box_seat_is_free_again_once_the_holder_releases_it(self, slots) -> None:
         """A box-wide exclusion that outlives its holder would be a box nobody can use."""
         broker = Broker()
         with BoxLock('first').held():
