@@ -1,0 +1,27 @@
+# Rendered by lab_commons.dev.famconfig from the family base for .pre-commit-config.yaml.
+# Hand edits RED. The base is data in lab_commons.dev._famconfig_rows;
+# this repo's own lines are its declared delta. Change one, re-render, commit.
+
+fail_fast: false
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: debug-statements
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.13.9
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
