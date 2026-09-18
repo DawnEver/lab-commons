@@ -77,9 +77,34 @@ def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
     consumers that otherwise have no reason to import ``sys``. Non-strings are formatted
     exactly like ``print`` (``format(text, '')`` falls back to ``str``). The stream is
     read at call time, so pytest's capsys captures it.
+
+    A CONSOLE THAT CANNOT CARRY A CHARACTER DEGRADES; IT DOES NOT KILL THE RUN. Measured 2026-09-18
+    on wdg-lab: ``lab_commons.dev.verify._tee`` streamed a test's U+2713 to a cp1252 stdout -- the
+    Windows DEFAULT whenever nothing overrides it -- and this function raised ``UnicodeEncodeError``
+    out through the verdict runner, which then produced an INCONCLUSIVE WITH NO LOG: the one state
+    that proves nothing and carries no verdict. A character the console cannot encode must not cost
+    the ability to ANSWER, for every caller, over output nobody chose.
+
+    WHY ``errors='replace'`` HERE AND NOT A FORCED UTF-8. They are different promises, and the two
+    streams deserve different ones. The citable evidence is the verify LOG, opened
+    ``encoding='utf-8'`` by its own writer and keeping every byte; the console is a VIEW of it, so
+    the view may lose a glyph and the evidence does not. Forcing UTF-8 would mean reconfiguring a
+    stream this library does not own -- global process state no caller asked to have changed -- and
+    on a real cp1252 console it renders mojibake rather than the character, trading a crash for a
+    silent lie. ``replace`` says what happened, where it happened, with ``?``.
+
+    EAFP rather than a pre-check: the substitution costs one encode only on the line that could not
+    be written, so ordinary output is handed to the stream UNTOUCHED, byte for byte.
+    ``TextIOWrapper`` encodes a whole ``write`` before buffering any of it, so nothing of the failing
+    line reached the stream when it raised.
     """
     stream = sys.stderr if err else sys.stdout
-    stream.write(f'{text}\n')
+    line = f'{text}\n'
+    try:
+        stream.write(line)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, 'encoding', None) or 'ascii'
+        stream.write(line.encode(encoding, errors='replace').decode(encoding, errors='replace'))
     if flush:
         stream.flush()
 
