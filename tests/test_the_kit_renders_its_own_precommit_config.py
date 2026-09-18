@@ -19,10 +19,11 @@ NOTHING HERE RE-IMPLEMENTS THE KIT. Every assertion below is either one of the s
 root, the name, the delta table, the command that re-renders, and which stages this checkout installs.
 
 THE COMPLETENESS ARM IS DELIBERATELY ABSENT and saying so is the point. ``assert_every_base_is_
-accounted_for`` demands a Delta for all three kit bases; this repo has adopted ONE. `.gitignore` and
-`Makefile` are open SPLITS rows in the config census with their own evidence, so calling that arm
-here would make this suite green on a completeness that has not happened, and leaving it out silently
-would be worse. The last test in this module is what holds the absence; it reds on adoption.
+accounted_for`` demands a Delta for all three kit bases; this repo has adopted TWO as of 2026-09-18,
+`Makefile` having joined this one. `.gitignore` is an open SPLITS row in the config census with its
+own evidence, so calling that arm here would make this suite green on a completeness that has not
+happened, and leaving it out silently would be worse. The last test in this module is what holds the
+absence; it reds on adoption, and it already did once.
 """
 
 from __future__ import annotations
@@ -163,9 +164,14 @@ def test_the_base_this_repo_adopted_is_still_the_family_one() -> None:
     assert missing == [], f'the base no longer renders {missing}, so every id assertion above got thinner'
 
 
-@pytest.mark.parametrize('artefact', ['.gitignore', 'Makefile'])
-def test_the_two_unadopted_bases_are_named_rather_than_silently_missing(artefact: str) -> None:
-    """The absence is DECLARED. If either is adopted, this reds and the completeness arm goes in."""
+@pytest.mark.parametrize('artefact', ['.gitignore'])
+def test_the_unadopted_base_is_named_rather_than_silently_missing(artefact: str) -> None:
+    """The absence is DECLARED. If it is adopted, this reds and the completeness arm goes in.
+
+    IT HELD TWO ROWS UNTIL 2026-09-18 and `Makefile` came off it by being ADOPTED, which is the
+    ratchet working rather than a row being dropped: this test reddened on the adoption commit and
+    `test_the_kit_meets_its_own_makefile_contract.py` is what replaced it. One row is left.
+    """
     assert artefact not in DELTAS, (
         f'{artefact} now has a delta here, so this repo has adopted it. Add '
         f'`assert_every_base_is_accounted_for` to this module and delete this row -- that arm is the '
