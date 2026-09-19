@@ -52,10 +52,10 @@ __all__ = [
 #: The signal that means what ``taskkill /F`` means: un-catchable, no cleanup.
 #:
 #: RESOLVED rather than spelled inline, because ``signal.SIGKILL`` DOES NOT EXIST on Windows --
-#: referencing it directly makes the POSIX branch unimportable from the only machines this fleet
-#: currently has, so the code written for macOS and Linux would ship never having been executed
-#: anywhere. The fallback is never taken on a real POSIX box; it exists so the constant is
-#: DEFINABLE everywhere, which is what lets that branch be tested from here.
+#: referencing it directly makes the POSIX branch unimportable from every DESK here, all Windows.
+#: CORRECTED 2026-09-19: this said such code runs nowhere, already wrong when written -- CI has run
+#: on ``ubuntu-latest`` throughout, a real POSIX box importing a real ``signal.SIGKILL``. The
+#: fallback is never taken there either; it makes the constant DEFINABLE on Windows, so it tests.
 _KILL_SIGNAL = getattr(signal, 'SIGKILL', signal.SIGTERM)
 
 _STILL_ACTIVE = 259
