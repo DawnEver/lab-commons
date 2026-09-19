@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons.dev import verify
+from lab_commons.dev.boxlock import BoxLock
 from lab_commons.dev.boxwait import PROGRESS_S, WAIT_S
 from lab_commons.dev.famtests.boxseat import (
     HOLD_THE_BOX_PARAMETERS,
@@ -120,9 +121,16 @@ def test_the_rendezvous_is_outside_this_repository() -> None:
 
 
 def test_a_rendezvous_inside_the_tree_reds() -> None:
-    """PLANTED: root the question at the filesystem root, which every path is relative to."""
+    """PLANTED: ask the question rooted at the records directory itself, which contains itself.
+
+    MEASURED BEFORE IT WAS WRITTEN, and the first attempt was WRONG in the silent direction: it
+    planted the filesystem root of this source file -- one drive letter -- on the assumption that
+    every path is relative to it. The box records live on ANOTHER drive, under TEMP, so it reached
+    and the arm would have passed without ever convicting. A control on a drive the subject is not
+    on is a control that cannot fail -- exactly the shape this whole package exists to refuse.
+    """
     with pytest.raises(AssertionError, match='A rendezvous a sibling repo cannot reach'):
-        assert_the_rendezvous_is_outside_this_repository(root=Path(Path(__file__).resolve().anchor))
+        assert_the_rendezvous_is_outside_this_repository(root=BoxLock.resource_dir())
 
 
 def test_the_wait_is_bounded_and_narrates() -> None:
