@@ -20,7 +20,7 @@ from typing import Final
 from _config_census_rows import REPO_PATHS
 
 from lab_commons.dev.collectscope import FileReading, Reach, local_modules, reach, read_imports, tree_texts
-from lab_commons.dev.syncscope import Selection, _base, extras
+from lab_commons.dev.syncscope import Selection, _base, canon, extras
 
 __all__ = [
     'BASE',
@@ -30,8 +30,11 @@ __all__ = [
     'CollectRow',
     'CollectRowError',
     'ReachDriftError',
+    'UnresolvedSupplierError',
     'VacuousTreeScanError',
+    'assert_no_unresolved_has_a_declared_supplier',
     'assert_reaches',
+    'derivable_suppliers',
     'measure',
     'present',
     'readings_of',
@@ -66,6 +69,18 @@ class ReachDriftError(AssertionError):
 
 class VacuousTreeScanError(AssertionError):
     """A scan read fewer test files, repos or rows than its floor, so its clean answer proves nothing."""
+
+
+class UnresolvedSupplierError(AssertionError):
+    """A name reported UNRESOLVED while a distribution the SAME manifest DECLARES can be derived to supply it.
+
+    THE DEFECT THIS EXISTS FOR, and it is on record: the residue was reported as *"all transitive,
+    none declared by any manifest, so no text settles them"* while THREE of its five names --
+    ``pdfminer`` (``pdfminer.six``, the ``img-to-cad`` extra), ``pywintypes`` and ``win32com``
+    (``pywin32``, the ``femm`` and ``tooldrivers`` extras) -- had a declared supplier in the very
+    manifest being read. An honest blind spot and a short table read identically from the outside,
+    and the only thing that tells them apart is a check that goes the OTHER way.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,3 +210,66 @@ def _assert_row(row: CollectRow, found: Reach) -> None:
             f'failing one. Re-measure the row; never widen it.'
         )
         raise ReachDriftError(msg)
+
+
+def derivable_suppliers(name: str, declared: frozenset[str]) -> frozenset[str]:
+    """Declared distributions whose SPELLING ALONE says they could supply *name*, with no table consulted.
+
+    Three shapes, each measured against a row the ALIASES table already holds rather than invented:
+    a SUFFIXED distribution (``pdfminer`` -> ``pdfminer.six``), a NAMESPACED one (``OCP`` ->
+    ``cadquery-ocp``), and the ``py`` prefix in either direction (``yaml`` -> ``pyyaml``). The
+    identity case is deliberately absent: `resolve` rule 1 already claimed it, so a name reaching
+    here can never equal a declared distribution.
+
+    WHAT IT CANNOT DERIVE, AND THE ANSWER IS NOT MORE PATTERNS. ``win32com`` and ``pywintypes`` both
+    come from ``pywin32`` and NO rule over the two spellings relates them -- neither contains the
+    other. A derivation that could would need the import names a wheel installs, which live in that
+    wheel's ``RECORD``/``top_level.txt`` and in no committed text of this family. That half stays a
+    NAMED SET, and the reason each surviving residue name is in it stays WRITTEN DOWN.
+    """
+    spelled = canon(name)
+    return frozenset(
+        dist
+        for dist in declared
+        if dist.startswith(f'{spelled}-')
+        or dist.endswith(f'-{spelled}')
+        or f'py{spelled}' == dist
+        or f'py{dist}' == spelled
+    )
+
+
+def assert_no_unresolved_has_a_declared_supplier(
+    rows: tuple[CollectRow, ...],
+    *,
+    pair_floor: int,
+) -> int:
+    """Refuse a residue name the manifest beside it already answers. Returns the pairs examined.
+
+    Raises:
+        UnresolvedSupplierError: a recorded UNRESOLVED name has a derivable declared supplier.
+        VacuousTreeScanError: fewer (name, distribution) pairs were examined than the floor.
+
+    """
+    pairs = 0
+    for row in rows:
+        if not present(row.repo):
+            continue
+        _, _, declared, _ = readings_of(row.repo)
+        for name in sorted(row.unresolved):
+            pairs += len(declared)
+            found = derivable_suppliers(name, declared)
+            if found:
+                msg = (
+                    f'{row.key}: `{name}` is recorded UNRESOLVED, but this manifest DECLARES '
+                    f'{sorted(found)}, which its spelling alone derives as a supplier. That is a '
+                    f'missing `collectscope.ALIASES` row, not a transitive dependency -- add the row '
+                    f'and re-measure the residue. Never widen the residue to keep it quiet.'
+                )
+                raise UnresolvedSupplierError(msg)
+    if pairs < pair_floor:
+        msg = (
+            f'examined {pairs} (import name, declared distribution) pairs, below the floor of '
+            f'{pair_floor}. Finding no derivable supplier in a set that was not read is vacuous.'
+        )
+        raise VacuousTreeScanError(msg)
+    return pairs
