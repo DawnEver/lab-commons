@@ -63,7 +63,7 @@ def set_active_logger(logger: logging.Logger) -> None:
 
 def _log_level_from_str(level: str) -> int:
     """Map a config-level string to a logging constant, defaulting to INFO."""
-    return getattr(logging, level.upper(), logging.INFO)
+    return logging.getLevelNamesMapping().get(level.upper(), logging.INFO)
 
 
 def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
@@ -103,7 +103,7 @@ def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
     try:
         stream.write(line)
     except UnicodeEncodeError:
-        encoding = getattr(stream, 'encoding', None) or 'ascii'
+        encoding = stream.encoding or 'ascii'
         stream.write(line.encode(encoding, errors='replace').decode(encoding, errors='replace'))
     if flush:
         stream.flush()
@@ -168,7 +168,14 @@ def log(msg: str, level: str = 'INFO') -> None:
 
     """
     level = level.upper()
-    log_method = getattr(_active_logger, level.lower(), None)
+    methods = {
+        'debug': _active_logger.debug,
+        'info': _active_logger.info,
+        'warning': _active_logger.warning,
+        'error': _active_logger.error,
+        'critical': _active_logger.critical,
+    }
+    log_method = methods.get(level.lower())
     if log_method is not None:
         log_method(msg)
     else:
