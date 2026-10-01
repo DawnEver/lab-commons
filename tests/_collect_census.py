@@ -44,7 +44,7 @@ __all__ = [
 HERE: Final = 'lab-commons'
 
 #: Where each repo is checked out relative to the family root. Taken from the config census rather
-#: than retyped, so the worktree ruling -- never the motronics MAIN checkout -- is stated once.
+#: than retyped, so where each repo is checked out is stated once.
 PATHS: Final[dict[str, str]] = {HERE: HERE, **REPO_PATHS}
 
 #: The shortest a row's REASON may be. A row's deliverable is WHY that selection is made and what
