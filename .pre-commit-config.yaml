@@ -25,3 +25,13 @@ repos:
     hooks:
       - id: commitizen
         stages: [commit-msg]
+
+  - repo: local
+    hooks:
+    - id: issue-ref
+      name: issue references are well-formed (warns, never blocks)
+      entry: lab-issue-ref
+      language: python
+      additional_dependencies: ['lab-commons @ git+https://github.com/DawnEver/lab-commons.git']
+      stages: [commit-msg]
+      verbose: true

@@ -74,12 +74,15 @@ class TestTheUnitIsTheHook:
             '        name: one decision, twelve lines',
             '        entry: lab-with-venv',
             "        args: ['scripts/planted.py']",
-            '        language: python',
+            # Spelled apart from the base's own `- repo: local` block (2026-10-01, `issue-ref`), so
+            # only the two structural keys collide and the plant still costs twelve.
+            '        language: system',
             "        additional_dependencies: ['lab-commons[dev]']",
             '        always_run: true',
             '        pass_filenames: false',
             '        require_serial: true',
-            '        verbose: true',
+            '        verbose: false',
+            '        files: ^planted/',
             '        stages: [pre-push]',
         )
         planted = '\n'.join([*base.lines, '', *extra, ''])
