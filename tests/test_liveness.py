@@ -114,6 +114,8 @@ def test_a_job_outliving_its_client_still_holds_the_seat_2026_09_03(tmp_path: Pa
             [sys.executable, '-c', _CLIENT, str(tmp_path), str(worker.pid)],
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=60,
             check=False,
         )

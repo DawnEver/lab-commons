@@ -124,6 +124,8 @@ def _run_verify(root: Path, environment: dict[str, str]) -> subprocess.Completed
         cwd=root,
         capture_output=True,
         text=True,
+        encoding='utf-8',
+        errors='replace',
         timeout=600,
         check=False,
         env=env,

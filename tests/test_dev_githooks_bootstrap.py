@@ -48,7 +48,7 @@ print('RESOLVED-INTERPRETER', sys.executable)
 
 
 def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=True)
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace', check=True)
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -313,6 +313,8 @@ def test_the_entry_is_nameable_with_no_interpreter_in_front(
         cwd=lane,
         capture_output=True,
         text=True,
+        encoding='utf-8',
+        errors='replace',
         check=False,
         env={**os.environ, 'PRE_COMMIT_HOME': str(lane.parent / 'pc-home')},
     )

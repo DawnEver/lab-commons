@@ -19,6 +19,8 @@ WHAT THE MEASUREMENT SAYS, 2026-09-19, over the four live checkouts:
 * ELEVEN of the base's fourteen lines are absent from the kit, and they are not stylistic: the base
   floats every cache rule (`**/__pycache__/`) where this tree anchors it (`__pycache__/`), and it
   carries `.coverage*`, `.mypy_cache/` and `uv.lock` for tools this repo does not run.
+* RE-MEASURED 2026-10-01: `uv.lock` was adopted here, so the kit holds FOUR of the fourteen and TEN
+  base lines are absent. Every subset test is still false; the answer below did not move.
 
 SO ADOPTION IS A REAL BEHAVIOUR CHANGE AND NOT A STAMP. It would add eleven patterns to a
 ten-pattern file, and one of the ten it must keep names this repo alone --
@@ -55,13 +57,15 @@ GITIGNORE: Final = '.gitignore'
 #: This checkout's root -- `tests/` sits directly under it.
 ROOT: Final = Path(__file__).resolve().parent.parent
 
-#: The kit's three patterns out of the consumers' fourteen, as a NAMED SET. A count cannot say WHICH
-#: one moved, and this family has already lowered a digit rather than read a swap.
-KIT_SHARE: Final[frozenset[str]] = frozenset({'*.egg-info/', '.pytest_cache/', '.ruff_cache/'})
+#: The kit's share of the consumers' fourteen, as a NAMED SET. A count cannot say WHICH one moved, and
+#: this family has already lowered a digit rather than read a swap. FOUR since 2026-10-01: `uv.lock`
+#: was ADOPTED here (b2ac445, "the family tracks the newest version of every dependency") -- a line
+#: arriving from the base, not the base moving.
+KIT_SHARE: Final[frozenset[str]] = frozenset({'*.egg-info/', '.pytest_cache/', '.ruff_cache/', 'uv.lock'})
 
-#: The eleven base lines this tree does not carry, NAMED. When this set empties the base has become
-#: adoptable here and the question re-opens; when it changes, a base line moved and the reader is
-#: told which. The floor under the reading is that it is non-empty, which the first arm asserts.
+#: The base lines this tree does not carry, NAMED -- ten since `uv.lock` was adopted. When this set
+#: empties the base has become adoptable here and the question re-opens; when it changes, a base line
+#: moved and the reader is told which. The floor under the reading is that it is non-empty.
 UNADOPTED_BASE_LINES: Final[frozenset[str]] = frozenset(
     {
         '**/.env',
@@ -74,7 +78,6 @@ UNADOPTED_BASE_LINES: Final[frozenset[str]] = frozenset(
         '.coverage*',
         '.mypy_cache/',
         '.venv*',
-        'uv.lock',
     }
 )
 
@@ -134,7 +137,7 @@ class TestTheKitsGitignoreIsAdoptableByNobody:
             )
             assert not other <= kit, f'{repo} is now a subset of the kit, so the kit could render for it'
 
-    def test_the_kit_holds_exactly_three_of_the_consumer_core(self) -> None:
+    def test_the_kit_holds_exactly_its_named_share_of_the_consumer_core(self) -> None:
         """A NAMED SET rather than a count, so a swap is legible and the digit cannot be edited down."""
         kit = gitignore_patterns(_reached()['lab-commons'])
         assert len(SHARED_GITIGNORE_CORE) >= 10, f'the recorded core is {len(SHARED_GITIGNORE_CORE)} patterns'
@@ -144,7 +147,7 @@ class TestTheKitsGitignoreIsAdoptableByNobody:
             f'cheap and this is the arm that says so.'
         )
 
-    def test_eleven_base_lines_are_absent_here_and_they_are_named(self) -> None:
+    def test_the_unadopted_base_lines_are_absent_here_and_they_are_named(self) -> None:
         """THE RE-OPENING TRIGGER. When this set empties, the base has arrived and the answer changes."""
         base = BASES[GITIGNORE]
         kit = gitignore_patterns(_reached()['lab-commons'])
