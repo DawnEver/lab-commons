@@ -46,7 +46,7 @@ __all__ = ['publish', 'record', 'stage', 'unpublish']
 #: cleanly and names a holder; this one is an `OSError` no caller of this package was told to expect,
 #: so a reader merely LOOKING at a lock could crash a writer.
 #:
-#: MEASURED 2026-09-16, driving motronics' gate lock (a `BoxLock` adapter) through a take/release
+#: MEASURED 2026-09-16, driving consumer-a' gate lock (a `BoxLock` adapter) through a take/release
 #: loop beside a concurrent poll storm: the loop wedged on its own seat within a few seconds, and
 #: with that fixed the next iteration's claim rename raised instead. A reader holds the file for
 #: microseconds, so insisting for a fraction of a second is the whole fix -- and it is a RETRY

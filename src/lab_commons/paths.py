@@ -1,9 +1,9 @@
 """App-agnostic path resolution + per-run output directories.
 
-Provenance: extracted from motronics-studio's ``core/utils/config.py``, parameterized by
-``app_name`` -- the motronics original already derived the home env var and the
-platformdirs namespace from ``app_name`` instead of hardcoding ``'motronics'`` /
-``MOTRONICS_HOME``, so this extraction is a pure relocation, not a redesign.
+Provenance: extracted from consumer-a's ``core/utils/config.py``, parameterized by
+``app_name`` -- the consumer-a original already derived the home env var and the
+platformdirs namespace from ``app_name`` instead of hardcoding ``'consumer-a'`` /
+``CONSUMER_A_HOME``, so this extraction is a pure relocation, not a redesign.
 
 Home-resolution precedence (per app):
   1. ``<APP>_HOME`` env (or an explicit ``env_var``); an explicit override.
@@ -144,7 +144,7 @@ def run_output_dir(app_name: str, name: str | None = None, *, root: Path | None 
     why no caller needs changing.
 
     ``root`` overrides the resolved :func:`output_root` (a consumer with its own,
-    already-resolved output root — e.g. motronics honoring a deprecated env var — passes it
+    already-resolved output root — e.g. consumer-a honoring a deprecated env var — passes it
     in); when None the root is resolved from ``app_name``.
     """
     base = root if root is not None else output_root(app_name)

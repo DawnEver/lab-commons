@@ -1,8 +1,8 @@
 """``lab_commons.exceptions`` — generic exception classes + decorators.
 
-Ported from motronics-studio's ``core/utils/exceptions.py`` behavior, renamed to this
+Ported from consumer-a's ``core/utils/exceptions.py`` behavior, renamed to this
 package's import path. Only the project-agnostic subset lives here: ``FEMMException``
-(vendor-solver domain) stays in motronics and is not tested here.
+(vendor-solver domain) stays in consumer-a and is not tested here.
 """
 
 from typing import Never

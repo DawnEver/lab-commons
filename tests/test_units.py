@@ -1,6 +1,6 @@
 """``lab_commons.units`` — tier-1 generic pint <-> pydantic (``Annotated``) machinery.
 
-Ported from motronics-studio's ``tests/unit/core/test_units.py`` behavior, restricted to
+Ported from consumer-a's ``tests/unit/core/test_units.py`` behavior, restricted to
 the tier-1 subset (no EM vocabulary -- that's ``test_em.py``). Also pins the tier
 boundary itself: importing this module must never import ``lab_commons.em``.
 """
@@ -55,7 +55,7 @@ def test_pydantic_quantity_rejects_a_raw_non_quantity_at_the_class_level() -> No
     so ``PydanticQuantity.validate`` (the piece that actually raises ``QuantityException`` on
     a non-``Quantity``) never sees a rejectable value once a model field has run.  The
     rejection contract is real, but only demonstrable at the class-method level (matches
-    motronics' own ``test_pydantic_quantity_validate``); a bad-unit-string INTO a full model
+    consumer-a' own ``test_pydantic_quantity_validate``); a bad-unit-string INTO a full model
     field instead surfaces pint's own ``UndefinedUnitError`` uncaught by pydantic (pint's
     error is an ``AttributeError`` subclass, not one of the exception types pydantic wraps
     into ``ValidationError``) -- a known permissiveness of this design, not asserted here as

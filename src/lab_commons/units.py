@@ -4,7 +4,7 @@ No EM/domain vocabulary lives here: no quantity-type NewTypes, no ``Q_*`` consta
 Test: could a lab doing something unrelated (chemistry, finance) use this module
 unchanged? Yes, for everything in it.
 
-Provenance: extracted from motronics-studio's ``core/units.py`` (the maintainer-designated
+Provenance: extracted from consumer-a's ``core/units.py`` (the maintainer-designated
 canonical design, 2026-07-22: "the ``Annotated`` approach, not a ``PydanticQuantity``
 core-schema registration") -- this module carries only the generic plumbing; the family's
 EM quantity types/constants (``LengthType``, ``TorqueType``, ``Q_0Nm``, ...) are tier 2,
@@ -67,7 +67,7 @@ def _build_pydantic_quantity(quantity_exception: type[Exception]) -> type:
     ``quantity_exception``, so this is unaffected by the ``__init__``/``super()`` MRO trap that
     makes multiple-inheritance bridging of two independent exception hierarchies unsafe (a
     subclass's ``__init__`` chain can silently skip ``Exception.__init__`` and corrupt
-    ``str(exc)`` -- measured in wdg-lab's own ``QuantityException``/``WdgError``).
+    ``str(exc)`` -- measured in consumer-b's own ``QuantityException``/``ConsumerBError``).
     """
 
     class _PydanticQuantity:
@@ -104,9 +104,9 @@ def _build_pydantic_quantity(quantity_exception: type[Exception]) -> type:
 
 
 # The default marker, bound to the shared QuantityException -- every existing consumer
-# (motronics, optimi-lab, and anything importing lab_commons.units/em directly) keeps this
-# EXACT class, unchanged behavior. A consumer with its own exception hierarchy (e.g. wdg-lab's
-# WdgError-based QuantityException) gets its own marker via get_quantity_type's
+# (consumer-a, consumer-c, and anything importing lab_commons.units/em directly) keeps this
+# EXACT class, unchanged behavior. A consumer with its own exception hierarchy (e.g. consumer-b's
+# ConsumerBError-based QuantityException) gets its own marker via get_quantity_type's
 # ``quantity_exception`` kwarg -- never by subclassing this one.
 PydanticQuantity = _build_pydantic_quantity(QuantityException)
 
@@ -124,11 +124,11 @@ def get_quantity_type(
             non-``Quantity`` value, AFTER the ``BeforeValidator(Q_)`` step. ``None`` (default)
             uses the shared :data:`PydanticQuantity` marker (raises the shared
             ``QuantityException``) -- BYTE-IDENTICAL to every call site before this parameter
-            existed. Pass a consumer's own exception class (e.g. a ``WdgError`` subclass) to
+            existed. Pass a consumer's own exception class (e.g. a ``ConsumerBError`` subclass) to
             get a field whose validation failures raise that class instead -- built via
             :func:`_build_pydantic_quantity`, not by subclassing the shared marker.
 
-    NOTE (ported from motronics, MANUAL-20260717-386 ratchet): the declared return type is
+    NOTE (ported from consumer-a, MANUAL-20260717-386 ratchet): the declared return type is
     deliberately NOT what this returns at runtime (an ``Annotated[...]`` special form,
     not a ``type``) -- pyright flags the mismatch at the single `return` below. Fixing it
     honestly (``-> Any``) was tried and makes it WORSE: every ``NewType(..., get_quantity_type(...))``
@@ -204,7 +204,7 @@ pydantic_config_dict_with_q = ConfigDict(
 )
 
 
-class BaseModel_with_q(BaseModel):  # noqa: N801 -- imported BY NAME in wdg-lab; renaming is cross-repo
+class BaseModel_with_q(BaseModel):  # noqa: N801 -- imported BY NAME in consumer-b; renaming is cross-repo
     """Pydantic ``BaseModel`` supporting pint quantity validation and ``np.ndarray`` serialization."""
 
     model_config = pydantic_config_dict_with_q

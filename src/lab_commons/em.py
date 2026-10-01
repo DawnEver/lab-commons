@@ -1,6 +1,6 @@
 """Tier 2 — family-shared EM/physical quantity vocabulary (optional import).
 
-Not project-specific, but shared across the motronics/optimi-lab/wdg-lab family of
+Not project-specific, but shared across the consumer-a/consumer-c/consumer-b family of
 motor/EM labs: every quantity ``NewType`` (``LengthType``, ``TorqueType``, ...) and every
 ``Q_*`` constant (``Q_0mm``, ``Q_360deg``, ...) lives here, isolated from tier 1 so that
 ``import lab_commons.units`` never drags this vocabulary along. Import this module
@@ -9,7 +9,7 @@ explicitly (``from lab_commons.em import TorqueType``) when a consumer needs it.
 Depends on ``lab_commons.units`` (tier 1) for ``Q_``/``get_quantity_type``/``ureg`` --
 never the reverse.
 
-Provenance: extracted from motronics-studio's ``core/units.py``.
+Provenance: extracted from consumer-a's ``core/units.py``.
 
 **Exception injection (plan-lab-commons-standalone.md §7, "clean end-state"):** the ~30
 quantity ``NewType``s (and the two point types built from them) are constructed by
@@ -18,8 +18,8 @@ quantity ``NewType``s (and the two point types built from them) are constructed 
 (``LengthType``, ``TorqueType``, ...) are ``build_em_types()``'s DEFAULT build (raises the
 shared ``lab_commons.exceptions.QuantityException``) -- every existing ``from lab_commons.em
 import TorqueType`` keeps resolving to the exact same object, unchanged. A consumer with its
-own exception hierarchy (e.g. wdg-lab's ``WdgError``-based ``QuantityException``) calls
-``build_em_types(quantity_exception=WdgQuantityException)`` for its OWN vocabulary instead of
+own exception hierarchy (e.g. consumer-b's ``ConsumerBError``-based ``QuantityException``) calls
+``build_em_types(quantity_exception=ConsumerBQuantityException)`` for its OWN vocabulary instead of
 forking these definitions.
 """
 
@@ -323,8 +323,8 @@ Polar2DPoint_Array = Annotated[
 
 
 # N802/N803 here and on the two functions below: `Q_` is pint's OWN spelling for a quantity and
-# `2D` is the domain's, and these three names are IMPORTED BY NAME in wdg-lab
-# (`wdg_lab/utils/quantities.py`). A rename is therefore a cross-repo move and belongs to the
+# `2D` is the domain's, and these three names are IMPORTED BY NAME in consumer-b
+# (`consumer_b/utils/quantities.py`). A rename is therefore a cross-repo move and belongs to the
 # stage that re-points the consumers, not to a lint pass in this tree.
 def Q_list2array(  # noqa: N802
     Q_list: list[PintQuantityType],  # noqa: N803

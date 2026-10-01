@@ -1,6 +1,6 @@
 """``lab_commons.file_io`` — TOML read/write + filesystem-presence helpers.
 
-Ported from motronics-studio's ``tests/unit/core/utils/test_file_io.py``, renamed to this
+Ported from consumer-a's ``tests/unit/core/utils/test_file_io.py``, renamed to this
 package's import path. Rewritten against real filesystem behavior (``tmp_path``) rather than
 mocked ``Path`` methods, matching the split-out style of ``test_log.py`` / ``test_paths.py``.
 """

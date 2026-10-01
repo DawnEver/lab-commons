@@ -1,7 +1,7 @@
 """App-agnostic logging primitives.
 
-Provenance: extracted from motronics-studio's ``core/utils/logger.py`` free functions
-(the strongest of six near-identical copies across the motronics/optimi-lab/wdg-lab
+Provenance: extracted from consumer-a's ``core/utils/logger.py`` free functions
+(the strongest of six near-identical copies across the consumer-a/consumer-c/consumer-b
 family; see ``finding-shared-lab-infra-extraction.md``), plus a named-logger factory.
 The domain-specific wiring (which config object supplies the formats/level, which path
 the file handler writes to) stays in each consumer; here we keep only the generic
@@ -79,7 +79,7 @@ def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
     read at call time, so pytest's capsys captures it.
 
     A CONSOLE THAT CANNOT CARRY A CHARACTER DEGRADES; IT DOES NOT KILL THE RUN. Measured 2026-09-18
-    on wdg-lab: ``lab_commons.dev.verify._tee`` streamed a test's U+2713 to a cp1252 stdout -- the
+    on consumer-b: ``lab_commons.dev.verify._tee`` streamed a test's U+2713 to a cp1252 stdout -- the
     Windows DEFAULT whenever nothing overrides it -- and this function raised ``UnicodeEncodeError``
     out through the verdict runner, which then produced an INCONCLUSIVE WITH NO LOG: the one state
     that proves nothing and carries no verdict. A character the console cannot encode must not cost
@@ -120,7 +120,7 @@ def add_handle(
 ) -> None:
     """Attach a file + console handler pair to ``logger`` (idempotent).
 
-    Generic mechanics lifted from the motronics ``add_handle``; the consumer supplies the
+    Generic mechanics lifted from the consumer-a ``add_handle``; the consumer supplies the
     resolved log-file path, level, and formats (which config object those come from is a
     domain concern). Returns early if handlers are already attached, so repeated runtime
     initialization never duplicates output.

@@ -147,7 +147,7 @@ class TestEveryDeclaredStageIsWired:
     def test_the_install_command_is_derived_from_the_config_rather_than_spelled(self) -> None:
         """A RESTATED STAGE LIST IS THE DEFECT `install_command` EXISTS FOR.
 
-        motronics' Makefile named two of three stages and every `stages: [pre-commit]` hook went
+        consumer-a' Makefile named two of three stages and every `stages: [pre-commit]` hook went
         uninstalled behind a populated hooks directory. So the remedy this suite prints is READ from
         the config, and this pins that it reaches every stage the config declares.
         """

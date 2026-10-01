@@ -1,13 +1,13 @@
 """Tier 1 -- reading this box: its memory, its process table, and ending a process TREE.
 
-WHY THIS IS IN LAB-COMMONS AND NOT IN A CONSUMER. motronics-studio carried TWO copies of the
+WHY THIS IS IN LAB-COMMONS AND NOT IN A CONSUMER. consumer-a carried TWO copies of the
 ``_MEMORYSTATUSEX`` ctypes structure -- one in ``core/utils/proc.py`` (production) and one in
 ``scripts/gate/width.py`` (its dev tree) -- not by accident but because its layering rule forbids
 the dev tree importing production code. Two copies of one syscall wrapper is two things to keep
 true, and the failure mode is silent: the copies drift, one starts sizing off TOTAL where the
 other sizes off AVAILABLE, and nothing reds. An INSTALLED package is importable from both sides of
 that firewall, which is the only arrangement that ends the duplication instead of minting a third
-copy. (motronics-studio ``docs-src/dev/compute-resources.md``, "the constraint any unification
+copy. (consumer-a ``docs-src/dev/compute-resources.md``, "the constraint any unification
 must reckon with first".)
 
 TIER 1, and the test is the package's own: this module imports ``ctypes``, ``os``, ``signal``,
@@ -23,7 +23,7 @@ kernel, so on the platforms this family runs there is ALWAYS a reading. Adding `
 hard dependency of tier 1 would also make "install nothing heavier than this" false for a consumer
 that wanted only logging.
 
-Provenance: extracted from motronics-studio's ``core/utils/proc.py`` (2026-09-13). The
+Provenance: extracted from consumer-a's ``core/utils/proc.py`` (2026-09-13). The
 Windows-specific incident notes kept in the docstrings below are MEASUREMENTS on that fleet and
 are what justify each choice against the more obvious one; they are carried across deliberately,
 because a rule whose evidence is deleted is the next thing somebody "simplifies".

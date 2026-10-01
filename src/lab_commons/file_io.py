@@ -1,7 +1,7 @@
 """App-agnostic TOML read/write + filesystem-presence helpers.
 
-Provenance: extracted from motronics-studio's ``core/utils/file_io.py`` (byte-identical
-across the motronics/optimi-lab/wdg-lab family; see ``finding-shared-lab-infra-extraction.md``),
+Provenance: extracted from consumer-a's ``core/utils/file_io.py`` (byte-identical
+across the consumer-a/consumer-c/consumer-b family; see ``finding-shared-lab-infra-extraction.md``),
 the strongest of the near-identical copies — it is the only fork whose :func:`read_toml`
 accepts both a path and in-memory ``bytes``. Pure ``rtoml`` + ``pathlib``/``shutil`` mechanics,
 no concept from any single lab's domain.

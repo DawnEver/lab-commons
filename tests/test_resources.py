@@ -1,6 +1,6 @@
 """``lab_commons.resources`` — the box-resource broker.
 
-The GENERIC half of motronics-studio's ``docs-src/dev/compute-resources.md`` design. Nothing here
+The GENERIC half of consumer-a's ``docs-src/dev/compute-resources.md`` design. Nothing here
 knows what a vendor is; a consumer declares the pools and the values.
 
 Every guard below PLANTS its exhaustion condition and calls the REAL guard, injecting the readers

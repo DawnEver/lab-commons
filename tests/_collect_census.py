@@ -20,6 +20,7 @@ from typing import Final
 from _config_census_rows import REPO_PATHS
 
 from lab_commons.dev.collectscope import FileReading, Reach, local_modules, reach, read_imports, tree_texts
+from lab_commons.dev.doorcensus import sibling_paths
 from lab_commons.dev.syncscope import Selection, _base, canon, extras
 
 __all__ = [
@@ -45,7 +46,7 @@ HERE: Final = 'lab-commons'
 
 #: Where each repo is checked out relative to the family root. Taken from the config census rather
 #: than retyped, so where each repo is checked out is stated once.
-PATHS: Final[dict[str, str]] = {HERE: HERE, **REPO_PATHS}
+PATHS: Final[dict[str, str]] = sibling_paths({HERE: HERE, **REPO_PATHS})
 
 #: The shortest a row's REASON may be. A row's deliverable is WHY that selection is made and what
 #: its three sets mean; a caption carries neither, and is how a row is added without anybody looking.
@@ -117,7 +118,7 @@ class CollectRow:
 def _readings(repo: str, root: Path) -> tuple[dict[str, FileReading], str, frozenset[str], frozenset[str]]:
     """One repo's test-tree readings, manifest, declared set and local names. Cached: the tree is read once.
 
-    MEASURED 2026-09-19: motronics' 2632 test files cost 11 s to read and parse, and the table asks
+    MEASURED 2026-09-19: consumer-a' 2632 test files cost 11 s to read and parse, and the table asks
     two questions of them. A second read would double the census for no second fact.
     """
     texts = tree_texts(root, _TESTS, at_head=repo != HERE)

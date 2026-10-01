@@ -1,6 +1,6 @@
 """``lab_commons.proc`` — the ONE home for reading this box's memory and its process table.
 
-Ported from motronics-studio's ``core/utils/proc.py``. That repo carried TWO duplicated
+Ported from consumer-a's ``core/utils/proc.py``. That repo carried TWO duplicated
 ``_MEMORYSTATUSEX`` ctypes structs -- one in production (``core/utils/proc.py``), one in the dev
 tree (``scripts/gate/width.py``) -- because its layering rule forbids the dev tree importing
 production code. An installed package is importable from both, so the duplication ends here.

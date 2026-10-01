@@ -1,6 +1,6 @@
 """``lab_commons.structured`` — structlog/JSON output, secret redaction, two-phase bootstrap.
 
-Ported from motronics-studio's ``tests/unit/mylab_logging/test_structured.py``, renamed to
+Ported from consumer-a's ``tests/unit/mylab_logging/test_structured.py``, renamed to
 this package's import path. Proves (a) the structured sink emits valid JSONL with the
 expected fields, (b) a record carrying a sensitive key (license key / token / fingerprint /
 secret / password) never leaks the raw value — only a stable ``sha256:`` hash — through

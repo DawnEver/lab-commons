@@ -6,13 +6,13 @@ so it is deliberately NOT re-exported from ``lab_commons``'s top-level ``__init_
 that top level's whole contract is "never pulls ``em`` in". Import it explicitly:
 ``from lab_commons.multiprocess import MultiProcessing``.
 
-Provenance: extracted from motronics-studio's ``core/utils/multiprocess.py`` (the
-maintainer-designated canonical copy; optimi-lab's ``utils/multiprocessing.py`` is a
+Provenance: extracted from consumer-a's ``core/utils/multiprocess.py`` (the
+maintainer-designated canonical copy; consumer-c's ``utils/multiprocessing.py`` is a
 near-identical fork, already English-commented, used as a cross-check here). The last
 plan-lab-commons-standalone.md candidate, blocked until units/exceptions/logging had
-lab_commons homes -- now unblocked: every motronics dependency below resolves inside this
+lab_commons homes -- now unblocked: every consumer-a dependency below resolves inside this
 package (``lab_commons.units``, ``lab_commons.em``, ``lab_commons.exceptions``,
-``lab_commons.log``), so the extraction is a clean re-point with no residual motronics
+``lab_commons.log``), so the extraction is a clean re-point with no residual consumer-a
 coupling.
 """
 

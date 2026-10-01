@@ -1,6 +1,6 @@
 """Tier 1 -- what this box rations, declared as data and enforced ACROSS PROCESSES.
 
-The GENERIC half of the design in motronics-studio's ``docs-src/dev/compute-resources.md``.
+The GENERIC half of the design in consumer-a's ``docs-src/dev/compute-resources.md``.
 Nothing here knows what a vendor tool is: a consumer declares the POOLS and the VALUES, and this
 module owns the dimensions, the bookkeeping, the admission and the running ceiling.
 

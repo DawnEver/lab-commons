@@ -1,6 +1,6 @@
 """``lab_commons.paths`` — app-agnostic path resolution + per-run output directories.
 
-Ported from motronics-studio's ``tests/unit/core/test_mylab_logging.py`` (the ``TestPathScheme``
+Ported from consumer-a's ``tests/unit/core/test_mylab_logging.py`` (the ``TestPathScheme``
 / ``TestResolveHome`` classes), renamed to this package's import path. Proves (a) the path
 primitives produce the nested ``logs/yy/mm/dd/[name/]HH-MM-SS/`` scheme, and (b) ``resolve_home``
 honors its env var and falls back correctly.

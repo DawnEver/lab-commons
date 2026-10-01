@@ -1,6 +1,6 @@
 """``lab_commons.em`` — tier-2 family-shared EM quantity vocabulary (optional import).
 
-Ported from motronics-studio's ``tests/unit/core/test_units.py`` (the EM-vocabulary
+Ported from consumer-a's ``tests/unit/core/test_units.py`` (the EM-vocabulary
 assertions), restricted to a representative subset of types/constants -- exhaustively
 re-testing every one of the ~40 constants would just re-test pint. Also pins the tier
 boundary: importing ``lab_commons.units`` must not import this module.
@@ -50,7 +50,7 @@ def test_angle_speed_type_and_q_0rpm() -> None:
 
 def test_is_equal_2d_point() -> None:
     # N806 waived five times here: `Q_<magnitude><unit>` is pint's own spelling for a quantity
-    # literal, and it is the family's -- wdg-lab imports `Q_0deg` BY THAT NAME. Lower-casing these
+    # literal, and it is the family's -- consumer-b imports `Q_0deg` BY THAT NAME. Lower-casing these
     # would make the fixture read like an ordinary float, which is the confusion pint exists to end.
     Q_0m = Q_(0, 'm')  # noqa: N806
     Q_1m = Q_(1, 'm')  # noqa: N806

@@ -1,6 +1,6 @@
 """A release must REMOVE its seat, even while a peer holds the file open to read it.
 
-WHAT WAS MEASURED, 2026-09-16. motronics-studio's `scripts/gate/lock.py` became an adapter over
+WHAT WAS MEASURED, 2026-09-16. consumer-a's `scripts/gate/lock.py` became an adapter over
 `BoxLock`, and the first thing its own suite did was drive take-and-release in a loop beside a
 concurrent poll storm -- the shape two agents polling `--who cpu` produce on a real box. Within
 seconds the loop was refused by a holder named `a real run [client:37504]`: its OWN pid, from an

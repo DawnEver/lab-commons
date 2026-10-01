@@ -1,6 +1,6 @@
 """``lab_commons.multiprocess`` — tier-2 (optional import) process-pool runner.
 
-Ported from motronics-studio's behavior; a real cross-process run rather than a mock, plus
+Ported from consumer-a's behavior; a real cross-process run rather than a mock, plus
 the parameter model's ``TimeType`` validation. Workers must be module-level functions
 (never closures/lambdas/nested defs) so Windows' ``spawn`` start method can pickle and
 re-import them in the child process -- see ``_worker_ok`` / ``_worker_boom`` below.

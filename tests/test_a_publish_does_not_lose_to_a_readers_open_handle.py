@@ -9,7 +9,7 @@ open::
     PermissionError: [WinError 5] Access is denied:
       '...\\staged-nzittwzn' -> '...\\lab-commons-box.claim.39816.31904.json'
 
-MEASURED 2026-09-16 from motronics-studio's take-loop arm, a child process storming reads while the
+MEASURED 2026-09-16 from consumer-a's take-loop arm, a child process storming reads while the
 parent took and released the box in a loop. The claim file's name is stable per (pid, thread), so
 the second iteration's publish lands on the first iteration's file -- which the storming reader had
 open.

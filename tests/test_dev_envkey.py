@@ -73,7 +73,7 @@ class TestTheKey:
 
 
 class TestAGitInstallIsNamedByItsCommit:
-    """The property that kept a second implementation of this module alive in motronics.
+    """The property that kept a second implementation of this module alive in consumer-a.
 
     The manifest reads the distribution VERSION and nothing else, so the claim that it can tell
     two checkouts of one declared version apart is a claim about what pip writes there. Planted

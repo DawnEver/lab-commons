@@ -1,9 +1,9 @@
 """App-agnostic exception classes + decorators.
 
-Provenance: extracted from motronics-studio's ``core/utils/exceptions.py`` (byte-identical
-across the motronics/optimi-lab/wdg-lab family; see ``finding-shared-lab-infra-extraction.md``).
+Provenance: extracted from consumer-a's ``core/utils/exceptions.py`` (byte-identical
+across the consumer-a/consumer-c/consumer-b family; see ``finding-shared-lab-infra-extraction.md``).
 Only the GENERIC subset is extracted here — ``FEMMException`` (a vendor-solver name) is
-project-specific and stays in motronics; wdg-lab's ``ErrorCode`` catalog / ``WdgError`` base
+project-specific and stays in consumer-a; consumer-b's ``ErrorCode`` catalog / ``ConsumerBError`` base
 class is its own project-specific extension and is likewise out of scope for this module.
 """
 

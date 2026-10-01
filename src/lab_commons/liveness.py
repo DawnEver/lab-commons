@@ -4,7 +4,7 @@ THE TWO INCIDENTS THIS MODULE SITS BETWEEN, one day apart, pointing in OPPOSITE 
 were real, both were measured, and any liveness test that adopts either one wholesale re-opens the
 other.
 
-* **2026-09-02 -- pid reuse.** motronics-studio's ``scripts/gate/lock.py`` was written as an
+* **2026-09-02 -- pid reuse.** consumer-a's ``scripts/gate/lock.py`` was written as an
   argument AGAINST recording a pid at all: a dead holder's pid was recycled by an unrelated ``cmd``
   process, the recorded number answered ALIVE, and every gate on the box was refused by a holder
   that had exited. Its remedy was a kernel byte-range lock, which the OS drops however the process

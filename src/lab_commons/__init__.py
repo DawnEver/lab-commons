@@ -12,13 +12,13 @@ repo's README).
 
 Tier 2 (NOT imported here -- opt in explicitly): ``lab_commons.em`` holds the EM/physical
 quantity vocabulary (``LengthType``, ``TorqueType``, ``Q_0Nm``, ...) shared across the
-motronics/optimi-lab/wdg-lab family. Import it directly:
+consumer-a/consumer-c/consumer-b family. Import it directly:
 ``from lab_commons.em import TorqueType``. Importing this package, or ``lab_commons.units``
 alone, never pulls ``em`` in.
 
-Provenance: extracted from motronics-studio's ``mylab_logging`` package (logging/paths)
+Provenance: extracted from consumer-a's ``mylab_logging`` package (logging/paths)
 and ``core/units.py`` (the maintainer-designated canonical pint design) -- the strongest
-of near-identical copies duplicated across motronics-studio / optimi-lab / wdg-lab
+of near-identical copies duplicated across consumer-a / consumer-c / consumer-b
 (+3 forks).
 """
 
