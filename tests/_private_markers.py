@@ -55,14 +55,26 @@ def load_markers(path: Path = MARKERS_FILE) -> tuple[re.Pattern[str], ...]:
     return tuple(out)
 
 
-def scan_text(text: str, markers: tuple[re.Pattern[str], ...] = ()) -> list[tuple[int, str, str]]:
+#: The one place each file NAMES ITS AUTHOR on purpose: the copyright line and the package author.
+#: The denylist is skipped on exactly these lines -- keyed by path and line shape, so the exemption
+#: never has to spell the name it admits. Generic patterns (an author e-mail) still apply here.
+AUTHORSHIP: Final[dict[str, re.Pattern[str]]] = {
+    'LICENSE': re.compile(r'^Copyright \(c\) \d{4} [^@]+$'),
+    'pyproject.toml': re.compile(r'^authors = \[\{ name = "[^"]+" \}\]$'),
+}
+
+
+def scan_text(text: str, markers: tuple[re.Pattern[str], ...] = (), *, path: str = '') -> list[tuple[int, str, str]]:
     """Every ``(line, kind, match)`` in *text*. A private-denylist hit reports its kind only."""
     hits: list[tuple[int, str, str]] = []
+    authorship = AUTHORSHIP.get(path)
     for number, line in enumerate(text.splitlines(), 1):
         for kind, pattern in GENERIC:
             hits.extend((number, kind, m.group(0)) for m in pattern.finditer(line))
         hits.extend((number, 'email', m.group(0)) for m in _MAIL.finditer(line) if not _ALLOWED_MAIL.search(m.group(1)))
         # The matched private value is never echoed: a log of the check must not leak what it guards.
+        if authorship is not None and authorship.match(line):
+            continue
         hits.extend((number, 'private marker', '<redacted>') for p in markers if p.search(line))
     return hits
 
@@ -84,5 +96,5 @@ def scan_tree(root: Path, markers: tuple[re.Pattern[str], ...] = ()) -> list[str
             continue
         text = data.decode('utf-8', errors='replace')
         rel = path.relative_to(root).as_posix()
-        found.extend(f'{rel}:{n}: {kind}: {m}' for n, kind, m in scan_text(text, markers))
+        found.extend(f'{rel}:{n}: {kind}: {m}' for n, kind, m in scan_text(text, markers, path=rel))
     return found
