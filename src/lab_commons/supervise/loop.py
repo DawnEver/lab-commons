@@ -1,0 +1,363 @@
+"""One supervision cycle: measure everything, act on what is wrong, say what happened.
+
+The order is the whole design. Measure first and act second, because a remedy chosen before the
+measurement is a remedy for last cycle's problem. Say what happened third, because an alert that
+precedes the action cannot report its outcome.
+
+CHECKS RUN ONE AT A TIME, and that is deliberate rather than lazy. This family deploys to a
+two-core box where a supervisor running its probes concurrently is a supervisor competing with the
+service it supervises -- and the memory ceilings the rest of this kit enforces would be beside the
+point if the supervisor itself forked a fleet. A check that hangs is bounded by
+``cycle.check_timeout``; the thread behind it is ABANDONED rather than killed, because Python
+cannot kill a thread, and that limit is stated here rather than hidden.
+
+MUTUAL EXCLUSION IS THE BROKER'S, not a lock of this module's own. A second cycle on the same
+target is refused with a message naming the holder. The kit states the rule plainly -- a byte-range
+lock, a pid file or a heartbeat would each be a second definition of the same thing -- so the seat
+is taken from :class:`lab_commons.resources.Broker` and there is no other.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Final
+
+from lab_commons.resources import Broker, Exhausted
+from lab_commons.supervise.alert import Delivery, Notice, Notifier
+from lab_commons.supervise.component import ActionContext, CheckContext, Registry
+from lab_commons.supervise.policy import decide
+from lab_commons.supervise.process.base import ProcessManager
+from lab_commons.supervise.remedy import Attempt, apply_chain
+from lab_commons.supervise.state import (
+    StateStore,
+    clear_anomaly,
+    count_anomaly,
+    new_state,
+    note_cycle,
+    note_quiet,
+)
+from lab_commons.supervise.verdict import Anomaly, CheckResult, Completion, Severity
+
+__all__ = ['CHECK_FAILED', 'DEPLOY_SLICE', 'UNCONFIGURED', 'CycleResult', 'Exhausted', 'run_cycle']
+
+#: How long a cycle waits for the seat before giving up. A second cycle that queues behind a slow
+#: one is a supervisor whose own schedule slips; refusing says so instead.
+SEAT_WAIT: Final = 0.0
+
+#: The severity of an anomaly raised because a check itself failed. It is CRITICAL: a probe that
+#: cannot run is worse than a probe that reports a problem, because nothing is watching.
+CHECK_FAILED: Final = 'check_failed'
+
+#: The state slice an action's author reaches through an ActionContext. Actions are not scoped to
+#: one component the way a check is -- several may share an action -- so the slice they share is
+#: named by the framework rather than guessed at per component.
+DEPLOY_SLICE: Final = 'actions'
+
+#: Raised when nothing is enabled. Also critical, for the same reason and one more: a supervisor
+#: that is watching nothing reports a clean run every time, which is the failure that looks most
+#: like success.
+UNCONFIGURED: Final = 'unconfigured'
+
+
+@dataclass(frozen=True)
+class CycleResult:
+    """What one cycle found, did and said.
+
+    Attributes:
+        status: ``healthy`` when nothing was wrong, else ``degraded``.
+        metrics: every number the checks reported, by metric name.
+        anomalies: what was wrong, with sources stamped.
+        completions: tasks that finished successfully.
+        attempts: every remedy step reached, in order.
+        deliveries: what each alert channel did with the notices that were warranted.
+        state: the state as it was left, for a caller that wants to report a delta.
+
+    """
+
+    status: str
+    metrics: dict[str, float] = field(default_factory=dict)
+    anomalies: list[Anomaly] = field(default_factory=list)
+    completions: list[Completion] = field(default_factory=list)
+    attempts: list[Attempt] = field(default_factory=list)
+    deliveries: list[Delivery] = field(default_factory=list)
+    state: dict[str, Any] = field(default_factory=dict)
+
+
+def _check_one(
+    *,
+    component_name: str,
+    registry: Registry,
+    config: Mapping[str, Any],
+    state: dict[str, Any],
+    project: Path,
+    manager: ProcessManager,
+    clock: datetime,
+    timeout: int,
+) -> CheckResult:
+    """Run one component's check under a hard wall.
+
+    Args:
+        component_name: the component to run.
+        registry: where the component and the component-owned state slice come from.
+        config: the merged configuration.
+        state: the run's state.
+        project: the target's directory.
+        manager: how a check that shells out runs its command.
+        clock: the instant this cycle is judged at.
+        timeout: seconds to allow the check.
+
+    Returns:
+        The check's result, or a single critical anomaly when the check itself failed -- including
+        when it ran too long, because a check that never answers is a check that is not watching.
+
+    """
+    component = registry.get(component_name)
+    if component is None:
+        return CheckResult()
+    scoped = state.setdefault('components', {}).setdefault(component_name, {})
+    ctx = CheckContext(
+        config=registry.config_for(component_name),
+        shared=config,
+        state=scoped,
+        project=project,
+        manager=manager,
+        timeline={
+            'now': clock.isoformat(),
+            'last_cycle': state.get('last_cycle', ''),
+            'last_quiet': state.get('last_quiet', ''),
+        },
+    )
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(component.check, ctx)
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            return CheckResult(
+                anomalies=[
+                    Anomaly(
+                        kind=CHECK_FAILED,
+                        severity=Severity.CRITICAL,
+                        message=f'{component_name} did not answer within {timeout}s',
+                        signature=f'{component_name}:timeout',
+                    )
+                ]
+            )
+        except Exception as exc:  # noqa: BLE001
+            return CheckResult(
+                anomalies=[
+                    Anomaly(
+                        kind=CHECK_FAILED,
+                        severity=Severity.CRITICAL,
+                        message=f'{component_name} raised {type(exc).__name__}: {exc}',
+                        signature=f'{component_name}:{type(exc).__name__}',
+                    )
+                ]
+            )
+    finally:
+        # NOT a `with` block: its __exit__ calls shutdown(wait=True), which joins the very thread
+        # the timeout exists to stop waiting for -- so a check that hung would hang the cycle and
+        # the wall would bound nothing. `wait=False` abandons the thread instead, which is stated
+        # in this module's docstring as the honest limit of a timeout Python cannot enforce.
+        pool.shutdown(wait=False)
+
+
+def _gather(
+    registry: Registry,
+    *,
+    config: Mapping[str, Any],
+    state: dict[str, Any],
+    project: Path,
+    manager: ProcessManager,
+    clock: datetime,
+) -> tuple[dict[str, float], list[Anomaly], list[Completion]]:
+    """Run every enabled check, one at a time, and stamp what they found.
+
+    Args:
+        registry: the components to run.
+        config: the merged configuration.
+        state: the run's state.
+        project: the target's directory.
+        manager: how a check that shells out runs its command.
+        clock: the instant this cycle is judged at.
+
+    Returns:
+        The metrics, the anomalies with their sources stamped, and the completions.
+
+    """
+    timeout = int(config.get('cycle', {}).get('check_timeout', 60))
+    metrics: dict[str, float] = {}
+    anomalies: list[Anomaly] = []
+    completions: list[Completion] = []
+    enabled = registry.enabled()
+    if not enabled:
+        # A SCAN THAT READ NOTHING IS NOT A CLEAN SCAN. A supervisor with no components configured
+        # would otherwise report `healthy` forever while watching nothing at all -- the loudest
+        # possible way for this to be wrong, and the quietest to notice.
+        return (
+            metrics,
+            [
+                Anomaly(
+                    kind=UNCONFIGURED,
+                    severity=Severity.CRITICAL,
+                    message='no components are enabled, so nothing is being watched',
+                    source=f'supervise.{UNCONFIGURED}',
+                    signature='unconfigured',
+                )
+            ],
+            completions,
+        )
+    for component in enabled:
+        result = _check_one(
+            component_name=component.name,
+            registry=registry,
+            config=config,
+            state=state,
+            project=project,
+            manager=manager,
+            clock=clock,
+            timeout=timeout,
+        )
+        metrics.update(result.metrics)
+        completions.extend(result.completions)
+        for anomaly in result.anomalies:
+            anomaly.source = f'{component.name}.{anomaly.kind}'
+            anomalies.append(anomaly)
+    return metrics, anomalies, completions
+
+
+def _notify(
+    anomalies: list[Anomaly],
+    registry: Registry,
+    *,
+    config: Mapping[str, Any],
+    state: dict[str, Any],
+    clock: datetime,
+    notifier: Notifier,
+) -> list[Delivery]:
+    """Decide what is worth saying, and say it.
+
+    Args:
+        anomalies: what is wrong.
+        registry: where each anomaly's escalation threshold comes from.
+        config: the merged configuration.
+        state: the run's state, whose counters the decision updates.
+        clock: the instant to judge cooldowns against.
+        notifier: how a warranted notice is delivered.
+
+    Returns:
+        One delivery per channel per notice actually sent.
+
+    """
+    sent: list[Delivery] = []
+    for anomaly in anomalies:
+        escalation = _escalation_for(registry, anomaly.kind)
+        verdict = decide(
+            state, anomaly.source, anomaly.signature or anomaly.message, config, clock=clock, escalate_after=escalation
+        )
+        if not verdict.notify:
+            continue
+        notice = Notice(subject=f'{anomaly.source}: {anomaly.message}', body=anomaly.message, severity=anomaly.severity)
+        sent.extend(notifier.send(notice))
+    return sent
+
+
+def _escalation_for(registry: Registry, kind: str) -> int | None:
+    """Return the escalation threshold any step in a chain declares for *kind*.
+
+    Args:
+        registry: where the chain comes from.
+        kind: the anomaly's type.
+
+    Returns:
+        The first non-null threshold, or None when no step declares one.
+
+    """
+    for step in registry.remedies(kind):
+        if step.escalate_after is not None:
+            return step.escalate_after
+    return None
+
+
+def run_cycle(
+    registry: Registry,
+    store: StateStore,
+    config: Mapping[str, Any],
+    project: Path,
+    manager: ProcessManager,
+    *,
+    clock: datetime,
+    broker: Broker | None = None,
+    notifier: Notifier | None = None,
+    dry_run: bool = False,
+) -> CycleResult:
+    """Run one cycle: measure, act, say.
+
+    Args:
+        registry: the components, actions and chains.
+        store: where the state lives.
+        config: the merged configuration.
+        project: the target's directory.
+        manager: how a remedy reaches the service's process.
+        clock: the instant this cycle is judged at.
+        broker: where the cycle's seat comes from. Defaults to the shared broker.
+        notifier: how a notice is delivered. Defaults to one over the merged config.
+        dry_run: resolve and gate everything, but run no action and send no notice.
+
+    Returns:
+        What the cycle found, did and said.
+
+    Raises:
+        Exhausted: another cycle holds this target's seat.
+
+    """
+    state = store.read() or new_state()
+    pool = f'supervise-{config.get("target", {}).get("name", "unknown")}'
+    with (broker or Broker()).admit(pool, {'seats': 1}, what='supervision cycle', wait_s=SEAT_WAIT):
+        metrics, anomalies, completions = _gather(
+            registry, config=config, state=state, project=project, manager=manager, clock=clock
+        )
+        note_cycle(state, clock.isoformat())
+        attempts: list[Attempt] = []
+        if anomalies:
+            ctx = ActionContext(
+                config=config.get('components', {}),
+                shared=config,
+                project=project,
+                manager=manager,
+                registry=registry,
+                state=state.setdefault('components', {}).setdefault(DEPLOY_SLICE, {}),
+            )
+            for anomaly in anomalies:
+                count_anomaly(state, anomaly.source)
+                attempts.extend(apply_chain(registry, anomaly, ctx, state, metrics=metrics, dry_run=dry_run))
+        else:
+            for source in list(state.get('anomalies', {})):
+                clear_anomaly(state, source)
+            note_quiet(state, clock.isoformat())
+        deliveries = (
+            []
+            if dry_run
+            else _notify(
+                anomalies,
+                registry,
+                config=config,
+                state=state,
+                clock=clock,
+                notifier=notifier or Notifier(config=config),
+            )
+        )
+        store.write(state)
+    return CycleResult(
+        status='degraded' if anomalies else 'healthy',
+        metrics=metrics,
+        anomalies=anomalies,
+        completions=completions,
+        attempts=attempts,
+        deliveries=deliveries,
+        state=state,
+    )
