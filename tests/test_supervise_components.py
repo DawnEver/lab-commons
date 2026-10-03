@@ -263,6 +263,32 @@ def test_a_log_scan_finds_errors_and_says_which_file(tmp_path: Path) -> None:
     assert result.data['hits'][0]['file'] == 'run.log'
 
 
+def test_a_new_error_in_a_log_that_already_had_one_is_a_new_condition(tmp_path: Path) -> None:
+    """THE CONTAINER IS NOT THE CONDITION, and the write-off is why the difference is load-bearing.
+
+    The signature used to be the set of file NAMES, so a fresh failure landing in a log that already
+    held an old one carried that old one's signature. The policy counts cycles per signature and
+    writes a condition off once the count passes its threshold -- so the new failure was absorbed
+    into the old one's silence, which is the one outcome a scanner watching for an unhandled
+    exception must not have.
+    """
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    log = logs / 'run.log'
+    log.write_text('10/03/2026 19:58:20 ERROR Failed to open file /a/b.toml! [Errno 2]\n', encoding='utf-8')
+    first = LogScanner().check(_ctx({'log_dir': str(logs)}, project=tmp_path)).anomalies[0]
+
+    # The SAME failure written again later: the date, the clock and the errno all moved.
+    log.write_text('10/04/2026 02:14:02 ERROR Failed to open file /a/b.toml! [Errno 2]\n', encoding='utf-8')
+    again = LogScanner().check(_ctx({'log_dir': str(logs)}, project=tmp_path)).anomalies[0]
+    assert again.signature == first.signature, 'a re-dated line is the same condition, not a new one'
+
+    # A DIFFERENT failure in the SAME file, which is the case that used to go silent.
+    log.write_text('10/04/2026 02:14:02 ERROR Failed to open file /c/d.toml! [Errno 2]\n', encoding='utf-8')
+    other = LogScanner().check(_ctx({'log_dir': str(logs)}, project=tmp_path)).anomalies[0]
+    assert other.signature != first.signature, 'a new failure must not inherit the old one signature'
+
+
 def test_a_clean_log_reports_nothing_and_says_it_looked(tmp_path: Path) -> None:
     """`CLEAN` and `NO_LOG_DIR` are different facts, and only one of them is reassuring."""
     logs = tmp_path / 'logs'

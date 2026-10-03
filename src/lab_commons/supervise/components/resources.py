@@ -12,6 +12,8 @@ the deployment worth knowing.
 
 from __future__ import annotations
 
+import hashlib
+import re
 import shutil
 from pathlib import Path
 from types import ModuleType
@@ -33,6 +35,13 @@ RAM_CRITICAL: Final = 95
 #: The default patterns a log scan convicts on. Deliberately few and blunt: a scanner tuned to
 #: somebody's log format is a scanner that stops matching the day the format changes.
 ERROR_PATTERNS: Final = ('FAIL', 'ERROR', 'Traceback')
+
+#: The part of a log line that changes on every write, removed before a signature is taken from it.
+#: A line is `10/03/2026 19:58:20 ERROR Failed to open file /x/y.toml! [Errno 2] ...`, so a date, a
+#: clock and an errno sit in every one of them. Digesting the raw text would make the SAME condition
+#: a new signature on every cycle and turn the scanner into an alert storm; digesting the text with
+#: its numbers folded is what leaves the part that says WHICH failure this is.
+_VOLATILE: Final = re.compile(r'\d+')
 
 
 class DiskUsage(Component):
@@ -354,10 +363,44 @@ class LogScanner(Component):
                     message=f'{len(hits)} error line(s) in {len({hit["file"] for hit in hits})} log(s)',
                     value=float(len(hits)),
                     threshold=0.0,
-                    signature=f'logs:{sorted({hit["file"] for hit in hits})}',
+                    signature=_error_signature(hits),
                 )
             )
         return result
+
+
+def _error_signature(hits: list[dict[str, str]]) -> str:
+    """Identify WHICH errors are in the logs, and not merely which files hold them.
+
+    THE CONTAINER IS NOT THE CONDITION. This signature used to be the sorted set of file names, and
+    a file name is stable while its contents are not -- so an entirely new failure landing in a log
+    that already had an old one was indistinguishable from that old one. The policy counts
+    consecutive cycles PER SIGNATURE and writes a condition off once the count passes its threshold,
+    after which it is reported as "the same condition has held for N cycles" and never again. So the
+    scanner had exactly two outcomes for a fresh exception: if no log held an error yet, it was
+    reported; if one did, the new failure was absorbed into the write-off of the old one and the
+    channel went quiet.
+
+    That is the failure this component exists to catch. It watches for an unhandled exception landing
+    outside a request -- the shape that leaves `/health/` answering 200 while something is wrong --
+    and it was blind precisely when something was already wrong.
+
+    The digest is taken over the matched lines with their NUMBERS FOLDED, because a log line's date,
+    clock and errno change on every write: hashing them would make one condition a new signature
+    every cycle. Folding keeps what names the failure -- the message, the path, the frames -- and
+    drops what only dates it.
+
+    Args:
+        hits: the matched lines, as ``{'file', 'keyword', 'line'}``.
+
+    Returns:
+        A signature, bounded and stable for one condition.
+
+    """
+    files = sorted({hit['file'] for hit in hits})
+    folded = sorted({_VOLATILE.sub('#', hit['line']) for hit in hits})
+    digest = hashlib.sha256('\n'.join(folded).encode('utf-8')).hexdigest()[:16]
+    return f'logs:{files}:{digest}'
 
 
 def _modified(path: Path) -> float:
