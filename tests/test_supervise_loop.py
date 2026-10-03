@@ -79,8 +79,9 @@ class _Deployer(Component):
     def handlers(self) -> dict[str, Handler]:
         """Implement one of them."""
 
-        def refresh(_ctx: ActionContext) -> bool:
+        def refresh(action_ctx: ActionContext) -> bool:
             _Deployer.calls.append('refresh')
+            _Deployer.seen_config = dict(action_ctx.config)
             return True
 
         return {'refresh': refresh}
@@ -90,6 +91,7 @@ class _Deployer(Component):
         return {'stale': [RemedyStep(action='refresh')]}
 
     calls: ClassVar[list[str]] = []
+    seen_config: ClassVar[dict[str, Any]] = {}
 
 
 class _Reply:
@@ -156,6 +158,7 @@ def _clean_components() -> None:
     _Probe.anomalies = []
     _Probe.metrics = {}
     _Deployer.calls = []
+    _Deployer.seen_config = {}
 
 
 def _run(registry: Registry, tmp_path: Path, config: dict[str, Any] | None = None, **kwargs: object) -> CycleResult:
@@ -245,6 +248,21 @@ def test_an_implemented_action_runs(tmp_path: Path) -> None:
     assert _Deployer.calls == ['refresh']
     assert [attempt.action for attempt in result.attempts] == ['refresh']
     assert result.attempts[0].ok is True
+
+
+def test_an_action_is_handed_its_own_component_s_config(tmp_path: Path) -> None:
+    """THE REGRESSION, and it made every deployment refuse itself.
+
+    `ActionContext` documents `config` as "this component's own section", and the acting path
+    passed the WHOLE components table instead. A component that read its section out of it found
+    an empty mapping, so the deploy component built an empty plan and refused every release with
+    "the deploy plan is incomplete, missing: repositories, unit, health, install, run, probe" --
+    naming six settings that were present in the file the whole time.
+    """
+    config = _config()
+    config['components'] = {'deployer': {'token': 'x'}}
+    _run(_registry(_Deployer()), tmp_path, config)
+    assert _Deployer.seen_config == {'token': 'x'}
 
 
 def test_a_command_action_runs_under_a_ceiling(tmp_path: Path) -> None:

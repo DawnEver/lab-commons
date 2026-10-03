@@ -307,6 +307,28 @@ class Registry:
                 return list(chain)
         return []
 
+    def owner(self, kind: str) -> str:
+        """Return the name of the component that declares a remedy chain for *kind*.
+
+        The acting path needs it to hand an action ITS OWN component's configuration, which is
+        what :class:`ActionContext` documents ``config`` to be. Passing the whole components table
+        instead left every acting component reading an empty mapping -- the deploy component built
+        an empty plan from it and refused every release, naming six settings that were present all
+        along.
+
+        Args:
+            kind: the anomaly's type.
+
+        Returns:
+            The component's name, or an empty string when the chain came from a configuration
+            override rather than from a component.
+
+        """
+        for name, component in self.components.items():
+            if component.remedies().get(kind):
+                return name
+        return ''
+
     def action(self, name: str) -> Action | None:
         """Return a declared action by name.
 

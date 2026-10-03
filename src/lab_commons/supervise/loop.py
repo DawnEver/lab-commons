@@ -334,16 +334,24 @@ def run_cycle(
                 clear_anomaly(state, source)
         attempts: list[Attempt] = []
         if anomalies:
-            ctx = ActionContext(
-                config=config.get('components', {}),
-                shared=config,
-                project=project,
-                manager=manager,
-                registry=registry,
-                state=state.setdefault('components', {}).setdefault(DEPLOY_SLICE, {}),
-            )
+            # THE ACTION GETS ITS OWN COMPONENT'S SECTION, not the whole components table. The
+            # table is what this passed, and `ActionContext` documents `config` as "this
+            # component's own section" -- so every acting component read an empty mapping. The
+            # deploy component built an empty plan from it and refused every release, reporting
+            # "missing: repositories, unit, health, install, run, probe" for six settings that
+            # were in the file the whole time.
+            state_slice = state.setdefault('components', {}).setdefault(DEPLOY_SLICE, {})
+            sections = config.get('components', {})
             for anomaly in anomalies:
                 count_anomaly(state, anomaly.source)
+                ctx = ActionContext(
+                    config=sections.get(registry.owner(anomaly.kind), {}),
+                    shared=config,
+                    project=project,
+                    manager=manager,
+                    registry=registry,
+                    state=state_slice,
+                )
                 attempts.extend(apply_chain(registry, anomaly, ctx, state, metrics=metrics, dry_run=dry_run))
         else:
             note_quiet(state, clock.isoformat())
