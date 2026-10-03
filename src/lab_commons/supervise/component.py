@@ -285,8 +285,17 @@ class Registry:
 
         Returns:
             The chain, from the config when it declares one and from the component otherwise. A
-            kind nothing declares falls back to a single ``log`` step, so an unhandled anomaly is
-            recorded rather than silently dropped.
+            kind nothing declares returns an EMPTY chain, and that is a statement rather than a
+            gap: no remedy is declared for it.
+
+            THE FALLBACK USED TO BE A SINGLE ``log`` STEP, and it was a phantom. The intent was
+            that an unhandled anomaly be recorded rather than silently dropped -- but no component
+            declares an action named ``log``, so the step could never run. It did not record the
+            anomaly; the anomaly records itself, in the state and in the report either way. What
+            the step produced was a failed attempt against an action nothing implements, once per
+            anomaly per cycle: a reading that something was tried, which is worse than a reading
+            that nothing was. An empty chain is what the code actually does, so it is what the
+            code now says.
 
         """
         override = self._remedy_overrides.get(kind)
@@ -296,7 +305,7 @@ class Registry:
             chain = component.remedies().get(kind)
             if chain:
                 return list(chain)
-        return [RemedyStep(action='log')]
+        return []
 
     def action(self, name: str) -> Action | None:
         """Return a declared action by name.

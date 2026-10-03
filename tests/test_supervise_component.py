@@ -14,6 +14,7 @@ from lab_commons.supervise.component import (
     Registry,
     load_components,
 )
+from lab_commons.supervise.components import COMPONENTS
 from lab_commons.supervise.process import manager_for
 from lab_commons.supervise.verdict import Action, Anomaly, CheckResult, RemedyStep, Severity
 
@@ -80,6 +81,11 @@ def _registry(*components: Component) -> Registry:
     for component in components:
         registry.register(component)
     return registry
+
+
+def shipped() -> list[Component]:
+    """Return the shipped roster as fresh instances, so one test cannot reconfigure another."""
+    return [type(component)() for component in COMPONENTS]
 
 
 def test_a_component_must_declare_a_name() -> None:
@@ -163,9 +169,31 @@ def test_an_action_context_carries_the_real_shared_config() -> None:
     assert ctx.config == {'a': 1}
 
 
-def test_a_kind_with_no_declared_chain_falls_back_to_logging() -> None:
-    """An unhandled anomaly is recorded rather than silently dropped."""
-    assert [step.action for step in _registry(_Probe()).remedies('nothing-declares-this')] == ['log']
+def test_a_kind_with_no_declared_chain_gets_no_chain() -> None:
+    """THE REGRESSION. The fallback named an action no component implements, so it never ran.
+
+    It was written to record an unhandled anomaly rather than drop it -- but the anomaly is
+    recorded either way, in the state and in the report. What the phantom step produced instead
+    was one failed attempt per anomaly per cycle, against an action nothing declares: a reading
+    that something was tried, when nothing was.
+    """
+    assert _registry(_Probe()).remedies('nothing-declares-this') == []
+
+
+def test_no_shipped_remedy_names_an_action_nobody_declares() -> None:
+    """THE CLASS OF DEFECT, not the instance.
+
+    The phantom fallback was one step naming an action no component implements. A chain that
+    cannot be resolved is reported as a failed attempt on EVERY cycle, so the class is worth a
+    check rather than the one instance: it turns a typo into a permanent alarm. Read over the
+    shipped roster, which is where a default remedy would be written.
+    """
+    roster = shipped()
+    declared = {name for component in roster for name in component.actions()}
+    for component in roster:
+        for kind, chain in component.remedies().items():
+            for step in chain:
+                assert step.action in declared, f'{component.name}.{kind} names undeclared {step.action!r}'
 
 
 def test_a_component_declared_chain_is_used() -> None:
