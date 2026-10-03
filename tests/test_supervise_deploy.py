@@ -266,6 +266,48 @@ def test_a_first_deployment_says_it_has_nowhere_to_roll_back_to() -> None:
     assert anomalies[0].severity is Severity.WARNING
 
 
+def _ctx_with(manager: _Scripted) -> CheckContext:
+    """A check context with no verified release and one repository."""
+    return CheckContext(
+        config={'repositories': {'main': '/srv/target'}},
+        shared={},
+        state={},
+        project=_PROJECT,
+        manager=manager,
+        timeline={},
+    )
+
+
+def test_a_target_that_has_never_deployed_can_still_see_a_release() -> None:
+    """THE REGRESSION, and it deadlocked the first deployment of the host this was written for.
+
+    A snapshot is written by a successful deploy; a deploy runs only on `release_available`; and
+    `check` RETURNED as soon as it found no snapshot, so `release_available` was never reached. A
+    target that had never deployed could therefore never deploy, and warned on every cycle while a
+    pushed release waited. The warning is about ROLLBACK -- there is no floor if this fails -- and
+    it is not a reason to refuse the only action that can create one.
+    """
+    manager = _Scripted({'origin/main': Ran(code=0, out='new12345\n'), 'HEAD': Ran(code=0, out='old12345\n')})
+    kinds = [one.kind for one in Deploy().check(_ctx_with(manager)).anomalies]
+    assert 'release_available' in kinds
+    assert 'no_verified_release' in kinds, 'the rollback warning must survive the fix'
+
+
+def test_a_target_already_running_the_remote_offers_nothing_to_deploy() -> None:
+    """With no snapshot the baseline is WHAT IS RUNNING, or every cycle would redeploy the same commit."""
+    manager = _Scripted({'origin/main': Ran(code=0, out='same1234\n'), 'HEAD': Ran(code=0, out='same1234\n')})
+    kinds = [one.kind for one in Deploy().check(_ctx_with(manager)).anomalies]
+    assert 'release_available' not in kinds
+    assert 'no_verified_release' in kinds
+
+
+def test_an_unreadable_checkout_is_not_a_release_to_deploy() -> None:
+    """A baseline that cannot be read says nothing about the remote, so nothing may be concluded."""
+    manager = _Scripted({'origin/main': Ran(code=0, out='new12345\n'), 'HEAD': Ran(code=1, err='not a git repository')})
+    kinds = [one.kind for one in Deploy().check(_ctx_with(manager)).anomalies]
+    assert 'release_available' not in kinds
+
+
 def test_a_release_that_keeps_failing_escalates_rather_than_repeating() -> None:
     """THE CIRCUIT BREAKER IS NOT A BLACKLIST: it is retried, and the alert says how many times."""
     state: dict[str, Any] = {}

@@ -77,6 +77,13 @@ class Deploy(Component):
         known = history(ctx.state)
         result.metrics['known_releases'] = float(len(known))
         if not known:
+            # THE WARNING IS ABOUT ROLLBACK, AND IT USED TO RETURN HERE. A snapshot is written by a
+            # successful deploy; a deploy runs only on `release_available`; and this early return
+            # meant `release_available` was never reached without one. A target that had never
+            # deployed could therefore never deploy -- and the host this was written for sat in
+            # exactly that state, warning on every cycle while a pushed release waited to be seen.
+            # "There is no floor if this fails" is not a reason to refuse the one action that can
+            # build one.
             result.anomalies.append(
                 Anomaly(
                     kind='no_verified_release',
@@ -85,10 +92,10 @@ class Deploy(Component):
                     signature='no_verified_release',
                 )
             )
-            return result
         result.anomalies.extend(_drift(ctx, plan))
         wanted = _remote(ctx, plan)
-        if wanted is not None and wanted.key != known[-1].key:
+        baseline = known[-1] if known else _checked_out(ctx, plan)
+        if wanted is not None and baseline is not None and wanted.key != baseline.key:
             result.anomalies.append(
                 Anomaly(
                     kind='release_available',
@@ -240,6 +247,35 @@ def _remote(ctx: CheckContext | ActionContext, plan: Plan) -> Snapshot | None:
             return None
         head = ctx.manager.run_capped(
             ['git', '-C', plan.repositories[name], 'rev-parse', 'origin/main'],
+            memory_max='256M',
+            timeout=120,
+        )
+        if not head.ok:
+            return None
+        commits[name] = head.out.strip()
+    return target_of(commits)
+
+
+def _checked_out(ctx: CheckContext | ActionContext, plan: Plan) -> Snapshot | None:
+    """Return what the target is running now.
+
+    The baseline for a target that has never had a verified release. Without one there is nothing
+    to compare the remote against, and every cycle would either redeploy the same commits or --
+    as it did before this existed -- never offer a release at all.
+
+    Args:
+        ctx: the acting or checking context, for the process manager.
+        plan: the deployment's plan.
+
+    Returns:
+        The snapshot the checkouts describe, or None when one cannot be read. An unreadable
+        checkout is not a baseline, so nothing is concluded from it.
+
+    """
+    commits: dict[str, str] = {}
+    for name in plan.repositories:
+        head = ctx.manager.run_capped(
+            ['git', '-C', plan.repositories[name], 'rev-parse', 'HEAD'],
             memory_max='256M',
             timeout=120,
         )
