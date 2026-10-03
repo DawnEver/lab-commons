@@ -303,11 +303,16 @@ def test_a_stalled_job_is_an_anomaly(tmp_path: Path) -> None:
 
 
 def test_a_job_with_no_progress_file_claims_no_percentage(tmp_path: Path) -> None:
-    """No reading is not no progress, and a percentage of nothing would be a lie."""
+    """NO READING IS NOT NO PROGRESS, and this test used to assert the opposite of its own name.
+
+    The docstring said the right thing and the assertions recorded `ops_done = 0.0` with no
+    anomaly, which is a percentage of nothing presented as a reading. A progress file that vanished
+    or became unreadable -- the job died, a cleanup removed it, permissions changed -- turned the
+    one component that would have noticed the job stopped into a silent no-op.
+    """
     result = ProgressTracker().check(_ctx({'progress_file': str(tmp_path / 'absent.json')}, project=tmp_path))
-    assert result.anomalies == []
-    assert result.data['status'] == 'NO_DATA'
-    assert result.metrics['ops_done'] == 0.0
+    assert [one.kind for one in result.anomalies] == ['progress_unreadable']
+    assert 'ops_done' not in result.metrics, 'a count of nothing was reported as a count'
 
 
 def test_a_fetch_reports_an_unreachable_endpoint_without_raising() -> None:

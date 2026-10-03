@@ -52,8 +52,23 @@ class ProgressTracker(Component):
             path = ctx.project / path
         payload = _read(path)
         if payload is None:
-            result.data['status'] = 'NO_DATA'
-            result.metrics['ops_done'] = 0.0
+            # NO READING IS NOT NO PROGRESS. `_read` answers None for a missing file and for an
+            # unparseable one, and its own docstring says so -- "both mean 'no reading', which is
+            # not the same as 'no progress'". The caller then asserted `ops_done = 0.0` and said
+            # nothing, and `data['status']` reaches no report: `report.summary` and `report.record`
+            # read anomalies, completions, attempts and deliveries, and nothing else.
+            #
+            # So a progress file that vanished or became unreadable -- the job died, a cleanup
+            # removed it, permissions changed -- turned the one component that would have noticed
+            # the job stopped into a silent no-op, with a zero recorded that looks like a reading.
+            result.anomalies.append(
+                Anomaly(
+                    kind='progress_unreadable',
+                    severity=Severity.WARNING,
+                    message=f'{path.name} could not be read, so progress cannot be judged',
+                    signature='progress:unreadable',
+                )
+            )
             return result
         done = _count(payload, str(ctx.config.get('count_path', '')), str(ctx.config.get('count_field', 'count')))
         total = float(_total(payload, ctx.config))

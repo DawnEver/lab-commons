@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons._records import publish
+from lab_commons.log import emit
 
 __all__ = [
     'REMEDY_HISTORY',
@@ -235,11 +236,36 @@ class StateStore:
             this build does not know.
 
         """
+        if not self.path.is_file():
+            # A MISSING FILE IS THE ORDINARY FIRST RUN and is not worth a word. Everything below is
+            # a file that EXISTS and could not be used, and that is a different fact about a
+            # different situation.
+            return new_state()
         try:
             parsed = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            # SAY SO. Returning a fresh state here is right -- a run that cannot read its history
+            # should start a new one rather than refuse to supervise -- but the file is left where
+            # it is for a human, and a human who is never told will not look. This discards the
+            # release history, which is the rollback floor, and the next write overwrites the
+            # evidence.
+            emit(
+                f'supervise: {self.path} could not be read ({type(exc).__name__}), so this run '
+                f'starts from no history and the file is left in place to be looked at',
+                flush=True,
+            )
             return new_state()
         if not isinstance(parsed, dict) or parsed.get('version') != SCHEMA_VERSION:
+            # SCHEMA_VERSION's own docstring says the check exists "so a future change to the shape
+            # is something a run can DETECT rather than silently misinterpret". Detecting it and
+            # then discarding the whole document -- release history, suppression counters, the
+            # rollback floor -- is not the promise the check was written to keep.
+            found = parsed.get('version') if isinstance(parsed, dict) else type(parsed).__name__
+            emit(
+                f'supervise: {self.path} is version {found!r} and this build reads {SCHEMA_VERSION!r}; '
+                f'it is left in place and this run starts from no history',
+                flush=True,
+            )
             return new_state()
         return parsed
 

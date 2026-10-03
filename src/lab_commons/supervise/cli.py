@@ -35,6 +35,12 @@ __all__ = ['build_registry', 'main']
 #: The journal a day's cycle records are appended to, relative to the target.
 JOURNAL: Final = 'output/supervise/cycles.jsonl'
 
+#: How large the journal may grow before it is rewritten down to its newest records, and how many
+#: of those to keep. Four megabytes is roughly two months of five-minute cycles; five thousand
+#: records is a bit over two weeks, which is what a digest is ever asked about.
+JOURNAL_MAX_BYTES: Final = 4 * 1024 * 1024
+JOURNAL_KEPT: Final = 5000
+
 
 def build_registry(config: dict[str, Any]) -> Registry:
     """Assemble the registry a configuration describes.
@@ -101,6 +107,34 @@ def _journal(project: Path) -> Path:
     return project / JOURNAL
 
 
+def _append_bounded(path: Path, line: str) -> None:
+    """Append *line*, and keep the file from growing without bound.
+
+    THE ONLY THING IN THIS PACKAGE WHOSE SIZE IS A FUNCTION OF UPTIME. A daemon writes one record
+    per cycle, forever -- about 2 MB a month at a five-minute interval, which is small on a 40 GB
+    disk and unbounded all the same. The state module's own docstring names its predecessor's
+    growing log ring as one of the defects it exists to fix, and this file had no ring at all.
+
+    `_read_journal` reads it whole, so an unbounded journal is also an unbounded allocation in the
+    daily digest -- on a host whose whole discipline is about what a process may allocate.
+
+    The rewrite is a plain write rather than a staged publish, which is the one place in this
+    package that is true: a crash in the middle of it loses a CONVENIENCE LOG, and the alternative
+    costs an atomic publish on every cycle for a file nothing depends on.
+
+    Args:
+        path: the journal.
+        line: the record, newline included.
+
+    """
+    with path.open('a', encoding='utf-8') as handle:
+        handle.write(line)
+    if path.stat().st_size <= JOURNAL_MAX_BYTES:
+        return
+    kept = path.read_text(encoding='utf-8').splitlines()[-JOURNAL_KEPT:]
+    path.write_text('\n'.join(kept) + '\n', encoding='utf-8')
+
+
 def _read_journal(path: Path) -> list[dict[str, Any]]:
     """Read back the records a run of cycles appended.
 
@@ -162,8 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     journal.parent.mkdir(parents=True, exist_ok=True)
 
     def append(result: CycleResult, at: datetime) -> None:
-        with journal.open('a', encoding='utf-8') as handle:
-            handle.write(json.dumps(record(result, at)) + '\n')
+        _append_bounded(journal, json.dumps(record(result, at)) + '\n')
 
     degraded = serve(loop, on_cycle=append)
     return 0 if degraded == 0 else 1
