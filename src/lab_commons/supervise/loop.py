@@ -322,6 +322,16 @@ def run_cycle(
             registry, config=config, state=state, project=project, manager=manager, clock=clock
         )
         note_cycle(state, clock.isoformat())
+        # EACH SOURCE IS CLEARED ON ITS OWN EVIDENCE. Clearing used to be all-or-nothing -- every
+        # counter dropped when a cycle came back with no anomalies at all -- so a single live
+        # condition kept every dead one on the books, frozen at the count and the alert time it
+        # had when it stopped. Measured on the real host: a health probe still carried an entry an
+        # hour after the defect behind it was repaired, because two unrelated anomalies were still
+        # firing, and its escalation clock kept ticking against a component that was answering.
+        reported = {anomaly.source for anomaly in anomalies}
+        for source in list(state.get('anomalies', {})):
+            if source not in reported:
+                clear_anomaly(state, source)
         attempts: list[Attempt] = []
         if anomalies:
             ctx = ActionContext(
@@ -336,8 +346,6 @@ def run_cycle(
                 count_anomaly(state, anomaly.source)
                 attempts.extend(apply_chain(registry, anomaly, ctx, state, metrics=metrics, dry_run=dry_run))
         else:
-            for source in list(state.get('anomalies', {})):
-                clear_anomaly(state, source)
             note_quiet(state, clock.isoformat())
         deliveries = (
             []

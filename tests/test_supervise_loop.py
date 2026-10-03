@@ -191,6 +191,27 @@ def test_a_quiet_cycle_clears_a_counter_a_previous_one_raised(tmp_path: Path) ->
     assert store.read()['anomalies'] == {}
 
 
+def test_one_source_clearing_does_not_wait_for_every_other_to_clear(tmp_path: Path) -> None:
+    """THE REGRESSION. Clearing was all-or-nothing, so a fixed fault stayed on the books.
+
+    The counters were cleared only when a cycle came back with NO anomalies at all. One live
+    condition therefore kept every dead one alive: a source whose fault had been repaired still
+    carried its frozen count and its last alert time, indefinitely, and its escalation clock kept
+    ticking against a healthy component. Measured on the real host before this was fixed -- a
+    health probe that had been silently broken by the transport defect still held an entry an
+    hour after the repair, because two unrelated anomalies were still firing.
+    """
+    store = StateStore(tmp_path / 'state.json')
+    _Probe.anomalies = [Anomaly(kind='bad', severity=Severity.WARNING, message='bad')]
+    registry = _registry(_Probe(), _Deployer())
+    run_cycle(registry, store, _config(), _PROJECT, _manager([]), clock=_CLOCK)
+    assert set(store.read()['anomalies']) == {'probe.bad', 'deployer.stale'}
+
+    _Probe.anomalies = []
+    run_cycle(registry, store, _config(), _PROJECT, _manager([]), clock=_CLOCK)
+    assert set(store.read()['anomalies']) == {'deployer.stale'}
+
+
 def test_an_anomaly_is_stamped_with_its_component(tmp_path: Path) -> None:
     """The stamped source is the key every other rule is keyed by."""
     _Probe.anomalies = [Anomaly(kind='bad', severity=Severity.WARNING, message='bad')]
