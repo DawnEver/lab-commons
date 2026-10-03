@@ -12,15 +12,13 @@ the deployment worth knowing.
 
 from __future__ import annotations
 
-import hashlib
-import re
 import shutil
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Final
 
 from lab_commons.supervise.component import CheckContext, Component
-from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity
+from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity, condition_digest
 
 __all__ = ['DiskUsage', 'LogScanner', 'ProcessMonitor']
 
@@ -35,13 +33,6 @@ RAM_CRITICAL: Final = 95
 #: The default patterns a log scan convicts on. Deliberately few and blunt: a scanner tuned to
 #: somebody's log format is a scanner that stops matching the day the format changes.
 ERROR_PATTERNS: Final = ('FAIL', 'ERROR', 'Traceback')
-
-#: The part of a log line that changes on every write, removed before a signature is taken from it.
-#: A line is `10/03/2026 19:58:20 ERROR Failed to open file /x/y.toml! [Errno 2] ...`, so a date, a
-#: clock and an errno sit in every one of them. Digesting the raw text would make the SAME condition
-#: a new signature on every cycle and turn the scanner into an alert storm; digesting the text with
-#: its numbers folded is what leaves the part that says WHICH failure this is.
-_VOLATILE: Final = re.compile(r'\d+')
 
 
 class DiskUsage(Component):
@@ -398,9 +389,7 @@ def _error_signature(hits: list[dict[str, str]]) -> str:
 
     """
     files = sorted({hit['file'] for hit in hits})
-    folded = sorted({_VOLATILE.sub('#', hit['line']) for hit in hits})
-    digest = hashlib.sha256('\n'.join(folded).encode('utf-8')).hexdigest()[:16]
-    return f'logs:{files}:{digest}'
+    return f'logs:{files}:{condition_digest(*(hit["line"] for hit in hits))}'
 
 
 def _modified(path: Path) -> float:

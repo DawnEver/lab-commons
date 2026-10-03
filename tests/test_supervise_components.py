@@ -148,6 +148,26 @@ def test_a_probe_that_cannot_run_is_an_anomaly_not_a_healthy_value() -> None:
     assert probe.check(ctx).anomalies[0].kind == 'q_failed'
 
 
+def test_two_probe_failures_that_exit_alike_are_not_the_same_condition() -> None:
+    """THE EXIT CODE IS A CONTAINER, and -1 is the coarsest of them: a timeout, a command that could
+    not be run at all and an OSError all carry it. The policy writes a condition off by signature, so
+    a signature of `{name}:{code}` made the second failure inherit the first one's silence -- and
+    `Ran.detail()`, which names the actual condition, was already computed for the message beside it.
+    """
+    probe = ShellProbe()
+
+    def failed(err: str) -> str:
+        ctx = _ctx({'probes': [{'name': 'q', 'command': 'x'}]}, ran=Ran(code=-1, err=err))
+        return str(probe.check(ctx).anomalies[0].signature)
+
+    timed_out = failed('timed out after 30')
+    missing = failed('could not run x: No such file or directory')
+    assert timed_out != missing, 'a timeout and a missing binary are not one condition'
+
+    # The SAME failure re-reported: the timeout's number moved, and that is not a new condition.
+    assert failed('timed out after 45') == timed_out, 'a re-measured timeout is the same condition'
+
+
 def test_a_probe_that_says_to_ignore_errors_still_reads_its_output() -> None:
     """Some commands report through their exit code and some only through their output."""
     probe = ShellProbe()

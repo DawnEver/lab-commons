@@ -14,7 +14,7 @@ from typing import Any, Final
 
 from lab_commons.supervise.component import CheckContext, Component
 from lab_commons.supervise.transport import Transport, fetch_json, scheme_transport
-from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity
+from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity, condition_digest
 
 __all__ = ['OK_CEILING', 'OK_FLOOR', 'Heartbeat', 'HttpHealth', 'ShellProbe']
 
@@ -213,7 +213,14 @@ class ShellProbe(Component):
                     kind=f'{name}_failed',
                     severity=Severity.CRITICAL,
                     message=f'{name} could not run: {ran.detail()}',
-                    signature=f'{name}:{ran.code}',
+                    # THE EXIT CODE IS A CONTAINER, AND A COARSE ONE. `Ran.code` is -1 for a TIMEOUT,
+                    # a command that could not be run at all and an OSError alike -- three different
+                    # facts under one value -- and two failures that both exit 1 for different reasons
+                    # collide just as completely. The policy writes a condition off BY SIGNATURE, so
+                    # each of those pairs made the second failure inherit the first one's silence.
+                    # The detail is already computed for the message above; it is what names the
+                    # condition, so it is what the signature is taken from.
+                    signature=f'{name}:{ran.code}:{condition_digest(ran.detail())}',
                 )
             ]
         value = _as_number(ran.out)
