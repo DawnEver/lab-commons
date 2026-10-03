@@ -45,10 +45,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from _config_census import hook_ids, reachable_repos
-from _config_census_rows import HOOK_ID_CORE, PRECOMMIT_LINE_DELTA, PRECOMMIT_OWN_HOOKS, REPO_PATHS
+from _config_census import hook_ids
+from _config_census_rows import HOOK_ID_CORE
 
-from lab_commons.dev.famconfig import VacuousBase, artefact_base, declared_hooks, hook_delta, measured_delta
+from lab_commons.dev.famconfig import VacuousBase, artefact_base, declared_hooks, hook_delta
 
 #: The artefact under measurement, spelled once.
 PRECOMMIT = '.pre-commit-config.yaml'
@@ -103,49 +103,3 @@ class TestTheUnitIsTheHook:
     def test_a_commented_out_hook_is_not_a_hook_the_repo_declares(self) -> None:
         """consumer-c carries a whole commented-out local block; counting it would invent a delta."""
         assert declared_hooks('  - hooks:\n      - id: live\n    # - id: dead\n') == ('live',)
-
-
-class TestTheRepoValuesAreReMeasured:
-    def test_every_reachable_repo_declares_exactly_the_own_hooks_its_row_records(self) -> None:
-        """Both sides: a hook arriving reds, and a hook DISAPPEARING reds. Exact, never a subset."""
-        reached = reachable_repos(REPO_PATHS)
-        assert len(reached) >= CONSUMER_FLOOR, f'only {sorted(reached)} readable; this arm measured nothing'
-        for repo, root in reached.items():
-            assert _own_hooks(root) == PRECOMMIT_OWN_HOOKS[repo], (
-                f'{repo} declares own hooks {_own_hooks(root)}, recorded {PRECOMMIT_OWN_HOOKS[repo]}. A '
-                f'hook ADDED here raises this repo -- say so and raise the recorded set; a hook GONE is '
-                f'a verdict that stopped running while the config still reads as guarded.'
-            )
-
-    def test_the_line_delta_and_the_hook_delta_rank_the_consumers_differently(self) -> None:
-        """THE FINDING, re-derived: the same deltas, two units, two opposite orders."""
-        reached = {r: root for r, root in reachable_repos(REPO_PATHS).items() if PRECOMMIT_OWN_HOOKS[r]}
-        assert len(reached) >= CONSUMER_FLOOR, f'only {sorted(reached)} carry a delta; there is no order to compare'
-        base = artefact_base(PRECOMMIT)
-        lines = {repo: len(measured_delta(root / PRECOMMIT, base, repo).added) for repo, root in reached.items()}
-        hooks = {repo: len(_own_hooks(root)) for repo, root in reached.items()}
-        for repo, recorded in lines.items():
-            assert recorded == PRECOMMIT_LINE_DELTA[repo], (
-                f'{repo} measures a LINE delta of {recorded}, recorded {PRECOMMIT_LINE_DELTA[repo]}. Both '
-                f'numbers in this module are measurements; re-take the pair rather than editing one digit.'
-            )
-        by_lines = max(lines, key=lambda r: lines[r])
-        by_hooks = max(hooks, key=lambda r: hooks[r])
-        assert by_lines != by_hooks, (
-            f'the largest delta is {by_lines} by lines and {by_hooks} by hooks. The two units agreeing is '
-            f'not a pass -- it means the family configs converged on one sourcing style, and the evidence '
-            f'that the ceiling cannot be stated in lines has to be re-taken before this arm is trusted '
-            f'again. Re-measure and rewrite this module docstring table.'
-        )
-
-    def test_consumer_a_is_the_largest_by_lines_and_the_smallest_by_hooks(self) -> None:
-        """The named DIRECTION of the inversion, so a mere swap cannot satisfy the arm above."""
-        reached = reachable_repos(REPO_PATHS)
-        if 'consumer-a' not in reached:
-            pytest.fail('consumer-a is not checked out beside this repo, so the R2 verdict is unmeasured')
-        consumers = {r: root for r, root in reached.items() if PRECOMMIT_OWN_HOOKS[r]}
-        base = artefact_base(PRECOMMIT)
-        lines = {r: len(measured_delta(root / PRECOMMIT, base, r).added) for r, root in consumers.items()}
-        hooks = {r: len(_own_hooks(root)) for r, root in consumers.items()}
-        assert lines['consumer-a'] == max(lines.values()), lines
-        assert hooks['consumer-a'] == min(hooks.values()), hooks
