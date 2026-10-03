@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons.resources import Broker
+from lab_commons.supervise import daemon
 from lab_commons.supervise.cli import build_registry
 from lab_commons.supervise.component import CheckContext, Component, Registry
 from lab_commons.supervise.daemon import MIN_INTERVAL, Loop, serve
@@ -97,6 +98,31 @@ def test_serve_once_runs_one_cycle_and_returns(tmp_path: Path) -> None:
     assert probe.runs == 1
     assert len(seen) == 1
     assert code == 0
+
+
+def test_a_daemon_flushes_what_it_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE REGRESSION. A buffered log from a process that never exits is not a log.
+
+    `emit` does not flush by default, which is right for a command that exits: the interpreter
+    flushes on the way out. A supervisor does not exit, and its stdout is a pipe to the journal,
+    so the default is BLOCK buffering -- one short line every few minutes leaves an 8 KB buffer
+    days away from filling.
+
+    Measured on the host: every `supervise:` line in the journal appeared in the same second as a
+    restart, because the restart was the only thing that flushed it. The cycle times read off
+    those lines were the times of the restarts, and a healthy daemon looked exactly like one that
+    had never run.
+    """
+    flushed: list[bool] = []
+    real = daemon.emit
+
+    def _record(text: object = '', *, err: bool = False, flush: bool = False) -> None:
+        flushed.append(flush)
+        real(text, err=err, flush=flush)
+
+    monkeypatch.setattr(daemon, 'emit', _record)
+    serve(_loop(tmp_path, _Probe()), once=True)
+    assert flushed == [True], 'the daemon logged without flushing'
 
 
 def test_serve_counts_the_cycles_that_found_something_wrong(tmp_path: Path) -> None:

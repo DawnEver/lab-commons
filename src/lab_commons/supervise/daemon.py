@@ -106,7 +106,7 @@ class Loop:
                 notifier=self.notifier,
             )
         except Exhausted as exc:
-            emit(f'supervise: skipped, another cycle holds this target ({exc})')
+            emit(f'supervise: skipped, another cycle holds this target ({exc})', flush=True)
             return None
 
     def cycles(self, clock: Callable[[], datetime] | None = None) -> Iterator[CycleResult]:
@@ -182,7 +182,14 @@ def serve(
     with _stopping(loop) as running:
         for result in running.cycles(tick):
             at = tick()
-            emit(f'supervise: {summary(result)}')
+            # FLUSHED. A DAEMON'S LOG THAT IS BUFFERED IS NOT A LOG, and `emit` does not flush by
+            # default -- right for a command that exits, wrong for one that never does. Its stdout
+            # is a pipe to the journal, so the default is block buffering and one short line every
+            # few minutes leaves the buffer days from filling. Measured on the host: every
+            # `supervise:` line appeared in the journal in the same second as a restart, because
+            # the restart was the only thing that flushed it. A healthy daemon was
+            # indistinguishable from one that had never run.
+            emit(f'supervise: {summary(result)}', flush=True)
             if result.status != 'healthy':
                 degraded += 1
             if on_cycle is not None:
