@@ -141,6 +141,7 @@ def test_a_check_is_handed_its_own_state_slice_and_nothing_else() -> None:
         shared={},
         state=state['components']['probe'],
         project=Path(),
+        manager=manager_for('systemd'),
     )
     ctx.state['peak'] = 11.0
     probe.check(ctx)

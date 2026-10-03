@@ -46,7 +46,7 @@ def _manager() -> SystemdProcessManager:
     return SystemdProcessManager(runner=run)
 
 
-def _loop(tmp_path: Path, probe: Component, **kwargs: object) -> Loop:
+def _loop(tmp_path: Path, probe: Component, *, broker: Broker | None = None) -> Loop:
     registry = Registry()
     registry.register(probe)
     config = {'target': {'name': 'unit-test'}, 'cycle': {'interval': 300, 'check_timeout': 30}, 'alerts': {}}
@@ -56,7 +56,7 @@ def _loop(tmp_path: Path, probe: Component, **kwargs: object) -> Loop:
         config=config,
         project=_PROJECT,
         manager=_manager(),
-        **kwargs,  # type: ignore[arg-type]
+        broker=broker,
     )
 
 
