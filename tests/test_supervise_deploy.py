@@ -402,3 +402,42 @@ def test_a_deploy_that_fails_records_the_release_it_tried() -> None:
     ctx.state = state
     assert Deploy(transport=_transport())._deploy(ctx) is False
     assert state['release_failures'][-1]['key'].startswith('abc12345')
+
+
+def test_a_failure_with_no_release_to_blame_records_no_release_failure() -> None:
+    """THE REGRESSION, and it was found as `"key": "|"` in a host's live state file.
+
+    A fetch that fails has no commit set to attribute anything to. The sequence passed an empty
+    mapping to `_settle` anyway, which built a snapshot out of it -- `main=''`, `libs=''`, key
+    `'|'` -- and recorded a failure of that. So the state accumulated failures of a release that
+    does not exist, `failure_streak` never counted them against anything real, and a reader
+    opening the file saw a release they could not name.
+    """
+    state: dict[str, Any] = {}
+    manager = _Scripted({'fetch': Ran(code=1, err='offline')})
+    ctx = _ctx(manager, _plan_config())
+    ctx.state = state
+    assert Deploy(transport=_transport())._deploy(ctx) is False
+    assert 'release_failures' not in state, state.get('release_failures')
+
+
+def test_an_unreadable_remote_is_reported_rather_than_called_no_release() -> None:
+    """THE SECOND REGRESSION, and this one made a deployment blind for an hour.
+
+    `_remote` returns None when a fetch fails, and the check read that exactly like "the remote
+    holds nothing new". When the daemon's git could not reach the repository at all -- it had no
+    `HOME`, so the ownership exemption was unreadable -- every cycle reported no release to deploy,
+    the anomaly list stayed empty, and a target running stale code looked identical to an
+    up-to-date one. The supervisor cannot supervise through an unreadable remote, and that fact
+    belongs in the anomaly list rather than in the gap between two `None`s.
+    """
+    manager = _Scripted({'fetch': Ran(code=1, err='offline')})
+    kinds = [one.kind for one in Deploy().check(_ctx_with(manager)).anomalies]
+    assert 'remote_unreadable' in kinds
+
+
+def test_a_readable_remote_says_nothing_about_being_readable() -> None:
+    """The refusal is for a remote that could not be read, not for every check."""
+    manager = _Scripted({'origin/main': Ran(code=0, out='same1234\n'), 'HEAD': Ran(code=0, out='same1234\n')})
+    kinds = [one.kind for one in Deploy().check(_ctx_with(manager)).anomalies]
+    assert 'remote_unreadable' not in kinds

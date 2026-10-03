@@ -94,8 +94,23 @@ class Deploy(Component):
             )
         result.anomalies.extend(_drift(ctx, plan))
         wanted = _remote(ctx, plan)
+        if wanted is None:
+            # A REMOTE THAT COULD NOT BE READ IS NOT A REMOTE WITH NOTHING ON IT. `_remote` answers
+            # None for either, and reading the first as the second is how this deployment was blind
+            # for an hour: the daemon's `git` had no HOME, so every fetch died on the repository's
+            # ownership, and every cycle reported no release to deploy while the anomaly list
+            # stayed empty. A target running stale code looked exactly like an up-to-date one.
+            result.anomalies.append(
+                Anomaly(
+                    kind='remote_unreadable',
+                    severity=Severity.WARNING,
+                    message='the remote could not be read, so nothing can be said about what it holds',
+                    signature='remote_unreadable',
+                )
+            )
+            return result
         baseline = known[-1] if known else _checked_out(ctx, plan)
-        if wanted is not None and baseline is not None and wanted.key != baseline.key:
+        if baseline is not None and wanted.key != baseline.key:
             result.anomalies.append(
                 Anomaly(
                     kind='release_available',
@@ -130,6 +145,9 @@ class Deploy(Component):
             'release_failing': [RemedyStep(action='notify', escalate_after=1)],
             'no_verified_release': [RemedyStep(action='notify', escalate_after=2)],
             'drifted': [RemedyStep(action='notify', escalate_after=2)],
+            # Nothing here can repair an unreadable remote, and that is the point of alerting on
+            # it: the supervisor is blind and the operator is the only one who can say why.
+            'remote_unreadable': [RemedyStep(action='notify', escalate_after=1)],
         }
 
     def actions(self) -> Mapping[str, Action]:
@@ -210,6 +228,14 @@ def _settle(ctx: ActionContext, plan: Plan, outcome: Outcome, *, commits: dict[s
 
     """
     if outcome.commits is None:
+        # A FAILURE WITH NO RELEASE TO BLAME IS NOT A RELEASE FAILURE, and recording one is worse
+        # than recording nothing. A fetch that fails has no commit set; `target_of({})` built a
+        # snapshot out of it anyway -- `main=''`, `libs=''`, key `'|'` -- so the state accumulated
+        # failures of a release that does not exist, `failure_streak` never counted them against
+        # anything, and a reader opening the file saw a release they could not name. Found as
+        # `"key": "|"` in this host's live state.
+        if not commits:
+            return False
         record_failure(ctx.state, target_of(commits), outcome.detail, tolerance=plan.tolerance)
         return False
     verified = target_of(outcome.commits)
