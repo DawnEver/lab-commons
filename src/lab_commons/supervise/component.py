@@ -327,6 +327,17 @@ class Registry:
         for name, component in self.components.items():
             if component.remedies().get(kind):
                 return name
+        # A CHAIN THE CONFIGURATION DECLARED STILL BELONGS TO WHOEVER IMPLEMENTS ITS FIRST ACTION.
+        # `Registry.remedies` consults `_remedy_overrides` before any component, so a kind
+        # reachable only through a `[remedies]` table has no declaring component -- and returning
+        # '' for it handed the action an empty configuration and the shared state slice, which is
+        # the two halves of the defects this session already found twice. The action's own
+        # declaration is the next-best answer and the right one: a component that implements an
+        # action is the component whose section and slice it should be reading.
+        for step in self.remedies(kind):
+            for name, component in self.components.items():
+                if step.action in component.actions():
+                    return name
         return ''
 
     def action(self, name: str) -> Action | None:

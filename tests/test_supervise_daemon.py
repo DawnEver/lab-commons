@@ -127,7 +127,12 @@ def test_a_daemon_flushes_what_it_logs(tmp_path: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(daemon, 'emit', _record)
     serve(_loop(tmp_path, _Probe()), once=True)
-    assert flushed == [True], 'the daemon logged without flushing'
+    # NOT `== [True]`, WHICH PINNED THE COUNT AND NOT THE PROPERTY. The daemon now says whether the
+    # manager is watching before it runs its first cycle, so a count would have to be edited every
+    # time it gains a line -- and the count was never the point. What must hold is that NO line the
+    # daemon writes goes out unflushed, however many there are.
+    assert flushed, 'the daemon wrote nothing at all, so this proves nothing'
+    assert all(flushed), 'the daemon logged without flushing'
 
 
 def test_serve_counts_the_cycles_that_found_something_wrong(tmp_path: Path) -> None:
@@ -148,6 +153,69 @@ def test_a_stop_flag_ends_the_loop_before_it_starts_work(tmp_path: Path) -> None
     loop = _loop(tmp_path, _Probe())
     loop.stop.set()
     assert list(loop.cycles(lambda: _CLOCK)) == []
+
+
+def test_the_loop_exits_once_what_it_loaded_has_changed_on_disk(tmp_path: Path) -> None:
+    """THE STALE-SUPERVISOR DEFECT, as a control.
+
+    A deployment installs its own units and can upgrade the kit a running supervisor executes from;
+    a Python process keeps the modules it imported at startup regardless. Measured on the host on
+    2026-10-03: a kit fix was deployed, the daemon kept the old one, and two cycles were recorded
+    under the OLD rules before somebody restarted it by hand.
+
+    The remedy is to EXIT, not to restart in place: asking the manager to replace us is a process
+    supervised by a process manager behaving correctly, and restarting from inside would kill the
+    writer of the state this cycle just produced.
+    """
+    probe = _Probe()
+    loop = _loop(tmp_path, probe)
+    # THE FLOOR IS THE POINT OF THE INTERVAL, SO THE TEST PAYS ONE OF THEM: the loop waits between
+    # cycles, and a signature that has not moved yet must not shortcut that wait. Five seconds is
+    # `MIN_INTERVAL`, which is as cheap as this can honestly be made.
+    loop.config['cycle']['interval'] = MIN_INTERVAL
+    signatures = iter(['before', 'before', 'after'])
+    loop.definition = lambda: next(signatures)
+
+    cycles = list(loop.cycles(lambda: _CLOCK))
+
+    assert len(cycles) == 2, 'the cycle in flight finishes, and the one after it does not start'
+    assert probe.runs == 2, 'every cycle that started ran its checks'
+    assert loop.stop.is_set(), 'the loop asked to be replaced rather than deciding for the manager'
+
+
+def test_a_definition_that_has_not_moved_does_not_end_the_loop(tmp_path: Path) -> None:
+    """The other side: an unchanged signature must never be a reason to stop.
+
+    Driven one step and then closed rather than drained -- draining would sit in the loop's own
+    interval wait, which is the behaviour this test is NOT about.
+    """
+    loop = _loop(tmp_path, _Probe())
+    loop.definition = lambda: 'unchanged'
+    steps = loop.cycles(lambda: _CLOCK)
+    next(steps)
+    assert not loop.stop.is_set()
+    steps.close()
+
+
+def test_a_signature_moves_with_a_named_file_and_not_with_a_missing_one(tmp_path: Path) -> None:
+    """A DELETED FILE IS A CHANGE; an unreadable one is not the same as an absent one.
+
+    Reporting a path that cannot be read as nothing would make the one case that most needs a
+    replace -- the unit is gone -- the one case that looks like no change at all.
+    """
+    project = tmp_path
+    (project / 'unit.service').write_text('Restart=always\n', encoding='utf-8')
+    loaded = daemon.definition_signature(project, ['unit.service'])
+
+    assert daemon.definition_signature(project, ['unit.service']) == loaded, 're-reading is stable'
+
+    (project / 'unit.service').write_text('Restart=on-failure\n', encoding='utf-8')
+    assert daemon.definition_signature(project, ['unit.service']) != loaded, 'content moved'
+
+    (project / 'unit.service').unlink()
+    gone = daemon.definition_signature(project, ['unit.service'])
+    assert gone != loaded, 'a deleted file is a change like any other'
+    assert 'FileNotFoundError' in gone, 'the reason travels, so the next reader is not misled'
 
 
 def test_build_registry_takes_remedies_and_sections_from_the_config() -> None:

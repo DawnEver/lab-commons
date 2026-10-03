@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 
 from lab_commons.supervise.process import MANAGERS, SystemdProcessManager, manager_for, subprocess_runner
 from lab_commons.supervise.process.base import Ran
-from lab_commons.supervise.process.systemd import Runner
+from lab_commons.supervise.process.systemd import OUTPUT_CAP, Runner
 
 
 def _recorder(calls: list[tuple[list[str], int, str | None]], code: int = 0) -> Runner:
@@ -99,3 +100,37 @@ def test_a_silent_failure_still_says_something() -> None:
 def test_detail_prefers_the_stream_that_explains() -> None:
     """Standard error is where a refusal explains itself, so it is read first."""
     assert Ran(code=1, out='noise', err='the real reason').detail() == 'the real reason'
+
+
+def test_a_commands_output_is_capped_rather_than_collected(tmp_path: Path) -> None:
+    """THE REGRESSION. `capture_output=True` collects a command's whole output into THIS process.
+
+    This process is the supervisor, whose own cgroup is 300M. The command runs inside a scope the
+    kernel bounds -- the candidate build under 600M -- so a command that emits half a gigabyte, or
+    a compiler reporting ten thousand errors, would blow the SUPERVISOR's ceiling instead and take
+    the thing doing the supervising with it. Nothing reads the middle of a build log: `Ran.detail`
+    keeps 200 characters for a line, and the numeric probes parse a leading token.
+    """
+    ran = subprocess_runner(
+        [sys.executable, '-c', f'print("x" * {4 * OUTPUT_CAP})'],
+        timeout=60,
+        cwd=str(tmp_path),
+    )
+    assert ran.ok
+    assert len(ran.out) <= OUTPUT_CAP, 'the caller received more than the cap'
+
+
+def test_a_command_that_cannot_be_asked_is_not_a_unit_that_is_gone() -> None:
+    """`is-active` exits 3 for inactive and 4 for unknown; -1 is this module's "could not run".
+
+    Collapsing all three into False made `stop_unit` report success on a unit it never stopped --
+    leaving a candidate's transient unit alive, holding the spare port every later candidate is
+    started on.
+    """
+
+    def refuses(_argv: list[str], _timeout: int, _cwd: str | None) -> Ran:
+        return Ran(code=-1, err='systemctl: command not found')
+
+    stopped = SystemdProcessManager(runner=refuses).stop_unit('lab-supervise-candidate')
+    assert stopped.ok is False, 'a unit nobody could ask about was reported stopped'
+    assert 'could not ask' in stopped.err

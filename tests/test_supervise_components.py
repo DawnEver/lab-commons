@@ -148,6 +148,28 @@ def test_a_probe_that_cannot_run_is_an_anomaly_not_a_healthy_value() -> None:
     assert probe.check(ctx).anomalies[0].kind == 'q_failed'
 
 
+def test_two_probe_failures_that_exit_alike_are_not_the_same_condition() -> None:
+    """THE EXIT CODE IS A CONTAINER, and -1 is the coarsest of them.
+
+    A timeout, a command that could not be run at all and an OSError all carry it. The policy writes
+    a condition off by signature, so a signature of `{name}:{code}` made the second failure inherit
+    the first one's silence -- and `Ran.detail()`, which names the actual condition, was already
+    computed for the message beside it.
+    """
+    probe = ShellProbe()
+
+    def failed(err: str) -> str:
+        ctx = _ctx({'probes': [{'name': 'q', 'command': 'x'}]}, ran=Ran(code=-1, err=err))
+        return str(probe.check(ctx).anomalies[0].signature)
+
+    timed_out = failed('timed out after 30')
+    missing = failed('could not run x: No such file or directory')
+    assert timed_out != missing, 'a timeout and a missing binary are not one condition'
+
+    # The SAME failure re-reported: the timeout's number moved, and that is not a new condition.
+    assert failed('timed out after 45') == timed_out, 'a re-measured timeout is the same condition'
+
+
 def test_a_probe_that_says_to_ignore_errors_still_reads_its_output() -> None:
     """Some commands report through their exit code and some only through their output."""
     probe = ShellProbe()
@@ -263,6 +285,32 @@ def test_a_log_scan_finds_errors_and_says_which_file(tmp_path: Path) -> None:
     assert result.data['hits'][0]['file'] == 'run.log'
 
 
+def test_a_new_error_in_a_log_that_already_had_one_is_a_new_condition(tmp_path: Path) -> None:
+    """THE CONTAINER IS NOT THE CONDITION, and the write-off is why the difference is load-bearing.
+
+    The signature used to be the set of file NAMES, so a fresh failure landing in a log that already
+    held an old one carried that old one's signature. The policy counts cycles per signature and
+    writes a condition off once the count passes its threshold -- so the new failure was absorbed
+    into the old one's silence, which is the one outcome a scanner watching for an unhandled
+    exception must not have.
+    """
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    log = logs / 'run.log'
+    log.write_text('10/03/2026 19:58:20 ERROR Failed to open file /a/b.toml! [Errno 2]\n', encoding='utf-8')
+    first = LogScanner().check(_ctx({'log_dir': str(logs)}, project=tmp_path)).anomalies[0]
+
+    # The SAME failure written again later: the date, the clock and the errno all moved.
+    log.write_text('10/04/2026 02:14:02 ERROR Failed to open file /a/b.toml! [Errno 2]\n', encoding='utf-8')
+    again = LogScanner().check(_ctx({'log_dir': str(logs)}, project=tmp_path)).anomalies[0]
+    assert again.signature == first.signature, 'a re-dated line is the same condition, not a new one'
+
+    # A DIFFERENT failure in the SAME file, which is the case that used to go silent.
+    log.write_text('10/04/2026 02:14:02 ERROR Failed to open file /c/d.toml! [Errno 2]\n', encoding='utf-8')
+    other = LogScanner().check(_ctx({'log_dir': str(logs)}, project=tmp_path)).anomalies[0]
+    assert other.signature != first.signature, 'a new failure must not inherit the old one signature'
+
+
 def test_a_clean_log_reports_nothing_and_says_it_looked(tmp_path: Path) -> None:
     """`CLEAN` and `NO_LOG_DIR` are different facts, and only one of them is reassuring."""
     logs = tmp_path / 'logs'
@@ -303,11 +351,16 @@ def test_a_stalled_job_is_an_anomaly(tmp_path: Path) -> None:
 
 
 def test_a_job_with_no_progress_file_claims_no_percentage(tmp_path: Path) -> None:
-    """No reading is not no progress, and a percentage of nothing would be a lie."""
+    """NO READING IS NOT NO PROGRESS, and this test used to assert the opposite of its own name.
+
+    The docstring said the right thing and the assertions recorded `ops_done = 0.0` with no
+    anomaly, which is a percentage of nothing presented as a reading. A progress file that vanished
+    or became unreadable -- the job died, a cleanup removed it, permissions changed -- turned the
+    one component that would have noticed the job stopped into a silent no-op.
+    """
     result = ProgressTracker().check(_ctx({'progress_file': str(tmp_path / 'absent.json')}, project=tmp_path))
-    assert result.anomalies == []
-    assert result.data['status'] == 'NO_DATA'
-    assert result.metrics['ops_done'] == 0.0
+    assert [one.kind for one in result.anomalies] == ['progress_unreadable']
+    assert 'ops_done' not in result.metrics, 'a count of nothing was reported as a count'
 
 
 def test_a_fetch_reports_an_unreachable_endpoint_without_raising() -> None:

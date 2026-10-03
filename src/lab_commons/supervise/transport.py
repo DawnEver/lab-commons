@@ -23,7 +23,28 @@ import json
 from collections.abc import Callable
 from typing import Final
 
-__all__ = ['BODY_CAP', 'REPLY_KEPT', 'Transport', 'fetch_json', 'https_only', 'scheme_transport', 'split_url']
+__all__ = [
+    'BODY_CAP',
+    'OK_CEILING',
+    'OK_FLOOR',
+    'REPLY_KEPT',
+    'Transport',
+    'fetch_json',
+    'https_only',
+    'scheme_transport',
+    'split_url',
+]
+
+#: What counts as an endpoint having answered, as a half-open range. Named rather than written into
+#: a comparison because a bare 200 in an expression is a number, and a rule someone can find and
+#: change is a policy.
+#:
+#: THESE LIVED IN TWO MODULES UNTIL 2026-10-03 -- `components.health` judged an endpoint healthy by
+#: them and `alert` judged a channel to have taken a notice by a private second pair of the same two
+#: numbers -- and they are ONE fact, so they are one definition now. HTTP is what this module is
+#: about; a component is a thing that USES the answer.
+OK_FLOOR: Final = 200
+OK_CEILING: Final = 300
 
 #: How much of a reply is kept for the anomaly message.
 REPLY_KEPT: Final = 200

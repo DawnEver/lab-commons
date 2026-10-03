@@ -27,10 +27,9 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.supervise.component import ActionContext
-from lab_commons.supervise.components.health import OK_CEILING, OK_FLOOR
 from lab_commons.supervise.process.base import Ran
 from lab_commons.supervise.release import Snapshot
-from lab_commons.supervise.transport import Transport, fetch_json
+from lab_commons.supervise.transport import OK_CEILING, OK_FLOOR, Transport, fetch_json
 
 __all__ = ['CANDIDATE', 'Outcome', 'Plan', 'activate', 'deploy', 'fetch', 'preflight', 'probe', 'rollback', 'verify']
 

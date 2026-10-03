@@ -10,18 +10,17 @@ counted as reachable.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any
 
 from lab_commons.supervise.component import CheckContext, Component
-from lab_commons.supervise.transport import Transport, fetch_json, scheme_transport
-from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity
+from lab_commons.supervise.transport import OK_CEILING, OK_FLOOR, Transport, fetch_json, scheme_transport
+from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity, condition_digest
 
-__all__ = ['OK_CEILING', 'OK_FLOOR', 'Heartbeat', 'HttpHealth', 'ShellProbe']
-
-#: A successful HTTP status, as a range. Named because a bare 200 in a comparison is a number and
-#: ``OK_FLOOR`` is a rule.
-OK_FLOOR: Final = 200
-OK_CEILING: Final = 300
+#: `OK_FLOOR` and `OK_CEILING` are NOT re-exported here. What counts as an HTTP endpoint having
+#: answered is HTTP's answer, not this component's, and a name re-exported through the module that
+#: merely uses it is how the family ends up with two of them -- which is exactly what had happened:
+#: `alert` kept a private second pair of these two numbers until 2026-10-03.
+__all__ = ['Heartbeat', 'HttpHealth', 'ShellProbe']
 
 
 class HttpHealth(Component):
@@ -213,7 +212,14 @@ class ShellProbe(Component):
                     kind=f'{name}_failed',
                     severity=Severity.CRITICAL,
                     message=f'{name} could not run: {ran.detail()}',
-                    signature=f'{name}:{ran.code}',
+                    # THE EXIT CODE IS A CONTAINER, AND A COARSE ONE. `Ran.code` is -1 for a TIMEOUT,
+                    # a command that could not be run at all and an OSError alike -- three different
+                    # facts under one value -- and two failures that both exit 1 for different reasons
+                    # collide just as completely. The policy writes a condition off BY SIGNATURE, so
+                    # each of those pairs made the second failure inherit the first one's silence.
+                    # The detail is already computed for the message above; it is what names the
+                    # condition, so it is what the signature is taken from.
+                    signature=f'{name}:{ran.code}:{condition_digest(ran.detail())}',
                 )
             ]
         value = _as_number(ran.out)

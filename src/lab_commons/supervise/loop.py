@@ -43,7 +43,15 @@ from lab_commons.supervise.state import (
 )
 from lab_commons.supervise.verdict import Anomaly, CheckResult, Completion, Severity
 
-__all__ = ['CHECK_FAILED', 'DEPLOY_SLICE', 'UNCONFIGURED', 'CycleResult', 'Exhausted', 'run_cycle']
+__all__ = [
+    'CHECK_FAILED',
+    'DEPLOY_SLICE',
+    'STATE_LOST',
+    'UNCONFIGURED',
+    'CycleResult',
+    'Exhausted',
+    'run_cycle',
+]
 
 #: How long a cycle waits for the seat before giving up. A second cycle that queues behind a slow
 #: one is a supervisor whose own schedule slips; refusing says so instead.
@@ -52,6 +60,10 @@ SEAT_WAIT: Final = 0.0
 #: The severity of an anomaly raised because a check itself failed. It is CRITICAL: a probe that
 #: cannot run is worse than a probe that reports a problem, because nothing is watching.
 CHECK_FAILED: Final = 'check_failed'
+
+#: Raised when the cycle's own state could not be written. The supervisor is about to forget what
+#: it just decided -- its counters, its suppression timestamps, its rollback floor.
+STATE_LOST: Final = 'state_lost'
 
 #: The state slice an action is handed WHEN THE CHAIN HAS NO OWNING COMPONENT -- one declared by a
 #: configuration override rather than by a component's own ``remedies()``. An action normally shares
@@ -437,7 +449,22 @@ def run_cycle(
                 notifier=notifier or Notifier(config=config),
             )
         )
-        store.write(state)
+        if not store.write(state):
+            # A STATE THAT DID NOT PERSIST IS A SUPERVISOR THAT IS ABOUT TO FORGET, and the answer
+            # used to be thrown away. `StateStore.write` returns False when the atomic publish did
+            # not land, and this was its only production caller -- so the counters, the suppression
+            # timestamps and the release history silently rolled back to the previous file's
+            # contents on the next read: suppressions release, escalation counts reset, and the
+            # rollback floor can be lost. The cycle still completed and reported normally.
+            anomalies.append(
+                Anomaly(
+                    kind=STATE_LOST,
+                    severity=Severity.WARNING,
+                    message='this cycle could not be written down, so the next one will not remember it',
+                    source=f'supervise.{STATE_LOST}',
+                    signature='state-lost',
+                )
+            )
     return CycleResult(
         status='degraded' if anomalies else 'healthy',
         metrics=metrics,

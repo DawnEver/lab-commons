@@ -13,7 +13,9 @@ and one daemon drive all of them.
 
 from __future__ import annotations
 
+import hashlib
 import operator
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -29,7 +31,39 @@ __all__ = [
     'Gate',
     'RemedyStep',
     'Severity',
+    'condition_digest',
 ]
+
+
+def condition_digest(*parts: str) -> str:
+    """Digest the text that identifies a condition, so it can be told from a different one.
+
+    IT LIVES BESIDE :attr:`Anomaly.signature` BECAUSE IT IS WHAT THAT FIELD MEANS. A signature is not
+    a label for a component or a file or an exit code -- those are CONTAINERS, and a container is
+    stable while its contents are not. It is the identity of the CONDITION, and the policy counts
+    consecutive cycles per signature and writes a condition off once the count passes its threshold.
+    A signature taken from a container therefore has two outcomes for a fresh failure: reported if
+    nothing was wrong yet, and absorbed into the old condition's silence if something was.
+
+    NUMBERS ARE FOLDED OUT because the text is reprinted on every cycle: a log line carries a date, a
+    clock and an errno, a command's failure detail carries a timeout in seconds or a pid. Digesting
+    the raw text would make ONE condition a new signature every cycle -- an alert storm, which is the
+    opposite failure and the one that trains a reader to ignore the channel.
+
+    Args:
+        *parts: the text that names the condition. Order does not matter; repeats are one part.
+
+    Returns:
+        Sixteen hex characters, stable for one condition and different for another.
+
+    """
+    folded = sorted({_VOLATILE.sub('#', part) for part in parts})
+    return hashlib.sha256('\n'.join(folded).encode('utf-8')).hexdigest()[:16]
+
+
+#: The part of a message that changes on every write, removed before a condition is digested. See
+#: :func:`condition_digest` for why folding rather than hashing the raw text is the whole point.
+_VOLATILE: Final = re.compile(r'\d+')
 
 #: The comparisons a condition may make, by the spelling a config uses. An explicit table rather
 #: than ``eval`` or a parsed expression: a config is data, and data does not get to run code.

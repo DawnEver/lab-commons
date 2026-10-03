@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any, Final
 
-from lab_commons.supervise.transport import Transport, https_only, split_url
+from lab_commons.supervise.transport import BODY_CAP, OK_CEILING, OK_FLOOR, REPLY_KEPT, Transport, https_only, split_url
 from lab_commons.supervise.verdict import Severity
 
 __all__ = ['Delivery', 'Notice', 'Notifier', 'Transport']
@@ -41,14 +41,15 @@ _TIMEOUT: Final = 15
 _TELEGRAM_HOST: Final = 'api.telegram.org'
 _RESEND_HOST: Final = 'api.resend.com'
 
-#: What counts as a channel having taken the notice. Named rather than written into the comparison
-#: because a bare 200 in an expression is a number, and ``_HTTP_OK_FLOOR`` is a rule.
-_HTTP_OK_FLOOR: Final = 200
-_HTTP_OK_CEILING: Final = 300
+#: What counts as a channel having taken the notice comes from `transport.OK_FLOOR`/`OK_CEILING`.
+#: This module kept a private second pair of the same two numbers, which is how two readers of the
+#: same rule drift: one of them gets a reason and the other does not.
 
-#: How much of a channel's reply is kept for a log line. A refusal explains itself in its first
-#: line; the rest is someone else's HTML.
-_REPLY_KEPT: Final = 200
+#: How much of a channel's reply is kept came from here as a second copy of
+#: :data:`lab_commons.supervise.transport.REPLY_KEPT`, and the copy is what let the two readers
+#: disagree: `transport` was changed to read its body TO A CAP and this one went on calling
+#: ``response.read()`` with no argument, which reads to EOF. Two constants that agree today are not
+#: one fact, and the second one carried no reason for its number.
 
 
 @dataclass(frozen=True)
@@ -280,8 +281,13 @@ class Notifier:
             try:
                 connection.request('POST', path, body=body, headers={'Content-Type': 'application/json', **headers})
                 response = connection.getresponse()
-                detail = response.read().decode('utf-8', 'replace')[:_REPLY_KEPT]
-                ok = _HTTP_OK_FLOOR <= response.status < _HTTP_OK_CEILING
+                # READ TO A CAP, NOT TO EOF. This call had no argument, so a channel that dribbles a
+                # body -- slowly, or in chunks -- is read into THIS process's memory until it stops,
+                # and this process is the supervisor, whose own cgroup is 300M. The identical defect
+                # was fixed in `transport.fetch_json` and left standing here, because the two were
+                # written as two constants that happened to hold the same number.
+                detail = response.read(BODY_CAP).decode('utf-8', 'replace')[:REPLY_KEPT]
+                ok = OK_FLOOR <= response.status < OK_CEILING
                 return Delivery(channel=channel, ok=ok, detail=detail)
             finally:
                 connection.close()

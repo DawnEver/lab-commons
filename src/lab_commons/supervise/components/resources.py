@@ -18,7 +18,7 @@ from types import ModuleType
 from typing import Any, Final
 
 from lab_commons.supervise.component import CheckContext, Component
-from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity
+from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity, condition_digest
 
 __all__ = ['DiskUsage', 'LogScanner', 'ProcessMonitor']
 
@@ -354,10 +354,42 @@ class LogScanner(Component):
                     message=f'{len(hits)} error line(s) in {len({hit["file"] for hit in hits})} log(s)',
                     value=float(len(hits)),
                     threshold=0.0,
-                    signature=f'logs:{sorted({hit["file"] for hit in hits})}',
+                    signature=_error_signature(hits),
                 )
             )
         return result
+
+
+def _error_signature(hits: list[dict[str, str]]) -> str:
+    """Identify WHICH errors are in the logs, and not merely which files hold them.
+
+    THE CONTAINER IS NOT THE CONDITION. This signature used to be the sorted set of file names, and
+    a file name is stable while its contents are not -- so an entirely new failure landing in a log
+    that already had an old one was indistinguishable from that old one. The policy counts
+    consecutive cycles PER SIGNATURE and writes a condition off once the count passes its threshold,
+    after which it is reported as "the same condition has held for N cycles" and never again. So the
+    scanner had exactly two outcomes for a fresh exception: if no log held an error yet, it was
+    reported; if one did, the new failure was absorbed into the write-off of the old one and the
+    channel went quiet.
+
+    That is the failure this component exists to catch. It watches for an unhandled exception landing
+    outside a request -- the shape that leaves `/health/` answering 200 while something is wrong --
+    and it was blind precisely when something was already wrong.
+
+    The digest is taken over the matched lines with their NUMBERS FOLDED, because a log line's date,
+    clock and errno change on every write: hashing them would make one condition a new signature
+    every cycle. Folding keeps what names the failure -- the message, the path, the frames -- and
+    drops what only dates it.
+
+    Args:
+        hits: the matched lines, as ``{'file', 'keyword', 'line'}``.
+
+    Returns:
+        A signature, bounded and stable for one condition.
+
+    """
+    files = sorted({hit['file'] for hit in hits})
+    return f'logs:{files}:{condition_digest(*(hit["line"] for hit in hits))}'
 
 
 def _modified(path: Path) -> float:
