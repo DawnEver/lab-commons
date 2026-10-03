@@ -19,9 +19,13 @@ class _FakeResponse:
     def __init__(self, status: int = 200, body: str = 'ok') -> None:
         self.status = status
         self._body = body
+        #: What the reader asked for, so a test can tell a CAPPED read from a read to EOF. `None`
+        #: here is `read()` with no argument, which reads until the channel stops talking.
+        self.asked_for: int | None = None
 
     def read(self, amt: int | None = None) -> bytes:
-        """Return the body."""
+        """Return the body, recording how much was asked for."""
+        self.asked_for = amt
         return self._body.encode('utf-8')
 
 
@@ -38,14 +42,16 @@ class _FakeConnection(http.client.HTTPConnection):
         self.status = status
         self.sent: list[tuple[str, str, bytes, dict[str, str]]] = []
         self.closed = False
+        self.reply: _FakeResponse | None = None
 
     def request(self, method: str, path: str, body: bytes, headers: dict[str, str]) -> None:
         """Record one request."""
         self.sent.append((method, path, body, headers))
 
     def getresponse(self) -> _FakeResponse:
-        """Return the canned reply."""
-        return _FakeResponse(self.status)
+        """Return the canned reply, keeping it so a test can see how it was read."""
+        self.reply = _FakeResponse(self.status)
+        return self.reply
 
     def close(self) -> None:
         """Record the close."""
@@ -137,6 +143,22 @@ def test_telegram_posts_to_the_chat_with_the_notice_rendered() -> None:
     assert '"chat_id": "42"' in body.decode('utf-8')
     assert 'CRITICAL' in body.decode('utf-8')
     assert 'disk full' in body.decode('utf-8')
+
+
+def test_a_channel_reply_is_read_to_a_cap_and_not_to_eof() -> None:
+    """A refusal explains itself in its first line, and the rest is someone else's HTML.
+
+    `read()` with no argument reads until the channel stops talking, and this process is the
+    supervisor -- whose own cgroup is 300M. The identical defect was fixed in
+    `transport.fetch_json` and left standing here, because each call site held its own copy of the
+    number instead of importing the one the package already had.
+    """
+    recorder = _Recorder()
+    alerts = {'telegram': {'enabled': True, 'token': 'T0K', 'chat': '42'}}
+    _notifier(alerts, recorder).send(Notice(subject='s', body='b'))
+    reply = recorder.connection.reply
+    assert reply is not None
+    assert reply.asked_for is not None, 'the reply was read to EOF'
 
 
 def test_a_webhook_splits_its_url_and_keeps_the_scheme() -> None:
