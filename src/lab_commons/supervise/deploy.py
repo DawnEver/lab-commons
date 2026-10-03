@@ -55,6 +55,8 @@ class Plan:
         health: the URL that says whether the target is up.
         health_timeout: how long to wait for it.
         install: the command that builds the target's environment, run in the candidate.
+        venv: the command that GIVES the candidate an environment to install into, run in the
+            candidate before ``install``. Empty for a target whose install makes its own.
         prepare: the command that wires a candidate's DATA before it is started -- the config it
             reads and the library it serves. Without it a candidate would be started against an
             empty home, answer nothing, and be refused for the wrong reason.
@@ -72,6 +74,7 @@ class Plan:
     health: str
     health_timeout: int
     install: str
+    venv: str
     prepare: str
     run: str
     probe: Sequence[str]
@@ -125,6 +128,7 @@ class Plan:
             health=str(config.get('health', '')),
             health_timeout=int(config.get('health_timeout', 60)),
             install=str(config.get('install', '')),
+            venv=str(config.get('venv', '')),
             prepare=str(config.get('prepare', '')),
             run=str(config.get('run', '')),
             probe=tuple(str(one) for one in config.get('probe', [])),
@@ -241,6 +245,18 @@ def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transp
         return Outcome(ok=False, detail='the candidate worktree could not be created')
     try:
         home.mkdir(parents=True, exist_ok=True)
+        if plan.venv:
+            # THE CANDIDATE NEEDS AN ENVIRONMENT BEFORE IT CAN BE INSTALLED INTO, and this step
+            # was missing: `preflight` starts the candidate with `{candidate}/.venv/bin/python`
+            # and never created it, so an install of the `uv pip install -e .` kind refused with
+            # "No virtual environment found" and EVERY release was rejected. It survived its first
+            # rehearsal because the rehearsal built the venv by hand before calling in -- the
+            # check was passing a precondition the real code path never established.
+            made = ctx.manager.run_capped(
+                ['sh', '-c', plan.venv], memory_max=plan.ceiling, timeout=600, cwd=str(candidate)
+            )
+            if not made.ok:
+                return Outcome(ok=False, detail=f'the candidate environment was not built: {made.detail()}')
         built = ctx.manager.run_capped(
             ['sh', '-c', plan.install], memory_max=plan.ceiling, timeout=900, cwd=str(candidate)
         )

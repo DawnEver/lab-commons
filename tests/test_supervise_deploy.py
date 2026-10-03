@@ -209,6 +209,48 @@ def test_a_candidate_that_will_not_install_is_refused_before_anything_is_started
     assert manager.restarts == []
 
 
+def test_the_candidate_gets_an_environment_before_it_is_installed() -> None:
+    """THE REGRESSION, and it survived a rehearsal that had quietly done this step by hand.
+
+    `preflight` starts the candidate with `{candidate}/.venv/bin/python` and never created that
+    venv. On the host this was written for, `make install-web` is `uv pip install -e ".[web]"`,
+    which refuses to run without one -- so EVERY release was refused with "No virtual environment
+    found", and the rehearsal passed only because the venv had been built by hand first.
+    """
+    manager = _Scripted()
+    outcome = preflight(
+        _plan(venv='uv venv --python 3.12', install='true', probe=[]),
+        _ctx(manager),
+        {'main': 'abc123'},
+        transport=_transport(),
+        port=7002,
+    )
+    assert outcome.ok is True
+    built = next(index for index, one in enumerate(manager.ran) if 'uv venv' in one)
+    installed = next(index for index, one in enumerate(manager.ran) if one.endswith('true'))
+    assert built < installed, manager.ran
+
+
+def test_a_candidate_whose_environment_will_not_build_is_refused() -> None:
+    """No environment means no install and no run, so it is refused where nothing is touched yet."""
+    manager = _Scripted({'uv venv': Ran(code=1, err='no interpreter')})
+    outcome = preflight(
+        _plan(venv='uv venv --python 3.12'), _ctx(manager), {'main': 'abc123'}, transport=_transport(), port=7002
+    )
+    assert outcome.ok is False
+    assert 'environment' in outcome.detail
+    assert manager.started == []
+
+
+def test_a_plan_with_no_environment_step_still_installs() -> None:
+    """The step is optional: a target whose install makes its own environment is unchanged."""
+    manager = _Scripted()
+    outcome = preflight(
+        _plan(install='true', probe=[]), _ctx(manager), {'main': 'abc123'}, transport=_transport(), port=7002
+    )
+    assert outcome.ok is True
+
+
 def test_activation_fast_forwards_then_installs_then_restarts() -> None:
     """Three steps, in that order: a restart before the install serves the old environment."""
     manager = _Scripted()
