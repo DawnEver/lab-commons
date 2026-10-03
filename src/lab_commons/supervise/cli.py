@@ -23,7 +23,7 @@ from lab_commons.log import emit
 from lab_commons.supervise.component import Registry, load_components
 from lab_commons.supervise.components import COMPONENTS
 from lab_commons.supervise.config import load_config
-from lab_commons.supervise.daemon import Loop, serve
+from lab_commons.supervise.daemon import Definition, Loop, definition_signature, serve
 from lab_commons.supervise.loop import CycleResult, run_cycle
 from lab_commons.supervise.policy import now
 from lab_commons.supervise.process import manager_for
@@ -163,6 +163,26 @@ def _read_journal(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _definition(project: Path, config: dict[str, Any]) -> Definition:
+    """Return the signature this daemon re-takes every cycle, built from its own config.
+
+    The list is a DEPLOYMENT's fact and not the kit's: which files are part of a given supervisor's
+    definition depends on which unit starts it and what that unit reads. The kit's own version is
+    always part of the signature and is not configurable -- it is the one ingredient no config can
+    know about, because it changes when a deployment upgrades the kit under a running process.
+
+    Args:
+        project: the target's directory, which the configured paths are relative to.
+        config: the merged configuration.
+
+    Returns:
+        A callable re-taking the signature from disk.
+
+    """
+    paths = tuple(str(one) for one in (config.get('daemon', {}) or {}).get('definition', ()))
+    return lambda: definition_signature(project, paths)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one of the supervisor's verbs.
 
@@ -191,7 +211,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         emit(summary(result))
         return 0 if result.status == 'healthy' else 1
 
-    loop = Loop(registry=registry, store=store, config=config, project=project, manager=manager)
+    loop = Loop(
+        registry=registry,
+        store=store,
+        config=config,
+        project=project,
+        manager=manager,
+        definition=_definition(project, config),
+    )
     journal = _journal(project)
     journal.parent.mkdir(parents=True, exist_ok=True)
 

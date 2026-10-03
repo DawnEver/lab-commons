@@ -51,6 +51,16 @@ DEFAULTS: Final[dict[str, Any]] = {
         'command_ceiling': '400M',
     },
     'state': {'file': ''},
+    #: WHAT THIS SUPERVISOR IS, for the one thing a running process cannot notice by itself. Add
+    #: the files that define it -- the unit that starts it and the config it was handed -- and the
+    #: daemon re-takes their signature every cycle, so a deployment that changed either makes it
+    #: exit and let the manager start one that reads what is there now. The kit's own version is
+    #: always part of the signature and is not listed here, because no config can know it.
+    #:
+    #: AN EMPTY LIST IS NOT THE SAFE DEFAULT. It leaves the kit-version half working, which covers
+    #: the upgrade case and not the unit case, and it is the unit case that ships a supervisor
+    #: enforcing settings nobody reviewed.
+    'daemon': {'definition': []},
     'alerts': {
         'suppress_after_identical': 3,
         'cooldown': 600,
