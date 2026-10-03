@@ -14,17 +14,22 @@ assertable without a systemd on the machine running the test.
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final
 
 from lab_commons.supervise.process.base import Ran
 
-__all__ = ['Runner', 'SystemdProcessManager', 'subprocess_runner']
+__all__ = ['OUTPUT_CAP', 'Runner', 'SystemdProcessManager', 'subprocess_runner']
 
 #: Run an argv and report what it produced. Injected so a test can read the command rather than
 #: execute it.
 Runner = Callable[[list[str], int, 'str | None'], Ran]
+
+#: How much of a command's output is kept, per stream. Generous for a log line and small enough
+#: that a runaway command cannot take the supervisor's own cgroup with it.
+OUTPUT_CAP: Final = 64 * 1024
 
 #: How long a subprocess is given beyond the ceiling the command itself carries. The ``timeout``
 #: inside the scope kills the command; this is the backstop for the scope machinery not coming up.
@@ -43,22 +48,27 @@ def subprocess_runner(argv: list[str], timeout: int, cwd: str | None) -> Ran:
         What the command produced, with -1 for a timeout.
 
     """
+    # OUTPUT GOES TO DISK AND ONLY A PREFIX COMES BACK, because `capture_output=True` collects the
+    # whole thing into THIS process's memory -- and this process is the supervisor, whose own
+    # cgroup is 300M. The command runs inside a scope the kernel bounds (the candidate build under
+    # 600M); a command that emits 500MB, or a compiler that reports ten thousand errors, would blow
+    # the SUPERVISOR's ceiling instead and take the thing doing the supervising with it.
+    #
+    # A capped prefix is what every caller wants anyway: `Ran.detail` keeps 200 characters for a
+    # log line, and the numeric probes parse a leading token. Nothing reads the middle of a build
+    # log. The full output still lands on disk, bounded by the command's own timeout.
     try:
-        done = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=timeout,
-            cwd=cwd,
-            check=False,
-        )
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            done = subprocess.run(argv, stdout=out, stderr=err, timeout=timeout, cwd=cwd, check=False)
+            out.seek(0)
+            err.seek(0)
+            kept_out = out.read(OUTPUT_CAP).decode('utf-8', 'replace')
+            kept_err = err.read(OUTPUT_CAP).decode('utf-8', 'replace')
     except subprocess.TimeoutExpired:
         return Ran(code=-1, err=f'timed out after {timeout}')
     except OSError as exc:
         return Ran(code=-1, err=f'could not run {argv[0]}: {exc}')
-    return Ran(code=done.returncode, out=done.stdout or '', err=done.stderr or '')
+    return Ran(code=done.returncode, out=kept_out, err=kept_err)
 
 
 @dataclass(frozen=True)
@@ -88,6 +98,23 @@ class SystemdProcessManager:
 
         """
         return self.runner([self.systemctl, 'is-active', unit], 30, None).ok
+
+    def ask_active(self, unit: str) -> Ran:
+        """Ask whether *unit* is running, and keep the difference between no and don't know.
+
+        `is_active` answers a bool, which is what its callers want -- but a bool cannot carry "the
+        command could not be run at all", and `systemctl` exits 3 for inactive and 4 for a unit that
+        does not exist while this module marks "could not run" as -1. Collapsing those three into
+        False is what let `stop_unit` report success on a unit it never stopped.
+
+        Args:
+            unit: the systemd unit name.
+
+        Returns:
+            What systemctl said.
+
+        """
+        return self.runner([self.systemctl, 'is-active', unit], 30, None)
 
     def start(self, unit: str) -> Ran:
         """Start *unit*.
@@ -174,7 +201,12 @@ class SystemdProcessManager:
             What systemctl said. A unit that is already gone is stopped.
 
         """
-        if not self.is_active(name):
+        probe = self.ask_active(name)
+        if probe.code == -1:
+            # COULD NOT ASK IS NOT ALREADY GONE. Reporting success here leaves a candidate's
+            # transient unit alive, holding the spare port every later candidate is started on.
+            return Ran(code=-1, err=f'could not ask whether {name} is running: {probe.err}')
+        if probe.code != 0:
             return Ran(code=0, out='already gone')
         return self.runner([self.systemctl, 'stop', name], 120, None)
 
