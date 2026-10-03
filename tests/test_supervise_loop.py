@@ -67,6 +67,7 @@ class _Deployer(Component):
 
     def check(self, ctx: CheckContext) -> CheckResult:
         """Report one anomaly for the chain to act on."""
+        ctx.state['seen_by_check'] = True
         return CheckResult(anomalies=[Anomaly(kind='stale', severity=Severity.CRITICAL, message='stale build')])
 
     def actions(self) -> dict[str, Action]:
@@ -82,6 +83,7 @@ class _Deployer(Component):
         def refresh(action_ctx: ActionContext) -> bool:
             _Deployer.calls.append('refresh')
             _Deployer.seen_config = dict(action_ctx.config)
+            _Deployer.action_state = action_ctx.state
             return True
 
         return {'refresh': refresh}
@@ -92,6 +94,8 @@ class _Deployer(Component):
 
     calls: ClassVar[list[str]] = []
     seen_config: ClassVar[dict[str, Any]] = {}
+    check_state: ClassVar[dict[str, Any]] = {}
+    action_state: ClassVar[dict[str, Any]] = {}
 
 
 class _Reply:
@@ -159,6 +163,8 @@ def _clean_components() -> None:
     _Probe.metrics = {}
     _Deployer.calls = []
     _Deployer.seen_config = {}
+    _Deployer.check_state = {}
+    _Deployer.action_state = {}
 
 
 def _run(registry: Registry, tmp_path: Path, config: dict[str, Any] | None = None, **kwargs: object) -> CycleResult:
@@ -248,6 +254,23 @@ def test_an_implemented_action_runs(tmp_path: Path) -> None:
     assert _Deployer.calls == ['refresh']
     assert [attempt.action for attempt in result.attempts] == ['refresh']
     assert result.attempts[0].ok is True
+
+
+def test_an_action_shares_the_state_slice_its_own_check_reads(tmp_path: Path) -> None:
+    """THE REGRESSION, and it silently disabled the circuit breaker.
+
+    A check is handed `state['components'][component]`; an action was handed a SHARED
+    `state['components']['actions']`. So the deploy component read its deployment history out of one
+    dict and wrote the snapshot into another: `check` never saw a verified release, `no_verified_release`
+    warned forever against a target that had deployed successfully, and -- the costly half --
+    `failure_streak` counted failures that had been recorded somewhere it never looked, so a release
+    could fail without limit and the escalation the operator asked for could never fire.
+
+    One component, one slice. A chain declared by a configuration override has no owning component
+    and keeps the shared slice, which is what having no owner means.
+    """
+    _run(_registry(_Deployer()), tmp_path)
+    assert _Deployer.action_state.get('seen_by_check') is True, 'the action cannot see what the check wrote'
 
 
 def test_an_action_is_handed_its_own_component_s_config(tmp_path: Path) -> None:

@@ -52,9 +52,10 @@ SEAT_WAIT: Final = 0.0
 #: cannot run is worse than a probe that reports a problem, because nothing is watching.
 CHECK_FAILED: Final = 'check_failed'
 
-#: The state slice an action's author reaches through an ActionContext. Actions are not scoped to
-#: one component the way a check is -- several may share an action -- so the slice they share is
-#: named by the framework rather than guessed at per component.
+#: The state slice an action is handed WHEN THE CHAIN HAS NO OWNING COMPONENT -- one declared by a
+#: configuration override rather than by a component's own ``remedies()``. An action normally shares
+#: the slice of the component it belongs to, so that what it records is what that component's check
+#: reads back; a chain with no owner shares this one, which is what having no owner means.
 DEPLOY_SLICE: Final = 'actions'
 
 #: Raised when nothing is enabled. Also critical, for the same reason and one more: a supervisor
@@ -334,23 +335,33 @@ def run_cycle(
                 clear_anomaly(state, source)
         attempts: list[Attempt] = []
         if anomalies:
-            # THE ACTION GETS ITS OWN COMPONENT'S SECTION, not the whole components table. The
-            # table is what this passed, and `ActionContext` documents `config` as "this
-            # component's own section" -- so every acting component read an empty mapping. The
-            # deploy component built an empty plan from it and refused every release, reporting
-            # "missing: repositories, unit, health, install, run, probe" for six settings that
-            # were in the file the whole time.
-            state_slice = state.setdefault('components', {}).setdefault(DEPLOY_SLICE, {})
+            # THE ACTION GETS ITS OWN COMPONENT'S SECTION AND ITS OWN COMPONENT'S SLICE, because
+            # `ActionContext` documents both that way and the acting path passed neither.
+            #
+            # The config half: the whole components table was passed, so every acting component
+            # read an empty mapping. The deploy component built an empty plan from it and refused
+            # every release, reporting "missing: repositories, unit, health, install, run, probe"
+            # for six settings that were in the file the whole time.
+            #
+            # The state half, and it was the worse one: a check is handed
+            # `state['components'][component]` while an action was handed a SHARED
+            # `state['components']['actions']`. So the deploy component read its deployment history
+            # out of one dict and wrote the snapshot into another -- `check` never saw a verified
+            # release, `no_verified_release` warned forever about a target that had deployed
+            # successfully, and `failure_streak` counted failures recorded somewhere it never
+            # looked, so a release could fail without limit and the escalation could never fire.
             sections = config.get('components', {})
+            scoped = state.setdefault('components', {})
             for anomaly in anomalies:
                 count_anomaly(state, anomaly.source)
+                owner = registry.owner(anomaly.kind)
                 ctx = ActionContext(
-                    config=sections.get(registry.owner(anomaly.kind), {}),
+                    config=sections.get(owner, {}),
                     shared=config,
                     project=project,
                     manager=manager,
                     registry=registry,
-                    state=state_slice,
+                    state=scoped.setdefault(owner or DEPLOY_SLICE, {}),
                 )
                 attempts.extend(apply_chain(registry, anomaly, ctx, state, metrics=metrics, dry_run=dry_run))
         else:
