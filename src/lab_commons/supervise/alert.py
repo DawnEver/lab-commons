@@ -23,19 +23,15 @@ from __future__ import annotations
 import http.client
 import json
 import smtplib
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any, Final
 
+from lab_commons.supervise.transport import Transport, https_only, split_url
 from lab_commons.supervise.verdict import Severity
 
-__all__ = ['Delivery', 'Notice', 'Notifier', 'Transport', 'https_transport']
-
-#: How a request reaches a channel: ``(host, timeout) -> connection``. The shipped default speaks
-#: HTTPS and nothing else; a caller substituting one has made that choice in code, which is what a
-#: comment asserting a URL is fine never was.
-type Transport = Callable[[str, float], http.client.HTTPConnection]
+__all__ = ['Delivery', 'Notice', 'Notifier', 'Transport']
 
 #: How long a channel is given. Bounded because an alert that blocks is worse than an alert that
 #: fails: the cycle it is holding is the one that would have retried.
@@ -53,20 +49,6 @@ _HTTP_OK_CEILING: Final = 300
 #: How much of a channel's reply is kept for a log line. A refusal explains itself in its first
 #: line; the rest is someone else's HTML.
 _REPLY_KEPT: Final = 200
-
-
-def https_transport(host: str, timeout: float) -> http.client.HTTPSConnection:
-    """Return the shipped transport: one protocol, structurally.
-
-    Args:
-        host: the host to connect to.
-        timeout: seconds to allow.
-
-    Returns:
-        A connection that cannot be talked down to plain HTTP.
-
-    """
-    return http.client.HTTPSConnection(host, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -116,12 +98,13 @@ class Notifier:
 
     Attributes:
         config: the merged configuration, read for its ``alerts`` table.
-        transport: how an HTTPS connection is made.
+        transport: how a connection is made. Defaults to the one that refuses plain HTTP, because
+            every channel that carries a credential goes through it.
 
     """
 
     config: Mapping[str, Any]
-    transport: Transport = https_transport
+    transport: Transport = https_only
 
     def send(self, notice: Notice) -> list[Delivery]:
         """Deliver *notice* to each enabled channel, independently.
@@ -224,7 +207,12 @@ class Notifier:
             'text': notice.body,
         }
         return self._post(
-            'email', _RESEND_HOST, '/emails', payload, {'Authorization': f'Bearer {cfg.get("api_key", "")}'}
+            'email',
+            'https',
+            _RESEND_HOST,
+            '/emails',
+            payload,
+            headers={'Authorization': f'Bearer {cfg.get("api_key", "")}'},
         )
 
     def _telegram(self, notice: Notice, cfg: Mapping[str, Any]) -> Delivery:
@@ -240,7 +228,7 @@ class Notifier:
         """
         payload = {'chat_id': str(cfg.get('chat', '')), 'text': notice.as_text()}
         path = f'/bot{cfg.get("token", "")}/sendMessage'
-        return self._post('telegram', _TELEGRAM_HOST, path, payload, {})
+        return self._post('telegram', 'https', _TELEGRAM_HOST, path, payload, headers={})
 
     def _webhook(self, notice: Notice, cfg: Mapping[str, Any]) -> Delivery:
         """Post the notice to a webhook.
@@ -254,23 +242,28 @@ class Notifier:
 
         """
         payload = {'text': notice.as_text(), 'subject': notice.subject, 'severity': notice.severity.value}
-        host = str(cfg.get('url', '')).removeprefix('https://').removeprefix('http://')
-        host, _, path = host.partition('/')
+        try:
+            scheme, host, path = split_url(str(cfg.get('url', '')))
+        except ValueError as exc:
+            return Delivery(channel='webhook', ok=False, detail=str(exc))
         headers = {str(k): str(v) for k, v in (cfg.get('headers') or {}).items()}
-        return self._post('webhook', host, '/' + path, payload, headers)
+        return self._post('webhook', scheme, host, path, payload, headers=headers)
 
     def _post(
         self,
         channel: str,
+        scheme: str,
         host: str,
         path: str,
         payload: Mapping[str, object],
+        *,
         headers: Mapping[str, str],
     ) -> Delivery:
         """POST a JSON body and report what came back.
 
         Args:
             channel: the channel's name, for the delivery.
+            scheme: the URL's scheme, which the transport needs to choose a connection class.
             host: the host to reach.
             path: the request path.
             payload: the JSON body.
@@ -283,7 +276,7 @@ class Notifier:
         """
         body = json.dumps(payload).encode('utf-8')
         try:
-            connection = self.transport(host, _TIMEOUT)
+            connection = self.transport(scheme, host, _TIMEOUT)
             try:
                 connection.request('POST', path, body=body, headers={'Content-Type': 'application/json', **headers})
                 response = connection.getresponse()
@@ -292,5 +285,5 @@ class Notifier:
                 return Delivery(channel=channel, ok=ok, detail=detail)
             finally:
                 connection.close()
-        except (OSError, http.client.HTTPException) as exc:
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             return Delivery(channel=channel, ok=False, detail=f'{type(exc).__name__}: {exc}')

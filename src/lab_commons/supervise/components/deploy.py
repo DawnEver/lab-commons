@@ -22,7 +22,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from lab_commons.supervise.alert import Transport, https_transport
 from lab_commons.supervise.component import ActionContext, CheckContext, Component, Handler
 from lab_commons.supervise.deploy import Outcome, Plan
 from lab_commons.supervise.deploy import deploy as run_deploy
@@ -36,6 +35,7 @@ from lab_commons.supervise.release import (
     record_success,
     target_of,
 )
+from lab_commons.supervise.transport import Transport, scheme_transport
 from lab_commons.supervise.verdict import Action, Anomaly, CheckResult, RemedyStep, Severity
 
 __all__ = ['Deploy']
@@ -167,7 +167,7 @@ class Deploy(Component):
             plan,
             ctx,
             previous,
-            transport=self.transport or https_transport,
+            transport=self.transport or scheme_transport,
             port=int(ctx.config.get('candidate_port', DEFAULT_PORT)),
         )
         return _settle(ctx, plan, outcome, commits=outcome.tried or {})
@@ -186,7 +186,7 @@ class Deploy(Component):
         known = history(ctx.state)
         if not known:
             return False
-        return run_rollback(plan, ctx, known[-1], transport=self.transport or https_transport).ok
+        return run_rollback(plan, ctx, known[-1], transport=self.transport or scheme_transport).ok
 
 
 def _settle(ctx: ActionContext, plan: Plan, outcome: Outcome, *, commits: dict[str, str]) -> bool:

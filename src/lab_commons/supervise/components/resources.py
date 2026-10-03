@@ -108,8 +108,8 @@ class ProcessMonitor(Component):
         enabled = true
         track_system = true
         [[components.process_monitor.processes]]
-        name = "wdg-lab"
-        match = "wdg_lab"
+        name = "webapp"
+        match = "webapp"
         min_count = 1
         max_rss_mb = 400
 

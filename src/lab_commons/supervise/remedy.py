@@ -2,8 +2,9 @@
 
 The predecessor stated this requirement and then split the implementation across two: a module for
 the daemon and a loop for the AI, with the chain resolution duplicated between them. It recorded
-the debt itself -- *"remedy 链双处声明(组件硬编码 vs config)优先级统一"* -- and never paid it, which
-is why a chain could mean two things depending on who ran it.
+the debt itself -- *"the remedy chain declared in two places, hardcoded in the component against
+configured in the config, with the precedence to be unified"* -- and never paid it, which is why a
+chain could mean two things depending on who ran it.
 
 WHAT A STEP IS. A gate, an action, and a retry count. The gate is a severity and an optional
 metric comparison; the action is either a shell line or something a component implements; the

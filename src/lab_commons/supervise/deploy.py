@@ -26,11 +26,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.supervise.alert import Transport
 from lab_commons.supervise.component import ActionContext
-from lab_commons.supervise.components.health import OK_CEILING, OK_FLOOR, fetch_json
+from lab_commons.supervise.components.health import OK_CEILING, OK_FLOOR
 from lab_commons.supervise.process.base import Ran
 from lab_commons.supervise.release import Snapshot
+from lab_commons.supervise.transport import Transport, fetch_json
 
 __all__ = ['CANDIDATE', 'Outcome', 'Plan', 'activate', 'deploy', 'fetch', 'preflight', 'probe', 'rollback', 'verify']
 
@@ -55,6 +55,9 @@ class Plan:
         health: the URL that says whether the target is up.
         health_timeout: how long to wait for it.
         install: the command that builds the target's environment, run in the candidate.
+        prepare: the command that wires a candidate's DATA before it is started -- the config it
+            reads and the library it serves. Without it a candidate would be started against an
+            empty home, answer nothing, and be refused for the wrong reason.
         run: how to start a candidate, with placeholders.
         probe: URLs a candidate must answer before it may be activated.
         ceiling: the memory ceiling for every command this runs.
@@ -69,6 +72,7 @@ class Plan:
     health: str
     health_timeout: int
     install: str
+    prepare: str
     run: str
     probe: Sequence[str]
     ceiling: str
@@ -121,6 +125,7 @@ class Plan:
             health=str(config.get('health', '')),
             health_timeout=int(config.get('health_timeout', 60)),
             install=str(config.get('install', '')),
+            prepare=str(config.get('prepare', '')),
             run=str(config.get('run', '')),
             probe=tuple(str(one) for one in config.get('probe', [])),
             ceiling=str(config.get('ceiling', '600M')),
@@ -241,6 +246,19 @@ def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transp
         )
         if not built.ok:
             return Outcome(ok=False, detail=f'installing the candidate failed: {built.detail()}')
+        if plan.prepare:
+            wires = {
+                'python': str(candidate / '.venv' / 'bin' / 'python'),
+                'home': str(home),
+                'port': str(port),
+                'candidate': str(candidate),
+                'project': str(ctx.project),
+            }
+            wired = ctx.manager.run_capped(
+                ['sh', '-c', plan.prepare.format(**wires)], memory_max=plan.ceiling, timeout=300, cwd=str(candidate)
+            )
+            if not wired.ok:
+                return Outcome(ok=False, detail=f'wiring the candidate failed: {wired.detail()}')
         command = plan.run.format(
             python=str(candidate / '.venv' / 'bin' / 'python'),
             home=str(home),

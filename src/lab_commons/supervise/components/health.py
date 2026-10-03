@@ -9,12 +9,11 @@ counted as reachable.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from lab_commons.supervise.alert import Transport, https_transport
 from lab_commons.supervise.component import CheckContext, Component
+from lab_commons.supervise.transport import Transport, fetch_json, scheme_transport
 from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity
 
 __all__ = ['OK_CEILING', 'OK_FLOOR', 'Heartbeat', 'HttpHealth', 'ShellProbe']
@@ -23,41 +22,6 @@ __all__ = ['OK_CEILING', 'OK_FLOOR', 'Heartbeat', 'HttpHealth', 'ShellProbe']
 #: ``OK_FLOOR`` is a rule.
 OK_FLOOR: Final = 200
 OK_CEILING: Final = 300
-
-#: How much of a reply is kept for the anomaly message.
-REPLY_KEPT: Final = 200
-
-
-def fetch_json(transport: Transport, url: str, timeout: float) -> tuple[int, object, str]:
-    """GET *url* and parse the body as JSON.
-
-    Args:
-        transport: how the connection is made.
-        url: the full URL.
-        timeout: seconds to allow.
-
-    Returns:
-        The status, the parsed body or None, and a one-line detail. A connection that failed
-        returns status 0 rather than raising: an endpoint being down is the ordinary case here.
-
-    """
-    host = url.removeprefix('https://').removeprefix('http://')
-    host, _, path = host.partition('/')
-    try:
-        connection = transport(host, timeout)
-        try:
-            connection.request('GET', '/' + path, headers={'Accept': 'application/json'})
-            response = connection.getresponse()
-            raw = response.read().decode('utf-8', 'replace')
-            try:
-                body = json.loads(raw)
-            except ValueError:
-                body = None
-            return response.status, body, raw[:REPLY_KEPT]
-        finally:
-            connection.close()
-    except OSError as exc:
-        return 0, None, f'{type(exc).__name__}: {exc}'
 
 
 class HttpHealth(Component):
@@ -83,10 +47,11 @@ class HttpHealth(Component):
         """Take the transport, so a test can read the request rather than make it.
 
         Args:
-            transport: how a connection is made. Defaults to HTTPS.
+            transport: how a connection is made. Defaults to the one that honours the URL's
+                scheme, because a probe against loopback is plain HTTP by design.
 
         """
-        self._transport = transport or https_transport
+        self._transport = transport or scheme_transport
 
     def check(self, ctx: CheckContext) -> CheckResult:
         """Fetch every configured endpoint and report what is wrong with each.

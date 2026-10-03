@@ -117,12 +117,14 @@ class _Connection:
 
 
 class _Transport:
-    """A transport that remembers which host it was asked for."""
+    """A transport that remembers what it was asked for."""
 
     def __init__(self) -> None:
         self.hosts: list[tuple[str, float]] = []
+        self.schemes: list[str] = []
 
-    def __call__(self, host: str, timeout: float) -> _Connection:
+    def __call__(self, scheme: str, host: str, timeout: float) -> _Connection:
+        self.schemes.append(scheme)
         self.hosts.append((host, timeout))
         return _Connection()
 

@@ -11,11 +11,12 @@ from typing import Any
 from lab_commons.supervise.alert import Transport
 from lab_commons.supervise.component import CheckContext
 from lab_commons.supervise.components import COMPONENTS
-from lab_commons.supervise.components.health import Heartbeat, HttpHealth, ShellProbe, fetch_json
+from lab_commons.supervise.components.health import Heartbeat, HttpHealth, ShellProbe
 from lab_commons.supervise.components.progress import ProgressTracker
 from lab_commons.supervise.components.resources import RAM_CRITICAL, DiskUsage, LogScanner, _one_process
 from lab_commons.supervise.process import SystemdProcessManager
 from lab_commons.supervise.process.base import Ran
+from lab_commons.supervise.transport import fetch_json
 from lab_commons.supervise.verdict import Severity
 
 _NOW = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
@@ -60,7 +61,7 @@ class _Connection(http.client.HTTPConnection):
 def _transport(status: int = 200, body: str = '{"status": "healthy"}') -> Transport:
     """Return a transport answering with one canned reply."""
 
-    def make(_host: str, _timeout: float) -> _Connection:
+    def make(_scheme: str, _host: str, _timeout: float) -> _Connection:
         return _Connection(status, body)
 
     return make
@@ -90,7 +91,7 @@ def _ctx(
     )
 
 
-def test_the_roster_is_the_seven_this_build_ships() -> None:
+def test_the_roster_is_what_this_build_ships() -> None:
     """A roster, not a directory walk: what runs is what the file names."""
     assert [component.name for component in COMPONENTS] == [
         'http_health',
@@ -100,6 +101,7 @@ def test_the_roster_is_the_seven_this_build_ships() -> None:
         'process_monitor',
         'log_scanner',
         'progress_tracker',
+        'deploy',
     ]
 
 
@@ -217,17 +219,17 @@ def test_disk_usage_measures_and_convicts_on_the_ceiling() -> None:
 
 def test_a_missing_process_is_an_anomaly() -> None:
     """The first thing anyone wants a supervisor to notice."""
-    found = {'python -m wdg_lab': (1, 120.0)}
-    assert _one_process({'name': 'wdg-lab', 'match': 'wdg_lab'}, found) == []
-    missing = _one_process({'name': 'wdg-lab', 'match': 'wdg_lab'}, {})
-    assert missing[0].kind == 'wdg-lab_missing'
+    found = {'python -m webapp': (1, 120.0)}
+    assert _one_process({'name': 'webapp', 'match': 'webapp'}, found) == []
+    missing = _one_process({'name': 'webapp', 'match': 'webapp'}, {})
+    assert missing[0].kind == 'webapp_missing'
 
 
 def test_a_process_past_its_memory_ceiling_is_an_anomaly() -> None:
     """The number that matters on a box where memory is the constraint."""
-    found = {'python -m wdg_lab': (1, 700.0)}
-    large = _one_process({'name': 'wdg-lab', 'match': 'wdg_lab', 'max_rss_mb': 400}, found)
-    assert large[0].kind == 'wdg-lab_large'
+    found = {'python -m webapp': (1, 700.0)}
+    large = _one_process({'name': 'webapp', 'match': 'webapp', 'max_rss_mb': 400}, found)
+    assert large[0].kind == 'webapp_large'
     assert '700MB' in large[0].message
 
 
@@ -296,7 +298,7 @@ def test_a_job_with_no_progress_file_claims_no_percentage(tmp_path: Path) -> Non
 def test_a_fetch_reports_an_unreachable_endpoint_without_raising() -> None:
     """An endpoint being down is the ordinary case this module exists to report."""
 
-    def refuse(_host: str, _timeout: float) -> _Connection:
+    def refuse(_scheme: str, _host: str, _timeout: float) -> _Connection:
         msg = 'connection refused'
         raise OSError(msg)
 

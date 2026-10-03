@@ -31,6 +31,8 @@ from lab_commons.file_io import read_toml
 
 __all__ = ['DEFAULTS', 'ENV_LEVEL', 'ENV_PREFIX', 'load_config']
 
+#: A LIST-VALUED KEY IS SET AS A COMMA-SEPARATED LIST, because that is the only way an
+#: environment variable can carry one.
 #: The prefix an override variable carries. A project that runs two supervisors sets a different
 #: one rather than sharing a namespace.
 ENV_PREFIX: Final = 'SUPERVISE_'
@@ -94,18 +96,26 @@ def _deep_merge(base: MutableMapping[str, Any], override: Mapping[str, Any]) -> 
     return base
 
 
-def _cast(text: str) -> object:
-    """Coerce an environment string to the type it plainly spells.
+def _cast(text: str, like: object = None) -> object:
+    """Coerce an environment string to the type the default at that key already has.
+
+    A LIST IS SPLIT ON COMMAS, and that is not a convenience: an environment variable can only hold
+    a string, so without this a list-valued key can never be set from one. ``recipients`` would
+    arrive as the string ``"a@x, b@y"`` and the mail path -- which joins it -- would iterate its
+    CHARACTERS and address the message to ``a, @, x, ...``. A value that looks set and is garbage is
+    worse than one that is missing, because nothing reports it.
 
     Args:
         text: the raw value.
+        like: the default at this key, whose type decides the reading. ``None`` when the key is new.
 
     Returns:
-        A bool for ``true``/``false``, an int or float when the text is exactly one, and the text
-        otherwise -- so ``SUPERVISE_ALERTS__EMAIL__ENABLED=false`` reads as a bool without a
-        separate spelling table.
+        A list when the default is one, a bool for ``true``/``false``, an int or float when the text
+        is exactly one, and the text otherwise.
 
     """
+    if isinstance(like, list):
+        return [piece.strip() for piece in text.split(',') if piece.strip()]
     lowered = text.strip().lower()
     if lowered in ('true', 'false'):
         return lowered == 'true'
@@ -144,13 +154,15 @@ def _env_override(config: MutableMapping[str, Any], environ: Mapping[str, str], 
         if not parts:
             continue
         node: MutableMapping[str, Any] = config
+        default: Any = DEFAULTS
         for part in parts[:-1]:
             child = node.get(part)
             if not isinstance(child, MutableMapping):
                 child = {}
                 node[part] = child
             node = child
-        node[parts[-1]] = _cast(raw)
+            default = default.get(part, {}) if isinstance(default, Mapping) else {}
+        node[parts[-1]] = _cast(raw, default.get(parts[-1]) if isinstance(default, Mapping) else None)
 
 
 def load_config(path: Path, *, environ: Mapping[str, str] | None = None, prefix: str = ENV_PREFIX) -> dict[str, Any]:
@@ -222,6 +234,13 @@ def _validate(config: Mapping[str, Any]) -> None:
     telegram = config.get('alerts', {}).get('telegram', {})
     if telegram.get('enabled') and not (telegram.get('token') and telegram.get('chat')):
         msg = 'alerts.telegram is enabled but is missing its token or its chat'
+        raise ValueError(msg)
+    webhook = config.get('alerts', {}).get('webhook', {})
+    if webhook.get('enabled') and not str(webhook.get('url', '')).startswith('https://'):
+        msg = (
+            'alerts.webhook is enabled over a URL that is not https; its configured headers carry '
+            'a secret and the channel will not send them in clear'
+        )
         raise ValueError(msg)
     interval = config.get('cycle', {}).get('interval', 0)
     if not isinstance(interval, int) or interval <= 0:

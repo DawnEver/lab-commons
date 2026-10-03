@@ -43,9 +43,9 @@ def test_is_active_reads_the_exit_status() -> None:
     """`systemctl is-active` answers in its status, not in its text."""
     calls: list[tuple[list[str], int, str | None]] = []
     manager = SystemdProcessManager(runner=_recorder(calls, code=0))
-    assert manager.is_active('wdg-lab') is True
-    assert calls[0][0] == ['systemctl', 'is-active', 'wdg-lab']
-    assert SystemdProcessManager(runner=_recorder(calls, code=3)).is_active('wdg-lab') is False
+    assert manager.is_active('webapp') is True
+    assert calls[0][0] == ['systemctl', 'is-active', 'webapp']
+    assert SystemdProcessManager(runner=_recorder(calls, code=3)).is_active('webapp') is False
 
 
 @pytest.mark.parametrize('verb', ['start', 'stop', 'restart'])
@@ -54,13 +54,13 @@ def test_lifecycle_verbs_are_one_command_each(verb: str) -> None:
     calls: list[tuple[list[str], int, str | None]] = []
     manager = SystemdProcessManager(runner=_recorder(calls))
     if verb == 'start':
-        result = manager.start('wdg-lab')
+        result = manager.start('webapp')
     elif verb == 'stop':
-        result = manager.stop('wdg-lab')
+        result = manager.stop('webapp')
     else:
-        result = manager.restart('wdg-lab')
+        result = manager.restart('webapp')
     assert result.ok
-    assert calls[0][0] == ['systemctl', verb, 'wdg-lab']
+    assert calls[0][0] == ['systemctl', verb, 'webapp']
 
 
 def test_a_capped_run_carries_its_ceiling_and_kills_inside_the_scope() -> None:

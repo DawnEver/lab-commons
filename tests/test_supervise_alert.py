@@ -53,14 +53,16 @@ class _FakeConnection(http.client.HTTPConnection):
 
 
 class _Recorder:
-    """A transport that hands out one connection and remembers the host it was asked for."""
+    """A transport that hands out one connection and remembers what it was asked for."""
 
     def __init__(self, status: int = 200) -> None:
         self.hosts: list[str] = []
+        self.schemes: list[str] = []
         self.connection = _FakeConnection(status)
 
-    def __call__(self, host: str, timeout: float) -> _FakeConnection:
-        """Record the host and hand back the connection."""
+    def __call__(self, scheme: str, host: str, timeout: float) -> _FakeConnection:
+        """Record the scheme and the host, then hand back the connection."""
+        self.schemes.append(scheme)
         self.hosts.append(host)
         return self.connection
 
@@ -137,12 +139,18 @@ def test_telegram_posts_to_the_chat_with_the_notice_rendered() -> None:
     assert 'disk full' in body.decode('utf-8')
 
 
-def test_a_webhook_strips_the_scheme_and_keeps_the_path() -> None:
-    """The transport takes a host; a config writes a URL. The seam is here, once."""
+def test_a_webhook_splits_its_url_and_keeps_the_scheme() -> None:
+    """The transport takes a scheme AND a host; a config writes a URL. The seam is here, once.
+
+    The predecessor dropped the scheme here -- it stripped ``https://`` and ``http://`` and handed
+    the transport a bare host, which is why the transport had to guess. Guessing HTTPS is right
+    for a channel carrying a token and wrong for every endpoint that is not.
+    """
     recorder = _Recorder()
     alerts = {'webhook': {'enabled': True, 'url': 'https://hooks.example.org/abc/def'}}
     _notifier(alerts, recorder).send(Notice(subject='s', body='b'))
     assert recorder.hosts == ['hooks.example.org']
+    assert recorder.schemes == ['https']
     assert recorder.connection.sent[0][1] == '/abc/def'
 
 
@@ -214,7 +222,7 @@ def test_a_failing_channel_does_not_silence_the_others(monkeypatch: pytest.Monke
 def test_a_transport_that_cannot_connect_reports_rather_than_raises() -> None:
     """An alert that blocks is worse than an alert that fails: the cycle it holds is the retry."""
 
-    def explode(_host: str, _timeout: float) -> NoReturn:
+    def explode(_scheme: str, _host: str, _timeout: float) -> NoReturn:
         raise OSError(113, 'no route to host')
 
     alerts = {'webhook': {'enabled': True, 'url': 'https://h.example.org/x'}}

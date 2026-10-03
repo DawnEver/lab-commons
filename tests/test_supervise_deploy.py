@@ -109,7 +109,7 @@ def _transport(status: int = 200, body: str = '{"status": "healthy", "commit": "
         def close(self) -> None:
             return None
 
-    def make(_host: str, _timeout: float) -> _Connection:
+    def make(_scheme: str, _host: str, _timeout: float) -> _Connection:
         return _Connection()
 
     return make
@@ -119,7 +119,7 @@ def _plan(**overrides: object) -> Plan:
     base: dict[str, Any] = {
         'repositories': {'main': '/srv/target'},
         'main': 'main',
-        'unit': 'wdg-lab',
+        'unit': 'webapp',
         'health': 'https://x/health/',
         'health_timeout': 1,
         'install': 'make install-web',
@@ -138,7 +138,7 @@ def _plan_config(**overrides: object) -> dict[str, Any]:
     config: dict[str, Any] = {
         'repositories': {'main': '/srv/target'},
         'main': 'main',
-        'unit': 'wdg-lab',
+        'unit': 'webapp',
         'health': 'https://x/health/',
         'install': 'make install-web',
         'run': '{python} -m app --port {port}',
@@ -213,7 +213,7 @@ def test_activation_fast_forwards_then_installs_then_restarts() -> None:
     """Three steps, in that order: a restart before the install serves the old environment."""
     manager = _Scripted()
     assert activate(_plan(), _ctx(manager), {'main': 'abc123'}).ok is True
-    assert manager.restarts == ['wdg-lab']
+    assert manager.restarts == ['webapp']
     assert any('make install-web' in one for one in manager.ran)
 
 

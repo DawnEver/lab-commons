@@ -39,9 +39,9 @@ def test_the_environment_wins_over_the_file(tmp_path: Path) -> None:
 
 def test_an_override_builds_a_nested_key_path(tmp_path: Path) -> None:
     """A double underscore separates the levels, so a deep key needs no special syntax."""
-    environ = {'SUPERVISE_ALERTS__EMAIL__RECIPIENTS': 'ops@example.org'}
+    environ = {'SUPERVISE_ALERTS__EMAIL__SUBJECT_PREFIX': '[wdg] '}
     config = load_config(tmp_path / 'absent.toml', environ=environ)
-    assert config['alerts']['email']['recipients'] == 'ops@example.org'
+    assert config['alerts']['email']['subject_prefix'] == '[wdg] '
 
 
 def test_an_override_addresses_a_key_that_contains_an_underscore(tmp_path: Path) -> None:
@@ -61,12 +61,30 @@ def test_an_override_is_cast_to_the_type_it_spells(tmp_path: Path) -> None:
     environ = {
         'SUPERVISE_ALERTS__EMAIL__ENABLED': 'false',
         'SUPERVISE_CYCLE__CHECK_TIMEOUT': '45',
-        'SUPERVISE_TARGET__NAME': 'wdg-lab',
+        'SUPERVISE_TARGET__NAME': 'webapp',
     }
     config = load_config(tmp_path / 'absent.toml', environ=environ)
     assert config['alerts']['email']['enabled'] is False
     assert config['cycle']['check_timeout'] == 45
-    assert config['target']['name'] == 'wdg-lab'
+    assert config['target']['name'] == 'webapp'
+
+
+def test_a_list_valued_key_is_set_as_a_comma_separated_list(tmp_path: Path) -> None:
+    """A list-valued key is split, because an environment variable can only hold a string.
+
+    THE REGRESSION: without the split, `recipients` arrives as one string and the mail path, which
+    joins it, addresses the message to its CHARACTERS.
+    """
+    environ = {'SUPERVISE_ALERTS__EMAIL__RECIPIENTS': 'a@example.org, b@example.org'}
+    config = load_config(tmp_path / 'absent.toml', environ=environ)
+    assert config['alerts']['email']['recipients'] == ['a@example.org', 'b@example.org']
+
+
+def test_a_single_recipient_is_still_a_list(tmp_path: Path) -> None:
+    """One address is the common case and must not become a string that iterates into letters."""
+    environ = {'SUPERVISE_ALERTS__EMAIL__RECIPIENTS': 'only@example.org'}
+    config = load_config(tmp_path / 'absent.toml', environ=environ)
+    assert config['alerts']['email']['recipients'] == ['only@example.org']
 
 
 def test_a_variable_without_the_prefix_is_ignored(tmp_path: Path) -> None:
@@ -121,6 +139,30 @@ def test_a_telegram_channel_missing_its_chat_is_refused(tmp_path: Path) -> None:
     path = _write(tmp_path, "[alerts.telegram]\nenabled = true\ntoken = 'x'\n")
     with pytest.raises(ValueError, match='token or its chat'):
         load_config(path, environ={})
+
+
+def test_a_webhook_on_plain_http_is_refused(tmp_path: Path) -> None:
+    """A URL the channel will always refuse must not load as though it were configured.
+
+    The transport refuses plain HTTP because a webhook's configured headers carry a secret. Left
+    to the send path, that refusal would arrive as a failed delivery on the first anomaly -- a
+    config that reads as set and does nothing. Refused here, it names itself.
+    """
+    path = _write(tmp_path, "[alerts.webhook]\nenabled = true\nurl = 'http://hooks.example.org/x'\n")
+    with pytest.raises(ValueError, match='not https'):
+        load_config(path, environ={})
+
+
+def test_a_webhook_over_https_is_accepted(tmp_path: Path) -> None:
+    """Refusing plain HTTP must not refuse the case the channel exists for."""
+    path = _write(tmp_path, "[alerts.webhook]\nenabled = true\nurl = 'https://hooks.example.org/x'\n")
+    assert load_config(path, environ={})['alerts']['webhook']['enabled'] is True
+
+
+def test_a_disabled_webhook_is_not_validated(tmp_path: Path) -> None:
+    """A channel nobody turned on is allowed to be half-written."""
+    path = _write(tmp_path, "[alerts.webhook]\nenabled = false\nurl = 'http://hooks.example.org/x'\n")
+    assert load_config(path, environ={})['alerts']['webhook']['enabled'] is False
 
 
 @pytest.mark.parametrize('interval', ['0', '-5'])
