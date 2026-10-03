@@ -13,12 +13,14 @@ assertable without a systemd on the machine running the test.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final
 
+from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process.base import Ran
 
 __all__ = ['OUTPUT_CAP', 'Runner', 'SystemdProcessManager', 'subprocess_runner']
@@ -57,9 +59,20 @@ def subprocess_runner(argv: list[str], timeout: int, cwd: str | None) -> Ran:
     # A capped prefix is what every caller wants anyway: `Ran.detail` keeps 200 characters for a
     # log line, and the numeric probes parse a leading token. Nothing reads the middle of a build
     # log. The full output still lands on disk, bounded by the command's own timeout.
+    #
+    # AND THE CHILD DOES NOT GET THE MANAGER'S NOTIFY SOCKET. Every fork the supervisor makes goes
+    # through here -- the probes, the fetches, the candidate build, `systemd-run` itself -- and every
+    # one of them would otherwise inherit `$NOTIFY_SOCKET` and be able to speak AS THE SUPERVISOR.
+    # Measured on the host on 2026-10-03, the moment the watchdog went live: notification messages
+    # arriving from CHILD pids, rejected only because `NotifyAccess=main` is the default. Widen that
+    # to `all` -- the permissive-looking setting -- and a subprocess would satisfy the check-in that
+    # exists to prove THE DAEMON is still working, which is not a watchdog. Removing the variable is
+    # the one-place fix for the whole class, and it does not depend on knowing which child it was:
+    # the journal names a pid, and the pid is gone by the time anybody reads it.
+    environment = {key: value for key, value in os.environ.items() if key != NOTIFY_SOCKET}
     try:
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-            done = subprocess.run(argv, stdout=out, stderr=err, timeout=timeout, cwd=cwd, check=False)
+            done = subprocess.run(argv, stdout=out, stderr=err, timeout=timeout, cwd=cwd, check=False, env=environment)
             out.seek(0)
             err.seek(0)
             kept_out = out.read(OUTPUT_CAP).decode('utf-8', 'replace')

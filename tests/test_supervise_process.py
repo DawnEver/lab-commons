@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process import MANAGERS, SystemdProcessManager, manager_for, subprocess_runner
 from lab_commons.supervise.process.base import Ran
 from lab_commons.supervise.process.systemd import OUTPUT_CAP, Runner
@@ -90,6 +91,27 @@ def test_a_command_that_cannot_be_run_reports_rather_than_raises() -> None:
     result = subprocess_runner(['definitely-not-a-binary-xyz'], 30, None)
     assert result.ok is False
     assert 'could not run' in result.err
+
+
+def test_a_child_does_not_inherit_the_managers_notify_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SUBPROCESS MUST NOT BE ABLE TO SPEAK AS THE SUPERVISOR.
+
+    Every fork goes through `subprocess_runner`, and every one would otherwise inherit
+    `$NOTIFY_SOCKET` -- measured on the host the moment the watchdog went live, as notification
+    messages arriving from CHILD pids. `NotifyAccess=main` is the only reason those were harmless,
+    and widening it to `all` would let a subprocess satisfy the check-in whose whole job is to prove
+    the DAEMON is still working. The class goes by removing the variable here, in the one place that
+    owns every fork -- rather than by naming an offender the journal cannot name either, since it
+    records a pid and the pid is gone before anybody reads it.
+    """
+    monkeypatch.setenv(NOTIFY_SOCKET, '/run/systemd/notify')
+    ran = subprocess_runner(
+        [sys.executable, '-c', 'import os; print(os.environ.get("NOTIFY_SOCKET", "absent"))'],
+        30,
+        None,
+    )
+    assert ran.ok
+    assert ran.out.strip() == 'absent', "a child could have notified on the supervisor's behalf"
 
 
 def test_a_silent_failure_still_says_something() -> None:
