@@ -18,19 +18,15 @@ NOTHING HERE RE-IMPLEMENTS THE KIT. Every assertion below is either one of the s
 :mod:`lab_commons.dev.hook_install`. This module supplies only what is a fact about THIS repo: the
 root, the name, the delta table, the command that re-renders, and which stages this checkout installs.
 
-THE COMPLETENESS ARM IS DELIBERATELY ABSENT and saying so is the point. ``assert_every_base_is_
-accounted_for`` demands a Delta for all three kit bases; this repo has adopted TWO as of 2026-09-18,
-`Makefile` having joined this one. `.gitignore` is an open SPLITS row in the config census with its
-own evidence, so calling that arm here would make this suite green on a completeness that has not
-happened, and leaving it out silently would be worse. The last test in this module is what holds the
-absence; it reds on adoption, and it already did once.
+THE COMPLETENESS ARM LIVES IN ``test_the_kit_renders_its_own_gitignore.py`` since 2026-10-03, when
+`.gitignore` -- the last of the three kit bases -- was adopted here. This module held the absence as a
+named row until then; it reddened on the adoption, as designed, and the row went with it.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from _famconfig_delta import DELTAS, INSTALLED_STAGES, PRECOMMIT, PRECOMMIT_DELTA, PRECOMMIT_HOOK_FLOOR, REPO
 
 from lab_commons.dev.famconfig import HOOK_ID_CORE, RENDERED, artefact_base
@@ -162,18 +158,3 @@ def test_the_base_this_repo_adopted_is_still_the_family_one() -> None:
     assert len(HOOK_ID_CORE) == PRECOMMIT_HOOK_FLOOR, 'the family hook core changed size; re-measure the floor'
     missing = [hook_id for hook_id in HOOK_ID_CORE if not any(f'- id: {hook_id}' in line for line in base.lines)]
     assert missing == [], f'the base no longer renders {missing}, so every id assertion above got thinner'
-
-
-@pytest.mark.parametrize('artefact', ['.gitignore'])
-def test_the_unadopted_base_is_named_rather_than_silently_missing(artefact: str) -> None:
-    """The absence is DECLARED. If it is adopted, this reds and the completeness arm goes in.
-
-    IT HELD TWO ROWS UNTIL 2026-09-18 and `Makefile` came off it by being ADOPTED, which is the
-    ratchet working rather than a row being dropped: this test reddened on the adoption commit and
-    `test_the_kit_meets_its_own_makefile_contract.py` is what replaced it. One row is left.
-    """
-    assert artefact not in DELTAS, (
-        f'{artefact} now has a delta here, so this repo has adopted it. Add '
-        f'`assert_every_base_is_accounted_for` to this module and delete this row -- that arm is the '
-        f'one checking the kit bases and this repo declarations are one set, exactly.'
-    )
