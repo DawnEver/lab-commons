@@ -12,7 +12,7 @@ import pytest
 from lab_commons.resources import Broker, Exhausted
 from lab_commons.supervise.alert import Notifier
 from lab_commons.supervise.component import ActionContext, CheckContext, Component, Handler, Registry
-from lab_commons.supervise.loop import CycleResult, run_cycle
+from lab_commons.supervise.loop import UNCONFIGURED, CycleResult, run_cycle
 from lab_commons.supervise.process import SystemdProcessManager
 from lab_commons.supervise.process.base import Ran
 from lab_commons.supervise.state import StateStore
@@ -103,7 +103,7 @@ class _Reply:
 
     status = 200
 
-    def read(self) -> bytes:
+    def read(self, amt: int | None = None) -> bytes:
         """Return the body."""
         return b'ok'
 
@@ -153,7 +153,15 @@ def _registry(*components: Component) -> Registry:
 def _config(**cycle: object) -> dict[str, Any]:
     base: dict[str, Any] = {'interval': 300, 'check_timeout': 30}
     base.update(cycle)
-    return {'target': {'name': 'unit-test'}, 'cycle': base, 'alerts': {}, 'components': {}}
+    # A CONFIGURED SUPERVISOR DECLARES WHAT IT WATCHES, which is also what makes the
+    # `unconfigured` refusal meaningful: a config with no sections at all is now the
+    # thing that refusal is about, and this harness describes the ordinary case.
+    return {
+        'target': {'name': 'unit-test'},
+        'cycle': base,
+        'alerts': {},
+        'components': {'probe': {}, 'deployer': {}, 'broken': {}, 'hanging': {}},
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -178,6 +186,32 @@ def _run(registry: Registry, tmp_path: Path, config: dict[str, Any] | None = Non
         clock=_CLOCK,
         **kwargs,
     )
+
+
+def test_a_config_with_no_component_sections_is_not_healthy(tmp_path: Path) -> None:
+    """THE REGRESSION, and the guard against it had NO TEST AT ALL, which is why it was dead code.
+
+    `Registry.enabled()` is default-ON for every registered component, so the arm refusing a run
+    with nothing enabled was reachable only by a config that explicitly disabled all eight -- an
+    arrangement nobody writes. What actually happens is a config with NO sections: a missing file,
+    an empty one, or a header typed with the wrong name. Eight components then run with nothing to
+    check, each reports clean because there is nothing for it to find wrong, and the cycle comes
+    back HEALTHY over a supervisor watching nothing at all.
+    """
+    config = _config()
+    config['components'] = {}
+    result = _run(_registry(_Probe()), tmp_path, config)
+    assert result.status != 'healthy'
+    assert [one.kind for one in result.anomalies] == [UNCONFIGURED]
+
+
+def test_a_config_that_disables_every_component_is_not_healthy(tmp_path: Path) -> None:
+    """The arrangement the guard always covered: sections that all say `enabled = false`."""
+    config = _config()
+    config['components'] = {'probe': {'enabled': False}}
+    result = _run(_registry(_Probe()), tmp_path, config)
+    assert result.status != 'healthy'
+    assert [one.kind for one in result.anomalies] == [UNCONFIGURED]
 
 
 def test_a_quiet_cycle_is_healthy_and_records_when(tmp_path: Path) -> None:

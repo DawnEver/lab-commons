@@ -168,6 +168,44 @@ def _check_one(
         pool.shutdown(wait=False)
 
 
+def _is_enabled(sections: Mapping[str, Any], name: str) -> bool:
+    """Return whether the component *name* is on, from the configuration alone.
+
+    Default-ON, which is deliberate: a target that installed a supervisor wants its probes running,
+    and an explicit disable is one line. The whole decision is one line here so that the loop and
+    the registry cannot answer it differently.
+
+    Args:
+        sections: the ``components`` table.
+        name: the component's name.
+
+    Returns:
+        Whether it should run.
+
+    """
+    section = sections.get(name, {})
+    return bool(section.get('enabled', True)) if isinstance(section, Mapping) else True
+
+
+def _unconfigured(message: str) -> Anomaly:
+    """Return the anomaly that says a supervisor is watching nothing.
+
+    Args:
+        message: which arrangement produced it -- no sections at all, or all of them disabled.
+
+    Returns:
+        The anomaly.
+
+    """
+    return Anomaly(
+        kind=UNCONFIGURED,
+        severity=Severity.CRITICAL,
+        message=message,
+        source=f'supervise.{UNCONFIGURED}',
+        signature='unconfigured',
+    )
+
+
 def _gather(
     registry: Registry,
     *,
@@ -195,24 +233,33 @@ def _gather(
     metrics: dict[str, float] = {}
     anomalies: list[Anomaly] = []
     completions: list[Completion] = []
-    enabled = registry.enabled()
+    sections = config.get('components', {})
+    if not sections:
+        # A SCAN THAT READ NOTHING IS NOT A CLEAN SCAN, and this arm was unreachable.
+        #
+        # `Registry.enabled()` is default-ON for every REGISTERED component -- deliberately, so a
+        # target that installed a supervisor gets its probes running without listing them. The
+        # consequence is that a config with no component sections leaves eight components enabled
+        # with nothing to check: `http_health` has no endpoints, `shell_probe` no probes, `deploy`
+        # no repositories, and each of them reports clean because there is nothing for it to find
+        # wrong. The cycle came back healthy over a supervisor watching nothing at all.
+        #
+        # So the refusal the config module documents -- "the loop refuses to call a run with no
+        # components enabled healthy" -- tested the one arrangement nobody reaches: a config that
+        # explicitly disables all eight. This is the arrangement that happens, and it is what a
+        # missing config file, an empty one, or a section header typed with the wrong name all
+        # produce.
+        nothing = 'no component section is configured, so nothing is being watched'
+        return (metrics, [_unconfigured(nothing)], completions)
+    # ENABLEMENT IS READ FROM THE CONFIG THIS RUN WAS HANDED, not from the registry's own copy of
+    # it. `Registry.enabled()` reads `_configs`, which only `Registry.configure` fills, so the loop
+    # and the registry each held a version of the same fact and agreed only because the CLI happens
+    # to call `configure` with the same mapping. Two sources for one fact is the arrangement this
+    # family refuses everywhere else, and it is invisible precisely until they disagree.
+    enabled = [component for name, component in registry.components.items() if _is_enabled(sections, name)]
     if not enabled:
-        # A SCAN THAT READ NOTHING IS NOT A CLEAN SCAN. A supervisor with no components configured
-        # would otherwise report `healthy` forever while watching nothing at all -- the loudest
-        # possible way for this to be wrong, and the quietest to notice.
-        return (
-            metrics,
-            [
-                Anomaly(
-                    kind=UNCONFIGURED,
-                    severity=Severity.CRITICAL,
-                    message='no components are enabled, so nothing is being watched',
-                    source=f'supervise.{UNCONFIGURED}',
-                    signature='unconfigured',
-                )
-            ],
-            completions,
-        )
+        all_off = 'every configured component is disabled, so nothing is being watched'
+        return (metrics, [_unconfigured(all_off)], completions)
     for component in enabled:
         result = _check_one(
             component_name=component.name,

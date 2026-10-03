@@ -50,7 +50,12 @@ def _manager() -> SystemdProcessManager:
 def _loop(tmp_path: Path, probe: Component, *, broker: Broker | None = None) -> Loop:
     registry = Registry()
     registry.register(probe)
-    config = {'target': {'name': 'unit-test'}, 'cycle': {'interval': 300, 'check_timeout': 30}, 'alerts': {}}
+    config = {
+        'target': {'name': 'unit-test'},
+        'cycle': {'interval': 300, 'check_timeout': 30},
+        'alerts': {},
+        'components': {probe.name: {}},
+    }
     return Loop(
         registry=registry,
         store=StateStore(tmp_path / 'state.json'),
