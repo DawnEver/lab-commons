@@ -187,8 +187,23 @@ class ShellProbe(Component):
 
         """
         name = str(probe.get('name', 'probe'))
+        command = str(probe.get('command', '')).strip()
+        if not command:
+            # A PROBE WITH NO COMMAND MEASURED NOTHING, and it used to run `true`. That exits zero
+            # with no output, `_as_number('')` reads 0.0, and no threshold is breached -- so a
+            # check whose `command` key was misspelled reported a passing value forever. The plan
+            # refuses an incomplete deploy plan for exactly this reason; a probe is the same shape
+            # one level down.
+            return [
+                Anomaly(
+                    kind=f'{name}_unconfigured',
+                    severity=Severity.WARNING,
+                    message=f'{name} has no command, so it measures nothing',
+                    signature=f'{name}:no-command',
+                )
+            ]
         ran = ctx.manager.run_capped(
-            ['sh', '-c', str(probe.get('command', 'true'))],
+            ['sh', '-c', command],
             memory_max=str(ctx.shared.get('cycle', {}).get('command_ceiling', '400M')),
             timeout=int(probe.get('timeout', 10)),
         )
@@ -320,10 +335,27 @@ class Heartbeat(Component):
         limit = float(ctx.config.get('max_age', 900))
         last = str(ctx.timeline.get('last_cycle', ''))
         result = CheckResult()
-        if not last:
-            return result
-        seconds = _age(last, str(ctx.timeline.get('now', '')))
+        seconds = _age(last, str(ctx.timeline.get('now', ''))) if last else None
         if seconds is None:
+            # A WATCHDOG THAT CANNOT SEE THE CLOCK IS NOT A WATCHDOG THAT SEES NOTHING WRONG.
+            #
+            # This is the one component whose job is to notice that the supervisor stopped, and it
+            # answered "I could not measure" with silence -- indistinguishable from "the supervisor
+            # is fine". `last_cycle` is empty on a state that was never written (missing file,
+            # corrupt file, a schema version this build does not know -- see `StateStore.read`),
+            # and an unparseable stamp gives the same None.
+            #
+            # Every other probe in this package treats unmeasurable as an anomaly: an endpoint that
+            # answers nothing is CRITICAL, a disk that cannot be read is `disk_check_failed`, a
+            # process table with no psutil says so. This one was the outlier.
+            result.anomalies.append(
+                Anomaly(
+                    kind='heartbeat_unmeasurable',
+                    severity=Severity.WARNING,
+                    message='no cycle has been recorded, so the supervisor cannot tell whether it is still running',
+                    signature='supervisor:unmeasurable',
+                )
+            )
             return result
         result.metrics['cycle_age'] = seconds
         if seconds > limit:

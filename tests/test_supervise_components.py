@@ -6,11 +6,14 @@ import http.client
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from lab_commons.supervise.alert import Transport
 from lab_commons.supervise.component import CheckContext
-from lab_commons.supervise.components import COMPONENTS
+from lab_commons.supervise.components import COMPONENTS, resources
 from lab_commons.supervise.components.health import Heartbeat, HttpHealth, ShellProbe
 from lab_commons.supervise.components.progress import ProgressTracker
 from lab_commons.supervise.components.resources import RAM_CRITICAL, DiskUsage, LogScanner, _one_process
@@ -30,7 +33,7 @@ class _Reply:
         self.status = status
         self._body = body
 
-    def read(self) -> bytes:
+    def read(self, amt: int | None = None) -> bytes:
         """Return the body."""
         return self._body.encode('utf-8')
 
@@ -202,9 +205,21 @@ def test_a_supervisor_that_stopped_cycling_is_reported() -> None:
     assert result.anomalies[0].severity is Severity.WARNING
 
 
-def test_a_heartbeat_with_no_cycle_yet_reports_nothing() -> None:
-    """A first run has no history, and inventing an anomaly from it would page on every install."""
-    assert Heartbeat().check(_ctx({'max_age': 60}, timeline={'now': _NOW.isoformat()})).anomalies == []
+def test_a_heartbeat_that_cannot_measure_says_so() -> None:
+    """THE REGRESSION. A watchdog that cannot see the clock is not a watchdog with nothing to say.
+
+    This is the one component whose job is noticing that the supervisor stopped, and it answered
+    "no cycle recorded" with silence -- which is exactly what it says when the supervisor is
+    perfectly healthy. Every other probe here treats unmeasurable as an anomaly: an endpoint that
+    answers nothing is CRITICAL, an unreadable disk is `disk_check_failed`, a process table without
+    psutil says so. The state carries no `last_cycle` on a first run AND whenever `StateStore.read`
+    discards a file it could not use, and that second case is the one that matters.
+
+    A WARNING rather than a page, so a fresh install reports it once and it clears by itself.
+    """
+    result = Heartbeat().check(_ctx({'max_age': 60}, timeline={'now': _NOW.isoformat()}))
+    assert [one.kind for one in result.anomalies] == ['heartbeat_unmeasurable']
+    assert result.anomalies[0].severity is Severity.WARNING
 
 
 def test_disk_usage_measures_and_convicts_on_the_ceiling() -> None:
@@ -305,3 +320,27 @@ def test_a_fetch_reports_an_unreachable_endpoint_without_raising() -> None:
     status, body, detail = fetch_json(refuse, 'https://x/health/', 5)
     assert (status, body) == (0, None)
     assert 'connection refused' in detail
+
+
+def test_a_log_that_cannot_be_read_is_not_a_clean_log(tmp_path: Path) -> None:
+    """THE REGRESSION. An unreadable file contributed zero lines and was still counted as scanned.
+
+    `_tail` answered `[]` both for "this file is empty" and for "this file could not be read", so a
+    log the scanner could not open -- permissions, an I/O error, or a DIRECTORY matching the glob --
+    made the scan report CLEAN. That is the one answer a scanner must never invent, and it is the
+    same conflation as `_remote`'s None: two different facts sharing one return value.
+    """
+    logs = tmp_path / 'logs'
+    (logs / 'a.log').mkdir(parents=True)  # a DIRECTORY that matches the glob
+    result = LogScanner().check(_ctx({'log_dir': str(logs), 'glob': '*.log'}))
+    assert [one.kind for one in result.anomalies] == ['logs_unreadable']
+    assert result.metrics['files_scanned'] == 0.0, 'an unreadable file was counted as read'
+
+
+def test_a_filesystem_reporting_no_size_is_not_an_empty_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`used / total` with a zero total is unanswerable, not 0% -- and 0% never convicts."""
+    report = SimpleNamespace(total=0, used=0, free=0)
+    monkeypatch.setattr(resources.shutil, 'disk_usage', lambda _path: report)
+    result = DiskUsage().check(_ctx({'paths': [{'path': '/', 'name': 'x'}]}))
+    assert 'disk_unmeasurable' in [one.kind for one in result.anomalies]
+    assert 'x_percent' not in result.metrics, 'a size nobody could read was reported as zero'

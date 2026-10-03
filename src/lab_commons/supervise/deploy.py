@@ -57,6 +57,9 @@ class Plan:
         install: the command that builds the target's environment, run in the candidate.
         venv: the command that GIVES the candidate an environment to install into, run in the
             candidate before ``install``. Empty for a target whose install makes its own.
+        provision: the command that puts the deployment's OWN DEFINITION on the host -- unit files
+            and anything else the release ships that the host has to read -- run at ACTIVATION
+            only, after the fast-forward and before the restart. Empty for a target with none.
         prepare: the command that wires a candidate's DATA before it is started -- the config it
             reads and the library it serves. Without it a candidate would be started against an
             empty home, answer nothing, and be refused for the wrong reason.
@@ -75,6 +78,7 @@ class Plan:
     health_timeout: int
     install: str
     venv: str
+    provision: str
     prepare: str
     run: str
     probe: Sequence[str]
@@ -129,6 +133,7 @@ class Plan:
             health_timeout=int(config.get('health_timeout', 60)),
             install=str(config.get('install', '')),
             venv=str(config.get('venv', '')),
+            provision=str(config.get('provision', '')),
             prepare=str(config.get('prepare', '')),
             run=str(config.get('run', '')),
             probe=tuple(str(one) for one in config.get('probe', [])),
@@ -353,6 +358,25 @@ def activate(plan: Plan, ctx: ActionContext, commits: dict[str, str]) -> Outcome
         )
         if not installed.ok:
             return Outcome(ok=False, detail=f'reinstalling failed: {installed.detail()}')
+    if plan.provision:
+        # THE DEPLOYMENT'S OWN DEFINITION HAS TO ARRIVE WITH THE RELEASE, AND ONLY HERE.
+        #
+        # Installed by hand at cutover -- which is the divergence this deployment exists to remove:
+        # the units that ran were not necessarily the units in the commit, and a unit change in the
+        # repository silently did nothing until somebody noticed.
+        #
+        # ACTIVATION ONLY. `install` runs in the candidate preflight as well, and a provisioning
+        # command there would put a CANDIDATE's units on the host -- letting a release that is
+        # about to be refused change the machine that refused it. A candidate is a build in a
+        # scratch directory being asked whether it can start, and it may touch nothing outside it.
+        #
+        # After the fast-forward, so it installs this release's own files; before the restart, so
+        # the service comes back under the new definition rather than the previous one.
+        provisioned = ctx.manager.run_capped(
+            ['sh', '-c', plan.provision], memory_max=plan.ceiling, timeout=300, cwd=str(ctx.project)
+        )
+        if not provisioned.ok:
+            return Outcome(ok=False, detail=f'provisioning the host failed: {provisioned.detail()}')
     restarted = ctx.manager.restart(plan.unit)
     if not restarted.ok:
         return Outcome(ok=False, detail=f'restarting {plan.unit} failed: {restarted.detail()}')
@@ -407,7 +431,16 @@ def rollback(plan: Plan, ctx: ActionContext, snapshot: Snapshot, *, transport: T
         if not _git(plan, ctx, name, ['reset', '--hard', sha]).ok:
             return Outcome(ok=False, detail=f'{name}: could not reset to {sha[:8]}')
     if plan.install:
-        ctx.manager.run_capped(['sh', '-c', plan.install], memory_max=plan.ceiling, timeout=900, cwd=str(ctx.project))
+        # THE REINSTALL'S OUTCOME IS CHECKED HERE TOO. `activate` aborts on a failed install; this
+        # path ran the same command and threw the result away, so a rollback whose reinstall failed
+        # restarted anyway and was reported as verified if the endpoint came up reporting the right
+        # commit -- which it can do from the checkout alone, since /health/ reads the commit rather
+        # than the code that loaded.
+        reinstalled = ctx.manager.run_capped(
+            ['sh', '-c', plan.install], memory_max=plan.ceiling, timeout=900, cwd=str(ctx.project)
+        )
+        if not reinstalled.ok:
+            return Outcome(ok=False, detail=f'the rollback could not reinstall: {reinstalled.detail()}')
     restarted = ctx.manager.restart(plan.unit)
     if not restarted.ok:
         return Outcome(ok=False, detail=f'restarting {plan.unit} failed: {restarted.detail()}')

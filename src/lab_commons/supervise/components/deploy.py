@@ -110,7 +110,21 @@ class Deploy(Component):
             )
             return result
         baseline = known[-1] if known else _checked_out(ctx, plan)
-        if baseline is not None and wanted.key != baseline.key:
+        if baseline is None:
+            # `_checked_out` could not read a checkout, so `wanted` has nothing to be compared
+            # against and no release can be offered. Treated as a refusal rather than as "no
+            # difference", which is the same reading that made an unreadable REMOTE look like an
+            # up-to-date target one line above.
+            result.anomalies.append(
+                Anomaly(
+                    kind='checkout_unreadable',
+                    severity=Severity.WARNING,
+                    message='what the target is running could not be read, so no release can be compared',
+                    signature='checkout_unreadable',
+                )
+            )
+            return result
+        if wanted.key != baseline.key:
             result.anomalies.append(
                 Anomaly(
                     kind='release_available',
@@ -148,6 +162,8 @@ class Deploy(Component):
             # Nothing here can repair an unreadable remote, and that is the point of alerting on
             # it: the supervisor is blind and the operator is the only one who can say why.
             'remote_unreadable': [RemedyStep(action='notify', escalate_after=1)],
+            'checkout_unreadable': [RemedyStep(action='notify', escalate_after=1)],
+            'drift_unreadable': [RemedyStep(action='notify', escalate_after=1)],
         }
 
     def actions(self) -> Mapping[str, Action]:
@@ -341,7 +357,20 @@ def _drift(ctx: CheckContext | ActionContext, plan: Plan) -> list[Anomaly]:
     found: list[Anomaly] = []
     for name, path in plan.repositories.items():
         status = ctx.manager.run_capped(['git', '-C', path, 'status', '--porcelain'], memory_max='256M', timeout=60)
-        if status.ok and status.out.strip():
+        if not status.ok:
+            # A CHECKOUT THAT CANNOT BE ASKED IS NOT A CLEAN ONE. The same revision already reports
+            # an unreadable REMOTE outright; this is the other half of the same question, and a
+            # `git status` that fails -- a path that moved, an ownership refusal, git missing --
+            # used to read as "no drift".
+            found.append(
+                Anomaly(
+                    kind='drift_unreadable',
+                    severity=Severity.WARNING,
+                    message=f'{name} could not be asked whether it has uncommitted changes',
+                    signature=f'{name}:drift-unreadable',
+                )
+            )
+        elif status.out.strip():
             found.append(
                 Anomaly(
                     kind='drifted',

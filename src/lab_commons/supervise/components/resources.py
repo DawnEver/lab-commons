@@ -79,7 +79,21 @@ class DiskUsage(Component):
                     )
                 )
                 continue
-            percent = usage.used / usage.total * 100 if usage.total else 0.0
+            if not usage.total:
+                # A FILESYSTEM THAT REPORTS NO SIZE IS NOT AN EMPTY ONE. `used / total` with a zero
+                # total is not 0% full, it is unanswerable -- and answering it 0.0 is the reading
+                # that never convicts. The same distinction this loop already draws for an OSError
+                # a few lines up; zero is simply the other way a total can fail to be a number.
+                result.anomalies.append(
+                    Anomaly(
+                        kind='disk_unmeasurable',
+                        severity=Severity.WARNING,
+                        message=f'{name} reports no size, so how full it is cannot be said',
+                        signature=f'{name}:no-size',
+                    )
+                )
+                continue
+            percent = usage.used / usage.total * 100
             result.metrics[f'{name}_percent'] = round(percent, 1)
             result.metrics[f'{name}_free_gb'] = round(usage.free / 1024**3, 2)
             for label, severity in (('critical', Severity.CRITICAL), ('warning', Severity.WARNING)):
@@ -304,12 +318,31 @@ class LogScanner(Component):
         kept = newest[: int(ctx.config.get('max_files', 10))]
         tail = int(ctx.config.get('tail_lines', 5))
         hits: list[dict[str, str]] = []
+        unreadable: list[str] = []
         for path in kept:
-            for line in _tail(path, tail):
+            lines_read = _tail(path, tail)
+            if lines_read is None:
+                # A FILE THAT COULD NOT BE READ IS NOT A FILE WITH NOTHING IN IT. It used to
+                # contribute zero lines and still be counted in `files_scanned`, so a log the
+                # scanner could not open -- permissions, an I/O error, or a DIRECTORY matching
+                # `*.log` -- made the scan report CLEAN, which is the one answer it must never
+                # invent. `_tail` now answers None for "could not read" and [] for "empty".
+                unreadable.append(path.name)
+                continue
+            for line in lines_read:
                 keyword = next((pattern for pattern in patterns if pattern in line), '')
                 if keyword:
                     hits.append({'file': path.name, 'keyword': keyword, 'line': line[:LINE_KEPT]})
-        result.metrics['files_scanned'] = float(len(kept))
+        if unreadable:
+            result.anomalies.append(
+                Anomaly(
+                    kind='logs_unreadable',
+                    severity=Severity.WARNING,
+                    message=f'{len(unreadable)} log(s) could not be read: {", ".join(sorted(unreadable)[:3])}',
+                    signature=f'logs-unreadable:{"|".join(sorted(unreadable))[:80]}',
+                )
+            )
+        result.metrics['files_scanned'] = float(len(kept) - len(unreadable))
         result.metrics['error_count'] = float(len(hits))
         result.data['hits'] = hits
         result.data['status'] = 'CLEAN' if not hits else 'ERRORS'
@@ -343,19 +376,22 @@ def _modified(path: Path) -> float:
         return 0.0
 
 
-def _tail(path: Path, lines: int) -> list[str]:
+def _tail(path: Path, lines: int) -> list[str] | None:
     """Return the last *lines* lines of a file.
+
+    None AND [] ARE DIFFERENT ANSWERS. `None` is "this file could not be read"; `[]` is "this file
+    is empty". Collapsing them is what let an unreadable log be reported as a clean one.
 
     Args:
         path: the file.
         lines: how many to keep.
 
     Returns:
-        The lines, or an empty list when the file cannot be read.
+        The lines, or None when the file cannot be read.
 
     """
     try:
         text = path.read_text(encoding='utf-8', errors='replace')
     except OSError:
-        return []
+        return None
     return text.splitlines()[-lines:]
