@@ -20,7 +20,7 @@ class _FakeResponse:
         self.status = status
         self._body = body
 
-    def read(self) -> bytes:
+    def read(self, amt: int | None = None) -> bytes:
         """Return the body."""
         return self._body.encode('utf-8')
 
