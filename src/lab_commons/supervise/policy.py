@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from lab_commons.supervise.state import mark_notified, note_signature, read_anomaly
+from lab_commons.supervise.state import note_signature, read_anomaly
 
 __all__ = ['Decision', 'decide', 'now']
 
@@ -124,9 +124,9 @@ def decide(
     sightings = note_signature(state, source, signature)
 
     if moved or sightings == 1:
-        return _send(state, source, clock, sightings, 'new' if sightings == 1 and moved else 'the condition changed')
+        return _send(sightings, 'new' if sightings == 1 and moved else 'the condition changed')
     if escalate_after is not None and sightings >= escalate_after:
-        return _send(state, source, clock, sightings, f'unresolved for {sightings} cycles')
+        return _send(sightings, f'unresolved for {sightings} cycles')
     if sightings > write_off:
         return Decision(
             notify=False, reason=f'silent: the same condition has held for {sightings} cycles', sightings=sightings
@@ -134,16 +134,23 @@ def decide(
     elapsed = _elapsed_since(str(before.get('last_alert', '')), clock)
     if elapsed is not None and elapsed < cooldown:
         return Decision(notify=False, reason=f'cooldown: {int(cooldown - elapsed)}s left', sightings=sightings)
-    return _send(state, source, clock, sightings, f'still failing after {sightings} cycles')
+    return _send(sightings, f'still failing after {sightings} cycles')
 
 
-def _send(state: dict[str, Any], source: str, clock: datetime, sightings: int, reason: str) -> Decision:
-    """Record that a notice is going, and return the decision that says so.
+def _send(sightings: int, reason: str) -> Decision:
+    """Return the decision to send a notice.
+
+    IT DOES NOT RECORD THAT ONE WENT, AND THAT IS THE POINT. This used to write `last_alert` here,
+    before the notifier was called -- so a notice that every channel refused still left a timestamp
+    saying it had gone, and the cooldown brake measures from exactly that timestamp. One failed
+    delivery therefore suppressed its own retry, and the identical-sighting write-off then made the
+    silence permanent. The alerting outage was converted into silence by bookkeeping rather than by
+    any decision anybody made.
+
+    Deciding to send and having sent are different facts, and the caller is the only one that
+    knows the second. It records it.
 
     Args:
-        state: the run's state.
-        source: the loop-stamped key.
-        clock: the instant the notice is being sent.
         sightings: the consecutive count this decision was reached at.
         reason: why the notice is warranted.
 
@@ -151,5 +158,4 @@ def _send(state: dict[str, Any], source: str, clock: datetime, sightings: int, r
         An affirmative decision.
 
     """
-    mark_notified(state, source, clock.isoformat())
     return Decision(notify=True, reason=reason, sightings=sightings)

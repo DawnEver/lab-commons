@@ -36,6 +36,7 @@ from lab_commons.supervise.state import (
     StateStore,
     clear_anomaly,
     count_anomaly,
+    mark_notified,
     new_state,
     note_cycle,
     note_quiet,
@@ -263,7 +264,18 @@ def _notify(
         if not verdict.notify:
             continue
         notice = Notice(subject=f'{anomaly.source}: {anomaly.message}', body=anomaly.message, severity=anomaly.severity)
-        sent.extend(notifier.send(notice))
+        delivered = notifier.send(notice)
+        sent.extend(delivered)
+        # RECORDED ONLY IF SOMETHING TOOK IT, and this ordering is the point. The decision to send
+        # used to write `last_alert` itself, before the notifier ran -- so a notice every channel
+        # refused still carried a timestamp saying it had gone, and the cooldown brake measures from
+        # that timestamp. One failed delivery suppressed its own retry, and the write-off made the
+        # silence permanent: the channel outage became invisible by bookkeeping.
+        #
+        # An empty list means nothing was enabled, which is a configuration fact rather than a
+        # failure -- there was no channel to lose, so there is nothing to retry either.
+        if any(one.ok for one in delivered):
+            mark_notified(state, anomaly.source, clock.isoformat())
     return sent
 
 
