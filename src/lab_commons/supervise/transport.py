@@ -23,10 +23,25 @@ import json
 from collections.abc import Callable
 from typing import Final
 
-__all__ = ['REPLY_KEPT', 'Transport', 'fetch_json', 'https_only', 'scheme_transport', 'split_url']
+__all__ = ['BODY_CAP', 'REPLY_KEPT', 'Transport', 'fetch_json', 'https_only', 'scheme_transport', 'split_url']
 
 #: How much of a reply is kept for the anomaly message.
 REPLY_KEPT: Final = 200
+
+#: How much of a reply is READ, and it is not the same number as the one above because truncating
+#: what is stored does not bound what is allocated. `response.read()` with no argument reads to
+#: EOF, so an endpoint that answers with a large body -- a misconfigured one returning an HTML
+#: error page, or one that is simply not the API it was believed to be -- makes the SUPERVISOR
+#: allocate whatever that body is. On a 1.6 GB host the supervisor's whole job is to survive the
+#: service behaving badly, and the 2026-10-01 incident on this machine was exactly a process that
+#: took the box with it. Generous for a health payload and bounded regardless.
+BODY_CAP: Final = 64 * 1024
+
+#: The read is bounded in SIZE; a peer that dribbles one byte at a time defeats the socket timeout,
+#: which applies per operation rather than to the whole reply. Bounding the size bounds that case
+#: too -- a deliberate dribble is capped at :data:`BODY_CAP` bytes rather than running forever --
+#: at the cost of hours rather than seconds in the worst case. Recorded rather than solved:
+#: `http.client` offers no wall-clock deadline for a whole response.
 
 #: Make a connection from a scheme, a host and a timeout. The scheme is the first parameter
 #: because it is the one the transport cannot recover and the one that decides the class.
@@ -125,7 +140,7 @@ def fetch_json(transport: Transport, url: str, timeout: float) -> tuple[int, obj
         try:
             connection.request('GET', path, headers={'Accept': 'application/json'})
             response = connection.getresponse()
-            raw = response.read().decode('utf-8', 'replace')
+            raw = response.read(BODY_CAP).decode('utf-8', 'replace')
             try:
                 body: object = json.loads(raw)
             except ValueError:
