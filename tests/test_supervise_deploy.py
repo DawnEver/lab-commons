@@ -7,11 +7,11 @@ from typing import Any
 
 from lab_commons.supervise.alert import Transport
 from lab_commons.supervise.component import ActionContext, CheckContext, Registry
-from lab_commons.supervise.components.deploy import Deploy
-from lab_commons.supervise.deploy import Plan, activate, fetch, preflight, probe, verify
+from lab_commons.supervise.components.deploy import Deploy, _settle
+from lab_commons.supervise.deploy import Outcome, Plan, activate, fetch, preflight, probe, verify
 from lab_commons.supervise.deploy import deploy as run_deploy
 from lab_commons.supervise.process.base import Ran
-from lab_commons.supervise.release import Snapshot, history, record_success
+from lab_commons.supervise.release import Snapshot, failure_streak, history, record_success
 from lab_commons.supervise.verdict import Severity
 
 _PROJECT = Path('/srv/target')
@@ -24,7 +24,7 @@ class _Reply:
         self.status = status
         self._body = body
 
-    def read(self) -> bytes:
+    def read(self, amt: int | None = None) -> bytes:
         """Return the body."""
         return self._body.encode('utf-8')
 
@@ -242,6 +242,38 @@ def test_a_candidate_whose_environment_will_not_build_is_refused() -> None:
     assert manager.started == []
 
 
+def test_activation_provisions_the_host_between_the_install_and_the_restart() -> None:
+    """THE DEPLOYMENT'S OWN DEFINITION IS PART OF THE RELEASE, SO IT HAS TO ARRIVE WITH IT.
+
+    The units were installed by hand at cutover, which is the same divergence this deployment was
+    rebuilt to remove: the units that ran were not necessarily the units in the commit. A unit
+    change in the repository silently did nothing until somebody noticed.
+
+    Order matters twice over. Provisioning runs AFTER the fast-forward so it installs the release's
+    own unit files, and BEFORE the restart so the service comes back under the new definition.
+    """
+    manager = _Scripted()
+    plan = _plan(install='true', provision='install -m 644 deploy/x.service /etc/systemd/system/')
+    assert activate(plan, _ctx(manager), {'main': 'abc123'}).ok is True
+    steps = [index for index, one in enumerate(manager.ran) if one.endswith('true') or 'install -m 644' in one]
+    assert len(steps) == 2, manager.ran
+    assert 'install -m 644' in manager.ran[steps[1]], 'provisioning ran before the install'
+    assert manager.restarts == ['webapp']
+
+
+def test_a_candidate_is_never_provisioned() -> None:
+    """A CANDIDATE MUST NOT TOUCH THE HOST'S SYSTEMD.
+
+    It is a build in a scratch directory being asked whether it can start. Installing its unit
+    files, or anything else it ships, would let a release that is about to be refused change the
+    machine that refused it.
+    """
+    manager = _Scripted()
+    plan = _plan(install='true', probe=[], provision='install -m 644 deploy/x.service /etc/systemd/system/')
+    preflight(plan, _ctx(manager), {'main': 'abc123'}, transport=_transport(), port=7002)
+    assert not any('install -m 644' in one for one in manager.ran), manager.ran
+
+
 def test_a_plan_with_no_environment_step_still_installs() -> None:
     """The step is optional: a target whose install makes its own environment is unchanged."""
     manager = _Scripted()
@@ -392,6 +424,44 @@ def test_an_incomplete_plan_is_refused_rather_than_run() -> None:
     )
     assert outcome.ok is False
     assert 'incomplete' in outcome.detail
+
+
+def test_a_rolled_back_release_is_counted_as_a_failure_of_the_release_it_tried() -> None:
+    """THE REGRESSION, and it killed the circuit breaker through the rollback door.
+
+    When a release comes up wrong and the rollback works, the outcome's `commits` are the OLD
+    release -- so `_settle` took the success branch, and `record_success` CLEARS the failure
+    record. The release that failed was therefore never counted at all, and every earlier count
+    was wiped with it. A release could fail on every cycle forever and `release_failing` -- the
+    escalation that says "this has now failed five times" while still retrying -- could never fire.
+
+    `Outcome.tried` exists for exactly this and says so in its own docstring: "recording the old
+    release as the failure would make the circuit breaker count the wrong thing and never reach
+    its threshold." The intent was written down and never read.
+    """
+    state: dict[str, Any] = {}
+    ctx = _ctx(_Scripted(), _plan_config())
+    ctx.state = state
+    plan = Plan.from_config(_plan_config(), _PROJECT)
+    rolled_back = Outcome(ok=True, detail='rolled back', commits={'main': 'old12345'}, tried={'main': 'new12345'})
+    assert _settle(ctx, plan, rolled_back) is True, 'the target is serving something verified'
+    assert failure_streak(state, Snapshot(main='new12345', libs='', at='')) == 1
+
+
+def test_a_rollback_does_not_re_add_the_release_it_restored() -> None:
+    """A RESTORED RELEASE IS NOT A NEWLY VERIFIED ONE.
+
+    The release rolled back TO was already in the history -- it is where `previous` came from --
+    so re-recording it would move it to the end for no reason and restamp it as verified now.
+    """
+    state: dict[str, Any] = {}
+    record_success(state, Snapshot(main='old12345', libs='', at='2026-01-01T00:00:00+00:00'))
+    ctx = _ctx(_Scripted(), _plan_config())
+    ctx.state = state
+    plan = Plan.from_config(_plan_config(), _PROJECT)
+    rolled_back = Outcome(ok=True, detail='rolled back', commits={'main': 'old12345'}, tried={'main': 'new12345'})
+    _settle(ctx, plan, rolled_back)
+    assert [one.at for one in history(state)] == ['2026-01-01T00:00:00+00:00']
 
 
 def test_a_deploy_that_fails_records_the_release_it_tried() -> None:

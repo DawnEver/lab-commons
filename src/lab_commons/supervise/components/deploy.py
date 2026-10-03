@@ -195,7 +195,7 @@ class Deploy(Component):
             transport=self.transport or scheme_transport,
             port=int(ctx.config.get('candidate_port', DEFAULT_PORT)),
         )
-        return _settle(ctx, plan, outcome, commits=outcome.tried or {})
+        return _settle(ctx, plan, outcome)
 
     def _rollback(self, ctx: ActionContext) -> bool:
         """Put the target back at the newest verified snapshot.
@@ -214,31 +214,46 @@ class Deploy(Component):
         return run_rollback(plan, ctx, known[-1], transport=self.transport or scheme_transport).ok
 
 
-def _settle(ctx: ActionContext, plan: Plan, outcome: Outcome, *, commits: dict[str, str]) -> bool:
+def _settle(ctx: ActionContext, plan: Plan, outcome: Outcome) -> bool:
     """Record a deployment's outcome and say whether the target is serving.
+
+    THE OUTCOME IS THE ONLY SOURCE. It carries both releases -- what was TRIED and what ENDED UP
+    LIVE -- and they are the same thing only when the deploy worked. Taking the caller's word for
+    which one a failure belongs to is how the breaker was killed through the rollback door: the
+    two were the same parameter, so a rollback passed the restored release and the release that
+    had just failed was never counted.
 
     Args:
         ctx: the acting context.
         plan: the deployment's plan.
         outcome: what the sequence produced.
-        commits: the release that was being tried, which a failure is remembered by.
 
     Returns:
         True when the target is serving something verified.
 
     """
+    # A FAILURE WITH NO RELEASE TO BLAME IS NOT A RELEASE FAILURE, and recording one is worse than
+    # recording nothing. A fetch that fails has no commit set; `target_of({})` built a snapshot out
+    # of it anyway -- `main=''`, `libs=''`, key `'|'` -- so the state accumulated failures of a
+    # release that does not exist, `failure_streak` never counted them against anything, and a
+    # reader opening the file saw a release they could not name. Found as `"key": "|"` in this
+    # host's live state.
+    attempted = target_of(outcome.tried) if outcome.tried else None
     if outcome.commits is None:
-        # A FAILURE WITH NO RELEASE TO BLAME IS NOT A RELEASE FAILURE, and recording one is worse
-        # than recording nothing. A fetch that fails has no commit set; `target_of({})` built a
-        # snapshot out of it anyway -- `main=''`, `libs=''`, key `'|'` -- so the state accumulated
-        # failures of a release that does not exist, `failure_streak` never counted them against
-        # anything, and a reader opening the file saw a release they could not name. Found as
-        # `"key": "|"` in this host's live state.
-        if not commits:
-            return False
-        record_failure(ctx.state, target_of(commits), outcome.detail, tolerance=plan.tolerance)
+        if attempted is not None:
+            record_failure(ctx.state, attempted, outcome.detail, tolerance=plan.tolerance)
         return False
     verified = target_of(outcome.commits)
+    if attempted is not None and attempted.key != verified.key:
+        # A ROLLBACK: THE TARGET IS SERVING AGAIN AND THE RELEASE STILL FAILED.
+        #
+        # Both are true and only one of them is what the breaker counts. `record_success` would
+        # clear the failure record -- right when the release that just deployed is the one that
+        # worked, wrong here, because the release being recorded as good is the OLD one and the
+        # new one has to be counted. And the restored release is already in the history (it is
+        # where `previous` came from), so re-recording it would only restamp it.
+        record_failure(ctx.state, attempted, outcome.detail, tolerance=plan.tolerance)
+        return True
     record_success(
         ctx.state,
         Snapshot(main=verified.main, libs=verified.libs, at=now().isoformat()),
