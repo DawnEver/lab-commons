@@ -149,10 +149,12 @@ def test_a_probe_that_cannot_run_is_an_anomaly_not_a_healthy_value() -> None:
 
 
 def test_two_probe_failures_that_exit_alike_are_not_the_same_condition() -> None:
-    """THE EXIT CODE IS A CONTAINER, and -1 is the coarsest of them: a timeout, a command that could
-    not be run at all and an OSError all carry it. The policy writes a condition off by signature, so
-    a signature of `{name}:{code}` made the second failure inherit the first one's silence -- and
-    `Ran.detail()`, which names the actual condition, was already computed for the message beside it.
+    """THE EXIT CODE IS A CONTAINER, and -1 is the coarsest of them.
+
+    A timeout, a command that could not be run at all and an OSError all carry it. The policy writes
+    a condition off by signature, so a signature of `{name}:{code}` made the second failure inherit
+    the first one's silence -- and `Ran.detail()`, which names the actual condition, was already
+    computed for the message beside it.
     """
     probe = ShellProbe()
 

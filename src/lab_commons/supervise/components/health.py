@@ -10,18 +10,17 @@ counted as reachable.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any
 
 from lab_commons.supervise.component import CheckContext, Component
-from lab_commons.supervise.transport import Transport, fetch_json, scheme_transport
+from lab_commons.supervise.transport import OK_CEILING, OK_FLOOR, Transport, fetch_json, scheme_transport
 from lab_commons.supervise.verdict import Anomaly, CheckResult, Severity, condition_digest
 
-__all__ = ['OK_CEILING', 'OK_FLOOR', 'Heartbeat', 'HttpHealth', 'ShellProbe']
-
-#: A successful HTTP status, as a range. Named because a bare 200 in a comparison is a number and
-#: ``OK_FLOOR`` is a rule.
-OK_FLOOR: Final = 200
-OK_CEILING: Final = 300
+#: `OK_FLOOR` and `OK_CEILING` are NOT re-exported here. What counts as an HTTP endpoint having
+#: answered is HTTP's answer, not this component's, and a name re-exported through the module that
+#: merely uses it is how the family ends up with two of them -- which is exactly what had happened:
+#: `alert` kept a private second pair of these two numbers until 2026-10-03.
+__all__ = ['Heartbeat', 'HttpHealth', 'ShellProbe']
 
 
 class HttpHealth(Component):
