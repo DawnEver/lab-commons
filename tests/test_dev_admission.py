@@ -187,3 +187,35 @@ def test_the_cli_routes_the_trunk_ref_to_the_strict_bar(tmp_path: Path, monkeypa
     assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 1
     assert admission.main([*base, '--remote-ref', 'refs/heads/main', '--fresh-log', str(gate)]) == 1
     assert admission.main([*base, '--remote-ref', 'refs/heads/feat/x', '--fresh-log', str(gate)]) == 0
+
+
+@pytest.mark.parametrize(
+    'log_lines',
+    [
+        ['[verdict tree=abc1234 env=env0001 tier=gate selector=never-selected] INCONCLUSIVE -- cpu held'],
+        ['the cpu was held by another run and this one never started', _line('INCONCLUSIVE')],
+        ['40 of 40 asked NOT RUN', _line('INCONCLUSIVE')],
+        ['ran=0', _line('INCONCLUSIVE')],
+    ],
+)
+def test_an_inconclusive_that_never_started_is_not_a_verdict(tmp_path: Path, log_lines: list[str]) -> None:
+    """User ruling 2026-10-04: zero tests run is NO verdict -- refused, and the remedy says wait or re-run."""
+    log = _anchor(tmp_path, 'gate.log', *log_lines)
+    gap = tmp_path / 'gap.md'
+    for decided in (
+        admission.admit([('gate', log)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV, gap=gap),
+        admission.decide_fresh(log, trunk=False, gap=gap),
+    ):
+        assert not decided.allowed
+        assert 'never started' in decided.message
+        assert 're-run' in decided.message
+    assert not gap.exists()
+
+
+def test_an_inconclusive_cut_short_still_admits_a_lane_and_records_the_gap(tmp_path: Path) -> None:
+    """The other side: it started, then a wall / node down / truncation cut it -- a lane may carry it."""
+    log = _anchor(tmp_path, 'gate.log', '7 of 40 asked NOT RUN', 'ran=33', _line('INCONCLUSIVE'))
+    gap = tmp_path / 'gap.md'
+    decided = admission.decide_fresh(log, trunk=False, gap=gap)
+    assert decided.allowed
+    assert gap.is_file()
