@@ -75,20 +75,21 @@ def test_the_trunk_admits_only_a_pass_of_its_own_tier(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ('line', 'clean', 'why'),
+    ('line', 'tree_state', 'why'),
     [
-        (None, True, 'no verdict'),
-        (_line('PASS', tree='fff0000'), True, 'tree='),
-        (_line('PASS', env='other'), True, 'env='),
-        (_line('PASS'), False, 'dirty'),
+        (None, 'clean', 'no verdict'),
+        (_line('PASS', tree='fff0000'), 'clean', 'tree='),
+        (_line('PASS', env='other'), 'clean', 'env='),
+        (_line('PASS'), 'dirty', 'dirty'),
     ],
 )
 def test_a_lane_still_refuses_what_is_not_a_verdict_about_this_tree(
     tmp_path: Path,
     line: str | None,
-    clean: bool,  # noqa: FBT001 -- a parametrized column
+    tree_state: str,
     why: str,
 ) -> None:
+    clean = tree_state == 'clean'
     anchor = _anchor(tmp_path, 'gate.verdict', line) if line else tmp_path / 'absent.verdict'
     decided = admission.admit([('gate', anchor)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=clean, env=ENV)
     assert not decided.allowed
