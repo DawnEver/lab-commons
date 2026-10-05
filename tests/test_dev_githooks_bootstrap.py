@@ -91,20 +91,19 @@ def main_checkout(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def lane(main_checkout: Path, tmp_path: Path) -> Path:
-    """A WORKTREE of *main_checkout* with no venv of its own -- the borrow-MAIN arm's subject."""
+    """A worktree with no environment until the individual control provisions one."""
     lane_root = tmp_path / 'lane'
     _git(main_checkout, 'worktree', 'add', '-q', '-b', f'lane-{tmp_path.name}', str(lane_root))
     return lane_root
 
 
-def test_a_venv_less_worktree_borrows_the_main_checkouts(main_checkout: Path, lane: Path) -> None:
-    """ARM ONE: no venv here, so MAIN's is resolved -- through git, never through a spelled path."""
+def test_a_venv_less_worktree_requires_its_own_bootstrap(main_checkout: Path, lane: Path) -> None:
+    """A populated main environment is not a lane's environment."""
     roots = bootstrap.repo_roots(lane)
     assert roots[0] == lane.resolve(), f'this checkout must come first, got {roots}'
-    assert main_checkout.resolve() in roots, f'MAIN must be reachable from a worktree, got {roots}'
-
-    resolved = bootstrap.find_interpreter(roots, PROBE_MODULE)
-    assert resolved.is_relative_to(main_checkout.resolve()), f"expected MAIN's interpreter, got {resolved}"
+    assert main_checkout.resolve() not in roots
+    with pytest.raises(bootstrap.NoInterpreter, match='--bootstrap'):
+        bootstrap.find_interpreter(roots, PROBE_MODULE)
 
 
 def test_a_worktree_with_its_own_venv_wins(main_checkout: Path, lane: Path) -> None:
@@ -122,17 +121,13 @@ def test_a_worktree_with_its_own_venv_wins(main_checkout: Path, lane: Path) -> N
     assert not resolved.is_relative_to(main_checkout.resolve()), f'the lane venv must win, got {resolved}'
 
 
-def test_a_lane_venv_that_cannot_provide_the_module_yields_to_main(main_checkout: Path, lane: Path) -> None:
-    """The 2026-09-14 lesson, planted: a REAL lane venv WITHOUT the asked-for module must not win.
-
-    It has distributions, so the distribution probe says yes; it cannot import what this call needs,
-    so it is not a candidate FOR THIS CALL. Getting this wrong produced ``No module named ruff`` on
-    every commit in a lane, with a populated venv one fallback away and the message naming ruff.
-    """
+def test_a_lane_venv_that_cannot_provide_the_module_requires_sync(main_checkout: Path, lane: Path) -> None:
+    """A missing tool requires the lane's own sync even when main can provide it."""
     _new_venv(lane)
 
-    resolved = bootstrap.find_interpreter(bootstrap.repo_roots(lane), PROBE_MODULE)
-    assert resolved.is_relative_to(main_checkout.resolve()), f'expected MAIN to be the fallback, got {resolved}'
+    assert main_checkout != lane
+    with pytest.raises(bootstrap.NoInterpreter, match='missing TOOL'):
+        bootstrap.find_interpreter(bootstrap.repo_roots(lane), PROBE_MODULE)
 
 
 def test_a_venv_with_no_distributions_is_not_an_environment(main_checkout: Path, lane: Path) -> None:
@@ -147,8 +142,9 @@ def test_a_venv_with_no_distributions_is_not_an_environment(main_checkout: Path,
     executable.write_bytes(Path(sys.executable).read_bytes())
     executable.chmod(0o755)
 
-    resolved = bootstrap.find_interpreter(bootstrap.repo_roots(lane), PROBE_MODULE)
-    assert resolved.is_relative_to(main_checkout.resolve()), f'a stub must not win, got {resolved}'
+    assert main_checkout != lane
+    with pytest.raises(bootstrap.NoInterpreter, match='--bootstrap'):
+        bootstrap.find_interpreter(bootstrap.repo_roots(lane), PROBE_MODULE)
 
 
 def test_no_venv_anywhere_names_the_missing_ENVIRONMENT(tmp_path: Path) -> None:
@@ -300,9 +296,11 @@ def test_the_entry_is_nameable_with_no_interpreter_in_front(
       under ``language: system`` cannot be written, since no venv is on ``PATH`` there at all;
     * the bootstrap then finds the CONSUMER's interpreter rather than the one that launched it, which
       is what keeps the managed environment a launcher instead of a second install of this package;
-    * and it finds it from a worktree with NO venv of its own, borrowing MAIN's -- the arm a
-      documented literal path into ``site-packages`` would have lost.
+    * and it finds the worktree's own environment, not main's populated environment.
     """
+    lane_venv = _new_venv(lane)
+    (_site_packages(lane_venv) / f'{PROBE_MODULE}.py').write_text(_PROBE_SOURCE, encoding='utf-8')
+    assert main_checkout != lane
     config = _CONFIG.format(module=PROBE_MODULE, spec=REPO_ROOT.as_posix())
     (lane / '.pre-commit-config.yaml').write_text(config, encoding='utf-8')
     _git(lane, 'add', '.pre-commit-config.yaml')
@@ -323,6 +321,6 @@ def test_the_entry_is_nameable_with_no_interpreter_in_front(
     assert done.returncode == 0, f'the hook did not pass:\n{output}'
     assert 'RESOLVED-INTERPRETER' in output, f'the console script never reached the probe:\n{output}'
     resolved = next(line for line in output.splitlines() if 'RESOLVED-INTERPRETER' in line)
-    assert main_checkout.resolve().as_posix() in Path(resolved.split(maxsplit=1)[1].strip()).as_posix(), (
+    assert lane.resolve().as_posix() in Path(resolved.split(maxsplit=1)[1].strip()).as_posix(), (
         f"the hook ran an interpreter that is not the consumer's: {resolved}"
     )
