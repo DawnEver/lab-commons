@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from lab_commons.supervise.verdict import OPERATORS, Action, CheckResult, Condition, RemedyStep
 
@@ -427,6 +427,12 @@ def _condition(declared: object) -> Condition | None:
     return condition
 
 
+class _ComponentModule(Protocol):
+    """The single declaration a project module contributes to supervision."""
+
+    COMPONENTS: list[Component] | None
+
+
 def load_components(dotted: str) -> list[Component]:
     """Import a project's component module and take its declared components.
 
@@ -449,10 +455,10 @@ def load_components(dotted: str) -> list[Component]:
 
     """
     module = importlib.import_module(dotted)
-    # Read through the module's namespace rather than as `module.COMPONENTS`: a missing attribute
-    # would raise AttributeError, and `getattr` with a default is the reflection this kit bans. A
-    # dict lookup says what it means -- the module either put the name there or it did not.
-    declared = vars(module).get('COMPONENTS')
+    try:
+        declared = cast(_ComponentModule, module).COMPONENTS
+    except AttributeError:
+        declared = None
     if declared is None:
         msg = f'{dotted} declares no COMPONENTS list, so there is nothing to load from it'
         raise ValueError(msg)

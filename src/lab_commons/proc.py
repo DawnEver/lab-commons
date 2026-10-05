@@ -56,7 +56,7 @@ __all__ = [
 #: CORRECTED 2026-09-19: this said such code runs nowhere, already wrong when written -- CI has run
 #: on ``ubuntu-latest`` throughout, a real POSIX box importing a real ``signal.SIGKILL``. The
 #: fallback is never taken there either; it makes the constant DEFINABLE on Windows, so it tests.
-_KILL_SIGNAL = vars(signal).get('SIGKILL', signal.SIGTERM)
+_KILL_SIGNAL = signal.SIGTERM if os.name == 'nt' else signal.SIGKILL
 
 _STILL_ACTIVE = 259
 #: A ``/proc/meminfo`` or ``/proc/<pid>/status`` line in kB is exactly ``<value> kB`` -- two tokens.
@@ -69,13 +69,12 @@ _TH32CS_SNAPPROCESS = 0x00000002
 def _kernel32() -> object | None:
     """``kernel32``, or ``None`` off Windows.
 
-    Reached through ``vars(ctypes)`` rather than as ``ctypes.windll.kernel32``: ``windll`` does not exist
-    off Windows, so the attribute expression is unresolvable to a type checker on every platform
-    at once and would need a suppression to say so. This puts that fact in the CODE, where the
-    ``None`` returns already handle it, instead of in a comment the checker is told to ignore.
+    Windows supplies the DLL loader; other platforms never reach that attribute. Preserve the
+    default WinDLL error handling used by ctypes.windll, rather than changing last-error semantics.
     """
-    windll = vars(ctypes).get('windll')
-    return None if windll is None else windll.kernel32
+    if os.name != 'nt':
+        return None
+    return ctypes.WinDLL('kernel32')
 
 
 # --------------------------------------------------------------------------------------------

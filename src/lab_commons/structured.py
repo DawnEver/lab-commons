@@ -15,8 +15,10 @@ already attached" guard.
 import copy
 import logging
 import re
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 
 import structlog
 
@@ -61,7 +63,17 @@ def redact_secrets_processor(logger: object, method_name: str, event_dict: dict)
 # record.getMessage()``), and the SAME record object is shared across every handler on a
 # logger -- excluding it explicitly keeps a second handler from treating the first
 # handler's rendering as extra caller data.
-_STD_RECORD_ATTRS = frozenset({*vars(logging.makeLogRecord({})), 'message'})
+def _record_fields(record: logging.LogRecord) -> Mapping[str, object]:
+    """Read stdlib's arbitrary extra DATA, never probe for a named capability.
+
+    LogRecord exposes no public extras mapping; third-party callers supply arbitrary keys.
+    This one read-only boundary must retain them so secret-key redaction cannot lose a field.
+    The architecture guard constrains reflection to this sole namespace read.
+    """
+    return MappingProxyType(vars(record))
+
+
+_STD_RECORD_ATTRS = frozenset({*_record_fields(logging.makeLogRecord({})), 'message'})
 
 
 class SecretHashingFormatter(logging.Formatter):
@@ -76,7 +88,7 @@ class SecretHashingFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         """Render *record*, appending the caller-supplied ``extra=`` fields as structured data."""
-        extras = {key: value for key, value in vars(record).items() if key not in _STD_RECORD_ATTRS}
+        extras = {key: value for key, value in _record_fields(record).items() if key not in _STD_RECORD_ATTRS}
         if not extras:
             return super().format(record)
         redacted = {
