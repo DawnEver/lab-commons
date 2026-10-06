@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -38,6 +39,8 @@ from numpy.typing import ArrayLike
 __all__ = [
     'Bars',
     'Circle',
+    'Colorbar',
+    'Contours',
     'Field',
     'Label',
     'NullRenderer',
@@ -47,6 +50,8 @@ __all__ = [
     'Segment',
     'Series',
     'Style',
+    'Ticks',
+    'Vectors',
 ]
 
 #: The ten-colour categorical cycle both adapters start from, so a figure does not change colour
@@ -126,6 +131,63 @@ class Scale:
 
 
 @dataclass(frozen=True)
+class Colorbar:
+    """A colour bar for a scale the FIGURE drew itself, rather than one a field drew for it.
+
+    WHY THIS IS A PRIMITIVE AND NOT A FLAG ON A DRAWING VERB. A field map and a region map publish
+    their own colour bar as part of drawing, and that is right: the bar belongs to the map. But a
+    figure that colours its own glyphs — a region map assembled from per-element colours, a scatter
+    whose palette was computed by hand — has no mappable to hang a bar on, and an axis with no scale
+    is a picture whose colours mean nothing. This is that bar: the figure says what its colours MEAN,
+    in the same vocabulary it drew them with.
+
+    ``vmin``/``vmax`` ARE REQUIRED HERE, and the reason is the one place this primitive differs from
+    a :class:`Scale` used on a field. A scale left open is derived from the samples the field carries;
+    a bar over nothing has no samples, so an open range would be a bar of unknown extent that draws
+    as if it had one. :meth:`Renderer.draw_colorbar` refuses it instead.
+
+    ``ticks`` GIVEN IS WHAT MAKES THE BAR DISCRETE, with one colour band centred on each tick — the
+    spelling of a categorical legend, where the value between two bands does not exist (a layer
+    index, a material, a phase). A bar with no ticks is continuous, and the library places its own.
+    This is deliberately not a ``discrete: bool``: the ticks ARE the band edges, so a flag beside
+    them could disagree with them.
+
+    Attributes:
+        scale: what the colours mean — colormap, label and the range the bar spans.
+        ticks: the tick positions, or ``None`` for a continuous bar over ``scale``'s range.
+        tick_labels: the text at each tick, or ``None`` to print the numbers; the two are read
+            positionally, so a label list has one entry per tick.
+
+    """
+
+    scale: Scale
+    ticks: Sequence[float] | None = None
+    tick_labels: Sequence[str] | None = None
+
+    def bands(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """``(edges, centres)`` of a discrete bar — what ``ticks`` MEANS, read in ONE place.
+
+        THIS IS ON THE PRIMITIVE BECAUSE IT IS PART OF THE DESCRIPTION, not a rendering choice. Two
+        adapters each deciding where a band starts would be two pictures of one figure the moment
+        either arithmetic drifted, which is the failure this whole tier exists to prevent; here both
+        call the same method, and the rule is the one the family's own region maps already use — each
+        band is centred on its tick, the edges sit midway between neighbouring ticks, and the two
+        outer edges are half a step beyond the outermost ones (a lone tick gets a unit-wide band).
+
+        Raises:
+            ValueError: when ``ticks`` is ``None``, because a continuous bar has no bands.
+
+        """
+        if self.ticks is None:
+            msg = 'a continuous Colorbar has no bands -- ticks is None, so no band edge exists to name'
+            raise ValueError(msg)
+        centres = tuple(float(tick) for tick in self.ticks)
+        step = (centres[-1] - centres[0]) / (len(centres) - 1) if len(centres) > 1 else 1.0
+        middles = tuple((before + after) / 2.0 for before, after in pairwise(centres))
+        return (centres[0] - step / 2.0, *middles, centres[-1] + step / 2.0), centres
+
+
+@dataclass(frozen=True)
 class Series:
     """A labelled ``x``/``y`` trace: a chart line, a waveform, or a marker cloud.
 
@@ -142,6 +204,7 @@ class Series:
         width: the line width in points, or ``None`` for the library's own default.
         marker: the symbol :meth:`Renderer.draw_markers` draws, e.g. ``'o'``, ``'s'``, ``'^'``.
         size: the symbol size in points, or ``None`` for the library's own default.
+        alpha: opacity, ``1.0`` for opaque — a trace behind another is read through it.
 
     """
 
@@ -153,6 +216,7 @@ class Series:
     width: float | None = None
     marker: str | None = None
     size: float | None = None
+    alpha: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -172,6 +236,7 @@ class Bars:
         width: the bar width, in the same units as *x*.
         label: the legend entry; a chart with no label is not legended.
         color: an explicit colour, or ``None`` to take the next palette colour.
+        alpha: opacity, ``1.0`` for opaque.
 
     """
 
@@ -180,6 +245,7 @@ class Bars:
     width: float = 0.8
     label: str | None = None
     color: str | None = None
+    alpha: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -196,6 +262,11 @@ class Patch:
         color: the face colour, used when *value* is ``None``; ``None`` means unfilled.
         edgecolor: the boundary colour, or ``None`` for no outline.
         label: the legend entry; a patch with no label is not legended.
+        alpha: opacity, ``1.0`` for opaque — a winding layout stacks conductors and reads through.
+        hatch: ONE hatch character over the face, e.g. ``'/'``, or ``None`` for a flat fill. It is
+            one character and not a string because that is the whole of what both libraries carry:
+            matplotlib spells density by REPEATING the character and bokeh takes it once, so a
+            two-character pattern is a description the two adapters would draw differently.
 
     """
 
@@ -204,6 +275,8 @@ class Patch:
     color: str | None = None
     edgecolor: str | None = None
     label: str | None = None
+    alpha: float = 1.0
+    hatch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +315,7 @@ class Segment:
         width: the line width in points, or ``None`` for the library's own default.
         style: the line style — ``'-'``, ``'--'``, ``':'``, ``'-.'``.
         arrow: draw a head at the END point, which is what makes direction readable.
+        alpha: opacity, ``1.0`` for opaque.
 
     """
 
@@ -254,6 +328,7 @@ class Segment:
     width: float | None = None
     style: str = '-'
     arrow: bool = False
+    alpha: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -268,10 +343,16 @@ class Label:
         size: the type size in points, or ``None`` to inherit the style's.
         halign: the horizontal anchor — ``'left'``, ``'center'`` or ``'right'``.
         valign: the vertical anchor — ``'top'``, ``'center'`` or ``'bottom'``.
+        box: draw a translucent chip between the text and what is under it.
 
     THE ANCHORS ARE SPELLED OUT rather than left at matplotlib's ``ha``/``va``: a two-letter name is
     one unit symbol away from a quantity, and this vocabulary is data a producer reads without the
     plotting library's abbreviations in mind.
+
+    ``box`` EXISTS BECAUSE A LABEL IS OFTEN DRAWN ON TOP OF SOMETHING. A slot id over a coloured
+    conductor, a value over a filled region map: the text and the picture are the same pixels, and
+    the chip is what keeps the first readable. It defaults to OFF, because a label over white paper
+    needs no chip and one silently added would be a box the description never asked for.
 
     """
 
@@ -282,6 +363,34 @@ class Label:
     size: float | None = None
     halign: str = 'center'
     valign: str = 'center'
+    box: bool = False
+
+
+@dataclass(frozen=True)
+class Ticks:
+    """Where one axis's ticks ARE, and what they SAY — the slot numbers, the layer names, the degrees.
+
+    WHY A PRODUCER ASKS FOR THIS AT ALL. Left alone, an axis labels itself with round numbers, which
+    is right for a physical quantity and wrong for an INDEX: a winding figure's abscissa is a slot id
+    and its ordinate is a layer id, and a reader who cannot find slot 7 on the axis cannot read the
+    picture. The positions are stated rather than implied because the two are independent — a slot
+    figure ticks every slot and labels every one of them, a dense one ticks each slot and labels
+    every other.
+
+    ``labels`` IS READ ON PRESENCE, NOT ON TRUTH, and that distinction is the whole reason this is a
+    dataclass. ``None`` means "let the library number them"; an EMPTY sequence means "these positions
+    and no text at all" — which is how a figure keeps its tick marks for alignment while showing
+    none of their numbers. A ``labels or None`` in an adapter would collapse the second into the
+    first, so both adapters read ``is not None``.
+
+    Attributes:
+        positions: the tick positions, in the axis's own units.
+        labels: one label per position, an empty sequence for no labels, or ``None`` to number them.
+
+    """
+
+    positions: ArrayLike
+    labels: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -305,6 +414,76 @@ class Field:
     y: ArrayLike
     values: ArrayLike
     scale: Scale | None = None
+
+
+@dataclass(frozen=True)
+class Contours:
+    """The ISOLINES of a scalar over a point set — a contour drawn as LINES, over something else.
+
+    THIS IS NOT A :class:`Field` WITH A FLAG, which is why it is its own primitive. A field is a
+    surface that carries a scale and publishes a colour bar; a contour is a set of lines at stated
+    levels, drawn OVER a surface whose colours already mean something — a set of equipotentials
+    over a flux-density map, a phase boundary over a region map. A field has no ``color`` because
+    its colour IS its value; a contour does, because its lines are an annotation of a scale that
+    lives elsewhere. Folding the two into one type would give every renderer a mode it must honour
+    in half its calls.
+
+    Attributes:
+        x: the sample abscissae.
+        y: the sample ordinates.
+        values: one value per sample, the same length as *x*.
+        levels: how many contour levels to draw between the smallest and largest value.
+        color: the line colour, or ``None`` for the library's own cycle.
+        width: the line width in points, or ``None`` for the library's own default.
+        alpha: opacity, ``1.0`` for opaque — an overlay is usually drawn translucent.
+
+    """
+
+    x: ArrayLike
+    y: ArrayLike
+    values: ArrayLike
+    levels: int = 10
+    color: str | None = None
+    width: float | None = None
+    alpha: float = 1.0
+
+
+@dataclass(frozen=True)
+class Vectors:
+    """A vector sampled at points — the quiver: one arrow per sample, its direction and length.
+
+    WHY A VECTOR IS NOT A :class:`Segment` WITH A HEAD. They are different objects at every level.
+    A segment is two points that a producer already knows; a vector is a POSITION AND A COMPONENT
+    PAIR, and the arrow's length is a SCALING decision rather than a coordinate — ``scale`` is the
+    one number that makes a field of arrows readable, and a segment list would bury it in N
+    multiplications the producer then has to redo to change it. The same difference separates the
+    libraries' primitives: a quiver is ONE artist over N samples in both, and a vectorized glyph is
+    what makes drawing a field of 10 000 arrows a single call rather than 10 000 of them.
+
+    THE LENGTH IN DATA UNITS IS ``|(u, v)| / scale``, which is matplotlib's convention and the one
+    the bokeh adapter computes from. A producer may equally pass already-scaled components and leave
+    ``scale`` at its default.
+
+    Attributes:
+        x: the sample abscissae.
+        y: the sample ordinates.
+        u: the abscissa component of each sample's vector.
+        v: the ordinate component of each sample's vector.
+        scale: how long ``|(u, v)|`` is drawn — the arrow is ``|(u, v)| / scale`` data units long.
+        color: an explicit colour, or ``None`` to take the next palette colour.
+        width: the shaft width in points, or ``None`` for the library's own default.
+        alpha: opacity, ``1.0`` for opaque.
+
+    """
+
+    x: ArrayLike
+    y: ArrayLike
+    u: ArrayLike
+    v: ArrayLike
+    scale: float = 1.0
+    color: str | None = None
+    width: float | None = None
+    alpha: float = 1.0
 
 
 @runtime_checkable
@@ -333,6 +512,9 @@ class Renderer(Protocol):
 
     def set_limits(self, *, x: tuple[float, float] | None = None, y: tuple[float, float] | None = None) -> None:
         """Fix the axis limits; a pair given high-to-low INVERTS that axis."""
+
+    def set_ticks(self, *, x: Ticks | None = None, y: Ticks | None = None) -> None:
+        """Place the ticks of either axis at the positions a :class:`Ticks` names."""
 
     def set_equal_aspect(self, *, on: bool = True) -> None:
         """Draw one unit of x at the same size as one unit of y, so a shape keeps its shape."""
@@ -369,6 +551,20 @@ class Renderer(Protocol):
 
     def draw_field(self, field: Field) -> None:
         """Draw a scalar field and its colour scale — the field map."""
+
+    def draw_contours(self, contours: Contours) -> None:
+        """Draw *contours* as isolines, with no fill and no colour bar of their own."""
+
+    def draw_vectors(self, vectors: Vectors) -> None:
+        """Draw *vectors* as arrows — the quiver, one head per sample."""
+
+    def draw_colorbar(self, bar: Colorbar) -> None:
+        """Draw *bar* as a colour bar for a scale the figure itself set.
+
+        THE RANGE MUST BE PINNED, and an adapter that cannot read a range from the bar REFUSES it
+        rather than inventing one: see :class:`Colorbar`, where the alternative to a refusal is a
+        legend whose extent is a guess. A bar with ticks is drawn in DISCRETE bands, one per tick.
+        """
 
     def save(self, path: Path | str) -> Path | None:
         """Write the figure to *path* and return where it went, or ``None`` if nothing was written.
@@ -419,6 +615,9 @@ class NullRenderer:
     def set_limits(self, *, x: tuple[float, float] | None = None, y: tuple[float, float] | None = None) -> None:
         """Accepted and ignored."""
 
+    def set_ticks(self, *, x: Ticks | None = None, y: Ticks | None = None) -> None:
+        """Accepted and ignored."""
+
     def set_equal_aspect(self, *, on: bool = True) -> None:
         """Accepted and ignored."""
 
@@ -454,6 +653,19 @@ class NullRenderer:
 
     def draw_field(self, field: Field) -> None:
         """Accepted and ignored."""
+
+    def draw_contours(self, contours: Contours) -> None:
+        """Accepted and ignored."""
+
+    def draw_vectors(self, vectors: Vectors) -> None:
+        """Accepted and ignored."""
+
+    def draw_colorbar(self, bar: Colorbar) -> None:
+        """Accepted and ignored — the range a drawing adapter must be able to read is not read here.
+
+        An adapter that DRAWS the bar refuses an unpinned range; this one has nothing to read it for,
+        and raising would make a description refuse to exist rather than refuse to be drawn.
+        """
 
     def save(self, path: Path | str) -> Path | None:
         """Write nothing, and answer ``None`` rather than the path it was handed.

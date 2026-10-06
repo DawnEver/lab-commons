@@ -13,11 +13,21 @@ there is no counterpart to ``mpl.show_or_save``'s GUI policy here — a policy t
 failure this library does not have would be a mechanism nobody could check. A headless consumer
 saves instead of showing, and the saved artifact is a self-contained page.
 
-COLOR MAP NAMES ARE TRANSLATED, NOT ASSUMED. A :class:`~lab_commons.viz.Scale` names a colormap, and
-the two libraries carry overlapping but different sets of them, so :data:`PALETTES` is the NAMED SET
-of names both adapters carry and an unknown name RAISES with the list. Quietly falling back to a
-default would draw a figure whose legend-free colour scale differs from the one another adapter
-draws for the same description, which is the one thing a shared vocabulary must never do.
+COLOR MAP NAMES ARE TRANSLATED, NOT ASSUMED, and the translation lives in its own module. A
+:class:`~lab_commons.viz.Scale` names a colormap and the two libraries carry overlapping but
+different sets of them, so :data:`~lab_commons.viz._bokeh_names.PALETTES` is the NAMED SET of names
+both adapters carry and an unknown name RAISES with the list. The dashes, the markers and the text
+baselines are translated the same way and live beside it: a table of another library's vocabulary is
+data, and a table edited through the module that reads it is a table nobody can review on its own.
+
+ONE VERB THIS LIBRARY CANNOT DRAW, AND IT REFUSES RATHER THAN IMITATING.
+:meth:`~lab_commons.viz.Renderer.draw_contours` arrives as a POINT SET and asks for isolines of it.
+This library's contour glyph takes a REGULAR GRID -- a 2-D ``z`` -- and its own documentation puts
+the interpolation machinery behind a ``contourpy`` dependency that a plain ``bokeh`` install does not
+carry, so honouring the verb would mean either re-gridding scattered samples (an interpolation this
+adapter has no library for) or importing a package neither the ``viz-bokeh`` extra nor the base
+runtime declares. It raises, and the message says which of the two a caller can do about it; a
+silent empty render would be a figure that looks drawn and is not.
 """
 
 from __future__ import annotations
@@ -29,63 +39,47 @@ from typing import Final
 import numpy as np
 from bokeh.io import save as bokeh_save
 from bokeh.io import show as bokeh_show
-from bokeh.models import Arrow, ColorBar, ColumnDataSource, LinearColorMapper, NormalHead
+from bokeh.models import Arrow, ColorBar, ColumnDataSource, FixedTicker, LinearColorMapper, NormalHead
 from bokeh.plotting import figure
 from bokeh.resources import INLINE
 from bokeh.transform import transform
 
-from lab_commons.viz import Bars, Circle, Field, Label, Patch, Scale, Segment, Series, Style
+from lab_commons.viz import (
+    Bars,
+    Circle,
+    Colorbar,
+    Contours,
+    Field,
+    Label,
+    Patch,
+    Scale,
+    Segment,
+    Series,
+    Style,
+    Ticks,
+    Vectors,
+)
+from lab_commons.viz._bokeh_names import BASELINES, DASHES, MARKERS, PALETTES, given, palette_for, quantized
 
 __all__ = ['PALETTES', 'BokehRenderer']
-
-#: The colormaps BOTH adapters carry: the vocabulary's name -> bokeh's palette name. A named set
-#: rather than a fallback, because a silent substitution is a colour scale that means something
-#: different from the one the description asked for -- and the key is matplotlib's own spelling,
-#: MEASURED against its registry rather than assumed, because that is the name a
-#: :class:`~lab_commons.viz.Scale` carries and the one the other adapter hands its library. What is
-#: NOT here is a scale only one library has (a sequential rainbow, for one), and asking for it
-#: raises with this list rather than drawing a different picture.
-PALETTES: Final[dict[str, str]] = {
-    'Blues': 'Blues256',
-    'Greens': 'Greens256',
-    'Reds': 'Reds256',
-    'cividis': 'Cividis256',
-    'gray': 'Greys256',
-    'grey': 'Greys256',
-    'inferno': 'Inferno256',
-    'magma': 'Magma256',
-    'plasma': 'Plasma256',
-    'turbo': 'Turbo256',
-    'viridis': 'Viridis256',
-}
-
-#: matplotlib's line-style spelling -> bokeh's. Named rather than derived: the two libraries use
-#: words for dashes that share no pattern with each other.
-_LINE_DASHES: Final[dict[str, str]] = {
-    '-': 'solid',
-    '--': 'dashed',
-    '-.': 'dashdot',
-    ':': 'dotted',
-}
-
-#: The symbols a :class:`~lab_commons.viz.Series` may name, as matplotlib spells them.
-_MARKERS: Final[dict[str, str]] = {
-    '+': 'cross',
-    'o': 'circle',
-    's': 'square',
-    '^': 'triangle',
-    'd': 'diamond',
-    'v': 'inverted_triangle',
-    'x': 'x',
-}
-
-#: Text anchors, matplotlib's spelling -> bokeh's. Only the vertical names differ.
-_BASELINES: Final[dict[str, str]] = {'center': 'middle', 'top': 'top', 'bottom': 'bottom'}
 
 #: How large one field sample is drawn, in pixels. Small on purpose: a field arrives as a dense
 #: cloud of samples, and a page is zoomable, so the marks are meant to read as a surface rather than
 #: as points -- a producer that wants visible markers draws a ``Series`` instead.
 _SAMPLE_SIZE_PX: Final = 4
+
+#: The head of one arrow, in pixels. Bokeh's marks are screen-sized, so a vector field drawn here
+#: has heads of one size whatever the samples' magnitudes are -- see :meth:`BokehRenderer.draw_vectors`
+#: for why that is this library's shape rather than a choice made here.
+_VECTOR_HEAD_SIZE: Final = 7
+
+#: Hatch density, MEASURED against the other adapter rather than guessed: with bokeh's own defaults
+#: a one-character pattern is drawn far denser than matplotlib draws the same character, so one
+#: description would read as two different fills. These two numbers are the pair that makes the
+#: hatch marks of the two adapters read alike, and they are here because a reader comparing two
+#: figures side by side is the only instrument that can see the difference.
+_HATCH_SCALE: Final = 30
+_HATCH_WEIGHT: Final = 0.5
 
 
 class BokehRenderer:
@@ -139,6 +133,26 @@ class BokehRenderer:
         if y is not None:
             self.figure.y_range.start, self.figure.y_range.end = y
 
+    def set_ticks(self, *, x: Ticks | None = None, y: Ticks | None = None) -> None:
+        """Place the ticks of either axis at the positions a :class:`Ticks` names.
+
+        AN EMPTY LABEL SEQUENCE IS NOT AN ABSENT ONE. ``None`` leaves the numbers alone; ``()`` asks
+        for the tick positions WITH NO TEXT, which this library spells by making the labels
+        transparent -- there is no "tick but no label" switch on a bokeh axis, and dropping the
+        ticker instead would move the marks the caller asked to keep.
+        """
+        for axis, ticks in ((self.figure.xaxis, x), (self.figure.yaxis, y)):
+            if ticks is None:
+                continue
+            axis.ticker = FixedTicker(ticks=[float(position) for position in ticks.positions])
+            if ticks.labels is None:
+                continue
+            axis.major_label_text_alpha = 0 if len(ticks.labels) == 0 else 1
+            if len(ticks.labels) > 0:
+                axis.major_label_overrides = {
+                    float(position): str(text) for position, text in zip(ticks.positions, ticks.labels, strict=True)
+                }
+
     def set_equal_aspect(self, *, on: bool = True) -> None:
         """Match the plot's aspect to the ranges', which is one unit of x per unit of y."""
         self.figure.match_aspect = on
@@ -167,11 +181,12 @@ class BokehRenderer:
         self.figure.line(
             series.x,
             series.y,
-            **_given(
-                line_dash=_LINE_DASHES.get(series.style, 'solid'),
+            **given(
+                line_dash=DASHES.get(series.style, 'solid'),
                 line_width=series.width,
                 color=self._next_color(series.color),
                 legend_label=series.label,
+                line_alpha=series.alpha,
             ),
         )
 
@@ -180,11 +195,13 @@ class BokehRenderer:
         self.figure.scatter(
             series.x,
             series.y,
-            **_given(
-                marker=_MARKERS.get(series.marker or 'o', 'circle'),
+            **given(
+                marker=MARKERS.get(series.marker or 'o', 'circle'),
                 size=series.size,
                 color=self._next_color(series.color),
                 legend_label=series.label,
+                line_alpha=series.alpha,
+                fill_alpha=series.alpha,
             ),
         )
 
@@ -193,7 +210,13 @@ class BokehRenderer:
         self.figure.vbar(
             x=bars.x,
             top=bars.height,
-            **_given(width=bars.width, color=self._next_color(bars.color), legend_label=bars.label),
+            **given(
+                width=bars.width,
+                color=self._next_color(bars.color),
+                legend_label=bars.label,
+                fill_alpha=bars.alpha,
+                line_alpha=bars.alpha,
+            ),
         )
 
     def draw_patches(self, parts: Sequence[Patch], scale: Scale | None = None) -> None:
@@ -201,9 +224,13 @@ class BokehRenderer:
         vertices = [np.asarray(part.vertices, dtype=float) for part in parts]
         values = [part.value for part in parts]
         if scale is not None and any(value is not None for value in values):
+            alphas = {part.alpha for part in parts}
+            if len(alphas) != 1:
+                msg = f'a value-coloured region map carries one transparency for its regions, not {sorted(alphas)}'
+                raise ValueError(msg)
             present = [value for value in values if value is not None]
             mapper = LinearColorMapper(
-                palette=_colormap(scale.cmap),
+                palette=palette_for(scale.cmap),
                 low=scale.vmin if scale.vmin is not None else min(present),
                 high=scale.vmax if scale.vmax is not None else max(present),
             )
@@ -214,7 +241,9 @@ class BokehRenderer:
                     'value': [np.nan if value is None else value for value in values],
                 }
             )
-            self.figure.patches('xs', 'ys', source=source, fill_color=transform('value', mapper))
+            self.figure.patches(
+                'xs', 'ys', source=source, fill_color=transform('value', mapper), fill_alpha=parts[0].alpha
+            )
             self.figure.add_layout(ColorBar(color_mapper=mapper, title=scale.label), 'right')
             return
         for points, part in zip(vertices, parts, strict=True):
@@ -227,7 +256,15 @@ class BokehRenderer:
                 # from the one the matplotlib adapter draws for the same description.
                 fill_color=part.color,
                 line_color=part.edgecolor,
-                **_given(legend_label=part.label),
+                fill_alpha=part.alpha,
+                line_alpha=part.alpha,
+                hatch_scale=_HATCH_SCALE,
+                hatch_weight=_HATCH_WEIGHT,
+                **given(
+                    legend_label=part.label,
+                    hatch_pattern=part.hatch,
+                    hatch_color=part.edgecolor or part.color,
+                ),
             )
 
     def draw_circles(self, circles: Sequence[Circle]) -> None:
@@ -262,16 +299,23 @@ class BokehRenderer:
                     y0=[segment.y0],
                     x1=[segment.x1],
                     y1=[segment.y1],
-                    **_given(
-                        line_dash=_LINE_DASHES.get(segment.style, 'solid'),
+                    **given(
+                        line_dash=DASHES.get(segment.style, 'solid'),
                         line_width=segment.width,
                         line_color=color,
                         legend_label=segment.label,
+                        line_alpha=segment.alpha,
                     ),
                 )
 
     def draw_labels(self, labels: Sequence[Label]) -> None:
-        """Draw text at its anchor."""
+        """Draw text at its anchor, on a chip of its own where one was asked for.
+
+        A CHIP IS FOUR PROPERTIES HERE AND ONE ON THE OTHER SIDE. This library draws a text
+        background only when its padding and its fill are both set, and an OMITTED property takes
+        bokeh's own default -- so the three are passed together or not at all, which is what
+        ``_given`` dropping the ``None`` of an unasked-for chip achieves.
+        """
         for label in labels:
             self.figure.text(
                 x=[label.x],
@@ -279,8 +323,13 @@ class BokehRenderer:
                 text=[label.text],
                 text_font_size=f'{label.size}pt' if label.size is not None else f'{self.style.font_size}pt',
                 text_align=label.halign,
-                text_baseline=_BASELINES.get(label.valign, 'middle'),
-                **_given(text_color=label.color),
+                text_baseline=BASELINES.get(label.valign, 'middle'),
+                **given(
+                    text_color=label.color,
+                    padding=6 if label.box else None,
+                    background_fill_color='white' if label.box else None,
+                    background_fill_alpha=0.7 if label.box else None,
+                ),
             )
 
     def draw_field(self, field: Field) -> None:
@@ -296,7 +345,7 @@ class BokehRenderer:
         y = np.asarray(field.y, dtype=float)
         values = np.asarray(field.values, dtype=float)
         mapper = LinearColorMapper(
-            palette=_colormap(scale.cmap),
+            palette=palette_for(scale.cmap),
             low=scale.vmin if scale.vmin is not None else float(np.nanmin(values)),
             high=scale.vmax if scale.vmax is not None else float(np.nanmax(values)),
         )
@@ -309,6 +358,82 @@ class BokehRenderer:
             size=_SAMPLE_SIZE_PX,
         )
         self.figure.add_layout(ColorBar(color_mapper=mapper, title=scale.label), 'right')
+
+    def draw_contours(self, contours: Contours) -> None:
+        """REFUSED: this library has no isoline glyph over a point set — see the module docstring.
+
+        The refusal is per-CALL rather than per-import because the alternative is worse in the
+        direction that matters: an adapter that quietly drew nothing for this verb would hand back a
+        figure that looks finished and has no isolines on it, and the caller has no way to tell that
+        from a field whose levels happened to miss. The message names both remedies -- draw the
+        contour with the matplotlib adapter, or bring a regular grid this library can contour.
+        """
+        msg = (
+            'BokehRenderer cannot draw Contours: bokeh contours a regular 2-D grid and interpolates it with '
+            'contourpy, which neither the viz-bokeh extra nor this package declares, so a point set cannot be '
+            'honoured. Use lab_commons.viz.mpl.MplRenderer for this figure, or bring a gridded field'
+        )
+        raise NotImplementedError(msg)
+
+    def draw_vectors(self, vectors: Vectors) -> None:
+        """Draw *vectors* as arrows — the SHAFT as one vectorized glyph, the HEAD as another.
+
+        BOKEH HAS NO QUIVER, so this adapter composes the two glyphs it does have rather than
+        building one Arrow annotation per sample: a quiver's whole point is that a field of N arrows
+        is one artist, and N annotation models would trade the primitive's cost model away for a
+        shape it is not worth. The head is therefore a screen-sized marker rather than a head scaled
+        with the arrow, which is a difference from the other adapter that a reader can see -- and a
+        mark that says "here is the direction" is what the vocabulary promises, not a head length.
+
+        ``|(u, v)| / scale`` is computed HERE, in data units: this library has no scaling of its own
+        for a mark, so the arithmetic the vocabulary defines is the arithmetic drawn.
+        """
+        tip_x = np.asarray(vectors.x, dtype=float) + np.asarray(vectors.u, dtype=float) / vectors.scale
+        tip_y = np.asarray(vectors.y, dtype=float) + np.asarray(vectors.v, dtype=float) / vectors.scale
+        color = self._next_color(vectors.color)
+        self.figure.segment(
+            x0=vectors.x,
+            y0=vectors.y,
+            x1=tip_x,
+            y1=tip_y,
+            **given(line_width=vectors.width, line_color=color, line_alpha=vectors.alpha),
+        )
+        self.figure.scatter(
+            x=tip_x,
+            y=tip_y,
+            marker='triangle',
+            size=_VECTOR_HEAD_SIZE,
+            angle=np.arctan2(np.asarray(vectors.v, dtype=float), np.asarray(vectors.u, dtype=float)) - np.pi / 2,
+            **given(fill_color=color, line_color=color, fill_alpha=vectors.alpha, line_alpha=vectors.alpha),
+        )
+
+    def draw_colorbar(self, bar: Colorbar) -> None:
+        """Draw *bar* — a continuous bar, or one discrete band per tick when ticks are given.
+
+        The range is REFUSED when it is open, for the reason the matplotlib adapter's own docstring
+        gives: a bar over nothing has no samples to derive one from, and the alternative to the
+        refusal is a legend of unknown extent drawn as if it had one.
+        """
+        scale = bar.scale
+        if scale.vmin is None or scale.vmax is None:
+            msg = (
+                f'draw_colorbar needs Scale(vmin=..., vmax=...) pinned; got {scale!r}. A bar the figure '
+                'draws for itself has no samples to derive a range from'
+            )
+            raise ValueError(msg)
+        if bar.ticks is None:
+            mapper = LinearColorMapper(palette=palette_for(scale.cmap), low=scale.vmin, high=scale.vmax)
+            self.figure.add_layout(ColorBar(color_mapper=mapper, title=scale.label), 'right')
+            return
+        edges, centers = bar.bands()
+        mapper = LinearColorMapper(palette=quantized(scale.cmap, len(centers)), low=edges[0], high=edges[-1])
+        drawn = ColorBar(color_mapper=mapper, title=scale.label)
+        drawn.ticker = FixedTicker(ticks=list(centers))
+        if bar.tick_labels is not None:
+            drawn.major_label_overrides = {
+                center: str(text) for center, text in zip(centers, bar.tick_labels, strict=True)
+            }
+        self.figure.add_layout(drawn, 'right')
 
     def save(self, path: Path | str) -> Path | None:
         """Write the figure as a self-contained HTML page and return where it went.
@@ -346,23 +471,3 @@ class BokehRenderer:
         color = explicit if explicit is not None else self.style.color(self._drawn)
         self._drawn += 1
         return color
-
-
-def _given(**properties: object) -> dict[str, object]:
-    """The glyph properties that were actually GIVEN, with ``None`` removed.
-
-    ``None`` is the vocabulary's spelling for "let the renderer decide", and bokeh's spelling for the
-    same thing is to OMIT the property -- it validates a numeric property against ``Real`` and
-    refuses ``None`` outright, as this adapter learned by drawing a line with no width. So the
-    translation happens here once, instead of at every glyph call site.
-    """
-    return {name: value for name, value in properties.items() if value is not None}
-
-
-def _colormap(name: str) -> str:
-    """Bokeh's palette name for *name*, or a refusal that lists what this adapter can draw."""
-    try:
-        return PALETTES[name]
-    except KeyError as missing:
-        msg = f'no bokeh palette named {name!r}; this adapter carries {sorted(PALETTES)}'
-        raise ValueError(msg) from missing

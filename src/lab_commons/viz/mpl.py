@@ -25,13 +25,28 @@ from typing import Final
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.cm import ScalarMappable
 from matplotlib.collections import PatchCollection
-from matplotlib.colors import Normalize
+from matplotlib.colors import BoundaryNorm, ListedColormap, Normalize
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle as CirclePatch
 from matplotlib.patches import Polygon as PolygonPatch
 
-from lab_commons.viz import Bars, Circle, Field, Label, Patch, Scale, Segment, Series, Style
+from lab_commons.viz import (
+    Bars,
+    Circle,
+    Colorbar,
+    Contours,
+    Field,
+    Label,
+    Patch,
+    Scale,
+    Segment,
+    Series,
+    Style,
+    Ticks,
+    Vectors,
+)
 
 __all__ = [
     'MplRenderer',
@@ -203,6 +218,22 @@ class MplRenderer:
         if y is not None:
             self._axes.set_ylim(y)
 
+    def set_ticks(self, *, x: Ticks | None = None, y: Ticks | None = None) -> None:
+        """Place the ticks of either axis at the positions a :class:`Ticks` names.
+
+        THE LABELS ARE READ ON PRESENCE, NOT ON TRUTH: an empty sequence means "these positions and
+        no text", which is what an under-labelled index axis asks for, and ``None`` means "number
+        them". ``labels or None`` here would collapse the first into the second.
+        """
+        if x is not None:
+            self._axes.set_xticks(np.asarray(x.positions, dtype=float))
+            if x.labels is not None:
+                self._axes.set_xticklabels([str(label) for label in x.labels])
+        if y is not None:
+            self._axes.set_yticks(np.asarray(y.positions, dtype=float))
+            if y.labels is not None:
+                self._axes.set_yticklabels([str(label) for label in y.labels])
+
     def set_equal_aspect(self, *, on: bool = True) -> None:
         """Draw one unit of x at the same size as one unit of y, so a shape keeps its shape."""
         self._axes.set_aspect('equal' if on else 'auto')
@@ -235,6 +266,7 @@ class MplRenderer:
             linewidth=series.width,
             color=self._next_color(series.color),
             label=series.label,
+            alpha=series.alpha,
         )
 
     def draw_markers(self, series: Series) -> None:
@@ -247,6 +279,7 @@ class MplRenderer:
             markersize=series.size,
             color=self._next_color(series.color),
             label=series.label,
+            alpha=series.alpha,
         )
 
     def draw_bars(self, bars: Bars) -> None:
@@ -257,6 +290,7 @@ class MplRenderer:
             width=bars.width,
             color=self._next_color(bars.color),
             label=bars.label,
+            alpha=bars.alpha,
         )
 
     def draw_patches(self, parts: Sequence[Patch], scale: Scale | None = None) -> None:
@@ -265,11 +299,25 @@ class MplRenderer:
         VALUE-COLOURED AND NAME-COLOURED ARE DIFFERENT FIGURES, not two spellings of one: a region
         carrying a ``value`` gets a colormap and a colour bar (the region map), and a region carrying
         a ``color`` gets that colour and a legend entry (the identity map).
+
+        THE VALUE PATH TAKES ONE TRANSPARENCY FOR THE WHOLE MAP, which is what a region map has: the
+        patches of one scale are one surface, and matplotlib colours them from the COLLECTION. A
+        figure whose regions each need their own alpha is drawn with colours and not with values --
+        and a description that asks for both at once is refused rather than silently flattened.
         """
         polygons = [PolygonPatch(np.asarray(part.vertices, dtype=float), closed=True) for part in parts]
         values = [part.value for part in parts]
         if scale is not None and any(value is not None for value in values):
-            collection = PatchCollection(polygons, cmap=scale.cmap, norm=Normalize(vmin=scale.vmin, vmax=scale.vmax))
+            alphas = {part.alpha for part in parts}
+            if len(alphas) != 1:
+                msg = f'a value-coloured region map carries one transparency for its regions, not {sorted(alphas)}'
+                raise ValueError(msg)
+            collection = PatchCollection(
+                polygons,
+                cmap=scale.cmap,
+                norm=Normalize(vmin=scale.vmin, vmax=scale.vmax),
+                alpha=parts[0].alpha,
+            )
             collection.set_array(np.asarray([np.nan if value is None else value for value in values], dtype=float))
             self._axes.add_collection(collection)
             self._axes.autoscale_view()
@@ -278,6 +326,9 @@ class MplRenderer:
         for polygon, part in zip(polygons, parts, strict=True):
             polygon.set_facecolor(part.color if part.color is not None else 'none')
             polygon.set_edgecolor(part.edgecolor if part.edgecolor is not None else 'none')
+            polygon.set_alpha(part.alpha)
+            if part.hatch is not None:
+                polygon.set_hatch(part.hatch)
             if part.label is not None:
                 polygon.set_label(part.label)
             self._axes.add_patch(polygon)
@@ -309,6 +360,7 @@ class MplRenderer:
                         'color': color,
                         'linewidth': segment.width,
                         'linestyle': segment.style,
+                        'alpha': segment.alpha,
                     },
                     label=segment.label,
                 )
@@ -320,10 +372,11 @@ class MplRenderer:
                     linewidth=segment.width,
                     color=color,
                     label=segment.label,
+                    alpha=segment.alpha,
                 )
 
     def draw_labels(self, labels: Sequence[Label]) -> None:
-        """Draw text at its anchor."""
+        """Draw text at its anchor, on a chip of its own where one was asked for."""
         for label in labels:
             self._axes.text(
                 label.x,
@@ -333,6 +386,7 @@ class MplRenderer:
                 fontsize=label.size,
                 ha=label.halign,
                 va=label.valign,
+                bbox={'boxstyle': 'round,pad=0.3', 'facecolor': 'white', 'alpha': 0.7} if label.box else None,
             )
 
     def draw_field(self, field: Field) -> None:
@@ -353,6 +407,77 @@ class MplRenderer:
             vmax=scale.vmax,
         )
         self.figure.colorbar(artist, ax=self._axes, label=scale.label)
+
+    def draw_contours(self, contours: Contours) -> None:
+        """Draw *contours* as isolines over a triangulation of the samples, with no fill.
+
+        THE SAME POINT SET :meth:`draw_field` TAKES, drawn the other way: this library computes
+        isolines over a Delaunay triangulation of the samples, so a scattered set and a mesh's nodes
+        both arrive here unchanged. A colour given is used for EVERY level rather than cycled -- the
+        caller is drawing a set of lines that mean one thing, which is what an overlay is.
+        """
+        self._axes.tricontour(
+            np.asarray(contours.x, dtype=float),
+            np.asarray(contours.y, dtype=float),
+            np.asarray(contours.values, dtype=float),
+            levels=contours.levels,
+            colors=None if contours.color is None else [contours.color],
+            linewidths=contours.width,
+            alpha=contours.alpha,
+        )
+
+    def draw_vectors(self, vectors: Vectors) -> None:
+        """Draw *vectors* as arrows — this library's quiver, ONE artist over every sample.
+
+        ``angles='xy', scale_units='xy'`` pins the arrow to the data coordinates and ``scale`` to the
+        vocabulary's meaning (``|(u, v)| / scale`` data units long) instead of matplotlib's own
+        default of normalising to the axes. A direction that reads as a number in the description has
+        to read as the same number on the page.
+        """
+        self._axes.quiver(
+            np.asarray(vectors.x, dtype=float),
+            np.asarray(vectors.y, dtype=float),
+            np.asarray(vectors.u, dtype=float),
+            np.asarray(vectors.v, dtype=float),
+            angles='xy',
+            scale_units='xy',
+            scale=vectors.scale,
+            width=vectors.width,
+            color=self._next_color(vectors.color),
+            alpha=vectors.alpha,
+        )
+
+    def draw_colorbar(self, bar: Colorbar) -> None:
+        """Draw *bar* — a continuous bar, or one discrete band per tick when ticks are given.
+
+        THE RANGE IS REFUSED WHEN IT IS OPEN, and that is this adapter's own error rather than the
+        vocabulary's: :class:`~lab_commons.viz.Colorbar` says why a bar over nothing cannot derive
+        one, and the alternative to this refusal is a legend of unknown extent drawn as if it had
+        one -- the declaration-that-lies shape, on the axis a reader trusts most.
+
+        A DISCRETE BAR SAMPLES ITS COLOURS AT THE BAND CENTRES, which mirrors the region maps the
+        family draws: the palette is quantised to one colour per tick and the boundaries sit half a
+        step outside the outermost ticks, so a tick's label names the band it is centred in.
+        """
+        scale = bar.scale
+        if scale.vmin is None or scale.vmax is None:
+            msg = (
+                f'draw_colorbar needs Scale(vmin=..., vmax=...) pinned; got {scale!r}. A bar the figure '
+                'draws for itself has no samples to derive a range from'
+            )
+            raise ValueError(msg)
+        if bar.ticks is None:
+            mappable = ScalarMappable(cmap=scale.cmap, norm=Normalize(vmin=scale.vmin, vmax=scale.vmax))
+            mappable.set_array([])
+            self.figure.colorbar(mappable, ax=self._axes, label=scale.label)
+            return
+        edges, centers = bar.bands()
+        cmap = ListedColormap(plt.get_cmap(scale.cmap)(np.linspace(0.0, 1.0, len(centers) + 2)[1:-1]))
+        mappable = ScalarMappable(cmap=cmap, norm=BoundaryNorm(np.asarray(edges, dtype=float), cmap.N))
+        mappable.set_array([])
+        drawn = self.figure.colorbar(mappable, ax=self._axes, ticks=centers, label=scale.label)
+        if bar.tick_labels is not None:
+            drawn.set_ticklabels([str(text) for text in bar.tick_labels])
 
     def save(self, path: Path | str) -> Path | None:
         """Write the figure — and never open a window, which is the batch-run tail.

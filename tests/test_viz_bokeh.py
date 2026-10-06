@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from _viz_figure import draw_everything
 
-from lab_commons.viz import Field, Renderer, Scale, Style
+from lab_commons.viz import Colorbar, Contours, Field, Renderer, Scale, Style, Ticks, Vectors
 
 pytest.importorskip('bokeh')
 
@@ -67,6 +67,44 @@ def test_every_palette_name_this_adapter_carries_is_a_palette_bokeh_has() -> Non
     )
     assert len(PALETTES) >= 10, 'a floor: an empty table would pass this check vacuously'
     assert not missing, f'bokeh has no such palette: {missing}'
+
+
+def test_the_new_verbs_land_on_the_page_they_describe() -> None:
+    """The added verbs are measured by the GLYPHS behind them, on the bokeh model graph.
+
+    A VECTOR IS TWO GLYPHS HERE rather than one, and that is this library's shape rather than a
+    choice made in the adapter: there is no quiver, so the shaft is one vectorized segment renderer
+    and the heads are one marker renderer -- never one Arrow annotation per sample, which would
+    trade the primitive's whole cost model away.
+    """
+    renderer = BokehRenderer()
+    renderer.set_ticks(x=Ticks(positions=[0.0, 1.0], labels=['a', 'b']), y=Ticks(positions=[0.0], labels=()))
+    renderer.draw_vectors(Vectors(x=[0.0], y=[0.0], u=[1.0], v=[0.0], scale=1.0))
+    renderer.draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L', vmin=0.0, vmax=3.0), ticks=[0.0, 1.0]))
+    assert len(renderer.figure.renderers) == 2, 'the shaft and the head are two vectorized glyphs'
+    assert renderer.figure.renderers[1].glyph.marker == 'triangle', 'a shaft with no head is not a vector'
+    assert renderer.figure.xaxis.ticker.ticks == [0.0, 1.0]
+    assert renderer.figure.xaxis.major_label_overrides == {0.0: 'a', 1.0: 'b'}
+    assert renderer.figure.yaxis.major_label_text_alpha == 0, 'an empty label list must silence, not drop, the ticks'
+    assert len(renderer.figure.right) == 1, 'the colour bar is a layout item on the right'
+    renderer.close()
+
+
+def test_an_unpinned_colour_range_is_refused_rather_than_drawn() -> None:
+    """The same refusal as the other adapter's, for the same reason, on the same field."""
+    with pytest.raises(ValueError, match='vmin'):
+        BokehRenderer().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
+
+
+def test_a_contour_over_a_point_set_is_refused_by_name() -> None:
+    """THE ONE VERB THIS LIBRARY CANNOT DRAW, pinned as a refusal rather than left to a caller.
+
+    Bokeh contours a regular grid and interpolates it with `contourpy`, which neither this package
+    nor the `viz-bokeh` extra declares -- so the honest outcome is a raise that names the remedy,
+    never a figure that looks drawn and carries no isolines.
+    """
+    with pytest.raises(NotImplementedError, match='cannot draw Contours'):
+        BokehRenderer().draw_contours(Contours(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0]))
 
 
 def test_a_colormap_this_adapter_cannot_draw_is_refused_by_name() -> None:

@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from _viz_figure import draw_everything
 
-from lab_commons.viz import Renderer, Series, Style
+from lab_commons.viz import Colorbar, Contours, Renderer, Scale, Series, Style, Ticks
 
 pytest.importorskip('matplotlib')
 
@@ -55,8 +55,36 @@ def test_the_shared_description_reaches_the_canvas() -> None:
     assert len(axes.patches) >= 3, 'two winding patches and a coil-side circle'
     assert len(axes.texts) >= 1, 'the label'
     assert axes.collections, 'the field map is a collection'
-    assert len(renderer.figure.axes) == 2, 'the field map drew no colour bar'
+    assert axes.quiver, 'the vector field is its own artist, not a pile of annotations'
+    assert len(renderer.figure.axes) == 4, 'a field map and two self-set colour bars drew none'
     renderer.close()
+
+
+def test_the_new_verbs_land_on_the_figure_they_describe() -> None:
+    """Each added verb is measured by the ARTIST it leaves, not by the call returning.
+
+    THE THREE THAT ARE NOT A COUNT OF EXISTING ARTISTS: ticks replace the axis's own locator, the
+    contour is a collection with no fill, and a quiet axis (an empty label list) must still be
+    tickED -- a figure that answered that with "no ticks" would move the marks the caller kept.
+    """
+    renderer = viz_mpl.MplRenderer()
+    renderer.set_ticks(
+        x=Ticks(positions=[0.0, 1.0], labels=['a', 'b']),
+        y=Ticks(positions=[0.0, 2.0], labels=()),
+    )
+    renderer.draw_contours(Contours(x=[0.0, 1.0, 0.0, 1.0], y=[0.0, 0.0, 1.0, 1.0], values=[0.0, 1.0, 1.0, 2.0]))
+    axes = renderer.figure.axes[0]
+    assert [text.get_text() for text in axes.get_xticklabels()] == ['a', 'b']
+    assert list(axes.get_yticks()) == [0.0, 2.0]
+    assert [text.get_text() for text in axes.get_yticklabels()] == ['', ''], 'the ticks are there, the text is not'
+    assert axes.collections, 'the contour lines are a collection'
+    renderer.close()
+
+
+def test_an_unpinned_colour_range_is_refused_rather_than_drawn() -> None:
+    """A bar over nothing has no samples to derive a range from, and says so by name."""
+    with pytest.raises(ValueError, match='vmin'):
+        viz_mpl.MplRenderer().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
 
 
 def test_saving_writes_a_file_and_opens_no_window(tmp_path: Path) -> None:
