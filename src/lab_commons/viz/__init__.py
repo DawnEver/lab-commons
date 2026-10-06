@@ -1,29 +1,46 @@
 """Tier 2 — the family's ONE plotting vocabulary: what a figure IS, before any library draws it.
 
-A FIGURE IS A DESCRIPTION AND A RENDERER IS A CHOICE OF LIBRARY, and this module is the first half.
-It imports NO plotting library — not a module-scope one and not a lazy one (`NO-LAZY-IMPORT`: a
-deferred import makes the graph a guess) — so a producer (a sweep, a report, a solver's
-post-processing step) can declare the picture it wants on a box where no plotting library exists at
-all. A renderer is then imported EXPLICITLY, and that import is what opts a consumer in::
+A DESCRIPTION IS DATA, A CANVAS HOLDS COORDINATE SYSTEMS, AND A RENDERER IS A CHOICE OF LIBRARY. This
+module is the first two: it imports NO plotting library — not a module-scope one and not a lazy one
+(`NO-LAZY-IMPORT`: a deferred import makes the graph a guess) — so a producer (a sweep, a report, a
+solver's post-processing step) can declare the picture it wants on a box where no plotting library
+exists at all. An adapter is then imported EXPLICITLY, and that import is what opts a consumer in::
 
     from lab_commons.viz.mpl import MplRenderer        # pip install 'lab-commons[viz-mpl]'
     from lab_commons.viz.bokeh import BokehRenderer    # pip install 'lab-commons[viz-bokeh]'
 
 TWO ADAPTERS, EQUAL PEERS. Neither is the second-class spelling of the other: they share this
-vocabulary, they satisfy the same :class:`Renderer` protocol, and the same figure description draws
-the same picture through both. Which one a consumer takes is a dependency decision it makes in its
-own manifest, which is why the two live in two extras rather than one.
+vocabulary, they implement the same two protocols, and the same figure description draws the same
+picture through both. Which one a consumer takes is a dependency decision it makes in its own
+manifest, which is why the two live in two extras rather than one.
 
-WHY THE VOCABULARY IS TYPED RATHER THAN DUCK-TYPED. A renderer is checked against :class:`Renderer`
-with ``isinstance``, so "this object is a renderer" is a question with an answer instead of an
-assumption that survives until the first missing verb. Every primitive below is a frozen dataclass:
-a description handed to a renderer is not a place for a producer and a consumer to share mutable
-state, and a figure can then be described once and drawn, in a test, by a renderer that records it.
+A CANVAS IS NOT A COORDINATE SYSTEM, and separating the two is the shape of this tier rather than a
+convenience:
 
-WHAT A PRODUCER MAY ASSUME ABOUT A RENDERER, stated once here because a consumer reads no other
-page. One renderer draws ONE figure: the verbs accumulate onto it, ``save``/``show`` publish it, and
-``close`` lets it go. A verb that cannot be honoured is an error in the ADAPTER, never a silent
-omission here.
+* :class:`Figure` is the CANVAS — the page, the style, the palette cursor and the lifecycle. It
+  creates frames (:meth:`Figure.frame`), writes them (:meth:`Figure.save`), shows them
+  (:meth:`Figure.show`) and lets them go (:meth:`Figure.close`).
+* :class:`Frame` is ONE COORDINATE SYSTEM on that canvas — its projection, its axes, its limits,
+  its ticks, its title, and EVERY DRAW VERB. A figure with two panels has two frames; a figure with
+  a second y scale over the first has two frames sharing an x axis; a polar figure's frame says
+  ``projection='polar'``.
+
+Collapsing those two is what made a polar figure, a twin axis and a panel grid INEXPRESSIBLE here:
+there was one place to say which coordinate system a picture was in, and it was decided at
+construction. A verb that cannot be honoured is an error in the ADAPTER that cannot honour it, never
+a silent omission here or there.
+
+WHY THE VOCABULARY IS TYPED RATHER THAN DUCK-TYPED. A renderer is checked against :class:`Figure`
+and a frame against :class:`Frame` with ``isinstance``, so "this object is a renderer" is a question
+with an answer instead of an assumption that survives until the first missing verb. Every primitive
+below is a frozen dataclass: a description handed to a renderer is not a place for a producer and a
+consumer to share mutable state, and a figure can then be described once and drawn, in a test, by a
+renderer that records it.
+
+WHAT A PRODUCER MAY ASSUME, stated once here because a consumer reads no other page. A canvas starts
+EMPTY — frames are created by :meth:`Figure.frame` and there is no implicit one — and every frame
+draws in its own coordinate system while sharing the canvas's style and palette cursor. ``save`` and
+``show`` publish the whole canvas, whatever frames it holds.
 """
 
 from __future__ import annotations
@@ -32,20 +49,24 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from numpy.typing import ArrayLike
 
 __all__ = [
+    'PROJECTIONS',
     'Bars',
     'Circle',
     'Colorbar',
     'Contours',
     'Field',
+    'Figure',
+    'Frame',
     'Label',
+    'NullFrame',
     'NullRenderer',
     'Patch',
-    'Renderer',
+    'Rect',
     'Scale',
     'Segment',
     'Series',
@@ -53,6 +74,31 @@ __all__ = [
     'Ticks',
     'Vectors',
 ]
+
+#: Where a frame sits on its canvas: ``(left, bottom, width, height)``, each in canvas fractions —
+#: the convention matplotlib's ``add_axes`` takes and the one this vocabulary states, so a producer
+#: computing a panel grid computes the same numbers for either adapter. A frame that names none is
+#: left to the canvas, and its ``rect`` is then ``None`` rather than an invented rectangle.
+type Rect = tuple[float, float, float, float]
+
+#: The rect a frame covers when it names none and shares no axis: the whole canvas. It is the answer
+#: an adapter uses for LAYOUT questions (which grid cell is this frame in), never a position this
+#: vocabulary claims a library must draw an axes at.
+_CANVAS_RECT: Final[Rect] = (0.0, 0.0, 1.0, 1.0)
+
+#: The four numbers a rect is, BY NAME — so the arity check in :func:`_as_rect` is a comparison of
+#: names rather than a literal, and the refusal it raises can say which numbers it wanted.
+_RECT_FIELDS: Final = ('left', 'bottom', 'width', 'height')
+
+#: The coordinate systems a frame may be built in, BY NAME — the ONE place the set is declared, so a
+#: misspelling raises in every adapter instead of drawing something nobody asked for. Both adapters
+#: read THIS set: adding a system is one line here plus its implementation in an adapter, never a
+#: private second list.
+#:
+#: ``cartesian`` is the default and the only system the bokeh adapter can draw; ``polar`` is
+#: matplotlib's polar projection (radius against angle), which bokeh has no counterpart for and
+#: refuses BY NAME.
+PROJECTIONS: Final = frozenset({'cartesian', 'polar'})
 
 #: The ten-colour categorical cycle both adapters start from, so a figure does not change colour
 #: when its backend changes. The values are the ones matplotlib's ``tab10`` and bokeh's
@@ -144,7 +190,7 @@ class Colorbar:
     ``vmin``/``vmax`` ARE REQUIRED HERE, and the reason is the one place this primitive differs from
     a :class:`Scale` used on a field. A scale left open is derived from the samples the field carries;
     a bar over nothing has no samples, so an open range would be a bar of unknown extent that draws
-    as if it had one. :meth:`Renderer.draw_colorbar` refuses it instead.
+    as if it had one. :meth:`Frame.draw_colorbar` refuses it instead.
 
     ``ticks`` GIVEN IS WHAT MAKES THE BAR DISCRETE, with one colour band centred on each tick — the
     spelling of a categorical legend, where the value between two bands does not exist (a layer
@@ -202,7 +248,7 @@ class Series:
         color: an explicit colour, or ``None`` to take the next palette colour.
         style: the line style — ``'-'``, ``'--'``, ``':'``, ``'-.'``.
         width: the line width in points, or ``None`` for the library's own default.
-        marker: the symbol :meth:`Renderer.draw_markers` draws, e.g. ``'o'``, ``'s'``, ``'^'``.
+        marker: the symbol :meth:`Frame.draw_markers` draws, e.g. ``'o'``, ``'s'``, ``'^'``.
         size: the symbol size in points, or ``None`` for the library's own default.
         alpha: opacity, ``1.0`` for opaque — a trace behind another is read through it.
 
@@ -487,19 +533,31 @@ class Vectors:
 
 
 @runtime_checkable
-class Renderer(Protocol):
-    """What a renderer must be able to draw, and what it must be able to write.
-
-    ONE PICTURE PER RENDERER: a renderer IS the figure. Both adapters build exactly one figure at
-    construction, the drawing verbs accumulate onto it, and the lifecycle verbs publish it — so a
-    producer that wants two figures builds two renderers, which is also what makes a renderer cheap
-    to pass into a function as "where the picture goes".
+class Frame(Protocol):
+    """ONE COORDINATE SYSTEM ON A CANVAS: its projection, its axes, and every draw verb.
 
     THE DRAWING VERBS TAKE THE PRIMITIVES ABOVE AND NOTHING ELSE. A verb with a bag of keyword
     arguments would let a producer spell the same figure two ways and the two adapters disagree
     about which spelling they honour; a primitive is the one spelling, and an extension is a field
     on a dataclass — visible to every renderer at once, which is the property this layer exists for.
+
+    THE AXIS VERBS AND THE DRAW VERBS ARE BOTH HERE, and the split against :class:`Figure` is not
+    "drawing versus lifecycle" but "this coordinate system versus the page": a title, a label, a
+    limit, a tick, an aspect, a grid and a legend all belong to ONE axes, which is why they are not
+    on the canvas. A frame that is drawn OVER another one (a twin axis) has its own y axis while
+    sharing the x one — the rule for that is :meth:`Figure.frame`'s.
+
+    Attributes:
+        rect: where this frame sits on the canvas, ``(left, bottom, width, height)`` in canvas
+            fractions — or ``None`` when the producer left the placement to the canvas, which draws
+            it as its own default panel. Two frames of one canvas may carry the same rect, which is
+            what an overlaid twin axis IS.
+        projection: this frame's coordinate system, one of :data:`PROJECTIONS`.
+
     """
+
+    rect: Rect | None
+    projection: str
 
     def set_title(self, text: str) -> None:
         """Set the figure's title."""
@@ -566,13 +624,75 @@ class Renderer(Protocol):
         legend whose extent is a guess. A bar with ticks is drawn in DISCRETE bands, one per tick.
         """
 
-    def save(self, path: Path | str) -> Path | None:
-        """Write the figure to *path* and return where it went, or ``None`` if nothing was written.
 
-        THE RESOLUTION IS NOT AN ARGUMENT HERE; it is the style's ``dpi``. One adapter cannot honour
-        a per-call resolution at all (a bokeh page is resolution independent), and an argument one
-        renderer honours and the other ignores is precisely the second-class-peer shape this layer
-        exists to remove -- so the number lives in :class:`Style`, where every adapter reads it.
+@runtime_checkable
+class Figure(Protocol):
+    """THE CANVAS: the page a producer builds frames on, and what gets written or shown.
+
+    ONE PICTURE PER FIGURE, and a picture may hold SEVERAL coordinate systems. A canvas starts
+    EMPTY -- :meth:`frame` creates every frame, and the absence of an implicit one is what lets a
+    two-panel comparison, a polar star and a twin axis be the same kind of object. It also keeps a
+    renderer cheap to pass into a function as "where the picture goes": the function creates the
+    frame it draws on.
+
+    THE STYLE AND THE PALETTE CURSOR ARE THE CANVAS'S, NOT A FRAME'S. Two frames of one canvas draw
+    in one typeface and from one palette sequence, so a series on a second panel — or on a twin
+    axis, where the two y scales share the same pixels — never takes the colour of the series it is
+    drawn beside.
+    """
+
+    def frame(
+        self,
+        *,
+        rect: Rect | None = None,
+        projection: str | None = None,
+        sharex: Frame | None = None,
+        sharey: Frame | None = None,
+    ) -> Frame:
+        """Create a frame on this canvas and return it — the coordinate system the verbs draw on.
+
+        ``rect`` is ``(left, bottom, width, height)`` in canvas fractions; ``None`` means THE CANVAS
+        DECIDES — with one exception: a frame that names no rect and shares an X axis is drawn OVER
+        the frame it shares with, at that frame's rect, which is what a twin axis is. State a rect
+        to lay a frame out anywhere else (a panel below, beside, or in a grid).
+
+        ``projection`` is one of :data:`PROJECTIONS`, or ``None`` for ``'cartesian'`` — and for the
+        projection of the frame an overlaying frame is drawn over. An unknown name RAISES, naming
+        the set: a coordinate system nobody implemented must not draw as if it were cartesian.
+
+        ``sharex``/``sharey`` name another frame whose axis this one shares (one limit, one zoom,
+        both directions). Three combinations are the shapes this vocabulary exists for, and the
+        rest are refused by name:
+
+        * two frames, two rects, ``sharex`` — a panel grid, where a reader compares columns;
+        * the same rect and ``sharex``, or ``sharex`` and no rect — a TWIN AXIS: a second y scale
+          over one panel, its axis on the right, sharing the x axis and the pixels;
+        * ``sharey`` between frames at different rects — the transposed panel grid.
+
+        A frame may share an axis only with a frame in the SAME coordinate system, a frame drawn
+        over another has its own y (so ``sharey`` on a twin RAISES), and a frame that shares only a
+        y axis must name its rect — placement by inheritance means "drawn over", which is an x-axis
+        relationship and cannot be read off a shared y. Two frames that would coincide while
+        sharing only their y — a twin whose axis is on the top — RAISE for the same reason rather
+        than overlapping two y axes on one side.
+        """
+
+    def save(self, path: Path | str) -> Path | None:
+        """Write the figure — EVERY frame of it — to *path* and return where it went.
+
+        ``None`` means nothing was written. The resolution is the style's ``dpi``, for the reason
+        the frame verbs give above.
+        """
+
+    @property
+    def frames(self) -> tuple[Frame, ...]:
+        """Every frame this canvas holds, in creation order — the canvas's own registry.
+
+        READ-ONLY ON PURPOSE: a consumer that could append to it could corrupt the layout an adapter
+        builds from it, and a frame is created by :meth:`frame` rather than inserted. It exists so
+        that a producer holding a canvas (rather than each frame it made) can still reach them —
+        restyling every panel of a finished figure, or handing a renderer's own frames to a second
+        pass.
         """
 
     def show(self, *, interactive: bool = True) -> None:
@@ -582,26 +702,109 @@ class Renderer(Protocol):
         """Release the figure."""
 
 
-class NullRenderer:
-    """The DEFAULT renderer: every verb accepted, nothing drawn, no plotting library involved.
+@dataclass(frozen=True)
+class _Placement:
+    """A resolved :meth:`Figure.frame` request: where the frame goes, what it draws in, what it is.
 
-    WHY DRAWS-NOTHING IS THE DEFAULT AND NOT AN ERROR. A sweep, a batch or an unattended report runs
-    on boxes where no plotting library is installed, and the alternatives to this class are both
-    worse: make a plotting library a hard dependency of every consumer, or scatter ``if plot:``
-    branches through every producer so that "draw me this" and "decide whether to draw" are the same
-    line of code. Here a producer declares its figure ONCE, unconditionally, and the renderer decides
-    whether that figure becomes a file, a window, or nothing at all — the decision lives at the one
-    place that built the renderer.
-
-    It is also the renderer a TEST passes: a function that takes a renderer can be driven with this
-    one and its drawing calls are then an executed, assertion-free part of the covered code path
-    rather than a branch nobody runs.
-
-    EXAMPLE (the whole of it — a producer needs no other import)::
-
-        renderer = NullRenderer()
-        renderer.set_title('no window, no file, no library')
+    ``rect`` is ``None`` when the producer left the placement to the canvas. ``twin_of`` is the
+    frame this one is drawn OVER — a second y scale sharing the first frame's x axis and pixels —
+    or ``None`` for a frame that stands on its own. It is the frame rather than a flag so that an
+    adapter needs no second lookup to find the axes or the range it must attach to.
     """
+
+    rect: Rect | None
+    projection: str
+    twin_of: Frame | None
+
+
+def _covers(rect: Rect | None) -> Rect:
+    """The territory a frame covers: *rect*, or the whole canvas when it named none.
+
+    THE LAYOUT QUESTION, asked once. An adapter decides which grid cell or panel a frame belongs to
+    from this — never from ``rect`` directly, which is ``None`` for the frame that asked the canvas
+    to place it.
+    """
+    return _CANVAS_RECT if rect is None else rect
+
+
+def _place(*, rect: Rect | None, projection: str | None, sharex: Frame | None, sharey: Frame | None) -> _Placement:
+    """Resolve a frame request — THE RULE EVERY ADAPTER READS, stated once so none of them drifts.
+
+    A rule implemented in each adapter is a rule that holds until one of them is edited, and the
+    whole claim of this tier is that one description draws one picture through either backend. So
+    the resolution of "which rect, which coordinate system, is this a twin" lives HERE, over the
+    protocol's own data, and an adapter only translates the answer into its library.
+
+    Raises:
+        ValueError: an unknown projection name, a rect that is not four numbers, an axis shared with
+            a frame in another coordinate system, a frame sharing only a y axis and naming no rect,
+            or a request for something that cannot be drawn (a y-axis twin). The messages name what
+            to do instead.
+
+    """
+    if projection is not None and projection not in PROJECTIONS:
+        msg = f'unknown projection {projection!r}: a frame is one of {sorted(PROJECTIONS)}'
+        raise ValueError(msg)
+    stated = None if rect is None else _as_rect(rect)
+    shared = sharex if sharex is not None else sharey
+    if shared is None:
+        return _Placement(stated, 'cartesian' if projection is None else projection, None)
+    if projection is not None and projection != shared.projection:
+        msg = (
+            f'a frame may share an axis only with a frame in its own coordinate system: {projection!r} '
+            f"against the shared frame's {shared.projection!r}"
+        )
+        raise ValueError(msg)
+    if sharey is not None and sharex is None and stated is None:
+        msg = (
+            'a frame that shares only a y axis must name its rect: naming none is how a frame is drawn '
+            'OVER the frame it shares an X axis with, and there is no such frame here'
+        )
+        raise ValueError(msg)
+    if sharey is not None and stated is not None and _covers(stated) == _covers(sharey.rect):
+        msg = (
+            "two frames drawn over one another share an X axis, with the second one's y on the right; a "
+            'twin whose y is shared and whose x is independent is not expressible'
+        )
+        raise ValueError(msg)
+    # NAMING NO RECT WHILE SHARING AN X IS HOW A TWIN IS SPELLED, and so is repeating the rect of the
+    # frame it shares that axis with: both mean "drawn over it", which is why the twin's rect is that
+    # frame's and not the canvas.
+    twin_of = sharex if sharex is not None and (stated is None or _covers(stated) == _covers(sharex.rect)) else None
+    if twin_of is not None:
+        if sharey is not None:
+            msg = "a frame drawn over another is a twin axis: it shares that frame's x and has its own y"
+            raise ValueError(msg)
+        return _Placement(twin_of.rect, shared.projection, twin_of)
+    return _Placement(stated, shared.projection, None)
+
+
+def _as_rect(rect: Rect) -> Rect:
+    """*rect* as four plain floats, refusing anything that is not four numbers."""
+    if len(rect) != len(_RECT_FIELDS):
+        msg = f'a rect is {", ".join(_RECT_FIELDS)} -- four numbers in canvas fractions; got {rect!r}'
+        raise ValueError(msg)
+    left, bottom, width, height = (float(value) for value in rect)
+    return left, bottom, width, height
+
+
+class NullFrame:
+    """A coordinate system that accepts every verb and draws nothing — what the default hands back.
+
+    TOTAL BY CONSTRUCTION, and that is the whole of its job: a producer declares its figure ONCE,
+    unconditionally, and "does this box draw?" is answered by which canvas it built rather than by
+    a branch at every drawing call. A frame that dropped a verb would move that branch back, so
+    every verb of :class:`Frame` — including the ones an adapter refuses to DRAW — is here.
+
+    THE RECT AND THE PROJECTION ARE KEPT, because they are the description rather than the drawing:
+    a producer (or a test) can still read the coordinate system it asked for, and a frame with no
+    library behind it is still the shape the adapters were asked for.
+    """
+
+    def __init__(self, *, rect: Rect, projection: str) -> None:
+        """Carry the placement nothing is drawn on."""
+        self.rect = rect
+        self.projection = projection
 
     def set_title(self, text: str) -> None:
         """Accepted and ignored."""
@@ -666,6 +869,63 @@ class NullRenderer:
         An adapter that DRAWS the bar refuses an unpinned range; this one has nothing to read it for,
         and raising would make a description refuse to exist rather than refuse to be drawn.
         """
+
+
+class NullRenderer:
+    """The DEFAULT renderer: every verb accepted, nothing drawn, no plotting library involved.
+
+    WHY DRAWS-NOTHING IS THE DEFAULT AND NOT AN ERROR. A sweep, a batch or an unattended report runs
+    on boxes where no plotting library is installed, and the alternatives to this class are both
+    worse: make a plotting library a hard dependency of every consumer, or scatter ``if plot:``
+    branches through every producer so that "draw me this" and "decide whether to draw" are the same
+    line of code. Here a producer declares its figure ONCE, unconditionally, and the renderer decides
+    whether that figure becomes a file, a window, or nothing at all — the decision lives at the one
+    place that built the renderer.
+
+    IT RESOLVES FRAMES BY THE SAME RULE THE ADAPTERS DO. :func:`_place` is called here too, so a
+    description that would raise against matplotlib raises identically against nothing: a batch that
+    runs unattended on a box with no plotting library is exactly where a figure that cannot be drawn
+    must still be caught, and "it only fails where it is drawn" would be a surprise saved for the
+    one machine nobody is watching.
+
+    It is also the renderer a TEST passes: a function that takes a renderer can be driven with this
+    one and its drawing calls are then an executed, assertion-free part of the covered code path
+    rather than a branch nobody runs.
+
+    EXAMPLE (the whole of it — a producer needs no other import)::
+
+        renderer = NullRenderer()
+        renderer.frame().set_title('no window, no file, no library')
+    """
+
+    def __init__(self) -> None:
+        """Build an empty canvas — the frames a producer creates are the only thing it holds."""
+        self._frames: list[NullFrame] = []
+
+    def frame(
+        self,
+        *,
+        rect: Rect | None = None,
+        projection: str | None = None,
+        sharex: Frame | None = None,
+        sharey: Frame | None = None,
+    ) -> NullFrame:
+        """Create a frame that accepts every verb and draws nothing, and return it.
+
+        The placement is resolved by the shared rule (:func:`_place`), so the rect a twin inherits,
+        the projection a frame is built in and every refusal are the same ones the drawing adapters
+        apply — a figure declared on a box with no plotting library is the figure that would have
+        been drawn.
+        """
+        placement = _place(rect=rect, projection=projection, sharex=sharex, sharey=sharey)
+        frame = NullFrame(rect=placement.rect, projection=placement.projection)
+        self._frames.append(frame)
+        return frame
+
+    @property
+    def frames(self) -> tuple[NullFrame, ...]:
+        """Every frame this canvas holds, in creation order."""
+        return tuple(self._frames)
 
     def save(self, path: Path | str) -> Path | None:
         """Write nothing, and answer ``None`` rather than the path it was handed.

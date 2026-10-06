@@ -11,9 +11,11 @@ built -- a suite that pops a window on somebody's desktop is a suite that gets r
 also what makes the degrade path testable rather than assumed: under Agg a show CANNOT happen, and
 every assertion below is about what happens instead.
 
-THE GUARD IS A BARE ``pytest.importorskip`` CALL rather than a binding, and that is deliberate: this
-suite reads its own tree for the shape it recommends, and a bare guard is the one that leaves the
-imports after it at module scope.
+THE FRAME VERBS ARE MEASURED ON THE ARTISTS THEY LEAVE, never on the call returning: a verb that
+returned without drawing anything would satisfy every protocol and produce an empty picture, which
+no signature can catch. THE SHAPES ARE MEASURED THE SAME WAY -- a panel grid by the limits its
+frames share, a twin axis by the axes matplotlib actually built under it -- because "the picture has
+four panels" is a claim about the figure and not about the code that asked for it.
 """
 
 from __future__ import annotations
@@ -21,9 +23,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from _viz_figure import draw_everything
+from _viz_figure import PANEL_RECTS, draw_everything, draw_panels, draw_polar, draw_twin
 
-from lab_commons.viz import Colorbar, Contours, Renderer, Scale, Series, Style, Ticks
+from lab_commons.viz import Colorbar, Contours, Figure, Frame, Scale, Series, Style, Ticks
 
 pytest.importorskip('matplotlib')
 
@@ -34,10 +36,11 @@ from lab_commons.viz import mpl as viz_mpl
 mpl.use('Agg')
 
 
-def test_the_adapter_satisfies_the_protocol() -> None:
-    """The adapter is checked against the SAME contract the vocabulary declares."""
+def test_the_adapter_satisfies_both_protocols() -> None:
+    """The adapter is checked against the SAME contracts the vocabulary declares, canvas and frame."""
     renderer = viz_mpl.MplRenderer()
-    assert isinstance(renderer, Renderer)
+    assert isinstance(renderer, Figure)
+    assert isinstance(renderer.frame(), Frame)
     assert renderer.figure.get_size_inches().tolist() == [8.0, 6.0]
     renderer.close()
 
@@ -49,14 +52,120 @@ def test_the_shared_description_reaches_the_canvas() -> None:
     would satisfy the protocol and produce an empty picture, which no signature can catch.
     """
     renderer = viz_mpl.MplRenderer()
-    draw_everything(renderer)
-    axes = renderer.figure.axes[0]
+    frame = renderer.frame()
+    draw_everything(frame)
+    axes = frame.axes
     assert len(axes.lines) >= 4, 'the chart, the waveform traces and the wire are lines'
     assert len(axes.patches) >= 3, 'two winding patches and a coil-side circle'
     assert len(axes.texts) >= 1, 'the label'
     assert axes.collections, 'the field map is a collection'
     assert axes.quiver, 'the vector field is its own artist, not a pile of annotations'
     assert len(renderer.figure.axes) == 4, 'a field map and two self-set colour bars drew none'
+    renderer.close()
+
+
+def test_a_panel_grid_shares_the_axes_every_panel_named() -> None:
+    """FOUR FRAMES ON ONE CANVAS, and the sharing measured by what a reader would see.
+
+    A limit set on the first panel is the limit of all four.
+
+    Reading ``get_shared_x_axes().joined(...)`` would be reading matplotlib's bookkeeping; reading
+    the LIMITS is reading the picture. Both directions are set, because a share that only propagated
+    one way would look linked and compare wrongly.
+    """
+    renderer = viz_mpl.MplRenderer()
+    draw_panels(renderer)
+    top_left, top_right, bottom_left, bottom_right = renderer.frames
+
+    assert [frame.rect for frame in renderer.frames] == list(PANEL_RECTS)
+    assert len(renderer.figure.axes) == 4, 'four frames are four axes'
+    top_left.set_limits(x=(0.0, 5.0), y=(0.0, 9.0))
+    for frame in (top_right, bottom_left, bottom_right):
+        assert frame.axes.get_xlim() == (0.0, 5.0), 'a panel does not share the x axis it named'
+        assert frame.axes.get_ylim() == (0.0, 9.0), 'a panel does not share the y axis it named'
+    assert [frame.axes.get_title() for frame in (top_left, top_right)] == ['panel 0', 'panel 1']
+    renderer.close()
+
+
+def test_a_twin_axis_is_a_second_scale_on_the_same_pixels() -> None:
+    """THE SHAPE ``twinx`` ASKS FOR, measured on the axes matplotlib built.
+
+    One rect, two axes, the second one's y on the right, no second x axis, and a transparent patch
+    so the first frame's drawing is not covered by the one drawn over it.
+    """
+    renderer = viz_mpl.MplRenderer()
+    draw_twin(renderer)
+    torque, power = renderer.frames
+
+    assert power.rect == torque.rect, 'a twin is drawn over the frame it shares an x axis with'
+    assert len(renderer.figure.axes) == 2, 'a twin is a second axes, not a second figure'
+    assert power.axes.get_position().bounds == torque.axes.get_position().bounds
+    assert power.axes.yaxis.get_ticks_position() == 'right', 'the second scale overprints the first'
+    assert power.axes.yaxis.get_label().get_text() == 'power (kW)'
+    assert power.axes.xaxis.get_visible() is False, 'a twin is not a second x axis'
+    assert power.axes.patch.get_visible() is False, 'an opaque twin hides the frame under it'
+
+    torque.set_limits(x=(0.0, 5000.0))
+    power.set_limits(y=(-1.0, 1.0))
+    assert power.axes.get_xlim() == (0.0, 5000.0), 'the twin does not share the x axis'
+    assert torque.axes.get_ylim() != (-1.0, 1.0), 'the twin does not have its own y scale'
+    renderer.close()
+
+
+def test_a_named_rect_is_the_axes_box_and_an_unnamed_one_is_the_canvas_own_panel() -> None:
+    """The two placement statements, measured on the axes matplotlib built.
+
+    A STATED RECT IS EXACT — a producer computing a panel grid gets those panels, to the fraction.
+    A frame that named none gets matplotlib's own subplot geometry, which is the box a normal plot
+    leaves for its own labels: drawing that frame as if it had named the whole canvas is what puts
+    a title outside the picture, and it is why the canvas decides rather than inventing a rect.
+    """
+    renderer = viz_mpl.MplRenderer()
+    placed = renderer.frame(rect=(0.0, 0.0, 0.5, 1.0))
+    unplaced = renderer.frame()
+    placed.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0]))
+    unplaced.draw_line(Series(x=[0.0, 1.0], y=[1.0, 0.0]))
+
+    assert tuple(placed.axes.get_position().bounds) == (0.0, 0.0, 0.5, 1.0)
+    left, bottom, width, height = (float(value) for value in unplaced.axes.get_position().bounds)
+    assert (left, bottom, width, height) != (0.0, 0.0, 1.0, 1.0), 'the canvas invented a rect'
+    assert left > 0.0, 'the frame the canvas placed is flush with the left edge'
+    assert left + width < 1.0, 'the frame the canvas placed is flush with the right edge'
+    assert bottom > 0.0, 'the frame the canvas placed is flush with the bottom'
+    assert bottom + height < 1.0, 'the frame the canvas placed is flush with the top'
+    renderer.close()
+
+
+def test_a_polar_frame_is_built_as_a_polar_axes() -> None:
+    """The projection is the LIBRARY's, so the frame is asked what it became rather than assumed.
+
+    ``axes.name`` is matplotlib's own answer, and the trace is on it: a frame that was built
+    cartesian would draw the same numbers as a circle-less spiral, which no protocol can catch.
+    """
+    renderer = viz_mpl.MplRenderer()
+    draw_polar(renderer)
+    star = renderer.frames[0]
+    assert star.projection == 'polar'
+    assert star.axes.name == 'polar'
+    assert star.axes.lines, 'the star trace was not drawn'
+    assert star.axes.get_title() == 'slot EMF star'
+    assert star.rect is None, 'a frame that names no rect is placed by the canvas'
+    renderer.close()
+
+
+def test_the_palette_cursor_belongs_to_the_canvas_and_not_to_a_frame() -> None:
+    """Two frames of one canvas take DIFFERENT colours, which is what a twin axis needs.
+
+    On a twin the two frames draw over the same pixels, so a per-frame cursor would give the second
+    series the first one's colour -- not a repeated colour, an unreadable one. The cursor is the
+    canvas's, so the n-th artist of the figure takes the n-th palette entry whichever frame drew it.
+    """
+    renderer = viz_mpl.MplRenderer()
+    first, second = renderer.frame(), renderer.frame(rect=(0.0, 0.5, 1.0, 0.5))
+    first.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0]))
+    second.draw_line(Series(x=[0.0, 1.0], y=[1.0, 0.0]))
+    assert first.axes.lines[0].get_color() == Style().palette[0]
+    assert second.axes.lines[0].get_color() == Style().palette[1]
     renderer.close()
 
 
@@ -68,29 +177,29 @@ def test_the_new_verbs_land_on_the_figure_they_describe() -> None:
     tickED -- a figure that answered that with "no ticks" would move the marks the caller kept.
     """
     renderer = viz_mpl.MplRenderer()
-    renderer.set_ticks(
+    frame = renderer.frame()
+    frame.set_ticks(
         x=Ticks(positions=[0.0, 1.0], labels=['a', 'b']),
         y=Ticks(positions=[0.0, 2.0], labels=()),
     )
-    renderer.draw_contours(Contours(x=[0.0, 1.0, 0.0, 1.0], y=[0.0, 0.0, 1.0, 1.0], values=[0.0, 1.0, 1.0, 2.0]))
-    axes = renderer.figure.axes[0]
-    assert [text.get_text() for text in axes.get_xticklabels()] == ['a', 'b']
-    assert list(axes.get_yticks()) == [0.0, 2.0]
-    assert [text.get_text() for text in axes.get_yticklabels()] == ['', ''], 'the ticks are there, the text is not'
-    assert axes.collections, 'the contour lines are a collection'
+    frame.draw_contours(Contours(x=[0.0, 1.0, 0.0, 1.0], y=[0.0, 0.0, 1.0, 1.0], values=[0.0, 1.0, 1.0, 2.0]))
+    assert [text.get_text() for text in frame.axes.get_xticklabels()] == ['a', 'b']
+    assert list(frame.axes.get_yticks()) == [0.0, 2.0]
+    assert [text.get_text() for text in frame.axes.get_yticklabels()] == ['', ''], 'the ticks are there'
+    assert frame.axes.collections, 'the contour lines are a collection'
     renderer.close()
 
 
 def test_an_unpinned_colour_range_is_refused_rather_than_drawn() -> None:
     """A bar over nothing has no samples to derive a range from, and says so by name."""
     with pytest.raises(ValueError, match='vmin'):
-        viz_mpl.MplRenderer().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
+        viz_mpl.MplRenderer().frame().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
 
 
 def test_saving_writes_a_file_and_opens_no_window(tmp_path: Path) -> None:
     """The batch tail: a path back, a non-empty file, and no window however headless the box."""
     renderer = viz_mpl.MplRenderer()
-    draw_everything(renderer)
+    draw_everything(renderer.frame())
     out = renderer.save(tmp_path / 'figure.png')
     assert out == tmp_path / 'figure.png'
     assert out is not None
@@ -98,13 +207,24 @@ def test_saving_writes_a_file_and_opens_no_window(tmp_path: Path) -> None:
     assert out.stat().st_size > 0
 
 
+def test_every_frame_of_a_canvas_reaches_the_saved_file(tmp_path: Path) -> None:
+    """A multi-panel canvas is ONE artifact: saving writes the whole figure, not the last frame."""
+    renderer = viz_mpl.MplRenderer()
+    draw_panels(renderer)
+    out = renderer.save(tmp_path / 'panels.png')
+    assert out is not None
+    assert out.is_file()
+    assert out.stat().st_size > 0
+    assert len(renderer.figure.axes) == 4, 'the saved figure lost the panels it was asked for'
+
+
 def test_one_description_takes_the_same_colours_every_time() -> None:
     """The palette position is a function of one figure, not of what an earlier figure did."""
     first, second = viz_mpl.MplRenderer(), viz_mpl.MplRenderer()
     for renderer in (first, second):
-        renderer.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0]))
-    assert first.figure.axes[0].lines[0].get_color() == Style().palette[0]
-    assert second.figure.axes[0].lines[0].get_color() == Style().palette[0]
+        renderer.frame().draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0]))
+    assert first.frames[0].axes.lines[0].get_color() == Style().palette[0]
+    assert second.frames[0].axes.lines[0].get_color() == Style().palette[0]
     first.close()
     second.close()
 

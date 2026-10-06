@@ -6,6 +6,10 @@ BOKEH IS AN OPTIONAL EXTRA, so this module degrades rather than stranding the su
 
 NOTHING HERE OPENS A BROWSER. ``show`` is only ever called with ``interactive=False``, and the
 artifact every assertion is taken on is the saved page.
+
+THE PANEL LAYOUT IS MEASURED ON THE GRID THE PAGE IS BUILT FROM, because this library has no axes
+rect: a frame becomes one figure in one cell, so "the four panels are where the rects say" is a
+question about the layout model and not about the code that asked for it.
 """
 
 from __future__ import annotations
@@ -13,36 +17,143 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from _viz_figure import draw_everything
+from _viz_figure import PANEL_RECTS, draw_everything, draw_panels, draw_twin
 
-from lab_commons.viz import Colorbar, Contours, Field, Renderer, Scale, Style, Ticks, Vectors
+from lab_commons.viz import (
+    Colorbar,
+    Contours,
+    Field,
+    Figure,
+    Frame,
+    Scale,
+    Segment,
+    Style,
+    Ticks,
+    Vectors,
+)
 
 pytest.importorskip('bokeh')
 
 from bokeh import palettes
+from bokeh.models import Arrow
 
 from lab_commons.viz.bokeh import PALETTES, BokehRenderer
 
 
-def test_the_adapter_satisfies_the_protocol() -> None:
-    """The adapter is checked against the SAME contract the vocabulary declares."""
+def test_the_adapter_satisfies_both_protocols() -> None:
+    """The adapter is checked against the SAME contracts the vocabulary declares, canvas and frame."""
     renderer = BokehRenderer()
-    assert isinstance(renderer, Renderer)
+    assert isinstance(renderer, Figure)
+    assert isinstance(renderer.frame(), Frame)
     assert renderer.style.figure_size == Style().figure_size
 
 
 def test_the_shared_description_reaches_the_page(tmp_path: Path) -> None:
     """Every subject in the shared description leaves a glyph behind, and the page is written."""
     renderer = BokehRenderer()
-    draw_everything(renderer)
-    assert len(renderer.figure.renderers) >= 6, 'bars, lines, markers, patches, circles, segments'
-    assert renderer.figure.title.text == 'every primitive'
+    frame = renderer.frame()
+    draw_everything(frame)
+    assert len(frame.figure.renderers) >= 6, 'bars, lines, markers, patches, circles, segments'
+    assert frame.figure.title.text == 'every primitive'
     out = renderer.save(tmp_path / 'figure.html')
     assert out == tmp_path / 'figure.html'
     assert out is not None
     assert out.is_file()
     assert out.stat().st_size > 0
     assert '<html' in out.read_text(encoding='utf-8'), 'the artifact is not a page'
+
+
+def test_a_panel_grid_is_arranged_by_the_rects_it_named() -> None:
+    """FOUR FRAMES, four cells, and one coordinate system each — measured on the layout.
+
+    ``gridplot`` keeps its cells flat as ``(plot, row, column)`` triples, which is the reading this
+    takes: the top row is the TOP of the picture (a row index counts down from the highest bottom
+    edge), and the columns run left to right. Sharing here is a shared RANGE object, because that is
+    what links two bokeh figures — the same one-limit behaviour, in this library's own spelling.
+    """
+    renderer = BokehRenderer()
+    draw_panels(renderer)
+    top_left, top_right, bottom_left, bottom_right = renderer.frames
+
+    cells = {(row, column): plot for plot, row, column in renderer._layout().children}
+    assert cells == {
+        (0, 0): top_left.figure,
+        (0, 1): top_right.figure,
+        (1, 0): bottom_left.figure,
+        (1, 1): bottom_right.figure,
+    }, 'the panels are not in the cells their rects describe'
+    assert [frame.rect for frame in renderer.frames] == list(PANEL_RECTS)
+    for frame in (top_right, bottom_left, bottom_right):
+        assert frame.figure.x_range is top_left.figure.x_range, 'a panel does not share the x range it named'
+        assert frame.figure.y_range is top_left.figure.y_range, 'a panel does not share the y range it named'
+
+
+def test_a_twin_axis_is_a_second_y_range_inside_one_figure() -> None:
+    """THE SHAPE ``twinx`` ASKS FOR: one figure, two y ranges, its own right-hand axis.
+
+    Every glyph of the twin is bound to its own range BY NAME, and the base's own glyph must stay
+    on the default one — which is the half that makes the two scales independent rather than merely
+    drawn together.
+
+    The base's own glyph must stay on the DEFAULT range, which is the half that makes the two
+    scales independent rather than merely drawn together.
+    """
+    renderer = BokehRenderer()
+    draw_twin(renderer)
+    torque, power = renderer.frames
+
+    assert power.figure is torque.figure, 'a twin is a second scale in one figure, not a second figure'
+    assert power.rect == torque.rect, 'a twin is drawn over the frame it shares an x axis with'
+    assert list(torque.figure.extra_y_ranges) == ['y1'], 'the twin registered no second y range'
+    assert torque.figure.right[0].axis_label == 'power (kW)', 'the twin has no axis of its own on the right'
+    assert torque.figure.renderers[0].y_range_name == 'default', 'the base glyph left the default range'
+    assert power.figure.renderers[1].y_range_name == 'y1', 'the twin glyph is not bound to the twin range'
+
+    torque.set_limits(x=(0.0, 5000.0))
+    power.set_limits(y=(0.0, 500.0))
+    assert torque.figure.x_range.start == 0.0, 'the twin does not share the x range'
+    assert power.figure.extra_y_ranges['y1'].end == 500.0, 'the twin has no y scale of its own'
+    assert torque.figure.y_range.end != 500.0, 'the twin wrote its scale into the base frame'
+
+
+def test_an_arrowed_segment_on_a_twin_is_refused_by_name() -> None:
+    """THE ONE PLACEMENT THIS LIBRARY CANNOT HONOUR, pinned as a refusal rather than left to a caller.
+
+    An arrowed segment is an ``Arrow`` annotation here, positioned in the figure's DEFAULT ranges —
+    on a twin frame the head would land on the other scale. There is no range binding on an
+    annotation, so the honest outcome is a raise that names the remedy, never an arrow in the wrong
+    place with a caption nobody can read.
+    """
+    renderer = BokehRenderer()
+    draw_twin(renderer)
+    torque, power = renderer.frames
+    with pytest.raises(NotImplementedError, match='twin axis'):
+        power.draw_segments((Segment(x0=0.0, y0=0.0, x1=1.0, y1=1.0, arrow=True),))
+    torque.draw_segments((Segment(x0=0.0, y0=0.0, x1=1.0, y1=1.0, arrow=True),))
+    assert any(isinstance(item, Arrow) for item in torque.figure.center), 'the base frame lost its arrow'
+
+
+def test_a_polar_frame_is_refused_by_name() -> None:
+    """THE ONE PROJECTION THIS LIBRARY DOES NOT HAVE, refused where the frame would be built.
+
+    Bokeh draws every glyph in cartesian data units, so a polar frame silently built as cartesian
+    would be a picture that looks drawn and means something else -- the remedy is the other adapter,
+    which has the projection, and the message says so.
+    """
+    with pytest.raises(NotImplementedError, match='polar'):
+        BokehRenderer().frame(projection='polar')
+
+
+def test_two_frames_that_cover_one_cell_without_sharing_it_are_refused(tmp_path: Path) -> None:
+    """A rect that is not a grid cell cannot be drawn here.
+
+    The writer says so rather than putting one panel wherever a cell happens to be.
+    """
+    renderer = BokehRenderer()
+    renderer.frame(rect=(0.0, 0.0, 1.0, 0.5))
+    renderer.frame(rect=(0.0, 0.0, 0.5, 1.0))
+    with pytest.raises(ValueError, match='one canvas cell'):
+        renderer.save(tmp_path / 'figure.html')
 
 
 def test_a_raster_extension_is_rewritten_to_the_format_this_library_writes(tmp_path: Path) -> None:
@@ -78,22 +189,23 @@ def test_the_new_verbs_land_on_the_page_they_describe() -> None:
     trade the primitive's whole cost model away.
     """
     renderer = BokehRenderer()
-    renderer.set_ticks(x=Ticks(positions=[0.0, 1.0], labels=['a', 'b']), y=Ticks(positions=[0.0], labels=()))
-    renderer.draw_vectors(Vectors(x=[0.0], y=[0.0], u=[1.0], v=[0.0], scale=1.0))
-    renderer.draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L', vmin=0.0, vmax=3.0), ticks=[0.0, 1.0]))
-    assert len(renderer.figure.renderers) == 2, 'the shaft and the head are two vectorized glyphs'
-    assert renderer.figure.renderers[1].glyph.marker == 'triangle', 'a shaft with no head is not a vector'
-    assert renderer.figure.xaxis.ticker.ticks == [0.0, 1.0]
-    assert renderer.figure.xaxis.major_label_overrides == {0.0: 'a', 1.0: 'b'}
-    assert renderer.figure.yaxis.major_label_text_alpha == 0, 'an empty label list must silence, not drop, the ticks'
-    assert len(renderer.figure.right) == 1, 'the colour bar is a layout item on the right'
+    frame = renderer.frame()
+    frame.set_ticks(x=Ticks(positions=[0.0, 1.0], labels=['a', 'b']), y=Ticks(positions=[0.0], labels=()))
+    frame.draw_vectors(Vectors(x=[0.0], y=[0.0], u=[1.0], v=[0.0], scale=1.0))
+    frame.draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L', vmin=0.0, vmax=3.0), ticks=[0.0, 1.0]))
+    assert len(frame.figure.renderers) == 2, 'the shaft and the head are two vectorized glyphs'
+    assert frame.figure.renderers[1].glyph.marker == 'triangle', 'a shaft with no head is not a vector'
+    assert frame.figure.xaxis.ticker.ticks == [0.0, 1.0]
+    assert frame.figure.xaxis.major_label_overrides == {0.0: 'a', 1.0: 'b'}
+    assert frame.figure.yaxis.major_label_text_alpha == 0, 'an empty label list must silence, not drop, the ticks'
+    assert len(frame.figure.right) == 1, 'the colour bar is a layout item on the right'
     renderer.close()
 
 
 def test_an_unpinned_colour_range_is_refused_rather_than_drawn() -> None:
     """The same refusal as the other adapter's, for the same reason, on the same field."""
     with pytest.raises(ValueError, match='vmin'):
-        BokehRenderer().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
+        BokehRenderer().frame().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
 
 
 def test_a_contour_over_a_point_set_is_refused_by_name() -> None:
@@ -104,15 +216,15 @@ def test_a_contour_over_a_point_set_is_refused_by_name() -> None:
     never a figure that looks drawn and carries no isolines.
     """
     with pytest.raises(NotImplementedError, match='cannot draw Contours'):
-        BokehRenderer().draw_contours(Contours(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0]))
+        BokehRenderer().frame().draw_contours(Contours(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0]))
 
 
 def test_a_colormap_this_adapter_cannot_draw_is_refused_by_name() -> None:
     """No silent fallback to a default: a substitution would draw a different colour scale."""
-    renderer = BokehRenderer()
+    frame = BokehRenderer().frame()
     field = Field(x=[0.0], y=[0.0], values=[1.0], scale=Scale(cmap='definitely-not-a-colormap'))
     with pytest.raises(ValueError, match='no bokeh palette named'):
-        renderer.draw_field(field)
+        frame.draw_field(field)
 
 
 def test_showing_without_a_window_opens_nothing() -> None:

@@ -1,10 +1,13 @@
 """The matplotlib adapter — importing THIS module is what opts a consumer in.
 
-This is the second half of :mod:`lab_commons.viz`. The vocabulary module imports no plotting library
-at all; this one imports matplotlib at module scope, so the import itself is the opt-in, and it is
-paid for by the ``viz-mpl`` extra. ``NO-LAZY-IMPORT`` is why nothing here defers that import into a
-function: a deferred import makes the import graph a guess for every reader and every cost model,
-and the honest spelling of "optional" is an OPTIONAL MODULE a consumer names explicitly.
+This is the canvas half of :mod:`lab_commons.viz`: the matplotlib ``Figure``, the style applied to
+it, the palette cursor its frames share, the lifecycle verbs -- and :meth:`MplRenderer.frame`, which
+creates the :class:`~lab_commons.viz.mpl_frame.MplFrame` that every draw verb belongs to. The
+vocabulary module imports no plotting library at all; this one imports matplotlib at module scope, so
+the import itself is the opt-in, and it is paid for by the ``viz-mpl`` extra. ``NO-LAZY-IMPORT`` is
+why nothing here defers that import into a function: a deferred import makes the import graph a guess
+for every reader and every cost model, and the honest spelling of "optional" is an OPTIONAL MODULE a
+consumer names explicitly.
 
 WHAT LIVES HERE BESIDE THE RENDERER, and why it is this module rather than the vocabulary one:
 :func:`enable_interactive_backend`, :func:`is_interactive_backend` and :func:`show_or_save` are the
@@ -18,35 +21,18 @@ nobody could check.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator
+from itertools import count
 from pathlib import Path
 from typing import Final
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import numpy as np
-from matplotlib.cm import ScalarMappable
-from matplotlib.collections import PatchCollection
-from matplotlib.colors import BoundaryNorm, ListedColormap, Normalize
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.patches import Circle as CirclePatch
-from matplotlib.patches import Polygon as PolygonPatch
 
-from lab_commons.viz import (
-    Bars,
-    Circle,
-    Colorbar,
-    Contours,
-    Field,
-    Label,
-    Patch,
-    Scale,
-    Segment,
-    Series,
-    Style,
-    Ticks,
-    Vectors,
-)
+from lab_commons.viz import Frame, Rect, Style, _place
+from lab_commons.viz.mpl_frame import MplFrame
 
 __all__ = [
     'MplRenderer',
@@ -59,6 +45,42 @@ __all__ = [
 #: The backends that CANNOT open a window. Lower-case, because ``mpl.get_backend()`` casing varies
 #: while matplotlib normalises its backend names case-insensitively.
 _NONINTERACTIVE_BACKENDS: Final = frozenset({'agg', 'pdf', 'ps', 'svg', 'cairo', 'template'})
+
+#: This library's own name for each coordinate system the vocabulary declares. ONE row per name in
+#: :data:`~lab_commons.viz.PROJECTIONS`, and the lookup is what turns an unknown name into a
+#: ``KeyError`` here rather than a figure drawn in the wrong system.
+#:
+#: ``cartesian`` IS ``None`` because matplotlib's default axes ARE the rectilinear system and its
+#: projection registry has no entry for them: handing a name to ``add_axes`` that the registry
+#: cannot resolve is an error, so the absence of a name is the spelling.
+_MPL_PROJECTIONS: Final[dict[str, str | None]] = {'cartesian': None, 'polar': 'polar'}
+
+
+def _opened(projection: str, sharex: Frame | None, sharey: Frame | None) -> dict[str, object]:
+    """The keyword arguments matplotlib opens an axes with: its projection and the two shares.
+
+    THE SHARES ARE TRANSLATED, NOT PASSED THROUGH. A shared frame's axis is an ``Axes`` of THIS
+    adapter, so a frame from the other one has none to hand over -- refused by NAME here rather than
+    by an ``AttributeError`` three frames later, because mixing the two adapters in one figure is a
+    mistake worth reading about rather than a stack trace to decode.
+    """
+    for shared in (sharex, sharey):
+        if shared is not None and not isinstance(shared, MplFrame):
+            msg = f'a frame can share an axis only with a frame of its own adapter, not {type(shared).__name__}'
+            raise TypeError(msg)
+    return {
+        'projection': _MPL_PROJECTIONS[projection],
+        'sharex': None if sharex is None else sharex.axes,
+        'sharey': None if sharey is None else sharey.axes,
+    }
+
+
+def _twin_of(base: Frame) -> Axes:
+    """The axes of a twin frame -- matplotlib's own ``twinx`` of *base*, or a refusal by name."""
+    if not isinstance(base, MplFrame):
+        msg = f'a frame can be drawn over only a frame of its own adapter, not {type(base).__name__}'
+        raise TypeError(msg)
+    return base.axes.twinx()
 
 
 def apply_style(style: Style | None = None) -> None:
@@ -176,308 +198,92 @@ def show_or_save(
 
 
 class MplRenderer:
-    """A matplotlib figure, drawn through the family vocabulary.
+    """A matplotlib figure — THE CANVAS, and the frames a producer creates on it.
 
     Attributes:
-        style: the :class:`~lab_commons.viz.Style` this figure was built with.
+        style: the :class:`~lab_commons.viz.Style` this canvas was built with.
         figure: the matplotlib ``Figure`` itself -- the adapter's own escape hatch. A consumer that
-            imported this module has matplotlib already, so a figure that needs one call the
-            vocabulary does not carry yet is reachable without rebuilding it by hand.
+            imported this module has matplotlib already, so a figure-level call the vocabulary does
+            not carry (a figure legend over two twin axes, a ``suptitle``) is reachable without
+            rebuilding anything by hand.
 
     """
 
     def __init__(self, style: Style | None = None) -> None:
-        """Build one empty figure: apply the style, then create the axes it is drawn on.
+        """Build one empty canvas: apply the style, then create the matplotlib figure it draws on.
 
         THE STYLE IS APPLIED HERE because matplotlib resolves type from the process-global
         ``rcParams`` at draw time -- see :func:`apply_style` for the consequence, which is stated
         rather than worked around.
+
+        THE LAYOUT ENGINE IS TURNED OFF FOR THIS FIGURE, and that is a decision about what a frame
+        IS rather than a style override. A figural layout engine places axes nobody placed; every
+        frame of this canvas carries its own geometry, so the engine has nothing to decide -- and
+        matplotlib says so on every draw of a figure whose axes were all added by hand ("there are
+        no gridspecs with layoutgrids"), which a batch would then print for every figure it writes.
+        A consumer that wants the engine back for this figure asks for it by name::
+
+            renderer.figure.set_layout_engine('constrained')   # its own call, its own consequence
+
+        NO FRAME IS CREATED HERE, and that is the difference between a canvas and a picture: a
+        producer that wants a two-panel figure creates both of its frames, and one that wants a
+        single panel creates the one -- an implicit default axes would be a third panel nobody asked
+        for, exactly on the figures that grew past one.
         """
         self.style = Style() if style is None else style
         apply_style(self.style)
         self.figure = plt.figure(figsize=self.style.figure_size, dpi=self.style.dpi)
-        self._axes = self.figure.add_subplot(111)
-        self._drawn = 0
+        self.figure.set_layout_engine('none')
+        self._drawn: Iterator[int] = count()
+        self._frames: list[MplFrame] = []
 
-    def set_title(self, text: str) -> None:
-        """Set the figure's title."""
-        self._axes.set_title(text)
+    def frame(
+        self,
+        *,
+        rect: Rect | None = None,
+        projection: str | None = None,
+        sharex: Frame | None = None,
+        sharey: Frame | None = None,
+    ) -> MplFrame:
+        """Create a coordinate system on this canvas — see :meth:`lab_commons.viz.Figure.frame`.
 
-    def set_xlabel(self, text: str) -> None:
-        """Set the x axis's label."""
-        self._axes.set_xlabel(text)
+        THE PLACEMENT IS NOT DECIDED HERE. Which rect a frame occupies, which coordinate system it
+        is built in and whether it is a twin axis are the vocabulary's rules, resolved once in
+        :func:`lab_commons.viz._place` so both adapters apply the same ones; this method only
+        translates the answer into matplotlib objects.
 
-    def set_ylabel(self, text: str) -> None:
-        """Set the y axis's label."""
-        self._axes.set_ylabel(text)
+        A STATED RECT IS THE AXES' BOX, exactly, and a frame that named none gets the canvas's own
+        panel — matplotlib's subplot geometry, with the room a normal plot leaves for its own labels
+        and title around it. Those are the two statements a producer can make, and they are drawn as
+        the two different things they are rather than as one rectangle with a default.
 
-    def set_limits(self, *, x: tuple[float, float] | None = None, y: tuple[float, float] | None = None) -> None:
-        """Fix the axis limits; a pair given high-to-low inverts that axis, which matplotlib honours."""
-        if x is not None:
-            self._axes.set_xlim(x)
-        if y is not None:
-            self._axes.set_ylim(y)
-
-    def set_ticks(self, *, x: Ticks | None = None, y: Ticks | None = None) -> None:
-        """Place the ticks of either axis at the positions a :class:`Ticks` names.
-
-        THE LABELS ARE READ ON PRESENCE, NOT ON TRUTH: an empty sequence means "these positions and
-        no text", which is what an under-labelled index axis asks for, and ``None`` means "number
-        them". ``labels or None`` here would collapse the first into the second.
+        A TWIN IS BUILT BY ``Axes.twinx()`` RATHER THAN BY A SECOND ``add_axes`` AT THE SAME RECT.
+        matplotlib's own twin carries the whole treatment -- the y axis on the right, an invisible x
+        axis, a transparent patch, the base's y ticks moved left, and a joined pair whose position
+        follows its base's. Assembling that by hand, or leaving two independent axes to coincide
+        today and drift apart the moment either moved, is what this call is for.
         """
-        if x is not None:
-            self._axes.set_xticks(np.asarray(x.positions, dtype=float))
-            if x.labels is not None:
-                self._axes.set_xticklabels([str(label) for label in x.labels])
-        if y is not None:
-            self._axes.set_yticks(np.asarray(y.positions, dtype=float))
-            if y.labels is not None:
-                self._axes.set_yticklabels([str(label) for label in y.labels])
-
-    def set_equal_aspect(self, *, on: bool = True) -> None:
-        """Draw one unit of x at the same size as one unit of y, so a shape keeps its shape."""
-        self._axes.set_aspect('equal' if on else 'auto')
-
-    def set_axis_off(self, *, off: bool = True) -> None:
-        """Hide the axes, their ticks and their frame — a drawing, not a chart."""
-        if off:
-            self._axes.set_axis_off()
+        placement = _place(rect=rect, projection=projection, sharex=sharex, sharey=sharey)
+        if placement.twin_of is not None:
+            axes = _twin_of(placement.twin_of)
+        elif placement.rect is None:
+            axes = self.figure.add_subplot(**_opened(placement.projection, sharex, sharey))
         else:
-            self._axes.set_axis_on()
-
-    def grid(self, *, on: bool = True) -> None:
-        """Show or hide the grid."""
-        self._axes.grid(on)
-
-    def legend(self, *, on: bool = True) -> None:
-        """Show the legend of everything labelled so far, or remove it."""
-        existing = self._axes.get_legend()
-        if on:
-            self._axes.legend()
-        elif existing is not None:
-            existing.remove()
-
-    def draw_line(self, series: Series) -> None:
-        """Draw *series* as a line, taking the next palette colour when it names none."""
-        self._axes.plot(
-            series.x,
-            series.y,
-            linestyle=series.style,
-            linewidth=series.width,
-            color=self._next_color(series.color),
-            label=series.label,
-            alpha=series.alpha,
+            axes = self.figure.add_axes(placement.rect, **_opened(placement.projection, sharex, sharey))
+        frame = MplFrame(
+            axes=axes,
+            rect=placement.rect,
+            projection=placement.projection,
+            style=self.style,
+            drawn=self._drawn,
         )
+        self._frames.append(frame)
+        return frame
 
-    def draw_markers(self, series: Series) -> None:
-        """Draw *series* as symbols, with no connecting line."""
-        self._axes.plot(
-            series.x,
-            series.y,
-            linestyle='none',
-            marker=series.marker or 'o',
-            markersize=series.size,
-            color=self._next_color(series.color),
-            label=series.label,
-            alpha=series.alpha,
-        )
-
-    def draw_bars(self, bars: Bars) -> None:
-        """Draw *bars* as bars."""
-        self._axes.bar(
-            bars.x,
-            bars.height,
-            width=bars.width,
-            color=self._next_color(bars.color),
-            label=bars.label,
-            alpha=bars.alpha,
-        )
-
-    def draw_patches(self, parts: Sequence[Patch], scale: Scale | None = None) -> None:
-        """Draw filled regions; *scale* colours them by value when the patches carry one.
-
-        VALUE-COLOURED AND NAME-COLOURED ARE DIFFERENT FIGURES, not two spellings of one: a region
-        carrying a ``value`` gets a colormap and a colour bar (the region map), and a region carrying
-        a ``color`` gets that colour and a legend entry (the identity map).
-
-        THE VALUE PATH TAKES ONE TRANSPARENCY FOR THE WHOLE MAP, which is what a region map has: the
-        patches of one scale are one surface, and matplotlib colours them from the COLLECTION. A
-        figure whose regions each need their own alpha is drawn with colours and not with values --
-        and a description that asks for both at once is refused rather than silently flattened.
-        """
-        polygons = [PolygonPatch(np.asarray(part.vertices, dtype=float), closed=True) for part in parts]
-        values = [part.value for part in parts]
-        if scale is not None and any(value is not None for value in values):
-            alphas = {part.alpha for part in parts}
-            if len(alphas) != 1:
-                msg = f'a value-coloured region map carries one transparency for its regions, not {sorted(alphas)}'
-                raise ValueError(msg)
-            collection = PatchCollection(
-                polygons,
-                cmap=scale.cmap,
-                norm=Normalize(vmin=scale.vmin, vmax=scale.vmax),
-                alpha=parts[0].alpha,
-            )
-            collection.set_array(np.asarray([np.nan if value is None else value for value in values], dtype=float))
-            self._axes.add_collection(collection)
-            self._axes.autoscale_view()
-            self.figure.colorbar(collection, ax=self._axes, label=scale.label)
-            return
-        for polygon, part in zip(polygons, parts, strict=True):
-            polygon.set_facecolor(part.color if part.color is not None else 'none')
-            polygon.set_edgecolor(part.edgecolor if part.edgecolor is not None else 'none')
-            polygon.set_alpha(part.alpha)
-            if part.hatch is not None:
-                polygon.set_hatch(part.hatch)
-            if part.label is not None:
-                polygon.set_label(part.label)
-            self._axes.add_patch(polygon)
-
-    def draw_circles(self, circles: Sequence[Circle]) -> None:
-        """Draw circles."""
-        for circle in circles:
-            artist = CirclePatch(
-                (circle.x, circle.y),
-                circle.radius,
-                facecolor=circle.color if circle.color is not None else 'none',
-                edgecolor=circle.edgecolor if circle.edgecolor is not None else 'none',
-            )
-            if circle.label is not None:
-                artist.set_label(circle.label)
-            self._axes.add_patch(artist)
-
-    def draw_segments(self, segments: Sequence[Segment]) -> None:
-        """Draw straight segments, with a head at the end point where one was asked for."""
-        for segment in segments:
-            color = self._next_color(segment.color)
-            if segment.arrow:
-                self._axes.annotate(
-                    '',
-                    xy=(segment.x1, segment.y1),
-                    xytext=(segment.x0, segment.y0),
-                    arrowprops={
-                        'arrowstyle': '-|>',
-                        'color': color,
-                        'linewidth': segment.width,
-                        'linestyle': segment.style,
-                        'alpha': segment.alpha,
-                    },
-                    label=segment.label,
-                )
-            else:
-                self._axes.plot(
-                    (segment.x0, segment.x1),
-                    (segment.y0, segment.y1),
-                    linestyle=segment.style,
-                    linewidth=segment.width,
-                    color=color,
-                    label=segment.label,
-                    alpha=segment.alpha,
-                )
-
-    def draw_labels(self, labels: Sequence[Label]) -> None:
-        """Draw text at its anchor, on a chip of its own where one was asked for."""
-        for label in labels:
-            self._axes.text(
-                label.x,
-                label.y,
-                label.text,
-                color=label.color,
-                fontsize=label.size,
-                ha=label.halign,
-                va=label.valign,
-                bbox={'boxstyle': 'round,pad=0.3', 'facecolor': 'white', 'alpha': 0.7} if label.box else None,
-            )
-
-    def draw_field(self, field: Field) -> None:
-        """Draw a scalar field and its colour scale — the field map.
-
-        The samples go to a FILLED CONTOUR OVER A TRIANGULATION, which is the primitive that accepts
-        a point set with no structure: a structured chart, a skewed one and an unstructured mesh all
-        arrive here as coordinates and values, and nothing has to be reshaped to a rectangle the
-        samples never had.
-        """
-        scale = Scale() if field.scale is None else field.scale
-        artist = self._axes.tricontourf(
-            np.asarray(field.x, dtype=float),
-            np.asarray(field.y, dtype=float),
-            np.asarray(field.values, dtype=float),
-            cmap=scale.cmap,
-            vmin=scale.vmin,
-            vmax=scale.vmax,
-        )
-        self.figure.colorbar(artist, ax=self._axes, label=scale.label)
-
-    def draw_contours(self, contours: Contours) -> None:
-        """Draw *contours* as isolines over a triangulation of the samples, with no fill.
-
-        THE SAME POINT SET :meth:`draw_field` TAKES, drawn the other way: this library computes
-        isolines over a Delaunay triangulation of the samples, so a scattered set and a mesh's nodes
-        both arrive here unchanged. A colour given is used for EVERY level rather than cycled -- the
-        caller is drawing a set of lines that mean one thing, which is what an overlay is.
-        """
-        self._axes.tricontour(
-            np.asarray(contours.x, dtype=float),
-            np.asarray(contours.y, dtype=float),
-            np.asarray(contours.values, dtype=float),
-            levels=contours.levels,
-            colors=None if contours.color is None else [contours.color],
-            linewidths=contours.width,
-            alpha=contours.alpha,
-        )
-
-    def draw_vectors(self, vectors: Vectors) -> None:
-        """Draw *vectors* as arrows — this library's quiver, ONE artist over every sample.
-
-        ``angles='xy', scale_units='xy'`` pins the arrow to the data coordinates and ``scale`` to the
-        vocabulary's meaning (``|(u, v)| / scale`` data units long) instead of matplotlib's own
-        default of normalising to the axes. A direction that reads as a number in the description has
-        to read as the same number on the page.
-        """
-        self._axes.quiver(
-            np.asarray(vectors.x, dtype=float),
-            np.asarray(vectors.y, dtype=float),
-            np.asarray(vectors.u, dtype=float),
-            np.asarray(vectors.v, dtype=float),
-            angles='xy',
-            scale_units='xy',
-            scale=vectors.scale,
-            width=vectors.width,
-            color=self._next_color(vectors.color),
-            alpha=vectors.alpha,
-        )
-
-    def draw_colorbar(self, bar: Colorbar) -> None:
-        """Draw *bar* — a continuous bar, or one discrete band per tick when ticks are given.
-
-        THE RANGE IS REFUSED WHEN IT IS OPEN, and that is this adapter's own error rather than the
-        vocabulary's: :class:`~lab_commons.viz.Colorbar` says why a bar over nothing cannot derive
-        one, and the alternative to this refusal is a legend of unknown extent drawn as if it had
-        one -- the declaration-that-lies shape, on the axis a reader trusts most.
-
-        A DISCRETE BAR SAMPLES ITS COLOURS AT THE BAND CENTRES, which mirrors the region maps the
-        family draws: the palette is quantised to one colour per tick and the boundaries sit half a
-        step outside the outermost ticks, so a tick's label names the band it is centred in.
-        """
-        scale = bar.scale
-        if scale.vmin is None or scale.vmax is None:
-            msg = (
-                f'draw_colorbar needs Scale(vmin=..., vmax=...) pinned; got {scale!r}. A bar the figure '
-                'draws for itself has no samples to derive a range from'
-            )
-            raise ValueError(msg)
-        if bar.ticks is None:
-            mappable = ScalarMappable(cmap=scale.cmap, norm=Normalize(vmin=scale.vmin, vmax=scale.vmax))
-            mappable.set_array([])
-            self.figure.colorbar(mappable, ax=self._axes, label=scale.label)
-            return
-        edges, centers = bar.bands()
-        cmap = ListedColormap(plt.get_cmap(scale.cmap)(np.linspace(0.0, 1.0, len(centers) + 2)[1:-1]))
-        mappable = ScalarMappable(cmap=cmap, norm=BoundaryNorm(np.asarray(edges, dtype=float), cmap.N))
-        mappable.set_array([])
-        drawn = self.figure.colorbar(mappable, ax=self._axes, ticks=centers, label=scale.label)
-        if bar.tick_labels is not None:
-            drawn.set_ticklabels([str(text) for text in bar.tick_labels])
+    @property
+    def frames(self) -> tuple[MplFrame, ...]:
+        """Every frame this canvas holds, in creation order — the escape hatch for a kept-nowhere one."""
+        return tuple(self._frames)
 
     def save(self, path: Path | str) -> Path | None:
         """Write the figure — and never open a window, which is the batch-run tail.
@@ -495,14 +301,3 @@ class MplRenderer:
     def close(self) -> None:
         """Release the figure."""
         plt.close(self.figure)
-
-    def _next_color(self, explicit: str | None) -> str:
-        """*explicit* when it is given, else the next palette entry — one slot per drawn artist.
-
-        The counter advances whether or not the caller named a colour, so the n-th artist's palette
-        position does not depend on which of its predecessors happened to name one: the same figure
-        drawn twice takes the same colours.
-        """
-        color = explicit if explicit is not None else self.style.color(self._drawn)
-        self._drawn += 1
-        return color

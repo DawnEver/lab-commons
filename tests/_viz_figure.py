@@ -1,22 +1,25 @@
-"""ONE figure description, covering every subject the plotting vocabulary exists for.
+"""ONE description per SHAPE this layer exists for, driven through BOTH adapters.
 
-WHY IT IS SHARED RATHER THAN REPEATED. The layer's whole claim is that a description is independent
-of the library that draws it: the same calls must produce a chart, a waveform, a field map, a winding
-layout and a connection diagram through either adapter. A description written once and driven through
-both is that claim MEASURED; a description written twice, once per adapter, would agree with itself
-by construction and measure nothing.
+WHY THEY ARE SHARED RATHER THAN REPEATED. The layer's whole claim is that a description is
+independent of the library that draws it: the same calls must produce a chart, a waveform, a field
+map, a winding layout and a connection diagram through either adapter. A description written once and
+driven through both is that claim MEASURED; a description written twice, once per adapter, would
+agree with itself by construction and measure nothing.
 
-IT DRAWS THROUGH :class:`~lab_commons.viz.Renderer`, never through a concrete adapter, so this
-module imports no plotting library -- which is also what keeps the vocabulary's own test file free
-of one.
+FOUR SUBJECTS, AND THE THREE THAT ARE NOT ONE AXES ARE THE POINT OF THIS FILE NOW. ``draw_everything``
+is the verb menu on one coordinate system. The other three are the shapes an earlier version of this
+tier could not express AT ALL, each for the same reason — a renderer conflated the canvas with the
+coordinate system, so there was exactly one axes and it was built at construction:
 
-EVERY VERB BOTH ADAPTERS CAN DRAW IS HERE, AND THE ONE THAT IS NOT IS A FINDING RATHER THAN AN
-OMISSION. ``Contours`` asks a point set for isolines, which bokeh cannot compute without a dependency
-neither extra declares, so that adapter REFUSES it by name (see ``lab_commons/viz/bokeh.py``'s module
-docstring). Adding that call here would turn "the two adapters draw the same description" into "the
-two adapters draw the same description except this one", and would make the peer test the place the
-exception is hidden -- so the verb is exercised PER ADAPTER instead: drawn by matplotlib, refused by
-bokeh, with the refusal itself under test.
+* ``draw_panels`` — four frames in a grid, rows sharing an x axis and columns sharing a y one;
+* ``draw_twin`` — two frames over ONE panel, sharing the x axis, the second with its own y scale;
+* ``draw_polar`` — a frame in the polar projection, which is the one subject a single backend cannot
+  draw: bokeh has no polar projection and REFUSES it by name (see ``lab_commons/viz/bokeh.py``),
+  exactly as it refuses ``Contours``. That refusal is exercised PER ADAPTER rather than here, so
+  "the same description draws through both" does not quietly become "...except this one".
+
+IT DRAWS THROUGH THE PROTOCOLS, never through a concrete adapter, so this module imports no plotting
+library -- which is also what keeps the vocabulary's own test file free of one.
 """
 
 from __future__ import annotations
@@ -26,9 +29,10 @@ from lab_commons.viz import (
     Circle,
     Colorbar,
     Field,
+    Figure,
+    Frame,
     Label,
     Patch,
-    Renderer,
     Scale,
     Segment,
     Series,
@@ -53,32 +57,47 @@ _SLOTS = (
 #: One vector in each quadrant, so the quiver has four directions to draw rather than one.
 _VECTORS = Vectors(x=[2.0, 6.0, 2.0, 6.0], y=[2.0, 2.0, 6.0, 6.0], u=[1.0, -1.0, 1.0, -1.0], v=[1.0, 1.0, -1.0, -1.0])
 
+#: The rects of the panel grid, in the order :func:`draw_panels` creates them: top-left, top-right,
+#: bottom-left, bottom-right. Stated here so a test can assert the LAYOUT rather than rediscover it.
+#:
+#: THE GAPS ARE THE POINT OF THE NUMBERS. A rect is a frame's BOX, and a frame's ticks, labels and
+#: title are drawn OUTSIDE it -- so a grid whose panels touch draws the top row's x labels under the
+#: bottom row's title. The gap each axis is given here is the room the panel beside it needs, which
+#: is a statement only the producer can make: the vocabulary places frames exactly where they are
+#: asked for and has no opinion about how much margin a label needs.
+PANEL_RECTS = (
+    (0.0, 0.58, 0.42, 0.40),
+    (0.58, 0.58, 0.42, 0.40),
+    (0.0, 0.04, 0.42, 0.40),
+    (0.58, 0.04, 0.42, 0.40),
+)
 
-def draw_everything(renderer: Renderer) -> None:
+
+def draw_everything(frame: Frame) -> None:
     """Draw every subject both adapters can draw: chart, waveform, field map, layout, connections."""
-    renderer.set_title('every primitive')
-    renderer.set_xlabel('x')
-    renderer.set_ylabel('y')
-    renderer.set_limits(x=(0.0, 10.0), y=(0.0, 10.0))
-    renderer.set_ticks(x=Ticks(positions=[0.0, 5.0, 10.0], labels=['a', 'b', 'c']))
-    renderer.set_ticks(y=Ticks(positions=[0.0, 10.0], labels=()))
-    renderer.grid()
+    frame.set_title('every primitive')
+    frame.set_xlabel('x')
+    frame.set_ylabel('y')
+    frame.set_limits(x=(0.0, 10.0), y=(0.0, 10.0))
+    frame.set_ticks(x=Ticks(positions=[0.0, 5.0, 10.0], labels=['a', 'b', 'c']))
+    frame.set_ticks(y=Ticks(positions=[0.0, 10.0], labels=()))
+    frame.grid()
 
     # A CHART: bars beside a line and a marker cloud, which is the axis-bearing half.
-    renderer.draw_bars(Bars(x=[1.0, 2.0], height=[3.0, 4.0], label='bars', alpha=0.5))
-    renderer.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0], label='trend'))
-    renderer.draw_markers(Series(x=[5.0], y=[5.0], marker='s', label='samples', alpha=0.8))
+    frame.draw_bars(Bars(x=[1.0, 2.0], height=[3.0, 4.0], label='bars', alpha=0.5))
+    frame.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0], label='trend'))
+    frame.draw_markers(Series(x=[5.0], y=[5.0], marker='s', label='samples', alpha=0.8))
 
     # A WAVEFORM: two traces over one axis, distinguished by colour, dash and legend.
-    renderer.draw_line(Series(x=[0.0, 1.0, 2.0], y=[0.0, 1.0, 0.0], label='phase A'))
-    renderer.draw_line(Series(x=[0.0, 1.0, 2.0], y=[1.0, 0.0, 1.0], style='--', label='phase B'))
+    frame.draw_line(Series(x=[0.0, 1.0, 2.0], y=[0.0, 1.0, 0.0], label='phase A'))
+    frame.draw_line(Series(x=[0.0, 1.0, 2.0], y=[1.0, 0.0, 1.0], style='--', label='phase B'))
 
     # A FIELD MAP: samples, and what their colour means.
-    renderer.draw_field(_FIELD)
+    frame.draw_field(_FIELD)
 
     # A BAR FOR A SCALE THE FIGURE SET ITSELF, once continuous and once banded on its ticks.
-    renderer.draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='scale', vmin=0.0, vmax=2.0)))
-    renderer.draw_colorbar(
+    frame.draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='scale', vmin=0.0, vmax=2.0)))
+    frame.draw_colorbar(
         Colorbar(
             scale=Scale(cmap='viridis', label='layer', vmin=0.0, vmax=3.0),
             ticks=[0.0, 1.0, 2.0, 3.0],
@@ -87,21 +106,87 @@ def draw_everything(renderer: Renderer) -> None:
     )
 
     # A VECTOR FIELD: a direction and a magnitude per sample, drawn as arrows.
-    renderer.draw_vectors(_VECTORS)
+    frame.draw_vectors(_VECTORS)
 
     # A WINDING LAYOUT: filled regions, a hatched patch, a coil side, a label, no axes.
-    renderer.set_equal_aspect()
-    renderer.set_axis_off()
-    renderer.draw_patches(_SLOTS)
-    renderer.draw_patches((Patch(vertices=[[4.0, 4.0], [4.5, 4.0], [4.5, 4.5]], color='white', hatch='/'),))
-    renderer.draw_circles((Circle(x=1.5, y=1.5, radius=0.2, label='coil side'),))
-    renderer.draw_labels((Label(x=0.5, y=0.5, text='A', halign='center', valign='center', box=True),))
+    frame.set_equal_aspect()
+    frame.set_axis_off()
+    frame.draw_patches(_SLOTS)
+    frame.draw_patches((Patch(vertices=[[4.0, 4.0], [4.5, 4.0], [4.5, 4.5]], color='white', hatch='/'),))
+    frame.draw_circles((Circle(x=1.5, y=1.5, radius=0.2, label='coil side'),))
+    frame.draw_labels((Label(x=0.5, y=0.5, text='A', halign='center', valign='center', box=True),))
 
     # A CONNECTION DIAGRAM: wires, one of them carrying direction.
-    renderer.draw_segments(
+    frame.draw_segments(
         (
             Segment(x0=0.0, y0=0.0, x1=1.0, y1=1.0, label='wire'),
             Segment(x0=1.0, y0=1.0, x1=2.0, y1=1.0, arrow=True, alpha=0.6),
         )
     )
-    renderer.legend()
+    frame.legend()
+
+
+def draw_panels(figure: Figure) -> None:
+    """A GRID OF PANELS: two rows of two, each row sharing an x axis and each column a y axis.
+
+    THE SHAPE A SOLVER COMPARISON NEEDS, and the one the ~10 measured ``subplots(nrows, ncols,
+    sharex=True, sharey=True)`` sites in the consumer ask for: four pictures of one quantity, read
+    row against row and column against column, where a reader compares the panels by their SHAPE
+    rather than by their tick numbers.
+
+    THE FRAMES ARE CREATED IN READING ORDER (top-left, top-right, bottom-left, bottom-right) so that
+    ``figure.frames`` is the picture's own order; the rects are :data:`PANEL_RECTS`. Every panel
+    shares BOTH axes with the first one, which is what ``subplots(2, 2, sharex=True, sharey=True)``
+    means and what makes the four one comparison instead of four charts: a reader reads the same
+    angle and the same flux density off whichever panel they happen to look at.
+    """
+    top_left = figure.frame(rect=PANEL_RECTS[0])
+    top_right = figure.frame(rect=PANEL_RECTS[1], sharex=top_left, sharey=top_left)
+    bottom_left = figure.frame(rect=PANEL_RECTS[2], sharex=top_left, sharey=top_left)
+    bottom_right = figure.frame(rect=PANEL_RECTS[3], sharex=top_left, sharey=top_left)
+
+    for index, panel in enumerate((top_left, top_right, bottom_left, bottom_right)):
+        panel.set_title(f'panel {index}')
+        panel.set_ylabel('|B| (T)')
+        panel.draw_line(Series(x=[0.0, 1.0, 2.0], y=[0.0, 1.0 + index, 0.0], label='field'))
+    bottom_left.set_xlabel('angle (deg)')
+    bottom_right.set_xlabel('angle (deg)')
+
+
+def draw_twin(figure: Figure) -> None:
+    """A TWIN AXIS: two frames over ONE panel, sharing the x axis, the second with its own y scale.
+
+    THE SHAPE THE 2 MEASURED ``twinx`` SITES ASK FOR — torque on the left and power on the right
+    against one speed axis — and it is spelled by NAMING NO RECT: a frame that shares an x axis and
+    says nothing about where it goes is drawn over the frame it shares with, which is what makes the
+    two y scales one picture.
+
+    The second frame is a different quantity with a different unit, so its scale is its own: nothing
+    here shares a y axis, and the limits below are set on one frame only to prove it.
+    """
+    torque = figure.frame()
+    power = figure.frame(sharex=torque)
+
+    torque.set_title('torque and power against speed')
+    torque.set_xlabel('speed (rpm)')
+    torque.set_ylabel('torque (Nm)')
+    power.set_ylabel('power (kW)')
+    torque.draw_line(Series(x=[0.0, 1.0, 2.0], y=[0.0, 3.0, 1.0], label='torque'))
+    power.draw_line(Series(x=[0.0, 1.0, 2.0], y=[0.0, 0.5, 1.0], label='power'))
+
+
+def draw_polar(figure: Figure) -> None:
+    """A POLAR frame: the slot-EMF star — angle IS the slot, radius is a value.
+
+    A cartesian frame can only fake it by drawing the circle by hand, which is exactly the kind of
+    thing a producer should not be doing.
+
+    THE ONE SUBJECT ONLY ONE ADAPTER CAN DRAW, and saying so here rather than omitting it is the
+    point: the vocabulary expresses it, matplotlib's polar projection draws it, and bokeh refuses it
+    BY NAME (it has no polar projection and draws every glyph in cartesian data units). A test that
+    drove this through the bokeh adapter would be measuring a promise nobody can keep.
+    """
+    star = figure.frame(projection='polar')
+    star.set_title('slot EMF star')
+    star.draw_line(Series(x=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], y=[1.0, 2.0, 1.5, 2.5, 1.0, 1.5], label='slot EMF'))
+    star.draw_markers(Series(x=[0.0, 1.0, 2.0], y=[1.0, 2.0, 1.5], marker='o'))

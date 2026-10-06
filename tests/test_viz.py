@@ -2,7 +2,10 @@
 
 THIS FILE IMPORTS NO PLOTTING LIBRARY, which is the layer's own claim being measured rather than
 described: the vocabulary is what a producer depends on, so it has to be usable -- and testable --
-on a box where matplotlib and bokeh were never installed.
+on a box where matplotlib and bokeh were never installed. IT IS ALSO WHERE THE FRAME RULES ARE
+MEASURED, for the same reason: which rect a twin inherits, which coordinate system a frame is built
+in and which requests are refused are the vocabulary's and not any adapter's, so they are checked
+here, with nothing installed, rather than three times through three libraries.
 """
 
 from __future__ import annotations
@@ -11,18 +14,21 @@ import dataclasses
 from pathlib import Path
 
 import pytest
-from _viz_figure import draw_everything
+from _viz_figure import draw_everything, draw_panels, draw_polar, draw_twin
 
 from lab_commons.viz import (
+    PROJECTIONS,
     Bars,
     Circle,
     Colorbar,
     Contours,
     Field,
+    Figure,
+    Frame,
     Label,
+    NullFrame,
     NullRenderer,
     Patch,
-    Renderer,
     Scale,
     Segment,
     Series,
@@ -32,13 +38,16 @@ from lab_commons.viz import (
 )
 
 
-def test_the_null_renderer_satisfies_the_protocol() -> None:
-    """``isinstance`` against the Protocol is what makes "this is a renderer" an ANSWER.
+def test_the_null_renderer_satisfies_both_protocols() -> None:
+    """``isinstance`` against the Protocols is what makes "this is a renderer"/"a frame" an ANSWER.
 
     Structural and runtime-checkable, so a class that has lost a verb is refused at the check rather
-    than at the first producer that happens to call the missing one.
+    than at the first producer that happens to call the missing one -- and BOTH halves are checked,
+    because the canvas and the coordinate system are two contracts now.
     """
-    assert isinstance(NullRenderer(), Renderer)
+    renderer = NullRenderer()
+    assert isinstance(renderer, Figure)
+    assert isinstance(renderer.frame(), Frame)
 
 
 def test_the_null_renderer_accepts_every_primitive_and_writes_nothing(tmp_path: Path) -> None:
@@ -48,16 +57,82 @@ def test_the_null_renderer_accepts_every_primitive_and_writes_nothing(tmp_path: 
     back into every producer, which is the shape this class exists to remove.
     """
     renderer = NullRenderer()
-    draw_everything(renderer)
+    draw_everything(renderer.frame())
     # THE ONE SUBJECT THE SHARED DESCRIPTION CANNOT CARRY is driven here, because every verb --
     # including the one an adapter refuses to DRAW -- has to be a verb this renderer ACCEPTS, or a
     # batch that declares its figures unconditionally would fail on the box it runs unattended on.
-    renderer.draw_contours(Contours(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0]))
+    renderer.frame().draw_contours(Contours(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0]))
     target = tmp_path / 'figure.png'
     assert renderer.save(target) is None, 'a renderer that wrote nothing must not claim a path'
     assert not target.exists(), 'the null renderer wrote a file'
     renderer.show()
     renderer.close()
+
+
+def test_the_null_renderer_draws_the_shapes_one_axes_cannot(tmp_path: Path) -> None:
+    """A panel grid, a twin axis and a polar frame are all accepted, and nothing is drawn.
+
+    THE THREE SHAPES THAT MADE THIS TIER BE REBUILT, declared here on a box with no plotting library
+    at all: totality is not a formality, because the box that draws nothing is exactly the box where
+    a figure that CANNOT be declared would go unnoticed until it was run somewhere else.
+    """
+    renderer = NullRenderer()
+    draw_panels(renderer)
+    draw_twin(renderer)
+    draw_polar(renderer)
+    assert len(renderer.frames) == 7, 'four panels, two frames of the twin, and the star'
+    assert renderer.frames[-1].projection == 'polar'
+    assert renderer.save(tmp_path / 'figure.png') is None
+
+
+def test_the_frame_rules_are_the_vocabularys_and_both_adapters_read_them() -> None:
+    """Which rect a frame occupies, and in which coordinate system, resolved with NOTHING installed.
+
+    A TWIN IS SPELLED BY NAMING NO RECT: a frame that shares an x axis and says nothing about where
+    it goes is drawn over the frame it shares with. That is the rule, so it is measured here rather
+    than through a library -- and because every adapter and :class:`NullRenderer` all call it, this
+    is the placement all three were handed.
+    """
+    renderer = NullRenderer()
+    base = renderer.frame()
+    twin = renderer.frame(sharex=base)
+    panel = renderer.frame(rect=(0.0, 0.0, 0.5, 1.0), sharex=base)
+    polar = renderer.frame(projection='polar')
+
+    assert base.rect is None, 'a frame that names no rect had one invented for it'
+    assert twin.rect is base.rect, 'a twin was not drawn over the frame it shares its x axis with'
+    assert panel.rect == (0.0, 0.0, 0.5, 1.0), 'an explicit rect was not kept'
+    assert polar.projection == 'polar'
+    assert [frame.projection for frame in (base, twin, panel)] == ['cartesian'] * 3
+    assert {'cartesian', 'polar'} == PROJECTIONS, 'the declared set of coordinate systems moved'
+    assert isinstance(base, NullFrame)
+
+
+def test_a_figure_shape_that_cannot_be_expressed_is_refused_by_name() -> None:
+    """THE UNSUPPORTED-RAISES ARM, and every message names what to do instead.
+
+    Each of these is a request a producer could plausibly write and that no adapter could honour
+    honestly: an unknown coordinate system, an axis shared across two of them, a y-axis share that
+    names no rect (placement by inheritance means "drawn over", which is an x relationship), a twin
+    on the wrong side, and a rect that is not four numbers. Refused HERE, once, rather than three
+    times -- and refused identically on the box that draws nothing.
+    """
+    renderer = NullRenderer()
+    base = renderer.frame()
+    side = renderer.frame(rect=(0.0, 0.0, 0.5, 1.0))
+    with pytest.raises(ValueError, match='unknown projection'):
+        renderer.frame(projection='mercator')
+    with pytest.raises(ValueError, match='own coordinate system'):
+        renderer.frame(projection='polar', sharex=base)
+    with pytest.raises(ValueError, match='must name its rect'):
+        renderer.frame(sharey=base)
+    with pytest.raises(ValueError, match='share an X axis'):
+        renderer.frame(rect=(0.0, 0.0, 1.0, 1.0), sharey=base)
+    with pytest.raises(ValueError, match='has its own y'):
+        renderer.frame(sharex=side, sharey=base)
+    with pytest.raises(ValueError, match='four numbers'):
+        renderer.frame(rect=(0.0, 0.0, 1.0))
+    assert len(renderer.frames) == 2, 'a refused request must not leave a frame behind'
 
 
 def test_every_primitive_is_frozen() -> None:
