@@ -1,16 +1,17 @@
 """The two adapters are EQUAL PEERS: one vocabulary, two contracts, one picture per SHAPE.
 
 NEITHER BACKEND IS THE SECOND-CLASS SPELLING OF THE OTHER, and that is a claim with a measurement
-behind it rather than a wording in a docstring: the SAME descriptions -- the four functions
+behind it rather than a wording in a docstring: the SAME descriptions -- the five functions
 ``tests/_viz_figure.py`` shares -- have to come out of both, both have to satisfy the same two
 Protocols, and the colour a series takes has to be the same in both. A layer where one backend
 silently drew less, or took a different colour, would still pass every per-adapter test.
 
-A SHAPE IS MEASURED BY THE FRAMES BOTH ADAPTERS REPORT, not by the pictures, because that is the
-layer's own datum: the same description must resolve to the same rects and the same coordinate
-systems whichever library is behind it. The one subject that is NOT driven through both is the polar
-frame -- bokeh has no polar projection and refuses it by name, which ``test_viz_bokeh`` measures --
-and it is named here rather than left for a reader to notice the omission.
+A SHAPE IS MEASURED BY WHAT BOTH ADAPTERS REPORT, not by the pictures, because that is the layer's
+own datum: the same description must resolve to the same rects, the same coordinate systems and the
+same rectangle the data covers whichever library is behind it. The two subjects that are NOT driven
+through both are the polar frame and the continuum -- bokeh has no polar projection and no
+filled-contour glyph over a point set, and it refuses both BY NAME, which ``test_viz_bokeh``
+measures. They are named here rather than left for a reader to notice the omission.
 
 BOTH LIBRARIES ARE OPTIONAL EXTRAS, so this module degrades when either is missing: a claim that
 holds only when the box happens to have everything installed is not the claim being made.
@@ -21,7 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from _viz_figure import draw_everything, draw_panels, draw_twin
+from _viz_figure import _GRID, _SAMPLES, draw_everything, draw_panels, draw_twin
 
 from lab_commons.viz import Figure, Frame
 
@@ -30,6 +31,7 @@ pytest.importorskip('bokeh')
 
 import matplotlib as mpl
 from bokeh import palettes
+from bokeh.models import Image
 
 from lab_commons.viz import Series, Style, bokeh
 from lab_commons.viz import mpl as viz_mpl
@@ -121,6 +123,46 @@ def test_a_series_takes_the_same_colour_through_either_adapter() -> None:
     page.frame().draw_line(series)
     assert raster.frames[0].axes.lines[0].get_color() == Style().palette[0]
     assert page.frames[0].figure.renderers[0].glyph.line_color == Style().palette[0]
+
+
+def test_the_same_grid_draws_over_the_same_rectangle_in_both() -> None:
+    """One GRID description, two rasters — the extent the PRIMITIVE resolved, in both libraries.
+
+    The rectangle is the datum both adapters have to agree on, and it is the one thing a producer
+    computing a mesh's bounding box can check without looking at a picture: matplotlib is handed the
+    extent directly, bokeh's image glyph carries it as a lower-left corner plus a width and a height.
+    The VOID travels too — masked in one library, NaN in the other, because neither has the other's
+    spelling — so a grid that lost its mask through the peer relationship would red here.
+    """
+    raster, page = viz_mpl.MplRenderer(), bokeh.BokehRenderer()
+    for renderer in (raster, page):
+        renderer.frame().draw_grid(_GRID)
+    image = raster.frames[0].axes.images[0]
+    assert image.get_extent() == [0.0, 3.0, 0.0, 2.0]
+    glyph = page.frames[0].figure.renderers[0].glyph
+    assert isinstance(glyph, Image)
+    assert (glyph.x, glyph.y, glyph.dw, glyph.dh) == (0.0, 0.0, 3.0, 2.0), 'the rectangle moved'
+    assert image.origin == 'lower', 'matplotlib drew the first row at the top'
+    assert glyph.origin == 'bottom_left', 'bokeh drew the first row at the top'
+
+
+def test_the_same_point_cloud_carries_the_same_values_in_both() -> None:
+    """One SAMPLES description, two colour-mapped clouds: the values, the scale and the mark size.
+
+    A cloud whose colour means a third quantity is only readable while both adapters map the same
+    numbers through the same range, so the SAMPLE VALUES and the pinned limits are asserted on both
+    sides rather than the presence of a scatter.
+    """
+    raster, page = viz_mpl.MplRenderer(), bokeh.BokehRenderer()
+    for renderer in (raster, page):
+        renderer.frame().draw_samples(_SAMPLES)
+    drawn = raster.frames[0].axes.collections[0]
+    plotted = page.frames[0].figure.renderers[0].glyph
+    assert list(drawn.get_array()) == [0.0, 1.0, 2.0, 3.0]
+    assert list(page.frames[0].figure.renderers[0].data_source.data['value']) == [0.0, 1.0, 2.0, 3.0]
+    assert drawn.get_clim() == (0.0, 3.0), 'the vocabulary range did not reach the matplotlib norm'
+    assert plotted.fill_color['transform'].low == 0.0, 'the same range did not reach the bokeh mapper'
+    assert plotted.fill_color['transform'].high == 3.0
 
 
 def test_every_colormap_name_is_one_both_libraries_can_draw() -> None:

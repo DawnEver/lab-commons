@@ -37,6 +37,19 @@ below is a frozen dataclass: a description handed to a renderer is not a place f
 consumer to share mutable state, and a figure can then be described once and drawn, in a test, by a
 renderer that records it.
 
+THREE SHAPES CARRY A SCALAR OVER A PLANE, AND WHICH ONE A PRODUCER PICKS IS THE DRAWING IT GETS. A
+:class:`Field` is a CONTINUUM — samples on a point set, drawn as a surface through them; a
+:class:`Samples` is DISCRETE — marks that each carry a value, drawn as marks; and a :class:`Grid` is
+a 2-D array on a rectilinear grid, drawn as a raster with its voids transparent. An adapter that
+picked between the first two per backend would decide, for the producer, which of the two its figure
+was — which is what this vocabulary did until the split, and why both now exist.
+
+WHERE A FRAME SITS IS NOT THIS MODULE. The rect convention, the coordinate systems a frame may be
+built in, the rule that resolves a ``frame(...)`` request and the panel-grid arithmetic live in
+:mod:`lab_commons.viz._placement` and are re-exported here — they are what both adapters READ, while
+the primitives are what a picture IS, and the two are different files for the same reason the canvas
+and the coordinate system are different objects.
+
 WHAT A PRODUCER MAY ASSUME, stated once here because a consumer reads no other page. A canvas starts
 EMPTY — frames are created by :meth:`Figure.frame` and there is no implicit one — and every frame
 draws in its own coordinate system while sharing the canvas's style and palette cursor. ``save`` and
@@ -51,7 +64,14 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
+import numpy as np
 from numpy.typing import ArrayLike
+
+# The PLACEMENT — the rect convention, the coordinate systems a frame may be built in, the one rule
+# that resolves a ``frame(...)`` request and the panel-grid arithmetic — lives in its own module and
+# is re-exported here: it is what a producer and both adapters READ, while the primitives above it
+# are what a picture IS. See `lab_commons.viz._placement` for why the seam is there.
+from lab_commons.viz._placement import PROJECTIONS, Rect, _place, panel_rects
 
 __all__ = [
     'PROJECTIONS',
@@ -62,43 +82,25 @@ __all__ = [
     'Field',
     'Figure',
     'Frame',
+    'Grid',
     'Label',
     'NullFrame',
     'NullRenderer',
     'Patch',
     'Rect',
+    'Samples',
     'Scale',
     'Segment',
     'Series',
     'Style',
     'Ticks',
     'Vectors',
+    'panel_rects',
 ]
 
-#: Where a frame sits on its canvas: ``(left, bottom, width, height)``, each in canvas fractions —
-#: the convention matplotlib's ``add_axes`` takes and the one this vocabulary states, so a producer
-#: computing a panel grid computes the same numbers for either adapter. A frame that names none is
-#: left to the canvas, and its ``rect`` is then ``None`` rather than an invented rectangle.
-type Rect = tuple[float, float, float, float]
-
-#: The rect a frame covers when it names none and shares no axis: the whole canvas. It is the answer
-#: an adapter uses for LAYOUT questions (which grid cell is this frame in), never a position this
-#: vocabulary claims a library must draw an axes at.
-_CANVAS_RECT: Final[Rect] = (0.0, 0.0, 1.0, 1.0)
-
-#: The four numbers a rect is, BY NAME — so the arity check in :func:`_as_rect` is a comparison of
-#: names rather than a literal, and the refusal it raises can say which numbers it wanted.
-_RECT_FIELDS: Final = ('left', 'bottom', 'width', 'height')
-
-#: The coordinate systems a frame may be built in, BY NAME — the ONE place the set is declared, so a
-#: misspelling raises in every adapter instead of drawing something nobody asked for. Both adapters
-#: read THIS set: adding a system is one line here plus its implementation in an adapter, never a
-#: private second list.
-#:
-#: ``cartesian`` is the default and the only system the bokeh adapter can draw; ``polar`` is
-#: matplotlib's polar projection (radius against angle), which bokeh has no counterpart for and
-#: refuses BY NAME.
-PROJECTIONS: Final = frozenset({'cartesian', 'polar'})
+#: The two axes a :class:`Grid` has, BY NAME — so the rank check in :meth:`Grid.cells` compares
+#: against names rather than a literal, and the refusal can say what a 2-D array is a grid OVER.
+_GRID_AXES: Final = ('rows', 'columns')
 
 #: The ten-colour categorical cycle both adapters start from, so a figure does not change colour
 #: when its backend changes. The values are the ones matplotlib's ``tab10`` and bokeh's
@@ -441,12 +443,20 @@ class Ticks:
 
 @dataclass(frozen=True)
 class Field:
-    """A scalar sampled at points — the field map.
+    """A scalar over a CONTINUUM — the field map, drawn as a surface through its samples.
 
     The samples are a POINT SET rather than a rectangular grid, because the meshes a field is
     computed on are not rectangular: a structured polar chart and an unstructured mesh both arrive
-    here as coordinates and values, and the adapter picks the primitive its library has for that
-    (contours over a triangulation, or a quad mesh) rather than making the producer reshape.
+    here as coordinates and values, and the adapter draws a surface through them (contours over a
+    triangulation) rather than making the producer reshape.
+
+    THE SURFACE IS THE DRAWING, and that is the whole of what this shape claims: the figure
+    interpolates between the samples, so a reader takes a value anywhere the continuum covers. The
+    other drawing of the same data is a :class:`Samples` — marks whose colour is the value, where
+    every mark is an observation and nothing is claimed between them — and the two were ONE shape
+    here until the split, drawn as a surface by one adapter and as a cloud by the other, which left
+    the producer unable to ask for either. A scalar on a rectangular grid is neither of these two;
+    it is a :class:`Grid`.
 
     Attributes:
         x: the sample abscissae.
@@ -460,6 +470,119 @@ class Field:
     y: ArrayLike
     values: ArrayLike
     scale: Scale | None = None
+
+
+@dataclass(frozen=True)
+class Grid:
+    """A scalar on a RECTILINEAR grid — the maskable map, drawn as a raster.
+
+    WHY THIS IS NEITHER A :class:`Field` NOR A LIST OF :class:`Patch`. A field is a POINT SET: its
+    samples are coordinates and values, and the adapter picks the surface it can draw through them. A
+    patch set is GEOMETRY: every region is a boundary a producer already knows. This is a 2-D array
+    on a regular grid, and the figures the family draws from one — a |B| map on a mesh's bounding
+    box, a slots-per-pole-per-phase table, a speed/torque cell map, an annotated efficiency heatmap —
+    have no spelling in this vocabulary without it: the array is not a point set, and turning it into
+    one is a reshape the producer should not be doing to describe a picture.
+
+    THE VOIDS ARE PART OF THE SHAPE. A masked cell (or a NaN) is a cell that has NO VALUE — a shaft,
+    an exterior, an infeasible combination — and it must be drawn as NOTHING rather than as zero or
+    as the bottom of the colour scale. ``values`` is read as a masked array for that reason, and a
+    grid rendered without its mask is the defect this shape exists to prevent.
+
+    ROW 0 IS THE SMALLEST Y. The array's first row is drawn at the BOTTOM of the map, the convention
+    every consumer of this shape writes by hand (``imshow(..., origin='lower')``) and the one the
+    family's physical maps need, since radius, angle and torque increase with the row index. It is
+    stated HERE so that neither adapter inherits the opposite from its own library's default.
+
+    Attributes:
+        values: the 2-D array, shape ``(nrows, ncols)`` — a masked array, or one carrying NaN in the
+            cells that have no value.
+        extent: ``(x0, x1, y0, y1)``, the rectangle the array spans in data coordinates — the
+            convention matplotlib's ``imshow`` takes and the one a producer already computes from a
+            mesh's bounding box. ``None`` means THE INDICES ARE THE COORDINATES: cell ``(row, col)``
+            covers ``[col - 0.5, col + 0.5]`` by ``[row - 0.5, row + 0.5]``, which is the table case
+            (a q-factor matrix, a heatmap of a DataFrame).
+        scale: what the colour means — colormap, label and range.
+
+    """
+
+    values: ArrayLike
+    extent: tuple[float, float, float, float] | None = None
+    scale: Scale | None = None
+
+    def cells(self) -> np.ma.MaskedArray:
+        """The values as a 2-D masked float array — masked where a cell carries no value.
+
+        THE ONE PLACE THE ARRAY IS READ, so that "a void is a cell with no value" is the same
+        statement in both adapters and in the shape itself: a masked cell and a NaN are the same
+        thing here, and neither becomes a number on the way to a library.
+
+        Raises:
+            ValueError: when ``values`` is not 2-D — a rectilinear grid of any other rank has no
+                rectangle to draw, and no adapter could honour it.
+
+        """
+        array = np.ma.masked_invalid(np.ma.asarray(self.values, dtype=float))
+        if len(array.shape) != len(_GRID_AXES):
+            msg = (
+                f'a Grid is a 2-D array of values on a rectilinear grid -- {" x ".join(_GRID_AXES)}; got '
+                f'{array.ndim} dimension(s). A point set is a Field or a Samples, and a boundary is a Patch'
+            )
+            raise ValueError(msg)
+        return array
+
+    def span(self) -> tuple[float, float, float, float]:
+        """The rectangle the grid covers in data coordinates — the stated extent, or the indices.
+
+        THE ONE PLACE THE DEFAULT IS COMPUTED, for the reason the discrete colour bar's band geometry
+        is on :meth:`Colorbar.bands`: two adapters each deciding what "no extent" means would be two
+        pictures of one description the moment either arithmetic drifted, and a grid drawn half a
+        cell off is still a grid — nothing about the figure would say which one moved.
+        """
+        rows, columns = self.cells().shape
+        if self.extent is not None:
+            x0, x1, y0, y1 = (float(value) for value in self.extent)
+            return x0, x1, y0, y1
+        return (-0.5, columns - 0.5, -0.5, rows - 0.5)
+
+
+@dataclass(frozen=True)
+class Samples:
+    """Points that CARRY VALUES — the colour-mapped point cloud, drawn as marks.
+
+    WHY THIS IS NOT A :class:`Field`, AND WHY IT IS NOT :meth:`Frame.draw_markers`. A field is a
+    CONTINUUM: the adapter draws a surface through the samples and a reader takes values off the
+    colour BETWEEN the marks. This is DISCRETE: every mark IS an observation, and what a reader takes
+    off it is the cloud's own shape — a parameter sweep, a map of operating points, a residual plot.
+    The two are different statements about data, and this vocabulary used to make one shape carry
+    both, with each adapter choosing which to draw; the split is what lets a producer ask.
+
+    ``values`` IS REQUIRED AND THERE IS NO ``color``. A cloud drawn in one colour is a
+    :class:`Series` handed to :meth:`Frame.draw_markers`, which already exists; what makes this shape
+    itself is the THIRD QUANTITY per point and the scale its colour means.
+
+    Attributes:
+        x: the sample abscissae.
+        y: the sample ordinates.
+        values: one value per sample, the same length as *x* — what the colour means.
+        scale: what the colour means — colormap, label and range. Two clouds from two runs are only
+            comparable while both are read against the same scale, which is why the range travels
+            with the description rather than being re-derived per cloud.
+        marker: the symbol to draw, e.g. ``'o'``, ``'s'``, ``'^'`` — or ``None`` for the library's.
+        size: the mark's size — ONE number for every sample, or one per sample where the size carries
+            a second quantity (a bubble map), or ``None`` for the library's own default. It is a
+            LENGTH in points: matplotlib takes a marker's AREA, and that adapter squares this value.
+        alpha: opacity, ``1.0`` for opaque — a dense cloud is read through itself.
+
+    """
+
+    x: ArrayLike
+    y: ArrayLike
+    values: ArrayLike
+    scale: Scale | None = None
+    marker: str | None = None
+    size: ArrayLike | None = None
+    alpha: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -608,7 +731,23 @@ class Frame(Protocol):
         """Draw text."""
 
     def draw_field(self, field: Field) -> None:
-        """Draw a scalar field and its colour scale — the field map."""
+        """Draw a scalar over a CONTINUUM and its colour scale — the field map.
+
+        The drawing is a surface through the samples, and an adapter whose library has no such glyph
+        over a point set REFUSES this by name rather than substituting one: see
+        :mod:`lab_commons.viz.bokeh`, where the remedy for a cloud of marks is
+        :meth:`draw_samples` and the remedy for a contour is the other adapter.
+        """
+
+    def draw_grid(self, grid: Grid) -> None:
+        """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
+
+        THE VOIDS ARE THE SHAPE, so a cell the grid does not carry is drawn as NOTHING rather than as
+        a value: see :class:`Grid`. The colour bar is the grid's, as it is a field's.
+        """
+
+    def draw_samples(self, samples: Samples) -> None:
+        """Draw points coloured by the values they carry — the point cloud and its colour scale."""
 
     def draw_contours(self, contours: Contours) -> None:
         """Draw *contours* as isolines, with no fill and no colour bar of their own."""
@@ -702,92 +841,6 @@ class Figure(Protocol):
         """Release the figure."""
 
 
-@dataclass(frozen=True)
-class _Placement:
-    """A resolved :meth:`Figure.frame` request: where the frame goes, what it draws in, what it is.
-
-    ``rect`` is ``None`` when the producer left the placement to the canvas. ``twin_of`` is the
-    frame this one is drawn OVER — a second y scale sharing the first frame's x axis and pixels —
-    or ``None`` for a frame that stands on its own. It is the frame rather than a flag so that an
-    adapter needs no second lookup to find the axes or the range it must attach to.
-    """
-
-    rect: Rect | None
-    projection: str
-    twin_of: Frame | None
-
-
-def _covers(rect: Rect | None) -> Rect:
-    """The territory a frame covers: *rect*, or the whole canvas when it named none.
-
-    THE LAYOUT QUESTION, asked once. An adapter decides which grid cell or panel a frame belongs to
-    from this — never from ``rect`` directly, which is ``None`` for the frame that asked the canvas
-    to place it.
-    """
-    return _CANVAS_RECT if rect is None else rect
-
-
-def _place(*, rect: Rect | None, projection: str | None, sharex: Frame | None, sharey: Frame | None) -> _Placement:
-    """Resolve a frame request — THE RULE EVERY ADAPTER READS, stated once so none of them drifts.
-
-    A rule implemented in each adapter is a rule that holds until one of them is edited, and the
-    whole claim of this tier is that one description draws one picture through either backend. So
-    the resolution of "which rect, which coordinate system, is this a twin" lives HERE, over the
-    protocol's own data, and an adapter only translates the answer into its library.
-
-    Raises:
-        ValueError: an unknown projection name, a rect that is not four numbers, an axis shared with
-            a frame in another coordinate system, a frame sharing only a y axis and naming no rect,
-            or a request for something that cannot be drawn (a y-axis twin). The messages name what
-            to do instead.
-
-    """
-    if projection is not None and projection not in PROJECTIONS:
-        msg = f'unknown projection {projection!r}: a frame is one of {sorted(PROJECTIONS)}'
-        raise ValueError(msg)
-    stated = None if rect is None else _as_rect(rect)
-    shared = sharex if sharex is not None else sharey
-    if shared is None:
-        return _Placement(stated, 'cartesian' if projection is None else projection, None)
-    if projection is not None and projection != shared.projection:
-        msg = (
-            f'a frame may share an axis only with a frame in its own coordinate system: {projection!r} '
-            f"against the shared frame's {shared.projection!r}"
-        )
-        raise ValueError(msg)
-    if sharey is not None and sharex is None and stated is None:
-        msg = (
-            'a frame that shares only a y axis must name its rect: naming none is how a frame is drawn '
-            'OVER the frame it shares an X axis with, and there is no such frame here'
-        )
-        raise ValueError(msg)
-    if sharey is not None and stated is not None and _covers(stated) == _covers(sharey.rect):
-        msg = (
-            "two frames drawn over one another share an X axis, with the second one's y on the right; a "
-            'twin whose y is shared and whose x is independent is not expressible'
-        )
-        raise ValueError(msg)
-    # NAMING NO RECT WHILE SHARING AN X IS HOW A TWIN IS SPELLED, and so is repeating the rect of the
-    # frame it shares that axis with: both mean "drawn over it", which is why the twin's rect is that
-    # frame's and not the canvas.
-    twin_of = sharex if sharex is not None and (stated is None or _covers(stated) == _covers(sharex.rect)) else None
-    if twin_of is not None:
-        if sharey is not None:
-            msg = "a frame drawn over another is a twin axis: it shares that frame's x and has its own y"
-            raise ValueError(msg)
-        return _Placement(twin_of.rect, shared.projection, twin_of)
-    return _Placement(stated, shared.projection, None)
-
-
-def _as_rect(rect: Rect) -> Rect:
-    """*rect* as four plain floats, refusing anything that is not four numbers."""
-    if len(rect) != len(_RECT_FIELDS):
-        msg = f'a rect is {", ".join(_RECT_FIELDS)} -- four numbers in canvas fractions; got {rect!r}'
-        raise ValueError(msg)
-    left, bottom, width, height = (float(value) for value in rect)
-    return left, bottom, width, height
-
-
 class NullFrame:
     """A coordinate system that accepts every verb and draws nothing — what the default hands back.
 
@@ -855,6 +908,12 @@ class NullFrame:
         """Accepted and ignored."""
 
     def draw_field(self, field: Field) -> None:
+        """Accepted and ignored."""
+
+    def draw_grid(self, grid: Grid) -> None:
+        """Accepted and ignored."""
+
+    def draw_samples(self, samples: Samples) -> None:
         """Accepted and ignored."""
 
     def draw_contours(self, contours: Contours) -> None:

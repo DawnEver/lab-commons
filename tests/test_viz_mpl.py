@@ -22,10 +22,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
-from _viz_figure import PANEL_RECTS, draw_everything, draw_panels, draw_polar, draw_twin
+from _viz_figure import (
+    _GRID,
+    _SAMPLES,
+    PANEL_RECTS,
+    draw_continuum,
+    draw_everything,
+    draw_panels,
+    draw_polar,
+    draw_twin,
+)
 
-from lab_commons.viz import Colorbar, Contours, Figure, Frame, Scale, Series, Style, Ticks
+from lab_commons.viz import Colorbar, Contours, Figure, Frame, Samples, Scale, Series, Style, Ticks
 
 pytest.importorskip('matplotlib')
 
@@ -50,6 +60,11 @@ def test_the_shared_description_reaches_the_canvas() -> None:
 
     A count of artists is the honest reading here: a verb that returned without drawing anything
     would satisfy the protocol and produce an empty picture, which no signature can catch.
+
+    ``images`` AND ``collections`` ARE TWO DIFFERENT DRAWINGS, which is the split this tier now
+    carries: the grid map is a RASTER (one image over the array's rectangle) and the point cloud is a
+    COLLECTION of marks at their own coordinates — and each draws its own colour bar, so the canvas
+    below holds the frame plus four bars rather than the frame plus two.
     """
     renderer = viz_mpl.MplRenderer()
     frame = renderer.frame()
@@ -58,9 +73,10 @@ def test_the_shared_description_reaches_the_canvas() -> None:
     assert len(axes.lines) >= 4, 'the chart, the waveform traces and the wire are lines'
     assert len(axes.patches) >= 3, 'two winding patches and a coil-side circle'
     assert len(axes.texts) >= 1, 'the label'
-    assert axes.collections, 'the field map is a collection'
+    assert len(axes.images) == 1, 'the masked grid map is a raster, not a pile of marks'
+    assert axes.collections, 'the point cloud is a collection of marks'
     assert axes.quiver, 'the vector field is its own artist, not a pile of annotations'
-    assert len(renderer.figure.axes) == 4, 'a field map and two self-set colour bars drew none'
+    assert len(renderer.figure.axes) == 5, 'the grid and the cloud each owe a colour bar'
     renderer.close()
 
 
@@ -187,6 +203,72 @@ def test_the_new_verbs_land_on_the_figure_they_describe() -> None:
     assert list(frame.axes.get_yticks()) == [0.0, 2.0]
     assert [text.get_text() for text in frame.axes.get_yticklabels()] == ['', ''], 'the ticks are there'
     assert frame.axes.collections, 'the contour lines are a collection'
+    renderer.close()
+
+
+def test_a_grid_map_is_an_image_that_KEEPS_its_voids() -> None:
+    """The masked cells reach the artist masked, and the rectangle is the one the grid stated.
+
+    THE VOID IS THE SUBJECT: an array drawn without its mask shows a value the grid never had, and a
+    test that asserted only "an image was drawn" would pass on exactly that defect. The extent and
+    the row order are checked together, because a map drawn upside down is still a map.
+    """
+    renderer = viz_mpl.MplRenderer()
+    frame = renderer.frame()
+    frame.draw_grid(_GRID)
+    image = frame.axes.images[0]
+    assert image.origin == 'lower', 'row 0 must be the smallest y, whatever the library defaults to'
+    assert image.get_extent() == [0.0, 3.0, 0.0, 2.0], 'the image does not cover the grid it was given'
+    mask = np.ma.getmaskarray(image.get_array())
+    assert mask[1, 1], 'the void was drawn as a value'
+    assert not mask[0, 0], 'a cell with a value was drawn as a void'
+    assert image.get_clim() == (0.0, 2.5), 'the pinned scale was not honoured'
+    assert len(renderer.figure.axes) == 2, 'the map owes a colour bar'
+    renderer.close()
+
+
+def test_a_point_cloud_is_a_coloured_collection_with_its_scale() -> None:
+    """The values ride on the collection, its size is the vocabulary's length SQUARED, and it scales.
+
+    The square is the one unit conversion in this adapter: the vocabulary states a mark's size as a
+    length and this library takes its area, so a description that says 6 must not draw a 6-point
+    area. Both halves are asserted, because a conversion that silently did nothing would look right
+    on every description whose sizes happen to be small.
+    """
+    renderer = viz_mpl.MplRenderer()
+    frame = renderer.frame()
+    frame.draw_samples(_SAMPLES)
+    cloud = frame.axes.collections[0]
+    assert list(cloud.get_array()) == [0.0, 1.0, 2.0, 3.0], 'the values are not what the colour means'
+    assert cloud.get_clim() == (0.0, 3.0), 'the pinned scale was not honoured'
+    assert list(cloud.get_sizes()) == [36.0], 'the mark size reached the marker as an AREA of 6'
+    np.testing.assert_allclose(cloud.get_offsets(), [(0.0, 0.0), (1.0, 1.0), (2.0, 0.5), (3.0, 1.5)])
+    assert len(renderer.figure.axes) == 2, 'the cloud owes a colour bar'
+    renderer.close()
+
+
+def test_one_size_per_sample_is_honoured_as_each_mark_its_own() -> None:
+    """A bubble map: the size carries a second quantity, so the marks are not all alike."""
+    renderer = viz_mpl.MplRenderer()
+    frame = renderer.frame()
+    frame.draw_samples(Samples(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0], size=[2.0, 5.0]))
+    assert list(frame.axes.collections[0].get_sizes()) == [4.0, 25.0]
+    renderer.close()
+
+
+def test_a_field_map_is_drawn_as_a_surface_through_its_samples() -> None:
+    """The CONTINUUM shape: drawn as a filled contour over the samples, never as marks at them.
+
+    This is the half the split decided, and the half one adapter cannot draw at all -- see
+    ``test_viz_bokeh`` for that refusal. Measured here on the artist: a filled contour is a
+    collection matplotlib builds from a triangulation, and there is no image and no offset cloud.
+    """
+    renderer = viz_mpl.MplRenderer()
+    draw_continuum(renderer)
+    frame = renderer.frames[0]
+    assert frame.axes.collections, 'a filled contour is a collection'
+    assert not frame.axes.images, 'a continuum is not a raster'
+    assert len(renderer.figure.axes) == 2, 'the surface owes a colour bar'
     renderer.close()
 
 

@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
-from _viz_figure import PANEL_RECTS, draw_everything, draw_panels, draw_twin
+from _viz_figure import _GRID, _SAMPLES, PANEL_RECTS, draw_everything, draw_panels, draw_twin
 
 from lab_commons.viz import (
     Colorbar,
@@ -25,8 +26,10 @@ from lab_commons.viz import (
     Field,
     Figure,
     Frame,
+    Samples,
     Scale,
     Segment,
+    Series,
     Style,
     Ticks,
     Vectors,
@@ -35,7 +38,7 @@ from lab_commons.viz import (
 pytest.importorskip('bokeh')
 
 from bokeh import palettes
-from bokeh.models import Arrow
+from bokeh.models import Arrow, Image
 
 from lab_commons.viz.bokeh import PALETTES, BokehRenderer
 
@@ -209,7 +212,7 @@ def test_an_unpinned_colour_range_is_refused_rather_than_drawn() -> None:
 
 
 def test_a_contour_over_a_point_set_is_refused_by_name() -> None:
-    """THE ONE VERB THIS LIBRARY CANNOT DRAW, pinned as a refusal rather than left to a caller.
+    """ONE OF THE VERBS THIS LIBRARY CANNOT DRAW, pinned as a refusal rather than left to a caller.
 
     Bokeh contours a regular grid and interpolates it with `contourpy`, which neither this package
     nor the `viz-bokeh` extra declares -- so the honest outcome is a raise that names the remedy,
@@ -219,12 +222,96 @@ def test_a_contour_over_a_point_set_is_refused_by_name() -> None:
         BokehRenderer().frame().draw_contours(Contours(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0]))
 
 
-def test_a_colormap_this_adapter_cannot_draw_is_refused_by_name() -> None:
-    """No silent fallback to a default: a substitution would draw a different colour scale."""
+def test_a_continuum_is_refused_by_name() -> None:
+    """THE OTHER ONE, AND THE SPLIT'S CONSEQUENCE: a ``Field`` is not drawn here AT ALL any more.
+
+    This library has no filled-contour glyph over a point set (the same limitation the contour
+    refusal names, one step further out), and the colour-mapped scatter this verb used to draw is
+    now the ``Samples`` shape. Keeping the substitution would leave :class:`Field` and
+    :class:`Samples` indistinguishable on this adapter -- exactly the conflation the split removed --
+    and a producer asking for a contour map would get a cloud that reads as one at a glance. The
+    message names both remedies, and the refusal is per CALL: the rest of the figure still draws.
+    """
     frame = BokehRenderer().frame()
-    field = Field(x=[0.0], y=[0.0], values=[1.0], scale=Scale(cmap='definitely-not-a-colormap'))
-    with pytest.raises(ValueError, match='no bokeh palette named'):
+    field = Field(x=[0.0, 1.0, 0.0, 1.0], y=[0.0, 0.0, 1.0, 1.0], values=[0.0, 1.0, 1.0, 2.0])
+    with pytest.raises(NotImplementedError, match='cannot draw Field'):
         frame.draw_field(field)
+    frame.draw_samples(Samples(x=[0.0], y=[0.0], values=[1.0]))
+    assert frame.figure.renderers, 'the refusal took the rest of the figure down with it'
+
+
+def test_a_grid_is_an_image_with_TRANSPARENT_voids() -> None:
+    """The masked cells reach the mapper's nan colour, and the geometry is the grid's rectangle.
+
+    THE VOID IS THE SUBJECT: a grid drawn without its mask shows a value it never had. Measured on
+    the two halves that make it happen -- the array that reaches the glyph carries a NaN where the
+    mask was, and the mapper paints a NaN in the fully transparent colour -- plus the geometry, in
+    DATA units, of the extent the primitive resolved.
+    """
+    renderer = BokehRenderer()
+    frame = renderer.frame()
+    frame.draw_grid(_GRID)
+    plotted = frame.figure.renderers[0]
+    glyph = plotted.glyph
+    assert isinstance(glyph, Image), 'a grid is a raster here, not a cloud of marks'
+    assert (glyph.x, glyph.y, glyph.dw, glyph.dh) == (0.0, 0.0, 3.0, 2.0), 'the image lost the extent'
+    assert glyph.origin == 'bottom_left', 'row 0 must be the smallest y, whatever the default is'
+    assert glyph.color_mapper.nan_color == '#00000000', 'a void drawn as a colour is a value invented'
+    image = np.asarray(plotted.data_source.data['image'][0])
+    assert np.isnan(image[1, 1]), 'the void did not reach the glyph'
+    assert image[0, 0] == 0.0, 'a cell with a value was voided'
+    assert len(frame.figure.right) == 1, 'the map owes a colour bar'
+    renderer.close()
+
+
+def test_a_point_cloud_is_a_scatter_over_one_colour_mapper() -> None:
+    """The values ride on a colour transform, the size may be per sample, and the scale is drawn.
+
+    A PER-SAMPLE SIZE IS A COLUMN HERE rather than a property, because this library refuses a
+    sequence handed to a glyph that has a source -- so the scalar and the per-sample cases are two
+    different model shapes and both are asserted.
+    """
+    renderer = BokehRenderer()
+    frame = renderer.frame()
+    frame.draw_samples(_SAMPLES)
+    plotted = frame.figure.renderers[0]
+    assert plotted.glyph.fill_color['field'] == 'value', 'the colour is not the values'
+    assert plotted.glyph.size == 6.0, 'the stated mark size did not reach the glyph'
+    assert list(plotted.data_source.data['value']) == [0.0, 1.0, 2.0, 3.0]
+    assert len(frame.figure.right) == 1, 'the cloud owes a colour bar'
+
+    bubbles = BokehRenderer().frame()
+    bubbles.draw_samples(Samples(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0], size=[3.0, 9.0], marker='s'))
+    drawn = bubbles.figure.renderers[0]
+    assert drawn.glyph.marker == 'square'
+    assert drawn.glyph.size == 'size', 'a per-sample size is a column, referenced by field name'
+    assert list(drawn.data_source.data['size']) == [3.0, 9.0]
+    renderer.close()
+
+
+def test_a_marker_this_adapter_cannot_draw_is_refused_by_name() -> None:
+    """No silent fallback to a circle: that is a figure the other adapter draws differently.
+
+    MEASURED AS A DEFECT BEFORE IT WAS FIXED -- the lookup was ``MARKERS.get(name, 'circle')``, so a
+    description asking for a symbol this library has no glyph for came out round. The table's own
+    module declares refusal-by-name as its rule, and both verbs that draw a marker now read it.
+    """
+    with pytest.raises(ValueError, match='no bokeh marker named'):
+        BokehRenderer().frame().draw_markers(Series(x=[0.0], y=[0.0], marker='X'))
+    with pytest.raises(ValueError, match='no bokeh marker named'):
+        BokehRenderer().frame().draw_samples(Samples(x=[0.0], y=[0.0], values=[1.0], marker='X'))
+
+
+def test_a_colormap_this_adapter_cannot_draw_is_refused_by_name() -> None:
+    """No silent fallback to a default: a substitution would draw a different colour scale.
+
+    Measured on the POINT CLOUD, which is the verb here that maps values through a palette -- the
+    field map this used to be measured on is refused before it ever reaches the mapper.
+    """
+    frame = BokehRenderer().frame()
+    cloud = Samples(x=[0.0], y=[0.0], values=[1.0], scale=Scale(cmap='definitely-not-a-colormap'))
+    with pytest.raises(ValueError, match='no bokeh palette named'):
+        frame.draw_samples(cloud)
 
 
 def test_showing_without_a_window_opens_nothing() -> None:

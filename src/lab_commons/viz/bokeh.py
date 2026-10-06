@@ -36,6 +36,12 @@ glyph in cartesian data units and has no polar projection, so ``projection='pola
 :meth:`BokehRenderer.frame` by name, with the adapter that can draw it as the remedy. A polar figure
 is drawn with ``lab_commons.viz.mpl``, which is what the equal-peer relationship means: the same
 vocabulary, each backend drawing what its library actually has.
+
+TWO DRAW VERBS ARE REFUSED FOR THE SAME REASON, EACH WITH ITS OWN REMEDY. This library interpolates
+a point set only through ``contourpy``, which no extra of this package declares, so ``Contours``
+(isolines) and ``Field`` (a surface) are raised per CALL by
+:class:`~lab_commons.viz.bokeh_frame.BokehFrame` rather than substituted: the cloud of marks a field
+map used to be drawn as here is the ``Samples`` shape now, and a producer asks for it by name.
 """
 
 from __future__ import annotations
@@ -53,8 +59,9 @@ from bokeh.models.plots import Plot
 from bokeh.plotting import figure
 from bokeh.resources import INLINE
 
-from lab_commons.viz import Frame, Rect, Style, _covers, _place, _Placement
+from lab_commons.viz import Frame, Style
 from lab_commons.viz._bokeh_names import PALETTES, given
+from lab_commons.viz._placement import Rect, _covers, _place, _Placement
 from lab_commons.viz.bokeh_frame import BokehFrame
 
 __all__ = ['PALETTES', 'BokehRenderer']

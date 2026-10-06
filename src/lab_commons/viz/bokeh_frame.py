@@ -1,11 +1,11 @@
 """The bokeh frame — ONE coordinate system on a :class:`~lab_commons.viz.bokeh.BokehRenderer`.
 
-WHY THE ADAPTER IS THREE MODULES, and the first two are a concept. ``bokeh.py`` is the canvas (the
-figure objects, the layout they are arranged into, the palette cursor and the lifecycle) and this is
-the coordinate system (one ``bokeh.plotting.figure`` and every verb that draws on it) -- the two
-things the tier was rebuilt around. ``_bokeh_glyphs.py`` is the third: the four verbs whose body
-BUILDS DATA rather than calling a glyph, which is what put this module past the band the repo holds
-its files to.
+THE THREE MODULES ARE A CONCEPT, and the first two are it. ``bokeh.py`` is the canvas (the figure
+objects, the layout they are arranged into, the palette cursor and the lifecycle) and this is the
+coordinate system (one ``bokeh.plotting.figure`` and every verb that draws on it) -- the two things
+the tier was rebuilt around. ``_bokeh_glyphs.py`` is the third: the verbs whose body BUILDS DATA
+rather than calling a glyph (a patch set, a grid raster, a point cloud, a quiver, a colour bar),
+which is what put this module past the band the repo holds its files to.
 
 A BOKEH FIGURE IS ONE COORDINATE SYSTEM, which is why the canvas above the frames is a layout and not
 a figure. That has one consequence worth stating here: A TWIN FRAME IS A SECOND Y RANGE INSIDE ITS
@@ -34,9 +34,11 @@ from lab_commons.viz import (
     Colorbar,
     Contours,
     Field,
+    Grid,
     Label,
     Patch,
     Rect,
+    Samples,
     Scale,
     Segment,
     Series,
@@ -45,7 +47,7 @@ from lab_commons.viz import (
     Vectors,
 )
 from lab_commons.viz import _bokeh_glyphs as glyphs
-from lab_commons.viz._bokeh_names import BASELINES, DASHES, MARKERS, given
+from lab_commons.viz._bokeh_names import BASELINES, DASHES, given, marked
 
 __all__ = ['BokehFrame']
 
@@ -175,12 +177,18 @@ class BokehFrame:
         )
 
     def draw_markers(self, series: Series) -> None:
-        """Draw *series* as symbols, with no connecting line."""
+        """Draw *series* as symbols, with no connecting line.
+
+        THE MARKER IS TRANSLATED, NOT DEFAULTED — see
+        :func:`~lab_commons.viz._bokeh_names.marked`: a symbol this library has no glyph for is
+        REFUSED by name rather than drawn as a circle, which is a figure the other adapter would
+        draw differently for the same description.
+        """
         self.figure.scatter(
             series.x,
             series.y,
             **given(
-                marker=MARKERS.get(series.marker or 'o', 'circle'),
+                marker=marked(series.marker or 'o'),
                 size=series.size,
                 color=self._next_color(series.color),
                 legend_label=series.label,
@@ -297,13 +305,45 @@ class BokehFrame:
             )
 
     def draw_field(self, field: Field) -> None:
-        """Draw a scalar field and its colour scale — the field map.
+        """REFUSED: this library has no filled-contour glyph over a point set — see ``bokeh.py``.
+
+        THE SAME LIMITATION :meth:`draw_contours` NAMES, one step further out: a field is a CONTINUUM
+        and its drawing is a surface through the samples, which this library interpolates only with
+        ``contourpy`` — a dependency neither the ``viz-bokeh`` extra nor this package declares.
+        Drawing the samples as marks instead is exactly the substitution the :class:`Field` /
+        :class:`Samples` split removed: a producer asking for a contour map would get a point cloud
+        that reads as one at a glance and carries no isolines, and could not tell that from a field
+        whose levels happened to miss.
+
+        Both remedies are named, and they are different figures: send a :class:`Samples` if a
+        colour-mapped cloud is what the data is, or draw the field with
+        ``lab_commons.viz.mpl.MplRenderer``, which contours it. The refusal is per-CALL rather than
+        per-import, so the rest of the figure is drawn either way.
+        """
+        msg = (
+            'BokehFrame cannot draw Field: a field is a continuum and bokeh has no filled-contour glyph over '
+            'a point set (contourpy is not declared by the viz-bokeh extra). Send lab_commons.viz.Samples if a '
+            'colour-mapped point cloud is the drawing you want, or use lab_commons.viz.mpl.MplRenderer'
+        )
+        raise NotImplementedError(msg)
+
+    def draw_grid(self, grid: Grid) -> None:
+        """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
+
+        AN IMAGE WITH A COLOUR MAPPER, this library's own raster primitive: the grid's rectangle
+        becomes the glyph's ``x``/``y``/``dw``/``dh`` in data units and its voids go through the
+        mapper's ``nan_color``. Built in :mod:`lab_commons.viz._bokeh_glyphs`, beside the mappers it
+        is made of.
+        """
+        glyphs.grid(self.figure, grid, y_range_name=self._y_range_name)
+
+    def draw_samples(self, samples: Samples) -> None:
+        """Draw points coloured by the values they carry — the point cloud and its colour scale.
 
         A colour-mapped scatter over a mapper whose range comes from the samples, built in
-        :mod:`lab_commons.viz._bokeh_glyphs`: this library's field primitive is an image over a
-        rectangular grid, and a mesh's nodes are not one.
+        :mod:`lab_commons.viz._bokeh_glyphs` beside the grid's own machinery.
         """
-        glyphs.field(self.figure, field, y_range_name=self._y_range_name)
+        glyphs.samples(self.figure, samples, y_range_name=self._y_range_name)
 
     def draw_contours(self, contours: Contours) -> None:
         """REFUSED: this library has no isoline glyph over a point set — see ``bokeh.py``'s docstring.

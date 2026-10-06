@@ -6,10 +6,12 @@ map, a winding layout and a connection diagram through either adapter. A descrip
 driven through both is that claim MEASURED; a description written twice, once per adapter, would
 agree with itself by construction and measure nothing.
 
-FOUR SUBJECTS, AND THE THREE THAT ARE NOT ONE AXES ARE THE POINT OF THIS FILE NOW. ``draw_everything``
-is the verb menu on one coordinate system. The other three are the shapes an earlier version of this
-tier could not express AT ALL, each for the same reason — a renderer conflated the canvas with the
-coordinate system, so there was exactly one axes and it was built at construction:
+FIVE SUBJECTS, AND THE FOUR THAT ARE NOT ONE AXES ARE THE POINT OF THIS FILE NOW. ``draw_everything``
+is the verb menu on one coordinate system -- chart, waveform, the two plane shapes (a masked grid map
+and a point cloud), a winding layout and a connection diagram. The other four are the shapes an
+earlier version of this tier could not express AT ALL, each for the same reason -- a renderer
+conflated the canvas with the coordinate system, so there was exactly one axes and it was built at
+construction, and the shapes that needed a second one or a different projection had no spelling:
 
 * ``draw_panels`` — four frames in a grid, rows sharing an x axis and columns sharing a y one;
 * ``draw_twin`` — two frames over ONE panel, sharing the x axis, the second with its own y scale;
@@ -17,12 +19,20 @@ coordinate system, so there was exactly one axes and it was built at constructio
   draw: bokeh has no polar projection and REFUSES it by name (see ``lab_commons/viz/bokeh.py``),
   exactly as it refuses ``Contours``. That refusal is exercised PER ADAPTER rather than here, so
   "the same description draws through both" does not quietly become "...except this one".
+* ``draw_continuum`` — a scalar over a point set, drawn as a surface through it. The second subject
+  only one adapter can draw, for the same kind of reason: bokeh has no filled-contour glyph over a
+  point set, and it REFUSES ``Field`` by name rather than substituting the point cloud that
+  ``Samples`` is.
 
 IT DRAWS THROUGH THE PROTOCOLS, never through a concrete adapter, so this module imports no plotting
 library -- which is also what keeps the vocabulary's own test file free of one.
 """
 
 from __future__ import annotations
+
+from typing import Final
+
+import numpy as np
 
 from lab_commons.viz import (
     Bars,
@@ -31,21 +41,47 @@ from lab_commons.viz import (
     Field,
     Figure,
     Frame,
+    Grid,
     Label,
     Patch,
+    Samples,
     Scale,
     Segment,
     Series,
     Ticks,
     Vectors,
+    panel_rects,
 )
 
-#: A square of four samples, so a field map has a scale to draw rather than a single value.
+#: A scalar over a CONTINUUM, with a scale, so the surface it is drawn as has a colour bar too.
 _FIELD = Field(
     x=[0.0, 1.0, 0.0, 1.0],
     y=[0.0, 0.0, 1.0, 1.0],
     values=[0.0, 1.0, 1.0, 2.0],
     scale=Scale(cmap='viridis', label='|B| (T)', vmin=0.0, vmax=2.0),
+)
+
+#: A 2 x 3 grid WITH A VOID, which is the whole subject of this shape: the masked cell must reach
+#: the artist masked, because a grid rendered without its mask draws a value it never had. The
+#: extent is stated in data coordinates (a mesh's bounding box, which is where these come from), and
+#: the scale is pinned so the two adapters' colour bars are comparable.
+_GRID = Grid(
+    values=np.ma.masked_array(
+        [[0.0, 0.5, 1.0], [1.5, 2.0, 2.5]],
+        mask=[[False, False, False], [False, True, False]],
+    ),
+    extent=(0.0, 3.0, 0.0, 2.0),
+    scale=Scale(cmap='viridis', label='|B| (T)', vmin=0.0, vmax=2.5),
+)
+
+#: FOUR POINTS THAT CARRY A VALUE, one of them off a line so the cloud is not a curve, with a stated
+#: mark size: the colour-mapped point cloud, which is not a ``Field`` and not a coloured ``Series``.
+_SAMPLES = Samples(
+    x=[0.0, 1.0, 2.0, 3.0],
+    y=[0.0, 1.0, 0.5, 1.5],
+    values=[0.0, 1.0, 2.0, 3.0],
+    scale=Scale(cmap='plasma', label='speed (rpm)', vmin=0.0, vmax=3.0),
+    size=6.0,
 )
 
 #: Two coil sides, one by phase name and one outlined -- the winding layout's two colouring modes.
@@ -58,23 +94,18 @@ _SLOTS = (
 _VECTORS = Vectors(x=[2.0, 6.0, 2.0, 6.0], y=[2.0, 2.0, 6.0, 6.0], u=[1.0, -1.0, 1.0, -1.0], v=[1.0, 1.0, -1.0, -1.0])
 
 #: The rects of the panel grid, in the order :func:`draw_panels` creates them: top-left, top-right,
-#: bottom-left, bottom-right. Stated here so a test can assert the LAYOUT rather than rediscover it.
+#: bottom-left, bottom-right. COMPUTED BY THE VOCABULARY RATHER THAN WRITTEN HERE, so the grid below
+#: is the panel arithmetic RENDERED through both adapters rather than a second copy of it.
 #:
-#: THE GAPS ARE THE POINT OF THE NUMBERS. A rect is a frame's BOX, and a frame's ticks, labels and
-#: title are drawn OUTSIDE it -- so a grid whose panels touch draws the top row's x labels under the
-#: bottom row's title. The gap each axis is given here is the room the panel beside it needs, which
-#: is a statement only the producer can make: the vocabulary places frames exactly where they are
-#: asked for and has no opinion about how much margin a label needs.
-PANEL_RECTS = (
-    (0.0, 0.58, 0.42, 0.40),
-    (0.58, 0.58, 0.42, 0.40),
-    (0.0, 0.04, 0.42, 0.40),
-    (0.58, 0.04, 0.42, 0.40),
-)
+#: THE GAPS ARE THE POINT OF THE NUMBERS. A rect is a frame's BOX, and everything a reader sees
+#: around it -- the ticks, the labels, the title -- is drawn OUTSIDE it, so a grid whose panels touch
+#: draws the top row's x labels under the bottom row's title. That arithmetic is
+#: :func:`~lab_commons.viz.panel_rects`'s, and this constant is what it returns for a 2 x 2 grid.
+PANEL_RECTS: Final = panel_rects(2, 2)
 
 
 def draw_everything(frame: Frame) -> None:
-    """Draw every subject both adapters can draw: chart, waveform, field map, layout, connections."""
+    """Draw every subject both adapters can draw: chart, waveform, two plane shapes, layout, wires."""
     frame.set_title('every primitive')
     frame.set_xlabel('x')
     frame.set_ylabel('y')
@@ -92,8 +123,11 @@ def draw_everything(frame: Frame) -> None:
     frame.draw_line(Series(x=[0.0, 1.0, 2.0], y=[0.0, 1.0, 0.0], label='phase A'))
     frame.draw_line(Series(x=[0.0, 1.0, 2.0], y=[1.0, 0.0, 1.0], style='--', label='phase B'))
 
-    # A FIELD MAP: samples, and what their colour means.
-    frame.draw_field(_FIELD)
+    # A GRID MAP: a scalar on a rectilinear grid, with a VOID that must be drawn as nothing.
+    frame.draw_grid(_GRID)
+
+    # A POINT CLOUD: marks that carry a value, coloured by it, with the scale that makes it readable.
+    frame.draw_samples(_SAMPLES)
 
     # A BAR FOR A SCALE THE FIGURE SET ITSELF, once continuous and once banded on its ticks.
     frame.draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='scale', vmin=0.0, vmax=2.0)))
@@ -135,10 +169,12 @@ def draw_panels(figure: Figure) -> None:
     rather than by their tick numbers.
 
     THE FRAMES ARE CREATED IN READING ORDER (top-left, top-right, bottom-left, bottom-right) so that
-    ``figure.frames`` is the picture's own order; the rects are :data:`PANEL_RECTS`. Every panel
-    shares BOTH axes with the first one, which is what ``subplots(2, 2, sharex=True, sharey=True)``
-    means and what makes the four one comparison instead of four charts: a reader reads the same
-    angle and the same flux density off whichever panel they happen to look at.
+    ``figure.frames`` is the picture's own order; the rects are :data:`PANEL_RECTS`, which is
+    :func:`~lab_commons.viz.panel_rects`'s answer for a 2 x 2 grid — so the panel arithmetic is
+    RENDERED through both adapters here rather than restated. Every panel shares BOTH axes with the
+    first one, which is what ``subplots(2, 2, sharex=True, sharey=True)`` means and what makes the
+    four one comparison instead of four charts: a reader reads the same angle and the same flux
+    density off whichever panel they happen to look at.
     """
     top_left = figure.frame(rect=PANEL_RECTS[0])
     top_right = figure.frame(rect=PANEL_RECTS[1], sharex=top_left, sharey=top_left)
@@ -181,12 +217,32 @@ def draw_polar(figure: Figure) -> None:
     A cartesian frame can only fake it by drawing the circle by hand, which is exactly the kind of
     thing a producer should not be doing.
 
-    THE ONE SUBJECT ONLY ONE ADAPTER CAN DRAW, and saying so here rather than omitting it is the
-    point: the vocabulary expresses it, matplotlib's polar projection draws it, and bokeh refuses it
-    BY NAME (it has no polar projection and draws every glyph in cartesian data units). A test that
-    drove this through the bokeh adapter would be measuring a promise nobody can keep.
+    ONE OF THE TWO SUBJECTS ONLY ONE ADAPTER CAN DRAW, and saying so here rather than omitting it is
+    the point: the vocabulary expresses it, matplotlib's polar projection draws it, and bokeh refuses
+    it BY NAME (it has no polar projection and draws every glyph in cartesian data units). A test
+    that drove this through the bokeh adapter would be measuring a promise nobody can keep.
     """
     star = figure.frame(projection='polar')
     star.set_title('slot EMF star')
     star.draw_line(Series(x=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], y=[1.0, 2.0, 1.5, 2.5, 1.0, 1.5], label='slot EMF'))
     star.draw_markers(Series(x=[0.0, 1.0, 2.0], y=[1.0, 2.0, 1.5], marker='o'))
+
+
+def draw_continuum(figure: Figure) -> None:
+    """A FIELD MAP: a scalar over a CONTINUUM, drawn as a surface through its samples.
+
+    THE OTHER SUBJECT ONLY ONE ADAPTER CAN DRAW. The shape is a point set with values and the drawing
+    it asks for is a surface — a filled contour over a triangulation — and bokeh has no such glyph
+    (it interpolates with ``contourpy``, which no extra of this package declares), so it REFUSES
+    ``Field`` by name. That refusal is the split's consequence rather than a gap: the cloud of marks
+    a bokeh field map used to be drawn as is now the ``Samples`` shape, which the producer asks for
+    explicitly — see ``test_viz_bokeh`` for the refusal itself.
+
+    The samples are deliberately NOT a rectangle, so the surface is drawn through a triangulation and
+    not as a grid: a rectangular array is ``Grid``, and this subject would otherwise be it.
+    """
+    map_frame = figure.frame()
+    map_frame.set_title('|B| over the air gap')
+    map_frame.set_xlabel('x (mm)')
+    map_frame.set_ylabel('y (mm)')
+    map_frame.draw_field(_FIELD)

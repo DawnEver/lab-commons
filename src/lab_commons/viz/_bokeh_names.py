@@ -24,7 +24,7 @@ from typing import Final
 
 from bokeh import palettes
 
-__all__ = ['BASELINES', 'DASHES', 'MARKERS', 'PALETTES', 'given', 'palette_for', 'quantized']
+__all__ = ['BASELINES', 'DASHES', 'MARKERS', 'PALETTES', 'given', 'marked', 'palette_for', 'quantized']
 
 #: The colormaps BOTH adapters carry: the vocabulary's name -> bokeh's palette name. A named set
 #: rather than a fallback, because a silent substitution is a colour scale that means something
@@ -77,6 +77,23 @@ def palette_for(name: str) -> str:
         return PALETTES[name]
     except KeyError as missing:
         msg = f'no bokeh palette named {name!r}; this adapter carries {sorted(PALETTES)}'
+        raise ValueError(msg) from missing
+
+
+def marked(name: str) -> str:
+    """Bokeh's marker for *name*, or a refusal that lists what this adapter can draw.
+
+    THIS IS THE TABLE'S OWN RULE APPLIED TO ITS THIRD TABLE, and it was earned rather than copied:
+    the lookup used to be ``MARKERS.get(name, 'circle')`` at both call sites, so a description that
+    asked for a symbol this library has no glyph for came out as a CIRCLE — a picture that
+    disagrees with the one the other adapter draws for the same description, silently, which is the
+    one failure a shared vocabulary must not have. A name that is not in the table is a name whose
+    picture is not drawable here, and the refusal says so with the list.
+    """
+    try:
+        return MARKERS[name]
+    except KeyError as missing:
+        msg = f'no bokeh marker named {name!r}; this adapter carries {sorted(MARKERS)}'
         raise ValueError(msg) from missing
 
 

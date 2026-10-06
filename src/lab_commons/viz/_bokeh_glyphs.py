@@ -1,24 +1,25 @@
-"""The four bokeh drawings that BUILD DATA, rather than translating one primitive into one glyph.
+"""The bokeh drawings that BUILD DATA, rather than translating one primitive into one glyph.
 
-WHY THESE FOUR AND NOT THE OTHER SIXTEEN. Every other verb of a :class:`~lab_commons.viz.bokeh_frame.BokehFrame`
-is a call with properties: a line, a scatter, bars, a circle, a segment, a text. These four are not
-— each ASSEMBLES something this library has no primitive for and passes it as data:
+WHY THESE AND NOT THE OTHER VERBS. Every other verb of a :class:`~lab_commons.viz.bokeh_frame.BokehFrame`
+is a call with properties: a line, a scatter, bars, a circle, a segment, a text. These are not — each
+ASSEMBLES something this library has no primitive for and passes it as data:
 
 * a **patch set** becomes a ``ColumnDataSource`` of vertex lists, colour-mapped through a
   ``LinearColorMapper`` when the patches carry values, or drawn one by one when they carry a colour;
-* a **field** is a colour-mapped scatter over a mapper whose range comes from the samples;
+* a **grid** becomes an ``image`` glyph over a colour mapper whose voids are painted transparent —
+  this library's raster, and the reason a masked 2-D array needs no reshape to be drawn here;
+* a **point cloud** is a colour-mapped scatter over a mapper whose range comes from the values;
 * a **quiver** is TWO glyphs — the shaft as one vectorized segment renderer and the head as one
   marker renderer, the ``|(u, v)| / scale`` arithmetic done here because this library has none;
 * a **colour bar** is a mapper, a quantised palette and a fixed ticker, added as a layout item.
 
 That is the seam, and it is the same one :mod:`lab_commons.viz._bokeh_names` is drawn on: the frame
-is the VERB TABLE and this is the machinery behind four of its rows. It is also what the module-size
-band asked for — the frame crossed it on exactly these four, and splitting them out is a repair
-rather than a waiver.
+is the VERB TABLE and this is the machinery behind its rows. It is also what the module-size band
+asked for — the frame crossed it on these, and splitting them out is a repair rather than a waiver.
 
-THE MEASURED NUMBERS LIVE HERE TOO, beside the only code that reads them: the pixel size of a field
-sample and of a vector head (both screen-sized in this library), and the hatch pair that was
-measured to make the two adapters' fills read alike.
+THE MEASURED NUMBERS LIVE HERE TOO, beside the only code that reads them: the pixel size of a vector
+head (screen-sized in this library), the hatch pair that was measured to make the two adapters' fills
+read alike, and the one colour this library will not accept a NAME for.
 """
 
 from __future__ import annotations
@@ -29,19 +30,21 @@ from typing import Final
 import numpy as np
 from bokeh.models import ColorBar, ColumnDataSource, FixedTicker, LinearColorMapper, Plot
 from bokeh.transform import transform
+from numpy.typing import ArrayLike
 
-from lab_commons.viz import Colorbar, Field, Patch, Scale, Vectors
-from lab_commons.viz._bokeh_names import given, palette_for, quantized
-
-#: How large one field sample is drawn, in pixels. Small on purpose: a field arrives as a dense
-#: cloud of samples, and a page is zoomable, so the marks are meant to read as a surface rather than
-#: as points -- a producer that wants visible markers draws a ``Series`` instead.
-_SAMPLE_SIZE_PX: Final = 4
+from lab_commons.viz import Colorbar, Grid, Patch, Samples, Scale, Vectors
+from lab_commons.viz._bokeh_names import given, marked, palette_for, quantized
 
 #: The head of one arrow, in pixels. Bokeh's marks are screen-sized, so a vector field drawn here
 #: has heads of one size whatever the samples' magnitudes are -- see :func:`vectors` for why that is
 #: this library's shape rather than a choice made here.
 _VECTOR_HEAD_SIZE: Final = 7
+
+#: WHAT A VOID IS PAINTED WITH: a fully transparent colour, in the RGBA-hex spelling this library's
+#: Color property accepts. ``'transparent'`` and ``None`` both look like the right spelling and both
+#: are REFUSED by it (measured on bokeh 3.10) -- and the first one would be an error only on the
+#: figures that HAVE a void, which is the half a test without one never reaches.
+_TRANSPARENT: Final = '#00000000'
 
 #: Hatch density, MEASURED against the other adapter rather than guessed: with bokeh's own defaults
 #: a one-character pattern is drawn far denser than matplotlib draws the same character, so one
@@ -50,6 +53,19 @@ _VECTOR_HEAD_SIZE: Final = 7
 #: figures side by side is the only instrument that can see the difference.
 _HATCH_SCALE: Final = 30
 _HATCH_WEIGHT: Final = 0.5
+
+
+def _mark_size(size: ArrayLike | None) -> float | np.ndarray | None:
+    """The mark size as this library's own property: a plain number, or one per sample.
+
+    A 0-D ARRAY IS NOT A NUMBER TO BOKEH. A scalar wrapped in an array arrives at ``scatter`` as a
+    sequence literal and is REFUSED ("Columns need to be 1D"), so the vocabulary's "one number, or
+    one per sample" is resolved here, at the one place that knows which of the two it was handed.
+    """
+    if size is None:
+        return None
+    values = np.asarray(size, dtype=float)
+    return float(values) if values.ndim == 0 else values
 
 
 def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_range_name: str | None) -> None:
@@ -113,31 +129,86 @@ def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_rang
         )
 
 
-def field(figure: Plot, samples: Field, *, y_range_name: str | None) -> None:
-    """Draw a scalar field and its colour scale — the field map.
+def grid(figure: Plot, cells: Grid, *, y_range_name: str | None) -> None:
+    """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
 
-    Bokeh draws a point set as a colour-mapped scatter with a colour bar, which is the glyph it has
-    for samples with no grid: the same description the matplotlib adapter sends to a filled contour,
-    drawn as marks because this library's field primitive is an image over a rectangular grid that a
-    mesh's nodes are not.
+    AN IMAGE, NOT A SCATTER, and that is what makes this a different picture from a
+    :class:`~lab_commons.viz.Samples`: the grid's rectangle becomes the glyph's geometry in DATA
+    units — ``x``/``y`` are its lower-left corner, ``dw``/``dh`` its width and height — and the array
+    is resampled across it, where a cloud's marks are drawn one per sample at their own coordinates.
+
+    THE VOIDS ARE TRANSPARENT. This library paints a NaN through the colour mapper's ``nan_color``,
+    so a masked cell is filled with NaN here and that colour is the fully transparent one; a masked
+    cell drawn as a value would be the defect the shape exists to prevent.
+
+    ``origin='bottom_left'`` IS STATED RATHER THAN INHERITED: it is the convention
+    :class:`~lab_commons.viz.Grid` defines (row 0 at the smallest y) and this library's own default
+    happens to agree today — which is exactly why the description should not rest on it.
     """
-    scale = Scale() if samples.scale is None else samples.scale
-    x = np.asarray(samples.x, dtype=float)
-    y = np.asarray(samples.y, dtype=float)
-    values = np.asarray(samples.values, dtype=float)
+    scale = Scale() if cells.scale is None else cells.scale
+    values = np.ma.filled(cells.cells(), np.nan)
+    x0, x1, y0, y1 = cells.span()
+    mapper = LinearColorMapper(
+        palette=palette_for(scale.cmap),
+        low=scale.vmin if scale.vmin is not None else float(np.nanmin(values)),
+        high=scale.vmax if scale.vmax is not None else float(np.nanmax(values)),
+        nan_color=_TRANSPARENT,
+    )
+    figure.image(
+        image=[values],
+        x=x0,
+        y=y0,
+        dw=x1 - x0,
+        dh=y1 - y0,
+        color_mapper=mapper,
+        origin='bottom_left',
+        **given(y_range_name=y_range_name),
+    )
+    figure.add_layout(ColorBar(color_mapper=mapper, title=scale.label), 'right')
+
+
+def samples(figure: Plot, cloud: Samples, *, y_range_name: str | None) -> None:
+    """Draw points coloured by the values they carry — the colour-mapped point cloud.
+
+    A SCATTER OVER A MAPPER, which is what this library has for marks whose colour is a third
+    quantity per point: the mapper's range comes from the values unless the scale pins it, and the
+    colour bar beside the panel is what makes those colours mean something.
+
+    THE MARKER IS TRANSLATED, NOT DEFAULTED — :func:`~lab_commons.viz._bokeh_names.marked` refuses a
+    name this library has no glyph for, so a description drawn as squares by one adapter cannot
+    arrive here as circles.
+    """
+    scale = Scale() if cloud.scale is None else cloud.scale
+    values = np.asarray(cloud.values, dtype=float)
     mapper = LinearColorMapper(
         palette=palette_for(scale.cmap),
         low=scale.vmin if scale.vmin is not None else float(np.nanmin(values)),
         high=scale.vmax if scale.vmax is not None else float(np.nanmax(values)),
     )
-    source = ColumnDataSource(data={'x': x, 'y': y, 'value': values})
+    data = {
+        'x': np.asarray(cloud.x, dtype=float),
+        'y': np.asarray(cloud.y, dtype=float),
+        'value': values,
+    }
+    size = _mark_size(cloud.size)
+    if isinstance(size, np.ndarray):
+        # ONE SIZE PER SAMPLE IS A COLUMN, not a property: this library refuses a sequence handed to
+        # a glyph that has a source ("must come from references to data columns"), so the per-sample
+        # case goes into the source and is referenced by field name.
+        data['size'] = size
+        size = 'size'
     figure.scatter(
         'x',
         'y',
-        source=source,
+        source=ColumnDataSource(data=data),
         fill_color=transform('value', mapper),
-        size=_SAMPLE_SIZE_PX,
-        **given(y_range_name=y_range_name),
+        marker=marked(cloud.marker or 'o'),
+        **given(
+            size=size,
+            fill_alpha=cloud.alpha,
+            line_alpha=cloud.alpha,
+            y_range_name=y_range_name,
+        ),
     )
     figure.add_layout(ColorBar(color_mapper=mapper, title=scale.label), 'right')
 

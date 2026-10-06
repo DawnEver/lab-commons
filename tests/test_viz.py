@@ -13,8 +13,9 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import numpy as np
 import pytest
-from _viz_figure import draw_everything, draw_panels, draw_polar, draw_twin
+from _viz_figure import draw_continuum, draw_everything, draw_panels, draw_polar, draw_twin
 
 from lab_commons.viz import (
     PROJECTIONS,
@@ -25,16 +26,19 @@ from lab_commons.viz import (
     Field,
     Figure,
     Frame,
+    Grid,
     Label,
     NullFrame,
     NullRenderer,
     Patch,
+    Samples,
     Scale,
     Segment,
     Series,
     Style,
     Ticks,
     Vectors,
+    panel_rects,
 )
 
 
@@ -70,17 +74,20 @@ def test_the_null_renderer_accepts_every_primitive_and_writes_nothing(tmp_path: 
 
 
 def test_the_null_renderer_draws_the_shapes_one_axes_cannot(tmp_path: Path) -> None:
-    """A panel grid, a twin axis and a polar frame are all accepted, and nothing is drawn.
+    """A panel grid, a twin axis, a polar frame and a continuum are all accepted, nothing is drawn.
 
-    THE THREE SHAPES THAT MADE THIS TIER BE REBUILT, declared here on a box with no plotting library
-    at all: totality is not a formality, because the box that draws nothing is exactly the box where
-    a figure that CANNOT be declared would go unnoticed until it was run somewhere else.
+    THE SHAPES THAT MADE THIS TIER BE REBUILT, declared here on a box with no plotting library at
+    all: totality is not a formality, because the box that draws nothing is exactly the box where a
+    figure that CANNOT be declared would go unnoticed until it was run somewhere else. ``draw_field``
+    is among them on purpose: bokeh refuses to DRAW a continuum, and a renderer that refused to
+    ACCEPT it would move an ``if plot:`` branch back into every producer.
     """
     renderer = NullRenderer()
     draw_panels(renderer)
     draw_twin(renderer)
+    draw_continuum(renderer)
     draw_polar(renderer)
-    assert len(renderer.frames) == 7, 'four panels, two frames of the twin, and the star'
+    assert len(renderer.frames) == 8, 'four panels, two frames of the twin, the map and the star'
     assert renderer.frames[-1].projection == 'polar'
     assert renderer.save(tmp_path / 'figure.png') is None
 
@@ -156,6 +163,12 @@ def test_the_primitives_default_to_the_neutral_choice() -> None:
     assert Label(x=0.0, y=0.0, text='A').halign == 'center'
     assert Label(x=0.0, y=0.0, text='A').box is False, 'a chip nobody asked for is a box on every label'
     assert Field(x=[0.0], y=[0.0], values=[1.0]).scale is None
+    assert Grid(values=[[1.0]]).extent is None, 'an unstated extent means the indices are the axes'
+    assert Grid(values=[[1.0]]).scale is None
+    assert Samples(x=[0.0], y=[0.0], values=[1.0]).scale is None
+    assert Samples(x=[0.0], y=[0.0], values=[1.0]).marker is None
+    assert Samples(x=[0.0], y=[0.0], values=[1.0]).size is None
+    assert Samples(x=[0.0], y=[0.0], values=[1.0]).alpha == 1.0
     assert Contours(x=[0.0], y=[0.0], values=[1.0]).levels == 10
     assert Contours(x=[0.0], y=[0.0], values=[1.0]).color is None
     assert Vectors(x=[0.0], y=[0.0], u=[1.0], v=[0.0]).scale == 1.0
@@ -163,6 +176,44 @@ def test_the_primitives_default_to_the_neutral_choice() -> None:
     # The ONE field that does not defer: the two libraries' own bar widths disagree, so a None here
     # would be a description that draws a different picture per backend.
     assert Bars(x=[0.0], height=[1.0]).width == 0.8
+
+
+def test_a_grid_resolves_its_extent_once_for_both_adapters() -> None:
+    """The rect a grid covers is the PRIMITIVE's answer, so the two libraries cannot disagree.
+
+    A stated extent is kept as given -- it is the mesh's bounding box, which is where these come from.
+    An UNSTATED one means the indices are the coordinates, one cell wide and one cell tall around
+    each sample, which is the table case (a q-factor matrix, a heatmap of a DataFrame). Computing
+    that in each adapter is how one of them ends up half a cell out with nothing to say which moved.
+    """
+    stated = Grid(values=[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], extent=(0.0, 3.0, 0.0, 2.0))
+    assert stated.span() == (0.0, 3.0, 0.0, 2.0)
+    assert Grid(values=[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).span() == (-0.5, 2.5, -0.5, 1.5)
+
+
+def test_a_grid_reads_a_void_as_a_void_however_it_was_spelled() -> None:
+    """A masked cell and a NaN are the same statement -- a cell with no value -- and stay one.
+
+    THIS IS THE SHAPE'S OWN SUBJECT: a grid rendered without its mask draws a value it never had, and
+    the two spellings a producer may use (a masked array from a mesh, a NaN from a solver) have to
+    arrive at both adapters as the same void.
+    """
+    masked = Grid(values=np.ma.masked_array([[1.0, 2.0], [3.0, 4.0]], mask=[[False, True], [False, False]]))
+    nan = Grid(values=[[1.0, float('nan')], [3.0, 4.0]])
+    for grid in (masked, nan):
+        cells = grid.cells()
+        assert cells.shape == (2, 2)
+        assert cells.mask[0, 1], 'a void arrived as a value'
+        assert not cells.mask[1, 1], 'a cell with a value arrived as a void'
+        assert cells[1, 1] == 4.0
+
+
+def test_a_grid_that_is_not_two_dimensional_is_refused_by_name() -> None:
+    """UNSUPPORTED-RAISES, naming the shapes that ARE expressible rather than a shape mismatch."""
+    with pytest.raises(ValueError, match='2-D array'):
+        Grid(values=[1.0, 2.0, 3.0]).cells()
+    with pytest.raises(ValueError, match='2-D array'):
+        Grid(values=[1.0, 2.0, 3.0]).span()
 
 
 def test_a_ticks_empty_label_list_is_not_an_absent_one() -> None:
@@ -213,3 +264,44 @@ def test_the_style_defaults_are_this_librarys_decision() -> None:
     assert style.dpi == 100
     assert style.font_size == 10.0
     assert style.font_family[0] == 'Times New Roman'
+
+
+def test_the_panel_grid_arithmetic_is_one_function() -> None:
+    """The rects of N panels, in READING ORDER, with the gaps that keep their labels apart.
+
+    A rect is the axes' BOX and the text around it is drawn OUTSIDE that box, so the gaps are the
+    whole point of this function -- a grid whose panels touch draws the upper row's x labels through
+    the lower row's title. The numbers asserted here are the invariants a caller depends on rather
+    than a restatement of the arithmetic: every panel is the same size, the grid spans the rectangle
+    it was given, the gaps are the gaps, and the top row is FIRST because that is how a page reads.
+
+    THE APPROXIMATE COMPARISONS STATE AN ABSOLUTE FLOOR: a rect is in CANVAS FRACTIONS, so 1e-9 of
+    the canvas is far below anything a layout could mean and far above the error of summing a few
+    floats -- and a bare ``approx`` would take the framework's own floor in whatever unit it guessed.
+    """
+    rects = panel_rects(2, 3, left=0.0, bottom=0.0, right=1.0, top=1.0, hgap=0.05, vgap=0.1)
+    assert len(rects) == 6
+    widths = {rect[2] for rect in rects}
+    heights = {rect[3] for rect in rects}
+    assert len(widths) == 1, 'the panels of one grid are equal boxes'
+    assert len(heights) == 1, 'the panels of one grid are equal boxes'
+    lefts = [rect[0] for rect in rects[:3]]
+    assert lefts == sorted(lefts), 'the top row runs left to right'
+    assert len(set(lefts)) == 3, 'two columns of one row are at the same left edge'
+    assert rects[3][0] == lefts[0], 'the second row starts at the same left edge'
+    assert rects[0][1] > rects[3][1], 'the first rect of the row-major order is the TOP one'
+    assert rects[3][1] == pytest.approx(0.0, abs=1e-9), 'the bottom row sits on the bottom margin'
+    assert rects[0][1] + rects[0][3] == pytest.approx(1.0, abs=1e-9), 'the top row is under the top margin'
+    assert rects[1][0] - (rects[0][0] + rects[0][2]) == pytest.approx(0.05, abs=1e-9), 'the column gap is hgap'
+    assert rects[0][1] - (rects[3][1] + rects[3][3]) == pytest.approx(0.1, abs=1e-9), 'the row gap is vgap'
+    assert rects[-1][0] + rects[-1][2] == pytest.approx(1.0, abs=1e-9), 'the last column ends at the right edge'
+
+
+def test_the_panel_helper_refuses_a_grid_that_is_not_a_picture() -> None:
+    """Two requests no arithmetic can honour honestly, both refused BY NAME rather than drawn."""
+    with pytest.raises(ValueError, match='at least one row'):
+        panel_rects(0, 2)
+    with pytest.raises(ValueError, match='at least one row'):
+        panel_rects(2, 0)
+    with pytest.raises(ValueError, match='no area is not a picture'):
+        panel_rects(3, 3, left=0.0, bottom=0.0, right=1.0, top=0.3, hgap=0.1, vgap=0.2)

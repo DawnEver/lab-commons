@@ -31,7 +31,8 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from lab_commons.viz import Frame, Rect, Style, _place
+from lab_commons.viz import Frame, Style
+from lab_commons.viz._placement import Rect, _place
 from lab_commons.viz.mpl_frame import MplFrame
 
 __all__ = [
@@ -249,7 +250,7 @@ class MplRenderer:
 
         THE PLACEMENT IS NOT DECIDED HERE. Which rect a frame occupies, which coordinate system it
         is built in and whether it is a twin axis are the vocabulary's rules, resolved once in
-        :func:`lab_commons.viz._place` so both adapters apply the same ones; this method only
+        :func:`lab_commons.viz._placement._place` so both adapters apply the same ones; this method only
         translates the answer into matplotlib objects.
 
         A STATED RECT IS THE AXES' BOX, exactly, and a frame that named none gets the canvas's own

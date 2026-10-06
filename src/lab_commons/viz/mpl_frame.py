@@ -37,9 +37,11 @@ from lab_commons.viz import (
     Colorbar,
     Contours,
     Field,
+    Grid,
     Label,
     Patch,
     Rect,
+    Samples,
     Scale,
     Segment,
     Series,
@@ -271,12 +273,14 @@ class MplFrame:
             )
 
     def draw_field(self, field: Field) -> None:
-        """Draw a scalar field and its colour scale — the field map.
+        """Draw a scalar over a CONTINUUM and its colour scale — the field map.
 
         The samples go to a FILLED CONTOUR OVER A TRIANGULATION, which is the primitive that accepts
         a point set with no structure: a structured chart, a skewed one and an unstructured mesh all
         arrive here as coordinates and values, and nothing has to be reshaped to a rectangle the
-        samples never had.
+        samples never had. THE SURFACE IS WHAT THE SHAPE ASKS FOR, and the other drawing of the same
+        data — marks at the samples, coloured by their values — is :class:`Samples`, which a
+        producer asks for by name rather than getting it because a backend could not contour.
         """
         scale = Scale() if field.scale is None else field.scale
         artist = self.axes.tricontourf(
@@ -286,6 +290,51 @@ class MplFrame:
             cmap=scale.cmap,
             vmin=scale.vmin,
             vmax=scale.vmax,
+        )
+        self.axes.figure.colorbar(artist, ax=self.axes, label=scale.label)
+
+    def draw_grid(self, grid: Grid) -> None:
+        """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
+
+        THE VOIDS ARE DRAWN AS NOTHING, which is the shape's subject rather than a detail: the cells
+        arrive at the image masked (a masked array stays masked, a NaN is masked by the primitive),
+        so the page shows through instead of a value the grid never had.
+
+        THE ASPECT IS NOT THIS VERB'S TO SET. ``imshow`` sets the axes aspect on EVERY call — from
+        ``rcParams['image.aspect']`` when none is passed — so an image drawn after
+        :meth:`set_equal_aspect` would silently undo it; the aspect in force is therefore handed
+        back unchanged, which leaves the one statement about it where the producer made it.
+        """
+        scale = Scale() if grid.scale is None else grid.scale
+        artist = self.axes.imshow(
+            grid.cells(),
+            origin='lower',
+            extent=grid.span(),
+            cmap=scale.cmap,
+            vmin=scale.vmin,
+            vmax=scale.vmax,
+            aspect=self.axes.get_aspect(),
+        )
+        self.axes.figure.colorbar(artist, ax=self.axes, label=scale.label)
+
+    def draw_samples(self, samples: Samples) -> None:
+        """Draw points coloured by the values they carry — the point cloud and its colour scale.
+
+        ``size`` IS A LENGTH HERE AND AN AREA THERE: this library's ``scatter(s=...)`` is a marker's
+        area in points squared, so a size given is squared. The vocabulary states a length because a
+        length is what a reader of the description means — see :class:`Samples`.
+        """
+        scale = Scale() if samples.scale is None else samples.scale
+        artist = self.axes.scatter(
+            np.asarray(samples.x, dtype=float),
+            np.asarray(samples.y, dtype=float),
+            c=np.asarray(samples.values, dtype=float),
+            cmap=scale.cmap,
+            vmin=scale.vmin,
+            vmax=scale.vmax,
+            marker=samples.marker if samples.marker is not None else 'o',
+            s=None if samples.size is None else np.asarray(samples.size, dtype=float) ** 2,
+            alpha=samples.alpha,
         )
         self.axes.figure.colorbar(artist, ax=self.axes, label=scale.label)
 
