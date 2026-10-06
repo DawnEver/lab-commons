@@ -14,7 +14,11 @@ Tier 2 (NOT imported here -- opt in explicitly): ``lab_commons.em`` holds the EM
 quantity vocabulary (``LengthType``, ``TorqueType``, ``Q_0Nm``, ...) shared across the
 consumer-a/consumer-c/consumer-b family. Import it directly:
 ``from lab_commons.em import TorqueType``. Importing this package, or ``lab_commons.units``
-alone, never pulls ``em`` in.
+alone, never pulls ``em`` in. ``lab_commons.viz`` holds the family's plotting vocabulary --
+what a figure IS, as data -- and imports no plotting library at all; a backend is an adapter
+(``lab_commons.viz.mpl``, ``lab_commons.viz.bokeh``) whose own import is the opt-in, so a
+solver batch can describe a figure on a box where no plotting library is installed. The viz
+tier is the same rule and is pinned the same way, by ``tests/test_viz_gate.py``.
 
 Provenance: extracted from consumer-a's ``mylab_logging`` package (logging/paths)
 and ``core/units.py`` (the maintainer-designated canonical pint design) -- the strongest
