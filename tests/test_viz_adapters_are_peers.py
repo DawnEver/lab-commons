@@ -1,17 +1,19 @@
 """The two adapters are EQUAL PEERS: one vocabulary, two contracts, one picture per SHAPE.
 
 NEITHER BACKEND IS THE SECOND-CLASS SPELLING OF THE OTHER, and that is a claim with a measurement
-behind it rather than a wording in a docstring: the SAME descriptions -- the five functions
-``tests/_viz_figure.py`` shares -- have to come out of both, both have to satisfy the same two
-Protocols, and the colour a series takes has to be the same in both. A layer where one backend
-silently drew less, or took a different colour, would still pass every per-adapter test.
+behind it rather than a wording in a docstring: the SAME descriptions -- the six functions
+``tests/_viz_figure.py`` shares -- have to come out of both wherever both can draw them, and the
+colour a series takes has to be the same in both. A layer where one backend silently drew less, or
+took a different colour, would still pass every per-adapter test.
 
 A SHAPE IS MEASURED BY WHAT BOTH ADAPTERS REPORT, not by the pictures, because that is the layer's
 own datum: the same description must resolve to the same rects, the same coordinate systems and the
-same rectangle the data covers whichever library is behind it. The two subjects that are NOT driven
-through both are the polar frame and the continuum -- bokeh has no polar projection and no
-filled-contour glyph over a point set, and it refuses both BY NAME, which ``test_viz_bokeh``
-measures. They are named here rather than left for a reader to notice the omission.
+same rectangle the data covers whichever library is behind it. The three subjects that are NOT driven
+through both are the polar frame, the continuum and the 3D frame -- bokeh has no polar projection, no
+filled-contour glyph over a point set and no third axis, and it refuses all three BY NAME, which
+``test_viz_bokeh`` measures. They are named here rather than left for a reader to notice the
+omission; the 3D one is refused one verb further out than the other two (at ``frame_3d``, the canvas
+verb, because there is no frame to hand back at all).
 
 BOTH LIBRARIES ARE OPTIONAL EXTRAS, so this module degrades when either is missing: a claim that
 holds only when the box happens to have everything installed is not the claim being made.

@@ -35,7 +35,10 @@ ONE PROJECTION THIS LIBRARY DOES NOT HAVE, AND IT REFUSES RATHER THAN IMITATING.
 glyph in cartesian data units and has no polar projection, so ``projection='polar'`` is refused at
 :meth:`BokehRenderer.frame` by name, with the adapter that can draw it as the remedy. A polar figure
 is drawn with ``lab_commons.viz.mpl``, which is what the equal-peer relationship means: the same
-vocabulary, each backend drawing what its library actually has.
+vocabulary, each backend drawing what its library actually has. THE SAME GOES FOR A THIRD AXIS, one
+verb further out: this library has no 3D axes at all, so :meth:`BokehRenderer.frame_3d` is refused by
+name with the same remedy — the vocabulary declares the protocol, one peer implements it, and this
+one says so rather than drawing a projection of it.
 
 TWO DRAW VERBS ARE REFUSED FOR THE SAME REASON, EACH WITH ITS OWN REMEDY. This library interpolates
 a point set only through ``contourpy``, which no extra of this package declares, so ``Contours``
@@ -59,7 +62,7 @@ from bokeh.models.plots import Plot
 from bokeh.plotting import figure
 from bokeh.resources import INLINE
 
-from lab_commons.viz import Frame, Style
+from lab_commons.viz import Frame, Frame3D, Style
 from lab_commons.viz._bokeh_names import PALETTES, given
 from lab_commons.viz._placement import Rect, _covers, _place, _Placement
 from lab_commons.viz.bokeh_frame import BokehFrame
@@ -161,6 +164,25 @@ class BokehRenderer:
         )
         self._frames.append(frame)
         return frame
+
+    def frame_3d(self, *, rect: Rect | None = None) -> Frame3D:
+        """REFUSED: this library has no 3D axes — the refusal the module docstring names.
+
+        THE REFUSAL IS HERE RATHER THAN ON A 3D FRAME OF THIS ADAPTER, because there is no such frame
+        to hand back: bokeh draws every glyph in two cartesian dimensions and has no third axis, so
+        the honest answer is at the door the producer knocks on. It is the same shape as the polar
+        refusal one verb above and it names the same remedy, so a consumer learns one rule: this
+        adapter draws what its library HAS, and says which adapter draws the rest.
+
+        A ``rect`` is not read and not refused on its own: nothing is built here whatever the
+        placement, and a malformed rectangle is :meth:`frame`'s to refuse — this verb never reaches
+        the axes it would have been handed.
+        """
+        msg = (
+            'BokehRenderer cannot build a 3D frame: bokeh draws every glyph in two cartesian dimensions '
+            'and has no third axis. Draw this figure with lab_commons.viz.mpl.MplRenderer, which has one'
+        )
+        raise NotImplementedError(msg)
 
     @property
     def frames(self) -> tuple[BokehFrame, ...]:

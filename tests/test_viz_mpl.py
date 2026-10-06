@@ -32,10 +32,11 @@ from _viz_figure import (
     draw_everything,
     draw_panels,
     draw_polar,
+    draw_space,
     draw_twin,
 )
 
-from lab_commons.viz import Colorbar, Contours, Figure, Frame, Samples, Scale, Series, Style, Ticks
+from lab_commons.viz import Colorbar, Contours, Figure, Frame, Frame3D, Samples, Scale, Series, Style, Ticks
 
 pytest.importorskip('matplotlib')
 
@@ -166,6 +167,114 @@ def test_a_polar_frame_is_built_as_a_polar_axes() -> None:
     assert star.axes.lines, 'the star trace was not drawn'
     assert star.axes.get_title() == 'slot EMF star'
     assert star.rect is None, 'a frame that names no rect is placed by the canvas'
+    renderer.close()
+
+
+def test_a_3d_frame_is_built_as_an_axes3d() -> None:
+    """THE THIRD AXIS, measured on the axes matplotlib actually built under the frame.
+
+    The three limits, the camera, the box aspect and the z label are one picture's worth of reasons
+    for this frame to be a protocol of its own, so all four are read here -- a frame that was built
+    in the plane would draw the same numbers from above and no signature can catch that.
+    ``axes.name`` is the library's own answer, which is the reading the polar frame's test takes too.
+    """
+    renderer = viz_mpl.MplRenderer()
+    draw_space(renderer)
+    frame = renderer.frames[0]
+
+    assert isinstance(frame, Frame3D)
+    assert isinstance(frame, Frame) is False, 'the two arities are one contract, and half its verbs lie'
+    assert frame.projection == '3d'
+    assert frame.axes.name == '3d', 'the frame was built in the plane and would draw from above'
+    assert frame.axes.get_title() == 'conductors in space'
+    assert frame.axes.get_zlabel() == 'z (mm)', 'the third axis lost its label'
+    assert frame.axes.get_zlim() == (0.0, 2.0), 'the z limit the description stated is not the drawn one'
+    assert (frame.axes.elev, frame.axes.azim) == (22.0, 35.0), 'the camera did not move'
+    # THE BOX ASPECT IS READ AS THE RATIO, because this library normalises it to the figure's own
+    # shape on the way in: the statement that survives is "z is drawn 0.7 as long as x", not the triple.
+    _x, _y, z = frame.axes.get_box_aspect()
+    assert z / frame.axes.get_box_aspect()[0] == pytest.approx(0.7, abs=1e-9)
+    assert len(frame.axes.collections) == 4, 'two groups of conductors, the nodes and the cell'
+    assert frame.axes.get_legend() is not None, 'the group labels reached the legend'
+    renderer.close()
+
+
+def test_the_3d_subject_reaches_the_saved_file(tmp_path: Path) -> None:
+    """One artifact for a canvas whose only frame is 3D — written, non-empty, no window."""
+    renderer = viz_mpl.MplRenderer()
+    draw_space(renderer)
+    out = renderer.save(tmp_path / 'space.png')
+    assert out is not None
+    assert out.is_file()
+    assert out.stat().st_size > 0
+    assert len(renderer.figure.axes) == 1, 'the 3D frame is one axes, not a panel and a leftover'
+    renderer.close()
+
+
+def test_a_trace_in_space_is_refused_on_a_plane_frame() -> None:
+    """THE COORDINATE CANNOT BE QUIETLY DROPPED: this library's ``plot(x, y)`` would drop the z.
+
+    The failure the refusal prevents is a picture that looks drawn: the space curve would come out as
+    its own projection onto the plane, and nothing in the figure would say a coordinate had gone. The
+    refusal is per CALL, so the rest of the figure still draws.
+    """
+    frame = viz_mpl.MplRenderer().frame()
+    with pytest.raises(ValueError, match='trace in space'):
+        frame.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0], z=[0.0, 1.0]))
+    with pytest.raises(ValueError, match='trace in space'):
+        frame.draw_markers(Series(x=[0.0], y=[0.0], z=[0.0]))
+    frame.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0]))
+    assert frame.axes.lines, 'the refusal took the rest of the figure down with it'
+
+
+def test_a_plane_trace_is_refused_on_a_3d_frame() -> None:
+    """The other half of the arity contract: a trace with no z drawn at z = 0 invents a coordinate."""
+    renderer = viz_mpl.MplRenderer()
+    frame = renderer.frame_3d()
+    with pytest.raises(ValueError, match='carries no z'):
+        frame.draw_lines((Series(x=[0.0, 1.0], y=[0.0, 1.0]),))
+    with pytest.raises(ValueError, match='carries no z'):
+        frame.draw_markers(Series(x=[0.0], y=[0.0]))
+    frame.draw_lines((Series(x=[0.0, 1.0], y=[0.0, 1.0], z=[0.0, 1.0]),))
+    assert frame.axes.collections, 'the refusal took the rest of the figure down with it'
+    renderer.close()
+
+
+def test_one_collection_is_one_legend_row() -> None:
+    """A set of traces drawn as ONE artist carries ONE label, so two in one call are refused by name.
+
+    The alternative is the silent one: a collection has a single legend label, so a call holding two
+    groups would draw one of them and drop the other's row without anything saying so. The remedy --
+    one call per group -- is what the shared description does, and what the consumer's own 3D figure
+    wants (one row per phase).
+    """
+    frame = viz_mpl.MplRenderer().frame_3d()
+    with pytest.raises(ValueError, match='ONE legend row'):
+        frame.draw_lines(
+            (
+                Series(x=[0.0, 1.0], y=[0.0, 1.0], z=[0.0, 1.0], label='phase U'),
+                Series(x=[0.0, 1.0], y=[1.0, 0.0], z=[0.0, 1.0], label='phase V'),
+            )
+        )
+
+
+def test_the_palette_cursor_is_the_canvas_of_BOTH_frame_classes() -> None:
+    """A trace in space takes the colour AFTER a trace in the plane, on one canvas.
+
+    This is what makes the shared cursor a rule rather than a coincidence: the two frame classes of
+    this adapter are two readers of ONE ``_next_color``, so the n-th artist's palette position is a
+    property of the FIGURE whichever arity drew it -- and a second copy of that arithmetic in the 3D
+    frame would hand the first trace in space the colour the plane frame already used.
+    """
+    renderer = viz_mpl.MplRenderer()
+    flat, space = renderer.frame(), renderer.frame_3d()
+    flat.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0]))
+    space.draw_lines((Series(x=[0.0, 1.0], y=[0.0, 1.0], z=[0.0, 1.0]),))
+
+    assert flat.axes.lines[0].get_color() == Style().palette[0]
+    # THE FLOOR IS AN RGBA CHANNEL, so 1e-9 is a share of full scale: far below any colour difference
+    # the eye or the palette could mean, and far above the error of one hex-to-floats conversion.
+    assert space.axes.collections[0].get_colors()[0] == pytest.approx(mpl.colors.to_rgba(Style().palette[1]), abs=1e-9)
     renderer.close()
 
 

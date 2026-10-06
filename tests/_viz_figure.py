@@ -6,23 +6,27 @@ map, a winding layout and a connection diagram through either adapter. A descrip
 driven through both is that claim MEASURED; a description written twice, once per adapter, would
 agree with itself by construction and measure nothing.
 
-FIVE SUBJECTS, AND THE FOUR THAT ARE NOT ONE AXES ARE THE POINT OF THIS FILE NOW. ``draw_everything``
+SIX SUBJECTS, AND THE FIVE THAT ARE NOT ONE AXES ARE THE POINT OF THIS FILE NOW. ``draw_everything``
 is the verb menu on one coordinate system -- chart, waveform, the two plane shapes (a masked grid map
-and a point cloud), a winding layout and a connection diagram. The other four are the shapes an
+and a point cloud), a winding layout and a connection diagram. The other five are the shapes an
 earlier version of this tier could not express AT ALL, each for the same reason -- a renderer
 conflated the canvas with the coordinate system, so there was exactly one axes and it was built at
-construction, and the shapes that needed a second one or a different projection had no spelling:
+construction, and the shapes that needed a second one, a different projection or a third axis had no
+spelling:
 
 * ``draw_panels`` — four frames in a grid, rows sharing an x axis and columns sharing a y one;
 * ``draw_twin`` — two frames over ONE panel, sharing the x axis, the second with its own y scale;
-* ``draw_polar`` — a frame in the polar projection, which is the one subject a single backend cannot
-  draw: bokeh has no polar projection and REFUSES it by name (see ``lab_commons/viz/bokeh.py``),
+* ``draw_polar`` — a frame in the polar projection, which is one of the subjects a single backend
+  cannot draw: bokeh has no polar projection and REFUSES it by name (see ``lab_commons/viz/bokeh.py``),
   exactly as it refuses ``Contours``. That refusal is exercised PER ADAPTER rather than here, so
   "the same description draws through both" does not quietly become "...except this one".
 * ``draw_continuum`` — a scalar over a point set, drawn as a surface through it. The second subject
   only one adapter can draw, for the same kind of reason: bokeh has no filled-contour glyph over a
   point set, and it REFUSES ``Field`` by name rather than substituting the point cloud that
   ``Samples`` is.
+* ``draw_space`` — a frame with a THIRD AXIS, and the third subject only one adapter can draw: bokeh
+  has no 3D axes at all, so ``BokehRenderer.frame_3d`` refuses by name while this description is
+  rendered through matplotlib by ``test_viz_mpl``.
 
 IT DRAWS THROUGH THE PROTOCOLS, never through a concrete adapter, so this module imports no plotting
 library -- which is also what keeps the vocabulary's own test file free of one.
@@ -43,6 +47,7 @@ from lab_commons.viz import (
     Frame,
     Grid,
     Label,
+    Mesh,
     Patch,
     Samples,
     Scale,
@@ -246,3 +251,58 @@ def draw_continuum(figure: Figure) -> None:
     map_frame.set_xlabel('x (mm)')
     map_frame.set_ylabel('y (mm)')
     map_frame.draw_field(_FIELD)
+
+
+#: TWO GROUPS OF CONDUCTORS IN SPACE, each trace the consumer's own data shape: a centreline's points,
+#: one per sample, with the third coordinate that makes it a trace IN SPACE rather than one in the
+#: plane. THE GROUPS ARE THE CALLS — a set of traces drawn as one artist is one legend row, so the
+#: two phases are two calls rather than one call of three differently-labelled traces.
+_PHASE_U: Final = (
+    Series(x=[0.0, 1.0, 2.0, 3.0], y=[0.0, 1.0, 1.0, 0.0], z=[0.0, 0.0, 1.0, 1.0], label='phase U'),
+    Series(x=[0.0, 1.0, 2.0, 3.0], y=[2.0, 1.0, 1.0, 2.0], z=[1.0, 1.0, 0.0, 0.0], label='phase U'),
+)
+_PHASE_V: Final = (Series(x=[0.0, 1.0, 2.0, 3.0], y=[4.0, 3.0, 3.0, 4.0], z=[0.0, 1.0, 0.0, 1.0], label='phase V'),)
+
+#: The weld nodes, as marks that carry no value of their own — a coloured ``Series`` in space, which is
+#: the same statement ``draw_markers`` makes in the plane.
+_NODES_3D: Final = Series(x=[0.5, 2.5], y=[0.5, 3.5], z=[0.5, 0.5], marker='s', size=6.0, label='weld node')
+
+#: ONE BODY'S SURFACE: a tetrahedron, which is a vertex set AND the faces that index it — the shape a
+#: tessellation arrives in, and the one nothing else in the vocabulary holds.
+_CELL: Final = Mesh(
+    vertices=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    faces=[[0, 1, 2], [0, 1, 3], [0, 2, 3]],
+    color='#c8d8e8',
+    edgecolor='black',
+    label='cell',
+)
+
+
+def draw_space(figure: Figure) -> None:
+    """A FRAME WITH A THIRD AXIS: conductors in space, which a plane frame cannot draw at all.
+
+    THE THIRD SUBJECT ONLY ONE ADAPTER CAN DRAW, and for the same kind of reason the polar frame and
+    the continuum are: bokeh has no 3D axes, so ``BokehRenderer.frame_3d`` refuses BY NAME at the
+    canvas verb that would build one — see ``lab_commons/viz/bokeh.py`` for the message and
+    ``test_viz_bokeh`` for the refusal itself. The frame is asked for by its OWN verb rather than as
+    ``frame(projection='3d')``, which is refused with that verb as the remedy: the verbs a 3D frame
+    has and the ones it lacks are not the plane frame's, so the two are two protocols.
+
+    WHAT IT DRAWS IS THE CONSUMER'S OWN 3D SUBJECT -- conductor centrelines grouped by phase, the
+    weld nodes, and a body's surface -- so the vocabulary is measured against the figure that has to
+    merge into it rather than against a shape invented here. Every trace carries a ``z``; a 3D frame
+    refuses one that does not, exactly as a plane frame refuses one that does.
+    """
+    windings = figure.frame_3d()
+    windings.set_title('conductors in space')
+    windings.set_xlabel('x (mm)')
+    windings.set_ylabel('y (mm)')
+    windings.set_zlabel('z (mm)')
+    windings.set_limits(x=(0.0, 4.0), y=(0.0, 4.0), z=(0.0, 2.0))
+    windings.set_view(elev=22.0, azim=35.0)
+    windings.set_box_aspect((1.0, 1.0, 0.7))
+    windings.draw_lines(_PHASE_U)
+    windings.draw_lines(_PHASE_V)
+    windings.draw_markers(_NODES_3D)
+    windings.draw_meshes((_CELL,))
+    windings.legend()

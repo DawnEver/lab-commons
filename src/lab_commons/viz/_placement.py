@@ -46,7 +46,19 @@ _RECT_FIELDS: Final = ('left', 'bottom', 'width', 'height')
 #: ``cartesian`` is the default and the only system the bokeh adapter can draw; ``polar`` is
 #: matplotlib's polar projection (radius against angle), which bokeh has no counterpart for and
 #: refuses BY NAME.
+#:
+#: A SYSTEM WITH A THIRD AXIS IS NOT A THIRD MEMBER, and the exclusion is the shape of the tier
+#: rather than an omission: a 3D frame has verbs this one does not (a camera, a box aspect, a third
+#: axis label) and LACKS verbs it has (bars, circles, a field, a quiver, ticks), so its protocol is
+#: :class:`~lab_commons.viz.Frame3D` and it is asked for by NAME. Every member here is a projection
+#: a ``frame``'s ``projection`` attribute can actually hold.
 PROJECTIONS: Final = frozenset({'cartesian', 'polar'})
+
+#: The name of the coordinate system a :class:`~lab_commons.viz.Frame3D` draws in — NOT a member of
+#: :data:`PROJECTIONS` (see above) and not a second place a coordinate system is declared either: it
+#: is the name ``frame(projection=...)`` REFUSES, with the canvas verb that does build one as the
+#: remedy, so a producer who spells the system here is routed instead of told it does not exist.
+_THREE_D: Final = '3d'
 
 
 @dataclass(frozen=True)
@@ -89,6 +101,13 @@ def _place(*, rect: Rect | None, projection: str | None, sharex: Frame | None, s
             to do instead.
 
     """
+    if projection == _THREE_D:
+        msg = (
+            'a 3D coordinate system is not a Frame: it has verbs a plane frame does not (a view, a box '
+            'aspect, a third axis label) and lacks verbs it has, so the two are two protocols. Ask the '
+            'canvas for one by name: figure.frame_3d()'
+        )
+        raise ValueError(msg)
     if projection is not None and projection not in PROJECTIONS:
         msg = f'unknown projection {projection!r}: a frame is one of {sorted(PROJECTIONS)}'
         raise ValueError(msg)
@@ -124,6 +143,17 @@ def _place(*, rect: Rect | None, projection: str | None, sharex: Frame | None, s
             raise ValueError(msg)
         return _Placement(twin_of.rect, shared.projection, twin_of)
     return _Placement(stated, shared.projection, None)
+
+
+def _place_3d(*, rect: Rect | None) -> _Placement:
+    """Resolve a ``frame_3d`` request — a rect, and the one coordinate system a 3D frame draws in.
+
+    A 3D frame is PLACED like any other (a stated rect, or the canvas's own panel) and takes nothing
+    else: a shared axis is a relationship between two PLANE coordinate systems and a twin is a second
+    AXIS on one of them, so neither has a meaning on a frame that has a third. This resolution is
+    small on purpose, and it lives here rather than in each adapter for the reason the module exists.
+    """
+    return _Placement(None if rect is None else _as_rect(rect), _THREE_D, None)
 
 
 def _as_rect(rect: Rect) -> Rect:

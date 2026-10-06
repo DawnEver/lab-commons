@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from _viz_figure import draw_continuum, draw_everything, draw_panels, draw_polar, draw_twin
+from _viz_figure import draw_continuum, draw_everything, draw_panels, draw_polar, draw_space, draw_twin
 
 from lab_commons.viz import (
     PROJECTIONS,
@@ -26,9 +26,12 @@ from lab_commons.viz import (
     Field,
     Figure,
     Frame,
+    Frame3D,
     Grid,
     Label,
+    Mesh,
     NullFrame,
+    NullFrame3D,
     NullRenderer,
     Patch,
     Samples,
@@ -74,21 +77,25 @@ def test_the_null_renderer_accepts_every_primitive_and_writes_nothing(tmp_path: 
 
 
 def test_the_null_renderer_draws_the_shapes_one_axes_cannot(tmp_path: Path) -> None:
-    """A panel grid, a twin axis, a polar frame and a continuum are all accepted, nothing is drawn.
+    """A panel grid, a twin axis, a polar frame, a continuum and a 3D frame: all accepted, none drawn.
 
     THE SHAPES THAT MADE THIS TIER BE REBUILT, declared here on a box with no plotting library at
     all: totality is not a formality, because the box that draws nothing is exactly the box where a
     figure that CANNOT be declared would go unnoticed until it was run somewhere else. ``draw_field``
     is among them on purpose: bokeh refuses to DRAW a continuum, and a renderer that refused to
-    ACCEPT it would move an ``if plot:`` branch back into every producer.
+    ACCEPT it would move an ``if plot:`` branch back into every producer. ``draw_space`` is the same
+    statement one protocol further out -- one adapter draws a third axis, and the default declares it
+    anyway.
     """
     renderer = NullRenderer()
     draw_panels(renderer)
     draw_twin(renderer)
     draw_continuum(renderer)
     draw_polar(renderer)
-    assert len(renderer.frames) == 8, 'four panels, two frames of the twin, the map and the star'
-    assert renderer.frames[-1].projection == 'polar'
+    draw_space(renderer)
+    assert len(renderer.frames) == 9, 'four panels, two frames of the twin, the map, the star and the 3D one'
+    assert renderer.frames[-1].projection == '3d', 'the 3D frame is the last one declared'
+    assert isinstance(renderer.frames[-1], NullFrame3D)
     assert renderer.save(tmp_path / 'figure.png') is None
 
 
@@ -123,12 +130,19 @@ def test_a_figure_shape_that_cannot_be_expressed_is_refused_by_name() -> None:
     names no rect (placement by inheritance means "drawn over", which is an x relationship), a twin
     on the wrong side, and a rect that is not four numbers. Refused HERE, once, rather than three
     times -- and refused identically on the box that draws nothing.
+
+    THE 3D SPELLING IS REFUSED WITH ITS OWN VERB AS THE REMEDY, which is the one refusal here that is
+    not about a malformed request: ``projection='3d'`` is a coordinate system this tier HAS, drawn by
+    a protocol of its own, so the message routes the producer instead of telling them the name does
+    not exist.
     """
     renderer = NullRenderer()
     base = renderer.frame()
     side = renderer.frame(rect=(0.0, 0.0, 0.5, 1.0))
     with pytest.raises(ValueError, match='unknown projection'):
         renderer.frame(projection='mercator')
+    with pytest.raises(ValueError, match='frame_3d'):
+        renderer.frame(projection='3d')
     with pytest.raises(ValueError, match='own coordinate system'):
         renderer.frame(projection='polar', sharex=base)
     with pytest.raises(ValueError, match='must name its rect'):
@@ -140,6 +154,28 @@ def test_a_figure_shape_that_cannot_be_expressed_is_refused_by_name() -> None:
     with pytest.raises(ValueError, match='four numbers'):
         renderer.frame(rect=(0.0, 0.0, 1.0))
     assert len(renderer.frames) == 2, 'a refused request must not leave a frame behind'
+
+
+def test_a_3d_frame_is_a_different_protocol_from_a_plane_one() -> None:
+    """THE SHAPE DECISION, measurable with nothing installed: two protocols, not one union.
+
+    ``isinstance`` is what this tier says makes "which coordinate system is this" a question with an
+    answer, so the answer has to be TRUE for both arities. A 3D frame carries a rect and a projection
+    — that is what a frame IS, and why the placement rule is shared — but it satisfies
+    :class:`Frame3D` and NOT :class:`Frame`, because the verbs a plane frame promises are not the
+    verbs it has. The projection it reports is the name ``frame()`` refuses.
+    """
+    renderer = NullRenderer()
+    flat = renderer.frame()
+    space = renderer.frame_3d(rect=(0.0, 0.0, 1.0, 0.5))
+
+    assert isinstance(space, Frame3D)
+    assert not isinstance(space, Frame), 'the two arities are one protocol, so half its verbs lie'
+    assert isinstance(flat, Frame)
+    assert not isinstance(flat, Frame3D)
+    assert space.projection == '3d'
+    assert space.rect == (0.0, 0.0, 1.0, 0.5), 'the placement rule is the shared one, rect for rect'
+    assert {'cartesian', 'polar'} == PROJECTIONS, "a 3D name joined the plane frame's projections"
 
 
 def test_every_primitive_is_frozen() -> None:
@@ -155,6 +191,7 @@ def test_the_primitives_default_to_the_neutral_choice() -> None:
     assert Series(x=[0.0], y=[0.0]).style == '-'
     assert Series(x=[0.0], y=[0.0]).label is None
     assert Series(x=[0.0], y=[0.0]).alpha == 1.0
+    assert Series(x=[0.0], y=[0.0]).z is None, 'a trace with no z is a trace in the plane, and says so'
     assert Patch(vertices=[[0.0, 0.0]]).color is None
     assert Patch(vertices=[[0.0, 0.0]]).hatch is None
     assert Patch(vertices=[[0.0, 0.0]]).alpha == 1.0
@@ -173,6 +210,8 @@ def test_the_primitives_default_to_the_neutral_choice() -> None:
     assert Contours(x=[0.0], y=[0.0], values=[1.0]).color is None
     assert Vectors(x=[0.0], y=[0.0], u=[1.0], v=[0.0]).scale == 1.0
     assert Ticks(positions=[0.0]).labels is None, 'an unlabelled axis is numbered, not silenced'
+    assert Mesh(vertices=[[0.0, 0.0, 0.0]], faces=[[0, 0, 0]]).color is None
+    assert Mesh(vertices=[[0.0, 0.0, 0.0]], faces=[[0, 0, 0]]).alpha == 1.0
     # The ONE field that does not defer: the two libraries' own bar widths disagree, so a None here
     # would be a description that draws a different picture per backend.
     assert Bars(x=[0.0], height=[1.0]).width == 0.8
@@ -295,6 +334,33 @@ def test_the_panel_grid_arithmetic_is_one_function() -> None:
     assert rects[1][0] - (rects[0][0] + rects[0][2]) == pytest.approx(0.05, abs=1e-9), 'the column gap is hgap'
     assert rects[0][1] - (rects[3][1] + rects[3][3]) == pytest.approx(0.1, abs=1e-9), 'the row gap is vgap'
     assert rects[-1][0] + rects[-1][2] == pytest.approx(1.0, abs=1e-9), 'the last column ends at the right edge'
+
+
+def test_a_mesh_resolves_its_faces_from_the_vertex_set() -> None:
+    """The connectivity is the SHAPE's arithmetic, done in one place rather than per implementation.
+
+    A mesh is a vertex set and indices INTO it, so a face's corners exist nowhere until they are
+    looked up -- and a lookup spelled once per drawing implementation would be one picture per
+    implementation the moment either of them moved, which is the failure this whole tier is built
+    against. The indices are the mesh's own statement that its faces SHARE these points; a patch list
+    would repeat them per face and lose exactly that.
+    """
+    mesh = Mesh(vertices=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], faces=[[0, 1, 2]])
+    polygons = mesh.polygons()
+    assert polygons.shape == (1, 3, 3), 'one face of three corners, each a point in space'
+    np.testing.assert_allclose(polygons[0], [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+
+def test_a_mesh_that_is_not_a_surface_in_space_is_refused_by_name() -> None:
+    """UNSUPPORTED-RAISES, naming the shapes that ARE expressible rather than a shape mismatch.
+
+    Both ranks matter: points in the plane are a ``Field`` or a ``Samples`` and not a surface, and a
+    face list that is not one row per face has no corners to resolve.
+    """
+    with pytest.raises(ValueError, match='points in space'):
+        Mesh(vertices=[[0.0, 0.0], [1.0, 0.0]], faces=[[0, 1]]).polygons()
+    with pytest.raises(ValueError, match='one row per face'):
+        Mesh(vertices=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], faces=[0, 1]).polygons()
 
 
 def test_the_panel_helper_refuses_a_grid_that_is_not_a_picture() -> None:

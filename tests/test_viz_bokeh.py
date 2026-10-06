@@ -147,6 +147,21 @@ def test_a_polar_frame_is_refused_by_name() -> None:
         BokehRenderer().frame(projection='polar')
 
 
+def test_a_3d_frame_is_refused_by_name() -> None:
+    """THE THIRD AXIS, REFUSED AT THE SAME DOOR AND WITH THE SAME REMEDY — no 3D axes exist here.
+
+    This library draws every glyph in two cartesian dimensions, so a 3D frame would have nothing to
+    be built out of: the honest answer is the one the polar refusal gives, one verb further out. The
+    vocabulary still DECLARES the protocol (``Frame3D``) and the other peer implements it, which is
+    what an equal-peer relationship means when one library's reach is shorter -- the layer does not
+    shrink to the smaller backend, and this adapter says so by name rather than drawing a projection.
+    """
+    renderer = BokehRenderer()
+    with pytest.raises(NotImplementedError, match=r'cannot build a 3D frame.*MplRenderer'):
+        renderer.frame_3d()
+    assert renderer.frames == (), 'a refused frame left a panel behind'
+
+
 def test_two_frames_that_cover_one_cell_without_sharing_it_are_refused(tmp_path: Path) -> None:
     """A rect that is not a grid cell cannot be drawn here.
 

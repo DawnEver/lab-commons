@@ -32,8 +32,9 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from lab_commons.viz import Frame, Style
-from lab_commons.viz._placement import Rect, _place
+from lab_commons.viz._placement import Rect, _place, _place_3d
 from lab_commons.viz.mpl_frame import MplFrame
+from lab_commons.viz.mpl_frame_3d import MplFrame3D
 
 __all__ = [
     'MplRenderer',
@@ -236,7 +237,7 @@ class MplRenderer:
         self.figure = plt.figure(figsize=self.style.figure_size, dpi=self.style.dpi)
         self.figure.set_layout_engine('none')
         self._drawn: Iterator[int] = count()
-        self._frames: list[MplFrame] = []
+        self._frames: list[MplFrame | MplFrame3D] = []
 
     def frame(
         self,
@@ -281,8 +282,41 @@ class MplRenderer:
         self._frames.append(frame)
         return frame
 
+    def frame_3d(self, *, rect: Rect | None = None) -> MplFrame3D:
+        """Create a 3D coordinate system on this canvas — see :meth:`lab_commons.viz.Figure.frame_3d`.
+
+        THE AXES ARE BUILT WITH ``projection='3d'``, which is matplotlib's own name for the system —
+        and the reason :meth:`~lab_commons.viz.Frame` cannot carry it is not this library's: the two
+        arities promise different verbs, so the vocabulary declares two protocols and this method is
+        the one door into the second.
+
+        IMPORTING THIS MODULE IS WHAT MAKES THAT PROJECTION RESOLVABLE. matplotlib learns the name
+        ``'3d'`` when ``mpl_toolkits.mplot3d`` is imported, which is what
+        :mod:`lab_commons.viz.mpl_frame_3d` does at module scope: the import that draws 3D is the
+        import that registers it, so there is no second place to forget.
+
+        THE PLACEMENT IS NOT DECIDED HERE, for the reason :meth:`frame` gives: a stated rect is this
+        axes' box and one that named none gets the canvas's own panel, resolved once in
+        :func:`lab_commons.viz._placement._place_3d` for every canvas that can build one.
+        """
+        placement = _place_3d(rect=rect)
+        axes = (
+            self.figure.add_subplot(projection='3d')
+            if placement.rect is None
+            else self.figure.add_axes(placement.rect, projection='3d')
+        )
+        frame = MplFrame3D(
+            axes=axes,
+            rect=placement.rect,
+            projection=placement.projection,
+            style=self.style,
+            drawn=self._drawn,
+        )
+        self._frames.append(frame)
+        return frame
+
     @property
-    def frames(self) -> tuple[MplFrame, ...]:
+    def frames(self) -> tuple[MplFrame | MplFrame3D, ...]:
         """Every frame this canvas holds, in creation order — the escape hatch for a kept-nowhere one."""
         return tuple(self._frames)
 

@@ -30,6 +30,14 @@ there was one place to say which coordinate system a picture was in, and it was 
 construction. A verb that cannot be honoured is an error in the ADAPTER that cannot honour it, never
 a silent omission here or there.
 
+A THIRD COORDINATE SYSTEM IS A SECOND PROTOCOL, NOT A THIRD PROJECTION. A 3D frame has verbs a plane
+frame does not (a camera, a box aspect, a third axis label) and LACKS verbs it has (bars, circles, a
+raster, a field, a quiver, ticks), so :class:`Frame3D` is a contract of its own, reached by name
+(:meth:`Figure.frame_3d`) while ``frame(projection='3d')`` is refused with that name as the remedy.
+The vocabulary is reused rather than duplicated: a trace in space is a :class:`Series` carrying a
+``z``, and the one shape nothing else holds is :class:`Mesh` — a vertex set AND the faces that index
+it, which is how meshed data arrives.
+
 WHY THE VOCABULARY IS TYPED RATHER THAN DUCK-TYPED. A renderer is checked against :class:`Figure`
 and a frame against :class:`Frame` with ``isinstance``, so "this object is a renderer" is a question
 with an answer instead of an assumption that survives until the first missing verb. Every primitive
@@ -71,7 +79,12 @@ from numpy.typing import ArrayLike
 # that resolves a ``frame(...)`` request and the panel-grid arithmetic — lives in its own module and
 # is re-exported here: it is what a producer and both adapters READ, while the primitives above it
 # are what a picture IS. See `lab_commons.viz._placement` for why the seam is there.
-from lab_commons.viz._placement import PROJECTIONS, Rect, _place, panel_rects
+from lab_commons.viz._placement import PROJECTIONS, Rect, _place, _place_3d, panel_rects
+
+# THE 3D PROTOCOL IS THE SECOND SUCH SEAM, at the tier's other joint: a frame with a third axis is a
+# different contract with a different verb set, and it takes the module budget of one. See
+# `lab_commons.viz._three_d` for the argument that made it two protocols rather than one.
+from lab_commons.viz._three_d import Frame3D, Mesh, NullFrame3D
 
 __all__ = [
     'PROJECTIONS',
@@ -82,9 +95,12 @@ __all__ = [
     'Field',
     'Figure',
     'Frame',
+    'Frame3D',
     'Grid',
     'Label',
+    'Mesh',
     'NullFrame',
+    'NullFrame3D',
     'NullRenderer',
     'Patch',
     'Rect',
@@ -243,9 +259,17 @@ class Series:
     verbs it passes them to decides how they are drawn. A waveform is several of these sharing an
     ``x`` axis, distinguished by ``label``.
 
+    A ``z`` MAKES IT A TRACE IN SPACE, and that is an extra coordinate rather than a second type: the
+    fields a curve carries are the same fields, and the library that draws both spells them as one
+    method (``plot(x, y)``, ``plot(x, y, z)``). WHICH ARITY A TRACE IS, IS NOT A DRAWING CHOICE — a
+    plane frame REFUSES a trace that carries a ``z`` and a 3D frame refuses one that does not, so
+    neither frame can silently drop the coordinate it has no room for.
+
     Attributes:
         x: the abscissa, one coordinate per sample.
         y: the ordinate, the same length as *x*.
+        z: the third coordinate, the same length as *x*, for a trace drawn on a
+            :class:`Frame3D` — ``None`` for a trace in the plane.
         label: the legend entry; a series with no label is not legended.
         color: an explicit colour, or ``None`` to take the next palette colour.
         style: the line style — ``'-'``, ``'--'``, ``':'``, ``'-.'``.
@@ -258,6 +282,7 @@ class Series:
 
     x: ArrayLike
     y: ArrayLike
+    z: ArrayLike | None = None
     label: str | None = None
     color: str | None = None
     style: str = '-'
@@ -675,7 +700,9 @@ class Frame(Protocol):
             fractions — or ``None`` when the producer left the placement to the canvas, which draws
             it as its own default panel. Two frames of one canvas may carry the same rect, which is
             what an overlaid twin axis IS.
-        projection: this frame's coordinate system, one of :data:`PROJECTIONS`.
+        projection: this frame's coordinate system, one of :data:`PROJECTIONS` — every one of which
+            is a system in the PLANE. A frame with a third axis is :class:`Frame3D`, a protocol of
+            its own, because the two arities promise different verbs.
 
     """
 
@@ -710,10 +737,14 @@ class Frame(Protocol):
         """Show or hide the legend of everything labelled so far."""
 
     def draw_line(self, series: Series) -> None:
-        """Draw *series* as a line."""
+        """Draw *series* as a line.
+
+        A series that carries a ``z`` is a trace IN SPACE and this frame has no third axis: an adapter
+        REFUSES it rather than drawing its projection, and :meth:`Figure.frame_3d` is where it goes.
+        """
 
     def draw_markers(self, series: Series) -> None:
-        """Draw *series* as symbols, with no connecting line."""
+        """Draw *series* as symbols, with no connecting line — and the same refusal of a ``z``."""
 
     def draw_bars(self, bars: Bars) -> None:
         """Draw *bars* as bars."""
@@ -823,15 +854,30 @@ class Figure(Protocol):
         the frame verbs give above.
         """
 
+    def frame_3d(self, *, rect: Rect | None = None) -> Frame3D:
+        """Create a 3D coordinate system on this canvas and return it.
+
+        WHY THIS IS NOT ``frame(projection='3d')``, and the refusal that spelling gets: a frame with a
+        third axis has verbs :class:`Frame` does not and lacks verbs it has, so it is a DIFFERENT
+        PROTOCOL and not a third projection — see :class:`Frame3D`. A producer who writes the name
+        anyway is told where to go rather than told it does not exist.
+
+        ``rect`` means what it means on :meth:`frame`: a stated box, or ``None`` for the canvas's own
+        panel. THE TWO VERBS THIS ONE HAS NOT are the shares and the projection — a shared axis is a
+        relationship between two PLANE coordinate systems and a twin is a second axis on one of them,
+        so neither has a meaning here.
+        """
+
     @property
-    def frames(self) -> tuple[Frame, ...]:
+    def frames(self) -> tuple[Frame | Frame3D, ...]:
         """Every frame this canvas holds, in creation order — the canvas's own registry.
 
         READ-ONLY ON PURPOSE: a consumer that could append to it could corrupt the layout an adapter
-        builds from it, and a frame is created by :meth:`frame` rather than inserted. It exists so
-        that a producer holding a canvas (rather than each frame it made) can still reach them —
-        restyling every panel of a finished figure, or handing a renderer's own frames to a second
-        pass.
+        builds from it, and a frame is created by :meth:`frame` (or :meth:`frame_3d`) rather than
+        inserted. It exists so that a producer holding a canvas (rather than each frame it made) can
+        still reach them — restyling every panel of a finished figure, or handing a renderer's own
+        frames to a second pass. THE TWO ARITIES ARE BOTH HERE: which coordinate system a frame is, is
+        what ``isinstance`` against :class:`Frame` or :class:`Frame3D` answers.
         """
 
     def show(self, *, interactive: bool = True) -> None:
@@ -941,7 +987,8 @@ class NullRenderer:
     whether that figure becomes a file, a window, or nothing at all — the decision lives at the one
     place that built the renderer.
 
-    IT RESOLVES FRAMES BY THE SAME RULE THE ADAPTERS DO. :func:`_place` is called here too, so a
+    IT RESOLVES FRAMES BY THE SAME RULE THE ADAPTERS DO. :func:`_place` is called here too — and
+    :func:`_place_3d` for a 3D one, so both arities are placed and refused by one rule each — and a
     description that would raise against matplotlib raises identically against nothing: a batch that
     runs unattended on a box with no plotting library is exactly where a figure that cannot be drawn
     must still be caught, and "it only fails where it is drawn" would be a surprise saved for the
@@ -959,7 +1006,7 @@ class NullRenderer:
 
     def __init__(self) -> None:
         """Build an empty canvas — the frames a producer creates are the only thing it holds."""
-        self._frames: list[NullFrame] = []
+        self._frames: list[NullFrame | NullFrame3D] = []
 
     def frame(
         self,
@@ -981,8 +1028,21 @@ class NullRenderer:
         self._frames.append(frame)
         return frame
 
+    def frame_3d(self, *, rect: Rect | None = None) -> NullFrame3D:
+        """Create a 3D coordinate system that accepts every verb and draws nothing, and return it.
+
+        THE BOX THAT DRAWS NOTHING IS WHERE THIS MATTERS MOST: a batch that renders conductor
+        previews declares them unconditionally, and the placement — and the refusal of the very
+        request ``frame(projection='3d')`` is — is resolved by the same rule the drawing adapters
+        read (:func:`_place_3d`).
+        """
+        placement = _place_3d(rect=rect)
+        frame = NullFrame3D(rect=placement.rect, projection=placement.projection)
+        self._frames.append(frame)
+        return frame
+
     @property
-    def frames(self) -> tuple[NullFrame, ...]:
+    def frames(self) -> tuple[NullFrame | NullFrame3D, ...]:
         """Every frame this canvas holds, in creation order."""
         return tuple(self._frames)
 

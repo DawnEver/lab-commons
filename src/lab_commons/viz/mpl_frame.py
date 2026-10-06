@@ -53,6 +53,39 @@ from lab_commons.viz import (
 __all__ = ['MplFrame']
 
 
+def _next_color(drawn: Iterator[int], style: Style, explicit: str | None) -> str:
+    """*explicit* when it is given, else the next palette entry — one slot per drawn artist.
+
+    THE CURSOR IS THE CANVAS'S, shared with every other frame of it — one of them a 3D frame, which
+    is why this is a FUNCTION here rather than a method of either frame class: a series on a second
+    panel, on a twin axis or in space therefore takes the NEXT colour rather than the same one, and
+    two copies of this arithmetic would be a colour rule that holds until one of them is edited.
+
+    The cursor advances whether or not the caller named a colour, so the n-th artist's palette
+    position does not depend on which of its predecessors happened to name one: the same figure
+    drawn twice takes the same colours.
+    """
+    index = next(drawn)
+    return explicit if explicit is not None else style.color(index)
+
+
+def _plane(series: Series) -> None:
+    """Refuse a trace that carries a ``z``: this frame draws in the plane, and a space curve is not.
+
+    THE DEFECT THIS PREVENTS IS SILENT, which is why the check is here rather than left to the
+    library: ``plot(x, y)`` would draw the trace's own projection onto the plane and drop the z
+    without a word, so a figure that was described in space would come out as a picture that looks
+    drawn and means something else.
+    """
+    if series.z is not None:
+        msg = (
+            'a Series carrying a z is a trace in space, and this frame has no third axis to draw it on: '
+            'plot() would drop the coordinate. Ask the canvas for a 3D coordinate system instead: '
+            'figure.frame_3d()'
+        )
+        raise ValueError(msg)
+
+
 class MplFrame:
     """One coordinate system on a matplotlib figure: an ``Axes`` and every verb that draws on it.
 
@@ -142,25 +175,27 @@ class MplFrame:
 
     def draw_line(self, series: Series) -> None:
         """Draw *series* as a line, taking the next palette colour when it names none."""
+        _plane(series)
         self.axes.plot(
             series.x,
             series.y,
             linestyle=series.style,
             linewidth=series.width,
-            color=self._next_color(series.color),
+            color=_next_color(self._drawn, self._style, series.color),
             label=series.label,
             alpha=series.alpha,
         )
 
     def draw_markers(self, series: Series) -> None:
         """Draw *series* as symbols, with no connecting line."""
+        _plane(series)
         self.axes.plot(
             series.x,
             series.y,
             linestyle='none',
             marker=series.marker or 'o',
             markersize=series.size,
-            color=self._next_color(series.color),
+            color=_next_color(self._drawn, self._style, series.color),
             label=series.label,
             alpha=series.alpha,
         )
@@ -171,7 +206,7 @@ class MplFrame:
             bars.x,
             bars.height,
             width=bars.width,
-            color=self._next_color(bars.color),
+            color=_next_color(self._drawn, self._style, bars.color),
             label=bars.label,
             alpha=bars.alpha,
         )
@@ -232,7 +267,7 @@ class MplFrame:
     def draw_segments(self, segments: Sequence[Segment]) -> None:
         """Draw straight segments, with a head at the end point where one was asked for."""
         for segment in segments:
-            color = self._next_color(segment.color)
+            color = _next_color(self._drawn, self._style, segment.color)
             if segment.arrow:
                 self.axes.annotate(
                     '',
@@ -373,7 +408,7 @@ class MplFrame:
             scale_units='xy',
             scale=vectors.scale,
             width=vectors.width,
-            color=self._next_color(vectors.color),
+            color=_next_color(self._drawn, self._style, vectors.color),
             alpha=vectors.alpha,
         )
 
@@ -408,18 +443,3 @@ class MplFrame:
         drawn = self.axes.figure.colorbar(mappable, ax=self.axes, ticks=centers, label=scale.label)
         if bar.tick_labels is not None:
             drawn.set_ticklabels([str(text) for text in bar.tick_labels])
-
-    def _next_color(self, explicit: str | None) -> str:
-        """*explicit* when it is given, else the next palette entry — one slot per drawn artist.
-
-        THE CURSOR IS THE CANVAS'S, shared with every other frame of it. A series of the second panel,
-        or of a twin axis drawn over the first, therefore takes the NEXT colour rather than the same
-        one: on a twin axis the two series occupy the same pixels, where a shared colour is not a
-        repeated colour but an unreadable one.
-
-        The cursor advances whether or not the caller named a colour, so the n-th artist's palette
-        position does not depend on which of its predecessors happened to name one: the same figure
-        drawn twice takes the same colours.
-        """
-        index = next(self._drawn)
-        return explicit if explicit is not None else self._style.color(index)
