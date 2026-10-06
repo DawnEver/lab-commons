@@ -1,9 +1,11 @@
 """The bokeh frame — ONE coordinate system on a :class:`~lab_commons.viz.bokeh.BokehRenderer`.
 
-WHY THE TWO HALVES ARE TWO MODULES. ``bokeh.py`` is the canvas (the figure objects, the layout they
-are arranged into, the palette cursor and the lifecycle) and this is the coordinate system (one
-``bokeh.plotting.figure`` and every verb that draws on it). They are split because they are the two
-concepts the tier was rebuilt around, and because the drawn half is the larger one.
+WHY THE ADAPTER IS THREE MODULES, and the first two are a concept. ``bokeh.py`` is the canvas (the
+figure objects, the layout they are arranged into, the palette cursor and the lifecycle) and this is
+the coordinate system (one ``bokeh.plotting.figure`` and every verb that draws on it) -- the two
+things the tier was rebuilt around. ``_bokeh_glyphs.py`` is the third: the four verbs whose body
+BUILDS DATA rather than calling a glyph, which is what put this module past the band the repo holds
+its files to.
 
 A BOKEH FIGURE IS ONE COORDINATE SYSTEM, which is why the canvas above the frames is a layout and not
 a figure. That has one consequence worth stating here: A TWIN FRAME IS A SECOND Y RANGE INSIDE ITS
@@ -55,7 +57,9 @@ class BokehFrame:
         figure: the bokeh ``figure`` this frame draws on -- the adapter's own escape hatch, for the
             one call the vocabulary does not carry yet. A twin axis SHARES this object with the frame
             it is drawn over, because in this library one figure is one panel.
-        rect: where this frame sits on the canvas, ``(left, bottom, width, height)`` in fractions.
+        rect: where this frame sits on the canvas, ``(left, bottom, width, height)`` in fractions —
+            or ``None`` when the producer left the placement to the canvas (see the vocabulary's
+            :class:`~lab_commons.viz.Frame`).
         projection: this frame's coordinate system, always ``'cartesian'`` here -- the canvas refuses
             the other one by name rather than this class pretending.
 

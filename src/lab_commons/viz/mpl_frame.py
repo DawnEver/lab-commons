@@ -57,7 +57,9 @@ class MplFrame:
     Attributes:
         axes: the matplotlib ``Axes`` itself -- the adapter's own escape hatch, for the one call the
             vocabulary does not carry yet.
-        rect: where this frame sits on the canvas, ``(left, bottom, width, height)`` in fractions.
+        rect: where this frame sits on the canvas, ``(left, bottom, width, height)`` in fractions —
+            or ``None`` when the producer left the placement to the canvas, which drew it as its own
+            panel (see :meth:`~lab_commons.viz.mpl.MplRenderer.frame`).
         projection: this frame's coordinate system, one of ``lab_commons.viz.PROJECTIONS``.
 
     """
