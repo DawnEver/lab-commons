@@ -8,6 +8,8 @@ or a dirty working tree.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,6 +19,7 @@ from lab_commons.dev import admission
 if TYPE_CHECKING:
     from pathlib import Path
 
+_GIT = shutil.which('git') or 'git'
 HEAD = 'abc1234'
 ENV = 'env0001'
 
@@ -293,3 +296,24 @@ def test_the_cli_refuses_a_push_carrying_an_unnamed_merge_deviation(tmp_path: Pa
     assert seen == [('tests',)]
     monkeypatch.setattr(admission, 'merge_refusals', lambda *_: ())
     assert admission.main(argv) == 0
+
+
+def _git(root: Path, *args: str) -> None:
+    command = [_GIT, '-C', str(root), '-c', 'user.email=t@t', '-c', 'user.name=t', *args]
+    subprocess.run(command, check=True, capture_output=True, timeout=60)
+
+
+def test_an_unborn_head_publishes_no_merge_and_a_born_one_names_its_merge(tmp_path: Path) -> None:
+    """A fresh repo's first push has no HEAD commit to walk: nothing to audit, never a crash.
+
+    The planted control is the same repo once born: one merge reachable from HEAD and no remote ref,
+    so an implementation that returned nothing everywhere would red here rather than pass vacuously.
+    """
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    assert admission.unpublished_merges(tmp_path) == ()
+    _git(tmp_path, 'commit', '-q', '--allow-empty', '-m', 'c1')
+    _git(tmp_path, 'checkout', '-q', '-b', 'side')
+    _git(tmp_path, 'commit', '-q', '--allow-empty', '-m', 'c2')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _git(tmp_path, 'merge', '-q', '--no-ff', '-m', 'm', 'side')
+    assert len(admission.unpublished_merges(tmp_path)) == 1
