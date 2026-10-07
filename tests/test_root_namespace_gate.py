@@ -1,20 +1,25 @@
+"""Root namespace and stdlib logging do not initialize optional capabilities."""
+
 import ast
 import subprocess
 import sys
 from pathlib import Path
 
 
-def test_root_namespace_has_no_eager_imports_or_reflective_facade():
+def test_root_namespace_has_no_eager_imports_or_reflective_facade() -> None:
     source = Path(__file__).parents[1] / 'src' / 'lab_commons' / '__init__.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
     assert not any(isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef)) for node in ast.walk(tree))
 
 
-def test_stdlib_logging_does_not_load_optional_capabilities():
+def test_stdlib_logging_does_not_load_optional_capabilities() -> None:
     probe = subprocess.run(
-        [sys.executable, '-c',
-         "import sys; from lab_commons.log import get_logger; "
-         "assert not {'pint', 'pydantic', 'structlog', 'platformdirs', 'rtoml', 'numpy'} & set(sys.modules)"],
+        [
+            sys.executable,
+            '-c',
+            'import sys; from lab_commons.log import get_logger; '
+            "assert not {'pint', 'pydantic', 'structlog', 'platformdirs', 'rtoml', 'numpy'} & set(sys.modules)",
+        ],
         capture_output=True,
         text=True,
         check=False,
