@@ -46,7 +46,9 @@ def test_the_parser_reads_the_last_verdict_in_either_grammar() -> None:
 @pytest.mark.parametrize('result', ['PASS', 'FAIL', 'INCONCLUSIVE'])
 def test_a_lane_admits_every_result_for_this_tree_and_env(tmp_path: Path, result: str) -> None:
     gate = _anchor(tmp_path, 'gate.verdict', _line(result))
-    decided = admission.admit([('gate', gate)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV)
+    decided = admission.admit(
+        [('gate', gate)], destination=admission.LANE, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV
+    )
     assert decided.allowed
     assert decided.cited is not None
     assert decided.cited.result == result
@@ -56,7 +58,9 @@ def test_a_lane_admits_every_result_for_this_tree_and_env(tmp_path: Path, result
 
 def test_a_cited_inconclusive_is_announced_loudly(tmp_path: Path) -> None:
     gate = _anchor(tmp_path, 'gate.verdict', _line('INCONCLUSIVE'))
-    decided = admission.admit([('gate', gate)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV)
+    decided = admission.admit(
+        [('gate', gate)], destination=admission.LANE, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV
+    )
     assert '!!! INCONCLUSIVE' in decided.message
     assert 'REFUSED' not in decided.message
 
@@ -65,11 +69,13 @@ def test_the_trunk_admits_only_a_pass_of_its_own_tier(tmp_path: Path) -> None:
     for result, allowed in (('PASS', True), ('FAIL', False), ('INCONCLUSIVE', False)):
         heavy = _anchor(tmp_path, f'heavy-{result}.verdict', _line(result, tier='heavy'))
         decided = admission.admit(
-            [('heavy', heavy)], trunk=True, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV
+            [('heavy', heavy)], destination=admission.TRUNK, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV
         )
         assert decided.allowed is allowed, result
     gate = _anchor(tmp_path, 'gate.verdict', _line('PASS'))
-    refused = admission.admit([('gate', gate)], trunk=True, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV)
+    refused = admission.admit(
+        [('gate', gate)], destination=admission.TRUNK, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV
+    )
     assert not refused.allowed
     assert 'REFUSED' in refused.message
 
@@ -91,7 +97,9 @@ def test_a_lane_still_refuses_what_is_not_a_verdict_about_this_tree(
 ) -> None:
     clean = tree_state == 'clean'
     anchor = _anchor(tmp_path, 'gate.verdict', line) if line else tmp_path / 'absent.verdict'
-    decided = admission.admit([('gate', anchor)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=clean, env=ENV)
+    decided = admission.admit(
+        [('gate', anchor)], destination=admission.LANE, trunk_tiers=('heavy',), head=HEAD, clean=clean, env=ENV
+    )
     assert not decided.allowed
     assert why in decided.message
 
@@ -100,7 +108,12 @@ def test_a_lane_prefers_the_strongest_result_across_tiers(tmp_path: Path) -> Non
     gate = _anchor(tmp_path, 'gate.verdict', _line('INCONCLUSIVE'))
     heavy = _anchor(tmp_path, 'heavy.verdict', _line('FAIL', tier='heavy'))
     decided = admission.admit(
-        [('gate', gate), ('heavy', heavy)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV
+        [('gate', gate), ('heavy', heavy)],
+        destination=admission.LANE,
+        trunk_tiers=('heavy',),
+        head=HEAD,
+        clean=True,
+        env=ENV,
     )
     assert decided.cited is not None
     assert decided.cited.tier == 'heavy'
@@ -109,7 +122,7 @@ def test_a_lane_prefers_the_strongest_result_across_tiers(tmp_path: Path) -> Non
 def test_a_full_head_sha_matches_a_short_stamp(tmp_path: Path) -> None:
     gate = _anchor(tmp_path, 'gate.verdict', _line('PASS'))
     decided = admission.admit(
-        [('gate', gate)], trunk=False, trunk_tiers=('heavy',), head=HEAD + 'd' * 33, clean=True, env=ENV
+        [('gate', gate)], destination=admission.LANE, trunk_tiers=('heavy',), head=HEAD + 'd' * 33, clean=True, env=ENV
     )
     assert decided.allowed
 
@@ -117,13 +130,13 @@ def test_a_full_head_sha_matches_a_short_stamp(tmp_path: Path) -> None:
 @pytest.mark.parametrize('result', ['PASS', 'FAIL', 'INCONCLUSIVE'])
 def test_a_fresh_lane_log_decides_by_the_same_table(tmp_path: Path, result: str) -> None:
     log = _anchor(tmp_path, 'gate.log', 'ran', _line(result))
-    assert admission.decide_fresh(log, trunk=False).allowed
-    assert admission.decide_fresh(log, trunk=True).allowed is (result == 'PASS')
+    assert admission.decide_fresh(log, destination=admission.LANE).allowed
+    assert admission.decide_fresh(log, destination=admission.TRUNK).allowed is (result == 'PASS')
 
 
 def test_a_fresh_run_with_no_log_or_no_verdict_is_refused(tmp_path: Path) -> None:
-    assert not admission.decide_fresh(tmp_path / 'missing.log', trunk=False).allowed
-    assert not admission.decide_fresh(_anchor(tmp_path, 'g.log', 'died'), trunk=False).allowed
+    assert not admission.decide_fresh(tmp_path / 'missing.log', destination=admission.LANE).allowed
+    assert not admission.decide_fresh(_anchor(tmp_path, 'g.log', 'died'), destination=admission.LANE).allowed
 
 
 def test_the_gap_record_carries_the_line_the_failures_and_the_never_ran_count(tmp_path: Path) -> None:
@@ -151,26 +164,38 @@ def test_a_pass_writes_no_gap_record(tmp_path: Path) -> None:
     gate = _anchor(tmp_path, 'gate.verdict', _line('PASS'))
     gap = tmp_path / 'gap.md'
     decided = admission.admit(
-        [('gate', gate)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV, gap=gap
+        [('gate', gate)], destination=admission.LANE, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV, gap=gap
     )
     assert decided.allowed
     assert not gap.exists()
     inconclusive = _anchor(tmp_path, 'gate2.verdict', _line('INCONCLUSIVE'))
     admission.admit(
-        [('gate', inconclusive)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV, gap=gap
+        [('gate', inconclusive)],
+        destination=admission.LANE,
+        trunk_tiers=('heavy',),
+        head=HEAD,
+        clean=True,
+        env=ENV,
+        gap=gap,
     )
     assert gap.is_file()
     assert (
         str(gap)
         in admission.admit(
-            [('gate', inconclusive)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV, gap=gap
+            [('gate', inconclusive)],
+            destination=admission.LANE,
+            trunk_tiers=('heavy',),
+            head=HEAD,
+            clean=True,
+            env=ENV,
+            gap=gap,
         ).message
     )
 
 
 def test_the_cli_routes_the_trunk_ref_to_the_strict_bar(tmp_path: Path, monkeypatch, capsys) -> None:
     gate = _anchor(tmp_path, 'gate.verdict', _line('INCONCLUSIVE'))
-    monkeypatch.setattr(admission, '_tree_state', lambda _root: (HEAD, True))
+    _no_merges(monkeypatch)
     monkeypatch.setattr(admission, '_current_env', lambda: ENV)
     base = [
         '--root',
@@ -203,8 +228,10 @@ def test_an_inconclusive_that_never_started_is_not_a_verdict(tmp_path: Path, log
     log = _anchor(tmp_path, 'gate.log', *log_lines)
     gap = tmp_path / 'gap.md'
     for decided in (
-        admission.admit([('gate', log)], trunk=False, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV, gap=gap),
-        admission.decide_fresh(log, trunk=False, gap=gap),
+        admission.admit(
+            [('gate', log)], destination=admission.LANE, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV, gap=gap
+        ),
+        admission.decide_fresh(log, destination=admission.LANE, gap=gap),
     ):
         assert not decided.allowed
         assert 'never started' in decided.message
@@ -216,6 +243,53 @@ def test_an_inconclusive_cut_short_still_admits_a_lane_and_records_the_gap(tmp_p
     """The other side: it started, then a wall / node down / truncation cut it -- a lane may carry it."""
     log = _anchor(tmp_path, 'gate.log', '7 of 40 asked NOT RUN', 'ran=33', _line('INCONCLUSIVE'))
     gap = tmp_path / 'gap.md'
-    decided = admission.decide_fresh(log, trunk=False, gap=gap)
+    decided = admission.decide_fresh(log, destination=admission.LANE, gap=gap)
     assert decided.allowed
     assert gap.is_file()
+
+
+@pytest.mark.parametrize(('result', 'allowed'), [('PASS', True), ('FAIL', True), ('INCONCLUSIVE', False)])
+def test_an_integration_branch_refuses_an_inconclusive(tmp_path: Path, result: str, *, allowed: bool) -> None:
+    """User ruling 2026-10-07: a lane on a slow box may carry INCONCLUSIVE; an integration branch may not."""
+    gate = _anchor(tmp_path, 'gate.verdict', _line(result))
+    decided = admission.admit(
+        [('gate', gate)], destination=admission.INTEGRATION, trunk_tiers=('heavy',), head=HEAD, clean=True, env=ENV
+    )
+    assert decided.allowed is allowed
+    assert admission.decide_fresh(gate, destination=admission.INTEGRATION).allowed is allowed
+
+
+def _no_merges(monkeypatch) -> None:
+    monkeypatch.setattr(admission, '_tree_state', lambda _root: (HEAD, True))
+    monkeypatch.setattr(admission, '_current_env', lambda: ENV)
+    monkeypatch.setattr(admission, 'unpublished_merges', lambda _root: ())
+
+
+def test_the_cli_routes_the_declared_integration_branch_to_its_bar(tmp_path: Path, monkeypatch) -> None:
+    gate = _anchor(tmp_path, 'gate.verdict', _line('INCONCLUSIVE'))
+    _no_merges(monkeypatch)
+    declared = '[tool.lab_commons.integrator]\nintegration = "int/x"\n'
+    (tmp_path / 'pyproject.toml').write_text(declared, encoding='utf-8')
+    base = ['--root', str(tmp_path), '--trunk-ref', 'none', '--anchor', f'gate={gate}']
+    assert admission.main([*base, '--remote-ref', 'refs/heads/integrate/main']) == 0
+    assert admission.main([*base, '--remote-ref', 'refs/heads/int/x']) == 1
+
+
+def test_the_cli_refuses_a_push_carrying_an_unnamed_merge_deviation(tmp_path: Path, monkeypatch, capsys) -> None:
+    gate = _anchor(tmp_path, 'gate.verdict', _line('PASS'))
+    _no_merges(monkeypatch)
+    monkeypatch.setattr(admission, 'unpublished_merges', lambda _root: ('m1',))
+    seen: list[tuple[str, ...]] = []
+
+    def refused(_root: Path, merges: tuple[str, ...], roots: tuple[str, ...]) -> tuple[str, ...]:
+        seen.append(roots)
+        return (f'{merges[0]} LOST test_b',)
+
+    monkeypatch.setattr(admission, 'merge_refusals', refused)
+    argv = ['--root', str(tmp_path), '--trunk-ref', 'none', '--remote-ref', 'refs/heads/lane/x']
+    argv += ['--anchor', f'gate={gate}']
+    assert admission.main(argv) == 1
+    assert 'm1 LOST test_b' in capsys.readouterr().out
+    assert seen == [('tests',)]
+    monkeypatch.setattr(admission, 'merge_refusals', lambda *_: ())
+    assert admission.main(argv) == 0
