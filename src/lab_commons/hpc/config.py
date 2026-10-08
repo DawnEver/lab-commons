@@ -13,7 +13,7 @@ because a plan built on a quota Slurm will not grant is a plan that queues forev
 Example::
 
     [cluster]
-    host = "user@login.example.ac.uk"     # empty: run commands locally (already on a login node)
+    host = "<login host>"                  # empty: run commands locally (already on a login node)
     partitions = ["devq", "shortq", "defq"]  # candidates, in preference order
     qos = { devq = "dev" }                # partitions that need a --qos to be used at all
 
