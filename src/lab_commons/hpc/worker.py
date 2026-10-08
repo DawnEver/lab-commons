@@ -18,6 +18,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from lab_commons.log import emit
+
 __all__ = ['load_entry', 'main', 'run_shard']
 
 
@@ -47,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point of every array task."""
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 2:  # noqa: PLR2004 -- the two positional arguments, manifest and shard
-        sys.stderr.write('usage: python -m lab_commons.hpc.worker <manifest.json> <shard>\n')
+        emit('usage: python -m lab_commons.hpc.worker <manifest.json> <shard>', err=True)
         return 2
     manifest_path = Path(args[0])
     shard = int(args[1])

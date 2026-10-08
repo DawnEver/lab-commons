@@ -17,6 +17,7 @@ from typing import Any
 from lab_commons.hpc.config import Config, load_config
 from lab_commons.hpc.plan import Plan, free_slots, make_plan, quota_slots
 from lab_commons.hpc.run import TERMINAL_OK, Runner, gather, probe, runner_for, shard_states, submit
+from lab_commons.log import emit
 
 __all__ = ['main']
 
@@ -42,7 +43,7 @@ def _plan(config: Config, run: Runner) -> Plan:
 
 
 def _out(text: str) -> None:
-    sys.stdout.write(text + '\n')
+    emit(text)
 
 
 def _probe(config: Config, run: Runner) -> int:
