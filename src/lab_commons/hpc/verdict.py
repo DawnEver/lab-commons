@@ -30,7 +30,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.dev.venvpath import venv_interpreter
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, allocate
@@ -58,8 +57,11 @@ ITEM_MODULE: Final = 'lab_ci_pytest_item'
 
 _ROOT: Final = '"$HOME"/ci'
 
-#: The tree's venv interpreter on the cluster -- a Linux login node, whatever box submits.
-_PY: Final = venv_interpreter(os_name='posix')
+#: Hex digits of a full SHA-1 commit id.
+_SHA_HEX: Final = 40
+
+#: The tree's venv first on PATH, so its ``python`` runs -- the cluster is POSIX whatever box submits.
+_VENV: Final = 'PATH="$PWD/.venv/bin:$PATH"'
 
 
 @dataclass(frozen=True)
@@ -77,7 +79,7 @@ class VerdictSpec:
 
     def __post_init__(self) -> None:
         """A verdict is bound to a full commit id, never to a branch name that moves under it."""
-        if len(self.sha) != 40 or any(c not in '0123456789abcdef' for c in self.sha):  # noqa: PLR2004 -- SHA-1 hex
+        if len(self.sha) != _SHA_HEX or any(c not in '0123456789abcdef' for c in self.sha):
             msg = f'a verdict needs the full 40-hex commit id, got {self.sha!r}'
             raise ValueError(msg)
 
@@ -126,7 +128,7 @@ def build_script(spec: VerdictSpec) -> str:
             'fi',
             'echo "@@@ facts"',
             'echo "platform=$(uname -s | tr A-Z a-z)-$(uname -m)/glibc$(getconf GNU_LIBC_VERSION | cut -d" " -f2)"',
-            f'echo "python=$({_PY} -c "import platform; print(platform.python_version())")"',
+            f'echo "python=$({_VENV} python -c "import platform; print(platform.python_version())")"',
         ]
     )
 
@@ -141,7 +143,8 @@ def collect_command(spec: VerdictSpec, *, covered_only: bool = False) -> str:
         parts.append(f'not ({spec.not_covered})')
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
     return (
-        f'cd {_ROOT}/trees/{spec.sha} && {_PY} -m pytest --collect-only -q -p no:cacheprovider{select} {spec.collect}'
+        f'cd {_ROOT}/trees/{spec.sha} && {_VENV} python -m pytest --collect-only -q -p no:cacheprovider'
+        f'{select} {spec.collect}'
     ).rstrip()
 
 

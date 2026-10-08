@@ -218,7 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     machine = load_grants()
     if args.verb == 'verdict':
-        missing = [f'--{n.replace("_", "-")}' for n in ('sha', 'repo_url', 'install', 'output') if not getattr(args, n)]
+        given = {'--sha': args.sha, '--repo-url': args.repo_url, '--install': args.install, '--output': args.output}
+        missing = [flag for flag, value in given.items() if not value]
         if missing:
             parser.error(f'verdict needs {", ".join(missing)}')
         return _verdict(args, machine)

@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 #: What hpc may import from its own package: itself and the stdlib-only tier-1 modules -- never an opt-in tier.
-TIER_ONE = ('lab_commons.hpc', 'lab_commons.log', 'lab_commons.resources', 'lab_commons.width')
+TIER_ONE = ('lab_commons.config', 'lab_commons.hpc', 'lab_commons.log', 'lab_commons.resources', 'lab_commons.width')
 
 HPC_ROOT = Path(__file__).resolve().parents[1] / 'src' / 'lab_commons' / 'hpc'
 
