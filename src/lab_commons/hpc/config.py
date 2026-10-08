@@ -1,21 +1,17 @@
-"""The one file a run is configured by, and the dataclasses every other layer reads instead of it.
+"""The JOB file a run is configured by, and the dataclasses every other layer reads instead of it.
 
-ONE SOURCE, EVERY NUMBER. Where to connect, which partitions are candidates, what one item costs, how
-long a piece of work should be, how the job's environment is set up -- all of it is in one TOML file,
-and the defaults below are the only other place a value can come from. A layer that needs a number
-takes it from these dataclasses; none of them reads the file or carries a private default.
+TWO FILES, TWO OWNERS. The job file says WHAT runs -- entry, items, set-up, what one item costs, how
+the work is cut -- and travels with the project. WHERE it may run (ssh target, Slurm account, this
+box's share, candidate partitions and their QOS) belongs to the MACHINE, in
+:mod:`lab_commons.hpc.grants`, because one job file is submitted from several boxes holding different
+shares. Neither file repeats the other; the defaults below are the only other source of a value.
 
 THE QUOTA IS READ, NOT TYPED. What the caller may use at once is the cluster's own answer (``sacctmgr``
-association limits, read by :func:`lab_commons.hpc.slurm.probe`). ``[limits]`` exists only to LOWER it
--- a share agreed with a group, say -- and a value above the cluster's is clipped to the cluster's,
-because a plan built on a quota Slurm will not grant is a plan that queues forever.
+association limits, read by :func:`lab_commons.hpc.slurm.probe`). A grant's share only LOWERS it, as a
+:class:`Limits` built at plan time, because a plan built on a quota Slurm will not grant is a plan
+that queues forever.
 
 Example::
-
-    [cluster]
-    host = "<login host>"                  # empty: run commands locally (already on a login node)
-    partitions = ["devq", "shortq", "defq"]  # candidates, in preference order
-    qos = { devq = "dev" }                # partitions that need a --qos to be used at all
 
     [job]
     name = "sweep"
@@ -28,6 +24,9 @@ Example::
     cpus = 1
     mem_gb = 2
     seconds = 90
+
+    [policy]                              # optional: how the work is cut
+    shard_minutes_max = 30
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ __all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'l
 
 @dataclass(frozen=True)
 class Cluster:
-    """Where commands run and which partitions a plan may choose from."""
+    """Where commands run and which partitions a plan may choose from -- built from a grant, not a job file."""
 
     host: str = ''
     partitions: tuple[str, ...] = ()
@@ -77,7 +76,7 @@ class Cost:
 
 @dataclass(frozen=True)
 class Limits:
-    """Ceilings that LOWER the cluster's quota. ``None`` means "whatever the cluster grants"."""
+    """Ceilings that LOWER the cluster's quota -- a grant's headroom. ``None`` means "whatever the cluster grants"."""
 
     cpus: int | None = None
     mem_gb: float | None = None
@@ -120,10 +119,8 @@ class JobSpec:
 class Config:
     """The whole configuration of one run, and the file it came from."""
 
-    cluster: Cluster = field(default_factory=Cluster)
     job: JobSpec = field(default_factory=JobSpec)
     cost: Cost = field(default_factory=Cost)
-    limits: Limits = field(default_factory=Limits)
     policy: Policy = field(default_factory=Policy)
     source: Path | None = None
 
@@ -136,15 +133,13 @@ class Config:
 
 
 _SECTIONS: dict[str, type] = {
-    'cluster': Cluster,
     'job': JobSpec,
     'cost': Cost,
-    'limits': Limits,
     'policy': Policy,
 }
 
 
-def _section(name: str, raw: dict[str, Any]) -> Any:  # noqa: ANN401 -- one of the five section types
+def _section(name: str, raw: dict[str, Any]) -> Any:  # noqa: ANN401 -- one of the three section types
     """Build one section, refusing a key the dataclass does not declare -- a typo is not a default."""
     kind = _SECTIONS[name]
     known = set(kind.__dataclass_fields__)

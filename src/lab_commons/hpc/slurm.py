@@ -20,6 +20,7 @@ not a forecast, and a plan sized from it would be sized from noise.
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -33,6 +34,8 @@ __all__ = [
     'parse_records',
     'parse_snapshot',
     'parse_tres',
+    'parse_usage',
+    'probe_command',
 ]
 
 #: Every question a plan needs, asked at once. ``--me``/``$USER`` keep it about the caller.
@@ -46,6 +49,33 @@ PROBE_COMMAND: Final = (
     'echo "@@@ running"; squeue -h --me -t RUNNING -o "%a|%C|%D|%m|%b"; '
     'echo "@@@ queued"; squeue -h --me -r -o "%q"'
 )
+
+#: The comment tag every job of a workstation carries -- :data:`lab_commons.hpc.grants.COMMENT_PREFIX`.
+_WS_TAG: Final = re.compile(r'(?:^|[\s,;])lc:ws=([^\s,;]+)')
+
+
+def probe_command(slurm_account: str = '') -> str:
+    """:data:`PROBE_COMMAND`, plus -- for a named account -- every job of the caller's on it, with its comment.
+
+    ``--me`` AS WELL AS ``-A``: the share is of THIS login's per-user quota, and an account like a
+    university's free tier carries thousands of other people's jobs that count against nothing of ours.
+    Pending jobs are included -- they are claims the scheduler will honour before a new submission.
+    """
+    if not slurm_account:
+        return PROBE_COMMAND
+    return f'{PROBE_COMMAND}; echo "@@@ shared"; squeue -h --me -A {shlex.quote(slurm_account)} -o "%C %k"'
+
+
+def parse_usage(text: str) -> dict[str, float]:
+    """``squeue -o "%C %k"`` lines into CPUs held per workstation tag; an untagged job is held by ``''``."""
+    usage: dict[str, float] = {}
+    for line in filter(None, (raw.strip() for raw in text.splitlines())):
+        cpus, _, comment = line.partition(' ')
+        tag = _WS_TAG.search(comment)
+        key = tag.group(1) if tag else ''
+        usage[key] = usage.get(key, 0.0) + float(cpus)
+    return usage
+
 
 #: A node state is schedulable only if its base is one of these and it carries no flag below.
 _SCHEDULABLE: Final = frozenset({'IDLE', 'MIXED'})
@@ -176,6 +206,8 @@ class Snapshot:
     nodes: tuple[Node, ...]
     partitions: dict[str, Partition]
     quota: Quota
+    #: CPUs the caller's jobs on the account hold, per workstation tag (``''`` = untagged); see :func:`parse_usage`.
+    usage: dict[str, float] = field(default_factory=dict)
 
 
 def _node(record: dict[str, str]) -> Node:
@@ -285,4 +317,5 @@ def parse_snapshot(text: str, account: str = '') -> Snapshot:
         nodes=tuple(map(_node, parse_records(sections['nodes']))),
         partitions=partitions,
         quota=_quota(sections, account),
+        usage=parse_usage(sections.get('shared', '')),
     )

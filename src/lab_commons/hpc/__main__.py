@@ -1,7 +1,12 @@
-"""``python -m lab_commons.hpc <verb> -c hpc.toml`` -- probe, plan, submit, status, gather, retry.
+"""``python -m lab_commons.hpc <verb>`` -- probe, plan, submit, status, gather, retry, verdict.
 
-The last submission of a config is recorded next to it as ``<config>.run.json`` (run directory, every
-job id it took, shard count), so ``status``/``gather``/``retry`` need no argument beyond the config.
+WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, ``~/.config/lab-commons/hpc.toml``
+or ``$LAB_COMMONS_HPC_GRANTS``); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
+submission of a job file is recorded next to it as ``<job>.run.json`` (the grant it went to, run
+directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need nothing more.
+
+``verdict`` tests one commit on the cluster (:mod:`lab_commons.hpc.verdict`); ``-c`` there is optional
+and only its ``[cost]``/``[policy]`` are read.
 """
 
 from __future__ import annotations
@@ -10,21 +15,30 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from lab_commons.hpc.config import Config, load_config
-from lab_commons.hpc.plan import Plan, free_slots, make_plan, quota_slots
-from lab_commons.hpc.run import TERMINAL_OK, Runner, gather, probe, runner_for, shard_states, submit
+from lab_commons.hpc.config import Config, Limits, load_config
+from lab_commons.hpc.grants import Grant, Machine, load_grants
+from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
+from lab_commons.hpc.run import TERMINAL_OK, Runner, gather, probe, runner_for, shard_states, ssh_runner, submit
+from lab_commons.hpc.slurm import Snapshot
+from lab_commons.hpc.verdict import VerdictSpec, remote_verdict, summary, write_record
 from lab_commons.log import emit
 
 __all__ = ['main']
 
+type Connect = Callable[[Grant], Runner]
+
+#: A login-node build of a tree's venv (a Rust extension, say) needs far more than a probe's five minutes.
+_BUILD_TIMEOUT = 3 * 3600.0
+
 
 def _state_path(config: Config) -> Path:
     if config.source is None:
-        msg = 'a run is recorded next to its config file; this config was not loaded from one'
+        msg = 'a run is recorded next to its job file; this config was not loaded from one'
         raise ValueError(msg)
     return config.source.with_suffix('.run.json')
 
@@ -37,35 +51,64 @@ def _items(config: Config) -> list[Any]:
     return items
 
 
-def _plan(config: Config, run: Runner) -> Plan:
-    snapshot = probe(run, config.cluster.account)
-    return make_plan(
-        len(_items(config)), config.cost, snapshot, cluster=config.cluster, policy=config.policy, limits=config.limits
-    )
+def _snapshots(machine: Machine, connect: Connect) -> list[tuple[Grant, Snapshot]]:
+    return [(g, probe(connect(g), g.slurm_account)) for g in machine.grants]
+
+
+def _host(grant: Grant) -> str:
+    return grant.account.rpartition('@')[2]
 
 
 def _out(text: str) -> None:
     emit(text)
 
 
-def _probe(config: Config, run: Runner) -> int:
-    snapshot = probe(run, config.cluster.account)
-    q = snapshot.quota
-    _out(f'account {q.account} (qos {q.default_qos}): free quota cpus={q.cpus} mem_mb={q.mem_mb} gpus={q.gpus}')
-    _out(f'one item ({config.cost}) -> {quota_slots(snapshot, config.cost, config.limits)} concurrent by quota')
-    for name in config.cluster.partitions or tuple(snapshot.partitions):
-        part = snapshot.partitions.get(name)
-        if part is not None:
-            _out(f'  {name:<14} max {part.max_minutes} min, {free_slots(snapshot, name, config.cost)} item slots free')
+def _probe(config: Config, machine: Machine, connect: Connect) -> int:
+    snapshots = _snapshots(machine, connect)
+    for grant, snapshot in snapshots:
+        q = snapshot.quota
+        here = sum(g.cpus for g, _ in snapshots if g.slurm_account == grant.slurm_account and _host(g) == _host(grant))
+        held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items())) or 'nothing'
+        room = headroom(snapshot, grant.cpus, machine.workstation)
+        _out(
+            f'{grant.account} account {q.account} (qos {q.default_qos}): '
+            f'quota cpus={q.cpus} mem_mb={q.mem_mb} gpus={q.gpus}'
+        )
+        _out(f'  shares known here {here} of quota {q.cpus}; held {held}; headroom for {machine.workstation}: {room}')
+        _out(f'  one item ({config.cost}) -> {quota_slots(snapshot, config.cost, Limits(cpus=room))} concurrent')
+        for name in grant.partitions or tuple(snapshot.partitions):
+            part = snapshot.partitions.get(name)
+            if part is not None:
+                _out(
+                    f'    {name:<14} max {part.max_minutes} min, '
+                    f'{free_slots(snapshot, name, config.cost)} item slots free'
+                )
     return 0
 
 
-def _submit(config: Config, run: Runner) -> int:
-    plan = _plan(config, run)
-    _out(plan.describe())
+def _allocate(config: Config, machine: Machine, connect: Connect) -> tuple[Grant, Plan]:
+    return allocate(
+        len(_items(config)),
+        config.cost,
+        _snapshots(machine, connect),
+        workstation=machine.workstation,
+        policy=config.policy,
+    )
+
+
+def _plan(config: Config, machine: Machine, connect: Connect) -> int:
+    grant, plan = _allocate(config, machine, connect)
+    _out(f'{grant.account}: {plan.describe()}')
+    return 0
+
+
+def _submit(config: Config, machine: Machine, connect: Connect) -> int:
+    grant, plan = _allocate(config, machine, connect)
+    _out(f'{grant.account}: {plan.describe()}')
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    sub = submit(run, plan, config, _items(config), stamp=stamp)
+    sub = submit(connect(grant), plan, config, _items(config), stamp=stamp)
     record = {
+        'grant': grant.account,
         'run_dir': sub.run_dir,
         'stamp': stamp,
         'job_ids': [sub.job_id],
@@ -73,7 +116,7 @@ def _submit(config: Config, run: Runner) -> int:
         'plan': asdict(plan),
     }
     _state_path(config).write_text(json.dumps(record, indent=2), encoding='utf-8')
-    _out(f'submitted job {sub.job_id}; run directory {sub.run_dir}')
+    _out(f'submitted job {sub.job_id} to {grant.account}; run directory {sub.run_dir}')
     return 0
 
 
@@ -81,8 +124,7 @@ def _record(config: Config) -> dict[str, Any]:
     return json.loads(_state_path(config).read_text(encoding='utf-8'))
 
 
-def _status(config: Config, run: Runner) -> int:
-    record = _record(config)
+def _status(run: Runner, record: dict[str, Any]) -> int:
     states = shard_states(run, record['job_ids'])
     counts: dict[str, int] = {}
     for shard in range(record['shards']):
@@ -92,8 +134,7 @@ def _status(config: Config, run: Runner) -> int:
     return 0
 
 
-def _gather(config: Config, run: Runner, target: Path | None) -> int:
-    record = _record(config)
+def _gather(run: Runner, record: dict[str, Any], target: Path | None) -> int:
     results = gather(run, record['run_dir'])
     flat = sorted((r for shard in results.values() for r in shard), key=lambda r: r['index'])
     failed = sum(not r['ok'] for r in flat)
@@ -104,8 +145,7 @@ def _gather(config: Config, run: Runner, target: Path | None) -> int:
     return 0
 
 
-def _retry(config: Config, run: Runner) -> int:
-    record = _record(config)
+def _retry(config: Config, run: Runner, record: dict[str, Any]) -> int:
     states = shard_states(run, record['job_ids'])
     returned = gather(run, record['run_dir'])
     redo = [s for s in range(record['shards']) if s not in returned and states.get(s) not in {'PENDING', 'RUNNING'}]
@@ -120,27 +160,74 @@ def _retry(config: Config, run: Runner) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Parse the verb and dispatch it against the config's cluster."""
+def _verdict(args: argparse.Namespace, machine: Machine) -> int:
+    config = load_config(args.config) if args.config else Config()
+    spec = VerdictSpec(
+        sha=args.sha,
+        repo_url=args.repo_url,
+        install=args.install,
+        collect=args.collect,
+        not_covered=args.not_covered,
+        python=args.python,
+        bundle_from=args.bundle,
+    )
+    record = remote_verdict(
+        spec,
+        machine,
+        lambda g: runner_for(g, _BUILD_TIMEOUT),
+        cost=config.cost,
+        policy=config.policy,
+    )
+    write_record(record, args.output)
+    _out(f'{spec.sha[:12]} on {record["cluster"]} ({record["platform"]}, python {record["python"]}): {summary(record)}')
+    _out(f'written {args.output}')
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc', description=__doc__.splitlines()[0])
-    parser.add_argument('verb', choices=['probe', 'plan', 'submit', 'status', 'gather', 'retry'])
-    parser.add_argument('-c', '--config', type=Path, default=Path('hpc.toml'))
-    parser.add_argument('-o', '--output', type=Path, help='gather: write the merged item results here (JSON)')
+    parser.add_argument('verb', choices=['probe', 'plan', 'submit', 'status', 'gather', 'retry', 'verdict'])
+    parser.add_argument('-c', '--config', type=Path, help='the job file (default hpc.toml; optional for verdict)')
+    parser.add_argument('-o', '--output', type=Path, help='gather: merged item results (JSON); verdict: the record')
+    verdict = parser.add_argument_group('verdict')
+    verdict.add_argument('--sha', help='the full commit id to test')
+    verdict.add_argument('--repo-url', help='read-only HTTPS remote the cluster fetches from')
+    verdict.add_argument('--install', help='shell, run once in the tree with its fresh .venv active')
+    verdict.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
+    verdict.add_argument('--not-covered', default='', help='marker expression this platform cannot run')
+    verdict.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
+    verdict.add_argument(
+        '--bundle', type=Path, help='local repository to bundle the commit from if the remote lacks it'
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse the verb and dispatch it against this machine's grants."""
+    parser = _parser()
     args = parser.parse_args(argv)
-    config = load_config(args.config)
-    run = runner_for(config)
+    machine = load_grants()
+    if args.verb == 'verdict':
+        missing = [f'--{n.replace("_", "-")}' for n in ('sha', 'repo_url', 'install', 'output') if not getattr(args, n)]
+        if missing:
+            parser.error(f'verdict needs {", ".join(missing)}')
+        return _verdict(args, machine)
+    config = load_config(args.config or Path('hpc.toml'))
+    connect = runner_for
     if args.verb == 'probe':
-        return _probe(config, run)
+        return _probe(config, machine, connect)
     if args.verb == 'plan':
-        _out(_plan(config, run).describe())
-        return 0
+        return _plan(config, machine, connect)
     if args.verb == 'submit':
-        return _submit(config, run)
-    if args.verb == 'status':
-        return _status(config, run)
-    if args.verb == 'gather':
-        return _gather(config, run, args.output)
-    return _retry(config, run)
+        return _submit(config, machine, connect)
+    record = _record(config)
+    run = ssh_runner(record['grant'])
+    tracked = {
+        'status': lambda: _status(run, record),
+        'gather': lambda: _gather(run, record, args.output),
+        'retry': lambda: _retry(config, run, record),
+    }
+    return tracked[args.verb]()
 
 
 if __name__ == '__main__':

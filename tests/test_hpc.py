@@ -149,7 +149,6 @@ class FakeCluster:
 
 def _config(tmp_path: Path) -> Config:
     return Config(
-        cluster=CLUSTER,
         job=JobSpec(name='sweep', workdir='~/proj', setup=('source .venv/bin/activate',), entry='m:f'),
         source=tmp_path / 'hpc.toml',
     )
@@ -219,16 +218,24 @@ def test_the_worker_writes_its_shard_file(tmp_path: Path) -> None:
 def test_config_round_trip_and_typos_are_refused(tmp_path: Path) -> None:
     path = tmp_path / 'hpc.toml'
     path.write_text(
-        '[cluster]\npartitions = ["devq"]\nqos = { devq = "dev" }\n[cost]\ncpus = 2\nmem_gb = 4\n'
-        '[job]\nitems = "items.json"\n',
+        '[cost]\ncpus = 2\nmem_gb = 4\n[job]\nitems = "items.json"\n[policy]\nshard_minutes_max = 30\n',
         encoding='utf-8',
     )
     config = load_config(path)
-    assert config.cluster.partitions == ('devq',)
+    assert config.policy.shard_minutes_max == 30
     assert config.cost == Cost(cpus=2, mem_gb=4)
     assert config.items_path() == tmp_path / 'items.json'
     path.write_text('[cost]\ncpu = 2\n', encoding='utf-8')
     with pytest.raises(ValueError, match='unknown keys'):
+        load_config(path)
+
+
+@pytest.mark.parametrize('moved', ['cluster', 'limits'])
+def test_where_a_job_runs_is_not_the_job_files_to_say(tmp_path: Path, moved: str) -> None:
+    """Host, account, partitions and the share moved to the machine's grants file."""
+    path = tmp_path / 'hpc.toml'
+    path.write_text(f'[{moved}]\n', encoding='utf-8')
+    with pytest.raises(ValueError, match=f"unknown sections \\['{moved}'\\]"):
         load_config(path)
 
 

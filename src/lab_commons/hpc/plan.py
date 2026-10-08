@@ -23,10 +23,12 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from typing import Final
 
 from lab_commons.hpc.config import GIB, Cluster, Cost, Limits, Policy
+from lab_commons.hpc.grants import COMMENT_PREFIX, Grant
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.resources import CPU, GPU, MEMORY
 from lab_commons.width import fits
@@ -34,7 +36,7 @@ from lab_commons.width import fits
 #: Slurm reports memory in MiB; :data:`~lab_commons.resources.MEMORY` counts bytes.
 MIB: Final = 1024**2
 
-__all__ = ['MIB', 'Plan', 'free_slots', 'make_plan', 'quota_slots']
+__all__ = ['MIB', 'Plan', 'allocate', 'free_slots', 'headroom', 'make_plan', 'quota_slots']
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,8 @@ class Plan:
     throttle: int
     free_slots: int
     makespan_minutes: float
+    #: The ``--comment`` every task carries -- the workstation tag :func:`allocate` stamps.
+    comment: str = ''
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""
@@ -178,3 +182,55 @@ def make_plan(
         free_slots=free,
         makespan_minutes=math.ceil(len(shards) / running) * minutes,
     )
+
+
+def headroom(snapshot: Snapshot, share: int, workstation: str) -> int:
+    """CPUs this workstation may still claim on a grant: ``min(share, quota - others) - mine``.
+
+    *others* is every CPU the caller's jobs on the account hold that is NOT tagged with *workstation* --
+    other boxes, and untagged jobs, which are someone's even if nobody said whose. A missing quota is no
+    constraint beyond the share.
+    """
+    mine = snapshot.usage.get(workstation, 0.0)
+    others = sum(cpus for tag, cpus in snapshot.usage.items() if tag != workstation)
+    quota = snapshot.quota.cpus
+    cap = share if quota is None else min(share, quota - others)
+    return max(0, math.floor(cap - mine))
+
+
+def allocate(
+    n_items: int,
+    cost: Cost,
+    candidates: Sequence[tuple[Grant, Snapshot]],
+    *,
+    workstation: str,
+    policy: Policy,
+) -> tuple[Grant, Plan]:
+    """The grant whose plan finishes EARLIEST, planned on that grant's headroom. Pure.
+
+    A tie goes to the higher ``priority``, then to the earlier grant in the file. No grant with room
+    raises, naming each account and why -- an empty answer is never a silent queue.
+    """
+    options: list[tuple[float, int, int, Grant, Plan]] = []
+    refusals = []
+    for order, (grant, snapshot) in enumerate(candidates):
+        room = headroom(snapshot, grant.cpus, workstation)
+        label = f'{grant.account} ({grant.slurm_account})'
+        if room < cost.cpus:
+            held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items()))
+            refusals.append(
+                f'{label}: headroom {room} CPU < {cost.cpus} per item '
+                f'(share {grant.cpus}, quota {snapshot.quota.cpus}, held {held or "nothing"})'
+            )
+            continue
+        try:
+            plan = make_plan(n_items, cost, snapshot, cluster=grant.cluster(), policy=policy, limits=Limits(cpus=room))
+        except ValueError as refused:
+            refusals.append(f'{label}: {refused}')
+            continue
+        options.append((plan.makespan_minutes, -grant.priority, order, grant, plan))
+    if not options:
+        msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])
+        raise ValueError(msg)
+    *_, grant, plan = min(options, key=lambda o: o[:3])
+    return grant, replace(plan, comment=COMMENT_PREFIX + workstation)

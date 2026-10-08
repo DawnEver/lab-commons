@@ -22,8 +22,9 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from lab_commons.hpc.config import Config
+from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.plan import Plan
-from lab_commons.hpc.slurm import PROBE_COMMAND, Snapshot, parse_snapshot
+from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
 
 __all__ = [
     'TERMINAL_OK',
@@ -33,6 +34,7 @@ __all__ = [
     'local_runner',
     'probe',
     'render_script',
+    'runner_for',
     'shard_states',
     'ssh_runner',
     'submit',
@@ -47,7 +49,7 @@ TERMINAL_OK: Final = 'COMPLETED'
 _TIMEOUT: Final = 300.0
 
 
-def _completed(argv: Sequence[str], stdin: str | None) -> str:
+def _completed(argv: Sequence[str], stdin: str | None, timeout: float = _TIMEOUT) -> str:
     """Run *argv*; stdin goes as UTF-8 BYTES.
 
     BYTES, BECAUSE TEXT MODE REWRITES IT. On Windows a text-mode pipe turns every LF into CRLF, and the
@@ -59,7 +61,7 @@ def _completed(argv: Sequence[str], stdin: str | None) -> str:
         argv,
         input=None if stdin is None else stdin.encode('utf-8'),
         capture_output=True,
-        timeout=_TIMEOUT,
+        timeout=timeout,
         check=False,
     )
     out, err = done.stdout.decode('utf-8', 'replace'), done.stderr.decode('utf-8', 'replace')
@@ -74,23 +76,27 @@ def local_runner(command: str, stdin: str | None = None) -> str:
     return _completed(['bash', '-lc', command], stdin)
 
 
-def ssh_runner(host: str) -> Runner:
-    """A runner that executes on *host* over key-based, non-interactive ``ssh``."""
+def ssh_runner(host: str, timeout: float = _TIMEOUT) -> Runner:
+    """A runner that executes on *host* over key-based, non-interactive ``ssh``.
+
+    *timeout* is per command; a login-node build (a per-tree install) needs far more than a probe.
+    """
 
     def run(command: str, stdin: str | None = None) -> str:
-        return _completed(['ssh', '-o', 'BatchMode=yes', host, f'bash -lc {shlex.quote(command)}'], stdin)
+        argv = ['ssh', '-o', 'BatchMode=yes', host, f'bash -lc {shlex.quote(command)}']
+        return _completed(argv, stdin, timeout)
 
     return run
 
 
-def runner_for(config: Config) -> Runner:
-    """``ssh`` when the config names a host, the local shell when it does not."""
-    return ssh_runner(config.cluster.host) if config.cluster.host else local_runner
+def runner_for(grant: Grant, timeout: float = _TIMEOUT) -> Runner:
+    """``ssh`` to the grant's account -- its ssh target, credentials from ``~/.ssh/config``."""
+    return ssh_runner(grant.account, timeout)
 
 
 def probe(run: Runner, account: str = '') -> Snapshot:
-    """Read the cluster once -- see :mod:`lab_commons.hpc.slurm`."""
-    return parse_snapshot(run(PROBE_COMMAND, None), account)
+    """Read the cluster once -- see :mod:`lab_commons.hpc.slurm`; a named account also reads its usage."""
+    return parse_snapshot(run(probe_command(account), None), account)
 
 
 def _sh_path(path: str) -> str:
@@ -113,7 +119,9 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         f'--mem={plan.mem_mb}M',
         f'--gres=gpu:{plan.gpus}' if plan.gpus else '',
         f'--time={plan.minutes}',
-        f'--output={run_dir}/logs/%A_%a.out',
+        f'--comment={plan.comment}' if plan.comment else '',
+        # Relative to the submit directory (the run directory, see submit): Slurm never expands a ``~``.
+        '--output=logs/%A_%a.out',
     ]
     lines = ['#!/bin/bash', *(f'#SBATCH {d}' for d in directives if d), 'set -eo pipefail']
     lines += [f'cd {_sh_path(config.job.workdir)}', *config.job.setup]
