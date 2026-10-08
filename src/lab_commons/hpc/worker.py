@@ -10,8 +10,8 @@ and shows as failed in ``sacct`` -- never as a half-written success.
 
 from __future__ import annotations
 
-import importlib
 import json
+import pkgutil
 import sys
 import traceback
 from collections.abc import Callable
@@ -27,7 +27,7 @@ def load_entry(spec: str) -> Callable[[Any], Any]:
     if not sep or not module or not name:
         msg = f'an entry point is "module:function", got {spec!r}'
         raise ValueError(msg)
-    return getattr(importlib.import_module(module), name)
+    return pkgutil.resolve_name(spec)
 
 
 def run_shard(manifest: dict[str, Any], shard: int, entry: Callable[[Any], Any] | None = None) -> dict[str, Any]:
