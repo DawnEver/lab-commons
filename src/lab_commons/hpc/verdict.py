@@ -66,6 +66,7 @@ class VerdictSpec:
     repo_url: str
     install: str
     collect: str = ''
+    select: str = ''
     not_covered: str = ''
     python: str = ''
     bundle_from: Path | None = None
@@ -126,9 +127,15 @@ def build_script(spec: VerdictSpec) -> str:
     )
 
 
-def collect_command(spec: VerdictSpec, marker: str = '') -> str:
-    """``pytest --collect-only`` in the tree, with *marker* as its ``-m``."""
-    select = f' -m {shlex.quote(marker)}' if marker else ''
+def collect_command(spec: VerdictSpec, *, covered_only: bool = False) -> str:
+    """``pytest --collect-only`` in the tree; ONE ``-m`` joins ``select`` and, for *covered_only*, ``not_covered``.
+
+    One expression, because pytest keeps only the last ``-m`` -- a second one would silently drop the first.
+    """
+    parts = [f'({spec.select})'] if spec.select else []
+    if covered_only and spec.not_covered:
+        parts.append(f'not ({spec.not_covered})')
+    select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
     return (
         f'cd {_ROOT}/trees/{spec.sha} && .venv/bin/python -m pytest --collect-only -q -p no:cacheprovider'
         f'{select} {spec.collect}'
@@ -214,7 +221,7 @@ def remote_verdict(
         raise RuntimeError(msg)
     not_covered: set[str] = set()
     if spec.not_covered:
-        covered = set(parse_ids(run(collect_command(spec, f'not ({spec.not_covered})'), None)))
+        covered = set(parse_ids(run(collect_command(spec, covered_only=True), None)))
         not_covered = {node for node in ids if node not in covered}
     items = group_items([node for node in ids if node not in not_covered])
 

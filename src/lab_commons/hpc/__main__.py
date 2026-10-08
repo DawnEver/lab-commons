@@ -167,6 +167,7 @@ def _verdict(args: argparse.Namespace, machine: Machine) -> int:
         repo_url=args.repo_url,
         install=args.install,
         collect=args.collect,
+        select=args.select,
         not_covered=args.not_covered,
         python=args.python,
         bundle_from=args.bundle,
@@ -194,6 +195,7 @@ def _parser() -> argparse.ArgumentParser:
     verdict.add_argument('--repo-url', help='read-only HTTPS remote the cluster fetches from')
     verdict.add_argument('--install', help='shell, run once in the tree with its fresh .venv active')
     verdict.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
+    verdict.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
     verdict.add_argument('--not-covered', default='', help='marker expression this platform cannot run')
     verdict.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
     verdict.add_argument(
