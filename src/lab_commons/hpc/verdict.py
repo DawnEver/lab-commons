@@ -30,6 +30,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.dev.venvpath import venv_interpreter
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, allocate
@@ -56,6 +57,9 @@ ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COM
 ITEM_MODULE: Final = 'lab_ci_pytest_item'
 
 _ROOT: Final = '"$HOME"/ci'
+
+#: The tree's venv interpreter on the cluster -- a Linux login node, whatever box submits.
+_PY: Final = venv_interpreter(os_name='posix')
 
 
 @dataclass(frozen=True)
@@ -122,7 +126,7 @@ def build_script(spec: VerdictSpec) -> str:
             'fi',
             'echo "@@@ facts"',
             'echo "platform=$(uname -s | tr A-Z a-z)-$(uname -m)/glibc$(getconf GNU_LIBC_VERSION | cut -d" " -f2)"',
-            'echo "python=$(.venv/bin/python -c "import platform; print(platform.python_version())")"',
+            f'echo "python=$({_PY} -c "import platform; print(platform.python_version())")"',
         ]
     )
 
@@ -137,8 +141,7 @@ def collect_command(spec: VerdictSpec, *, covered_only: bool = False) -> str:
         parts.append(f'not ({spec.not_covered})')
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
     return (
-        f'cd {_ROOT}/trees/{spec.sha} && .venv/bin/python -m pytest --collect-only -q -p no:cacheprovider'
-        f'{select} {spec.collect}'
+        f'cd {_ROOT}/trees/{spec.sha} && {_PY} -m pytest --collect-only -q -p no:cacheprovider{select} {spec.collect}'
     ).rstrip()
 
 
