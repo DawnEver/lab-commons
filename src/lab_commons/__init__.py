@@ -6,3 +6,5 @@ Use ``lab_commons.log``, ``lab_commons.paths``, ``lab_commons.file_io``,
 ``lab_commons.units``/``em``, or a named renderer adapter when that capability is
 actually required. Each module remains independently importable.
 """
+
+__all__: list[str] = []
