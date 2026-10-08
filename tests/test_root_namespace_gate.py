@@ -17,11 +17,14 @@ def test_stdlib_logging_does_not_load_optional_capabilities() -> None:
         [
             sys.executable,
             '-c',
-            'import sys; from lab_commons.log import get_logger; '
-            "assert not {'pint', 'pydantic', 'structlog', 'platformdirs', 'rtoml', 'numpy'} & set(sys.modules)",
+            (
+                'import sys; from lab_commons.log import get_logger; '
+                "assert not {'pint', 'pydantic', 'structlog', 'platformdirs', 'rtoml', 'numpy'} & set(sys.modules)"
+            ),
         ],
         capture_output=True,
         text=True,
+        encoding='utf-8',
         check=False,
     )
     assert probe.returncode == 0, probe.stderr
