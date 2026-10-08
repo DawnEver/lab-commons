@@ -22,6 +22,9 @@ from lab_commons.log import emit
 
 __all__ = ['load_entry', 'main', 'run_shard']
 
+#: The positional arguments of an array task: the manifest path and the shard index.
+_ARGS = ('manifest', 'shard')
+
 
 def load_entry(spec: str) -> Callable[[Any], Any]:
     """``package.module:function`` to the callable it names."""
@@ -48,7 +51,7 @@ def run_shard(manifest: dict[str, Any], shard: int, entry: Callable[[Any], Any] 
 def main(argv: list[str] | None = None) -> int:
     """Entry point of every array task."""
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 2:  # noqa: PLR2004 -- the two positional arguments, manifest and shard
+    if len(args) != len(_ARGS):
         emit('usage: python -m lab_commons.hpc.worker <manifest.json> <shard>', err=True)
         return 2
     manifest_path = Path(args[0])

@@ -23,7 +23,9 @@ __all__ = ['main']
 
 
 def _state_path(config: Config) -> Path:
-    assert config.source is not None  # noqa: S101 -- load_config always sets it
+    if config.source is None:
+        msg = 'a run is recorded next to its config file; this config was not loaded from one'
+        raise ValueError(msg)
     return config.source.with_suffix('.run.json')
 
 
