@@ -215,7 +215,7 @@ def allocate(
     refusals = []
     for order, (grant, snapshot) in enumerate(candidates):
         room = headroom(snapshot, grant.cpus, workstation)
-        label = f'{grant.account} ({grant.slurm_account})'
+        label = grant.name
         if room < cost.cpus:
             held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items()))
             refusals.append(

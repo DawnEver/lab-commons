@@ -25,11 +25,14 @@ from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
+from lab_commons.log import log
 
 __all__ = [
     'TERMINAL_OK',
     'Runner',
     'Submission',
+    'Unreachable',
+    'failover_runner',
     'gather',
     'local_runner',
     'probe',
@@ -48,6 +51,16 @@ TERMINAL_OK: Final = 'COMPLETED'
 
 _TIMEOUT: Final = 300.0
 
+#: Seconds ``ssh`` waits for a login host to answer before the next one is tried.
+CONNECT_TIMEOUT: Final = 10
+
+#: ``ssh`` exits 255 when it could not reach the host -- the command never ran, so another host may run it.
+_SSH_UNREACHABLE: Final = 255
+
+
+class Unreachable(RuntimeError):
+    """``ssh`` could not reach a login host; the command did not run."""
+
 
 def _completed(argv: Sequence[str], stdin: str | None, timeout: float = _TIMEOUT) -> str:
     """Run *argv*; stdin goes as UTF-8 BYTES.
@@ -65,6 +78,9 @@ def _completed(argv: Sequence[str], stdin: str | None, timeout: float = _TIMEOUT
         check=False,
     )
     out, err = done.stdout.decode('utf-8', 'replace'), done.stderr.decode('utf-8', 'replace')
+    if done.returncode == _SSH_UNREACHABLE and argv[0] == 'ssh':
+        msg = f'ssh could not reach {argv[-2]}: {err.strip() or out.strip()}'
+        raise Unreachable(msg)
     if done.returncode != 0:
         msg = f'{argv[0]} exited {done.returncode}: {err.strip() or out.strip()}'
         raise RuntimeError(msg)
@@ -83,15 +99,51 @@ def ssh_runner(host: str, timeout: float = _TIMEOUT) -> Runner:
     """
 
     def run(command: str, stdin: str | None = None) -> str:
-        argv = ['ssh', '-o', 'BatchMode=yes', host, f'bash -lc {shlex.quote(command)}']
+        argv = [
+            'ssh',
+            '-o',
+            'BatchMode=yes',
+            '-o',
+            f'ConnectTimeout={CONNECT_TIMEOUT}',
+            host,
+            f'bash -lc {shlex.quote(command)}',
+        ]
         return _completed(argv, stdin, timeout)
 
     return run
 
 
+def failover_runner(runners: Sequence[tuple[str, Runner]]) -> Runner:
+    """A runner over several login hosts of ONE cluster: the first that answers is used from then on.
+
+    A host that raises :class:`Unreachable` is skipped and the skip is logged; the chosen host stays chosen,
+    so one run never straddles two hosts for no reason. Every host refusing raises naming all of them.
+    """
+    if not runners:
+        msg = 'a failover runner needs at least one host'
+        raise ValueError(msg)
+    order = list(runners)
+
+    def run(command: str, stdin: str | None = None) -> str:
+        refusals = []
+        while order:
+            target, runner = order[0]
+            try:
+                return runner(command, stdin)
+            except Unreachable as refused:
+                refusals.append(str(refused))
+                order.pop(0)
+                if order:
+                    log(f'hpc: {target} did not answer; failing over to {order[0][0]}', level='WARNING')
+        msg = 'no login host answered: ' + '; '.join(refusals)
+        raise Unreachable(msg)
+
+    return run
+
+
 def runner_for(grant: Grant, timeout: float = _TIMEOUT) -> Runner:
-    """``ssh`` to the grant's account -- its ssh target, credentials from ``~/.ssh/config``."""
-    return ssh_runner(grant.account, timeout)
+    """``ssh`` to the grant's hosts in order, the first that answers; credentials from ``~/.ssh/config``."""
+    return failover_runner([(target, ssh_runner(target, timeout)) for target in grant.targets])
 
 
 def probe(run: Runner, account: str = '') -> Snapshot:

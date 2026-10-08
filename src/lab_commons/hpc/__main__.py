@@ -1,9 +1,10 @@
 """``python -m lab_commons.hpc <verb>`` -- probe, plan, submit, status, gather, retry, verdict.
 
-WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, ``~/.config/lab-commons/hpc.toml``
-or ``$LAB_COMMONS_HPC_GRANTS``); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
-submission of a job file is recorded next to it as ``<job>.run.json`` (the grant it went to, run
-directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need nothing more.
+WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
+:mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
+submission of a job file is recorded next to it as ``<job>.run.json`` (the grant it went to and its ssh
+targets, run directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need
+nothing more -- through whichever of those login hosts answers.
 
 ``verdict`` tests one commit on the cluster (:mod:`lab_commons.hpc.verdict`); ``-c`` there is optional
 and only its ``[cost]``/``[policy]`` are read.
@@ -23,7 +24,17 @@ from typing import Any
 from lab_commons.hpc.config import Config, Limits, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
-from lab_commons.hpc.run import TERMINAL_OK, Runner, gather, probe, runner_for, shard_states, ssh_runner, submit
+from lab_commons.hpc.run import (
+    TERMINAL_OK,
+    Runner,
+    failover_runner,
+    gather,
+    probe,
+    runner_for,
+    shard_states,
+    ssh_runner,
+    submit,
+)
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.verdict import VerdictSpec, remote_verdict, summary, write_record
 from lab_commons.log import emit
@@ -55,10 +66,6 @@ def _snapshots(machine: Machine, connect: Connect) -> list[tuple[Grant, Snapshot
     return [(g, probe(connect(g), g.slurm_account)) for g in machine.grants]
 
 
-def _host(grant: Grant) -> str:
-    return grant.account.rpartition('@')[2]
-
-
 def _out(text: str) -> None:
     emit(text)
 
@@ -67,11 +74,11 @@ def _probe(config: Config, machine: Machine, connect: Connect) -> int:
     snapshots = _snapshots(machine, connect)
     for grant, snapshot in snapshots:
         q = snapshot.quota
-        here = sum(g.cpus for g, _ in snapshots if g.slurm_account == grant.slurm_account and _host(g) == _host(grant))
+        here = sum(g.cpus for g, _ in snapshots if g.account == grant.account and g.same_cluster(grant))
         held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items())) or 'nothing'
         room = headroom(snapshot, grant.cpus, machine.workstation)
         _out(
-            f'{grant.account} account {q.account} (qos {q.default_qos}): '
+            f'{grant.name} account {q.account} (qos {q.default_qos}): '
             f'quota cpus={q.cpus} mem_mb={q.mem_mb} gpus={q.gpus}'
         )
         _out(f'  shares known here {here} of quota {q.cpus}; held {held}; headroom for {machine.workstation}: {room}')
@@ -98,17 +105,18 @@ def _allocate(config: Config, machine: Machine, connect: Connect) -> tuple[Grant
 
 def _plan(config: Config, machine: Machine, connect: Connect) -> int:
     grant, plan = _allocate(config, machine, connect)
-    _out(f'{grant.account}: {plan.describe()}')
+    _out(f'{grant.name}: {plan.describe()}')
     return 0
 
 
 def _submit(config: Config, machine: Machine, connect: Connect) -> int:
     grant, plan = _allocate(config, machine, connect)
-    _out(f'{grant.account}: {plan.describe()}')
+    _out(f'{grant.name}: {plan.describe()}')
     stamp = time.strftime('%Y%m%d-%H%M%S')
     sub = submit(connect(grant), plan, config, _items(config), stamp=stamp)
     record = {
-        'grant': grant.account,
+        'grant': grant.name,
+        'targets': list(grant.targets),
         'run_dir': sub.run_dir,
         'stamp': stamp,
         'job_ids': [sub.job_id],
@@ -116,7 +124,7 @@ def _submit(config: Config, machine: Machine, connect: Connect) -> int:
         'plan': asdict(plan),
     }
     _state_path(config).write_text(json.dumps(record, indent=2), encoding='utf-8')
-    _out(f'submitted job {sub.job_id} to {grant.account}; run directory {sub.run_dir}')
+    _out(f'submitted job {sub.job_id} to {grant.name}; run directory {sub.run_dir}')
     return 0
 
 
@@ -223,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.verb == 'submit':
         return _submit(config, machine, connect)
     record = _record(config)
-    run = ssh_runner(record['grant'])
+    run = failover_runner([(t, ssh_runner(t)) for t in record['targets']])
     tracked = {
         'status': lambda: _status(run, record),
         'gather': lambda: _gather(run, record, args.output),

@@ -202,7 +202,7 @@ def remote_verdict(
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
     grant, _ = allocate(1, cost, snapshots, workstation=machine.workstation, policy=policy)
     run = runners[grant.account]
-    host = grant.account.rpartition('@')[2]
+    host = grant.hosts[0]
 
     if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
         if spec.bundle_from is None:
@@ -225,7 +225,7 @@ def remote_verdict(
         not_covered = {node for node in ids if node not in covered}
     items = group_items([node for node in ids if node not in not_covered])
 
-    same_cluster = [(g, s) for g, s in snapshots if g.account.rpartition('@')[2] == host]
+    same_cluster = [(g, s) for g, s in snapshots if g.same_cluster(grant)]
     grant, plan = allocate(len(items), cost, same_cluster, workstation=machine.workstation, policy=policy)
     run = runners[grant.account]
     setup = ('source .venv/bin/activate', 'export PYTHONPATH="$HOME/ci/bin${PYTHONPATH:+:$PYTHONPATH}"')
@@ -251,7 +251,7 @@ def remote_verdict(
 
 
 def _plan_record(plan: Plan, grant: Grant, job_id: str, run_dir: str) -> dict[str, Any]:
-    return {**asdict(plan), 'grant': grant.account, 'job_id': job_id, 'run_dir': run_dir}
+    return {**asdict(plan), 'grant': grant.name, 'job_id': job_id, 'run_dir': run_dir}
 
 
 def summary(record: dict[str, Any]) -> str:
