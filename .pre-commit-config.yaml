@@ -32,6 +32,6 @@ repos:
       name: issue references are well-formed (warns, never blocks)
       entry: lab-issue-ref
       language: python
-      additional_dependencies: ['lab-commons @ git+https://github.com/DawnEver/lab-commons.git']
+      additional_dependencies: ['lab-commons @ git+https://github.com/DawnEver/lab-commons.git@97b2764a45c99e97890e679d7fd192ac716895a5']
       stages: [commit-msg]
       verbose: true
