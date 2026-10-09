@@ -34,10 +34,22 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
-__all__ = ['STREAM_ENV', 'canonical', 'outcome_of', 'pytest_runtest_logreport', 'read_stream', 'run']
+__all__ = [
+    'IDS_ENV',
+    'STREAM_ENV',
+    'canonical',
+    'outcome_of',
+    'pytest_collection_modifyitems',
+    'pytest_runtest_logreport',
+    'read_stream',
+    'run',
+]
 
 #: The environment variable naming the stream file the plugin appends to.
 STREAM_ENV = 'LAB_CI_STREAM'
+
+#: The environment variable naming a JSON list of the node ids to keep -- selection is by id, not by argv.
+IDS_ENV = 'LAB_CI_IDS'
 
 #: Worst first: a test with a failing call and an erroring teardown is ``failed``.
 _RANK = ('failed', 'error', 'xfailed', 'skipped', 'passed')
@@ -62,6 +74,32 @@ def outcome_of(when: str, outcome: str, *, xfail: bool) -> str | None:
     if outcome == 'failed':
         return 'failed' if when == 'call' else 'error'
     return 'passed' if when == 'call' else None
+
+
+class _Item(Protocol):
+    nodeid: str
+
+
+class _Config(Protocol):
+    hook: Any
+
+
+def pytest_collection_modifyitems(config: _Config, items: list[_Item]) -> None:
+    """Keep only the item's ids -- the FILES go on the command line, this hook picks the ids out of them.
+
+    The ids are NOT passed as arguments: pytest cannot parse every id it prints
+    back (a ``::`` or an escaped non-ASCII character inside a parameter), and one it cannot parse aborts the
+    whole file with ``no tests ran``.
+    """
+    source = os.environ.get(IDS_ENV)
+    if not source:
+        return
+    keep = set(json.loads(Path(source).read_text(encoding='utf-8')))
+    chosen = [item for item in items if item.nodeid in keep]
+    dropped = [item for item in items if item.nodeid not in keep]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = chosen
 
 
 def pytest_runtest_logreport(report: _Report) -> None:
@@ -127,8 +165,11 @@ def run(item: dict[str, Any]) -> dict[str, Any]:
     stream.parent.mkdir(parents=True, exist_ok=True)
     stream.unlink(missing_ok=True)
     serial = ['-n', '0'] if importlib.util.find_spec('xdist') else []
-    argv = [sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', '-p', Path(__file__).stem, '-q', *serial, *ids]
-    env = {**os.environ, STREAM_ENV: str(stream.resolve())}
+    chosen = stream.with_suffix('.ids.json')
+    chosen.write_text(json.dumps(ids), encoding='utf-8')
+    files = list(dict.fromkeys(node.split('::', maxsplit=1)[0] for node in ids))
+    argv = [sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', '-p', Path(__file__).stem, '-q', *serial, *files]
+    env = {**os.environ, STREAM_ENV: str(stream.resolve()), IDS_ENV: str(chosen.resolve())}
     start = time.monotonic()
     with tempfile.TemporaryFile() as out:
         proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env)
