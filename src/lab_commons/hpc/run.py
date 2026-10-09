@@ -176,7 +176,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         '--output=logs/%A_%a.out',
     ]
     lines = ['#!/bin/bash', *(f'#SBATCH {d}' for d in directives if d), 'set -eo pipefail']
-    lines += [f'cd {_sh_path(config.job.workdir)}', *config.job.setup]
+    lines += [*plan.setup, f'cd {_sh_path(config.job.workdir)}', *config.job.setup]
     lines += [
         (
             'export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK" OPENBLAS_NUM_THREADS="$SLURM_CPUS_PER_TASK" '

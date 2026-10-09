@@ -1,70 +1,141 @@
-"""One remote-verdict item on a compute node: run a group of pytest node ids, return each one's outcome.
+"""One remote-verdict item on a compute node: run a group of pytest node ids, STREAM each one's outcome.
 
 STANDALONE AND STDLIB-ONLY ON PURPOSE. :mod:`lab_commons.hpc.verdict` ships this file's TEXT to the
 cluster (``~/ci/bin/lab_ci_pytest_item.py``) and the array task imports it from there inside the tested
-tree's own venv -- so the outcome parser that runs is the one this checkout wrote, whatever version of
+tree's own venv -- so the code that runs is the one this checkout wrote, whatever version of
 ``lab_commons`` the tested project happens to pin. It imports nothing from ``lab_commons``.
 
-THE JUNIT FILE IS THE RECORD, NOT THE EXIT CODE. ``pytest`` writes ``--junitxml`` per item; an id that
-ran is read back from it by the address pytest itself mangles into ``classname``/``name``, and an id the
-file does not mention (the interpreter died, the collection changed) is ``missing`` -- never assumed to
-have passed.
+THE SAME FILE IS THE PYTEST PLUGIN. :func:`run` starts ``pytest -p lab_ci_pytest_item``; the hook below
+appends one JSON line per test phase to the item's stream file the moment pytest reports it, and
+:func:`run` appends a closing ``done`` line (exit code, wall seconds, peak RSS). A shard Slurm kills for
+time or memory therefore leaves every test it FINISHED on disk; an item without its ``done`` line is
+UNFINISHED and is re-run, never assumed. Measured on Ada (verdict of motronics 64c85da4d9, 2026-10-09):
+23 of 99 shards were killed at the wall limit, and the end-of-shard results file they never wrote took
+13751 ids down with them as ``lost`` -- finished ones included.
+
+THE ID IS PYTEST'S OWN ``nodeid``, NOT A JUNIT RE-MANGLING. The junit file this replaced was keyed on
+``(classname, name)``, and pytest-xdist's ``--dist loadgroup`` appends ``@<group>`` to a grouped test's id
+inside its workers -- measured on the same run: ``name="test_unknown_attribute_raises_attribute_error
+@heavy_parallel_0"`` matched no collected id, and 8786 tests that RAN were recorded ``missing``. The run
+asks for ``-n 0`` when xdist is installed (an item has one CPU; an xdist worker is a second interpreter
+importing the whole tree again, per file, for nothing), and :func:`canonical` strips a suffix that still
+arrives.
 """
 
 from __future__ import annotations
 
-import re
+import importlib.util
+import json
+import os
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
+import tempfile
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-__all__ = ['junit_key', 'parse_junit', 'run']
+__all__ = ['STREAM_ENV', 'canonical', 'outcome_of', 'pytest_runtest_logreport', 'read_stream', 'run']
+
+#: The environment variable naming the stream file the plugin appends to.
+STREAM_ENV = 'LAB_CI_STREAM'
 
 #: Worst first: a test with a failing call and an erroring teardown is ``failed``.
 _RANK = ('failed', 'error', 'xfailed', 'skipped', 'passed')
 
 
-def junit_key(node_id: str) -> tuple[str, str]:
-    """The ``(classname, name)`` pytest's junit writer gives *node_id* (``_pytest.junitxml.mangle_test_address``)."""
-    path, bracket, params = node_id.partition('[')
-    names = path.split('::')
-    names[0] = re.sub(r'\.py$', '', names[0].replace('/', '.'))
-    names[-1] += bracket + params
-    return '.'.join(names[:-1]), names[-1]
+class _Report(Protocol):
+    """What the hook reads of pytest's ``TestReport`` -- pytest itself is not imported here."""
+
+    nodeid: str
+    when: str
+    outcome: str
+    duration: float
 
 
-def _outcome(case: ET.Element) -> str:
-    found = []
-    for child in case:
-        if child.tag == 'failure':
-            found.append('failed')
-        elif child.tag == 'error':
-            found.append('error')
-        elif child.tag == 'skipped':
-            found.append('xfailed' if child.get('type') == 'pytest.xfail' else 'skipped')
-    return min(found, key=_RANK.index) if found else 'passed'
+def outcome_of(when: str, outcome: str, *, xfail: bool) -> str | None:
+    """One phase report's contribution to its test's outcome; ``None`` when the phase decides nothing.
+
+    A passing setup or teardown says nothing -- only a passing CALL makes a test ``passed``.
+    """
+    if outcome == 'skipped':
+        return 'xfailed' if xfail else 'skipped'
+    if outcome == 'failed':
+        return 'failed' if when == 'call' else 'error'
+    return 'passed' if when == 'call' else None
 
 
-def parse_junit(text: str, node_ids: list[str]) -> dict[str, str]:
-    """Each of *node_ids*' outcome in a junit document; an id it does not mention is ``missing``."""
-    seen: dict[tuple[str, str], str] = {}
-    for case in ET.fromstring(text).iter('testcase'):  # noqa: S314 -- our own pytest's output, not untrusted input
-        key = (case.get('classname', ''), case.get('name', ''))
-        outcome = _outcome(case)
-        seen[key] = min(seen.get(key, outcome), outcome, key=_RANK.index)
-    return {node: seen.get(junit_key(node), 'missing') for node in node_ids}
+def pytest_runtest_logreport(report: _Report) -> None:
+    """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
+    target = os.environ.get(STREAM_ENV)
+    outcome = outcome_of(report.when, report.outcome, xfail=hasattr(report, 'wasxfail'))
+    if not target or outcome is None:
+        return
+    line = json.dumps({'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)})
+    with Path(target).open('a', encoding='utf-8') as stream:
+        stream.write(line + '\n')
+
+
+def canonical(node: str, expected: set[str]) -> str:
+    """*node* as collected: an xdist ``@<group>`` suffix is dropped when what precedes it is an expected id."""
+    if node in expected:
+        return node
+    head, at, _ = node.rpartition('@')
+    return head if at and head in expected else node
+
+
+def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
+    """Fold one item's stream into ``{outcomes, seconds, done}``.
+
+    ``outcomes`` holds only the ids the stream reports (the worst phase wins); ``seconds`` sums their
+    phases; ``done`` is the closing record, or ``None`` when the item never closed -- then every id it
+    did not report is still owed a run.
+    """
+    expected = set(node_ids)
+    outcomes: dict[str, str] = {}
+    seconds: dict[str, float] = {}
+    done = None
+    for raw in text.splitlines():
+        try:
+            line = json.loads(raw)
+        except json.JSONDecodeError:
+            continue  # the half-written last line of a killed task
+        if 'done' in line:
+            done = line
+            continue
+        node = canonical(line['id'], expected)
+        if node not in expected:
+            continue
+        outcome = line['outcome']
+        outcomes[node] = min(outcomes.get(node, outcome), outcome, key=_RANK.index)
+        seconds[node] = round(seconds.get(node, 0.0) + float(line.get('s', 0.0)), 3)
+    return {'outcomes': outcomes, 'seconds': seconds, 'done': done}
+
+
+def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
+    """Exit code and the child's peak RSS in MB -- ``wait4`` where the OS has it, else no peak."""
+    if not hasattr(os, 'wait4'):
+        return proc.wait(), None
+    _, status, usage = os.wait4(proc.pid, 0)
+    proc.returncode = os.waitstatus_to_exitcode(status)
+    return proc.returncode, round(usage.ru_maxrss / 1024, 1)  # Linux reports KiB
 
 
 def run(item: dict[str, Any]) -> dict[str, Any]:
-    """Run ``item['ids']`` in the current directory with this interpreter; outcomes per id, exit code, tail."""
+    """Run ``item['ids']`` streaming to ``item['stream']``; the folded stream plus the output's tail."""
     ids = list(item['ids'])
-    junit = Path(item['junit'])
-    junit.parent.mkdir(parents=True, exist_ok=True)
-    junit.unlink(missing_ok=True)
-    argv = [sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', '-q', f'--junitxml={junit}', *ids]
-    done = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
-    text = junit.read_text(encoding='utf-8') if junit.is_file() else '<testsuites/>'
-    tail = (done.stdout + done.stderr).strip().splitlines()[-20:]
-    return {'rc': done.returncode, 'outcomes': parse_junit(text, ids), 'tail': '\n'.join(tail)}
+    stream = Path(item['stream'])
+    stream.parent.mkdir(parents=True, exist_ok=True)
+    stream.unlink(missing_ok=True)
+    serial = ['-n', '0'] if importlib.util.find_spec('xdist') else []
+    argv = [sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', '-p', Path(__file__).stem, '-q', *serial, *ids]
+    env = {**os.environ, STREAM_ENV: str(stream.resolve())}
+    start = time.monotonic()
+    with tempfile.TemporaryFile() as out:
+        proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env)
+        rc, peak = _wait(proc)
+        out.seek(0)
+        tail = out.read().decode('utf-8', 'replace').strip().splitlines()[-20:]
+    done = {'done': rc, 'wall': round(time.monotonic() - start, 3), 'peak_mb': peak}
+    with stream.open('a', encoding='utf-8') as handle:
+        handle.write(json.dumps(done) + '\n')
+    return {**read_stream(stream.read_text(encoding='utf-8'), ids), 'tail': '\n'.join(tail)}

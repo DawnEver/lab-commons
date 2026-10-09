@@ -27,6 +27,12 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     priority = 0                                  # optional; breaks a tie between equally fast grants
     partitions = ["shortq", "defq"]               # optional cluster facts: candidates, in preference order
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
+    setup = ["module load git-uoneasy/2.42.0-GCCcore-13.2.0"]   # optional: run first in every array task
+
+``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- Ada's
+compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
+``FileNotFoundError: 'git'`` there, while the login node has it) -- so it is declared once per grant and
+prepended to every shard script that grant submits, before the job's own set-up.
 """
 
 from __future__ import annotations
@@ -54,6 +60,7 @@ class Grant:
     priority: int = 0
     partitions: tuple[str, ...] = ()
     qos: dict[str, str] = field(default_factory=dict)
+    setup: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """A grant names who, where and which account; a share that cannot hold one CPU is not a share."""

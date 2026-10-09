@@ -16,8 +16,21 @@ the grants on that cluster; submit the array; poll ``sacct`` until no shard is a
 NOT COVERED IS NOT PASSED. The commit's own ``[tool.lab_commons.platforms]`` table
 (:mod:`lab_commons.hpc.platforms`) says which markers linux cannot run; those ids are collected
 separately, recorded as ``not-covered``, and listed in the record's ``left`` with the platforms that CAN
-run each (``[]`` when none can) -- the input the next platform part selects from. An id whose shard died
-is ``lost``; an id the junit file never mentions is ``missing``. Only ``passed`` means passed.
+run each (``[]`` when none can) -- the input the next platform part selects from. Only ``passed`` means
+passed.
+
+A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its outcomes as they happen
+(:mod:`lab_commons.hpc.pytest_item`); the verdict reads the streams, not the shards' end-of-run files.
+An item whose stream never closed is unfinished: its unreported ids are re-submitted, split in halves,
+for up to :data:`RETRIES` more rounds -- a round after an ``OUT_OF_MEMORY`` asks for twice the memory --
+and only what is still unfinished after that is ``lost``. An item that closed without reporting an id
+recorded it ``missing``.
+
+THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
+minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next verdict reads them
+back (``history``), so an item's time is its file's overhead plus its ids' durations, the array's
+memory is the worst measured peak times ``policy.safety``, and ``cost`` is the fallback only for a file
+never measured -- named in the plan as ``unmeasured``.
 """
 
 from __future__ import annotations
@@ -28,19 +41,22 @@ import shlex
 import subprocess
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
+from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.plan import Plan, allocate
 from lab_commons.hpc.platforms import PLATFORMS, cannot_run
-from lab_commons.hpc.run import Runner, Unreachable, gather, probe, shard_states, submit
+from lab_commons.hpc.pytest_item import read_stream
+from lab_commons.hpc.run import Runner, Unreachable, probe, shard_states, submit
 
 __all__ = [
     'ACTIVE',
     'ITEM_MODULE',
+    'RETRIES',
     'VerdictSpec',
     'build_script',
     'collect_command',
@@ -48,6 +64,7 @@ __all__ = [
     'group_items',
     'parse_collection_errors',
     'parse_ids',
+    'read_streams',
     'remote_verdict',
     'summary',
     'write_record',
@@ -55,6 +72,9 @@ __all__ = [
 
 #: Slurm states during which a shard may still write its results.
 ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COMPLETING', 'RESIZING', 'SUSPENDED'})
+
+#: Rounds after the first that re-run what a killed shard left unfinished.
+RETRIES: Final = 2
 
 #: The item runner's name on the cluster -- unique, so it can shadow nothing in the tested project.
 ITEM_MODULE: Final = 'lab_ci_pytest_item'
@@ -166,12 +186,12 @@ def parse_collection_errors(text: str) -> list[str]:
     return [line[len('ERROR ') :].split(' - ', 1)[0].strip() for line in text.splitlines() if line.startswith('ERROR ')]
 
 
-def group_items(ids: Sequence[str]) -> list[dict[str, Any]]:
-    """One item per test file, in first-seen order; each writes its own junit file under the tree."""
+def group_items(ids: Sequence[str]) -> list[list[str]]:
+    """One item per test file, in first-seen order."""
     files: dict[str, list[str]] = {}
     for node in ids:
         files.setdefault(node.split('::')[0], []).append(node)
-    return [{'ids': group, 'junit': f'.lab-ci/junit/{i}.xml'} for i, group in enumerate(files.values())]
+    return list(files.values())
 
 
 def _facts(text: str) -> dict[str, str]:
@@ -231,8 +251,12 @@ def remote_verdict(
     poll: float = 30.0,
     sleep: Callable[[float], None] = time.sleep,
     stamp: str | None = None,
+    history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The module docstring's flow; the record is ``{sha, platform, cluster, python, plan, outcomes, left}``."""
+    """The module docstring's flow; *history* is a previous record, read for its measurements only.
+
+    The record is ``{sha, platform, cluster, python, plan, rounds, outcomes, left}`` plus the measurements.
+    """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
     grant, _ = allocate(1, cost, snapshots, workstation=machine.workstation, policy=policy)
@@ -262,33 +286,85 @@ def remote_verdict(
     }
     not_covered = {node for node in ids if node in cannot.get('linux', set())}
     left = {node: [p for p in PLATFORMS if node not in cannot.get(p, set())] for node in sorted(not_covered)}
-    items = group_items([node for node in ids if node not in not_covered])
 
     same_cluster = [(g, s) for g, s in snapshots if g.same_cluster(grant)]
-    grant, plan = allocate(len(items), cost, same_cluster, workstation=machine.workstation, policy=policy)
-    run = runners[grant.account]
-    setup = ('source .venv/bin/activate', 'export PYTHONPATH="$HOME/ci/bin${PYTHONPATH:+:$PYTHONPATH}"')
-    job = JobSpec(name=f'verdict-{spec.sha[:12]}', workdir=spec.tree, setup=setup, entry=f'{ITEM_MODULE}:run')
-    config = Config(job=job, cost=cost, policy=policy)
-    sub = submit(run, plan, config, items, stamp=stamp or time.strftime('%Y%m%d-%H%M%S'))
-    _wait(run, sub.job_id, sub.shards, poll, sleep)
-    returned = {r['index']: r for shard in gather(run, sub.run_dir).values() for r in shard}
-
+    stamp = stamp or time.strftime('%Y%m%d-%H%M%S')
     outcomes: dict[str, str] = dict.fromkeys(sorted(not_covered), 'not-covered')
     outcomes.update(dict.fromkeys(errored, 'error'))
-    for index, item in enumerate(items):
-        result = returned.get(index)
-        got = result['value']['outcomes'] if result and result['ok'] else {}
-        outcomes.update({node: got.get(node, 'lost') for node in item['ids']})
+    measured = Measured.of(history or {})
+    rounds: list[dict[str, Any]] = []
+    pending = group_items([node for node in ids if node not in not_covered])
+    oom = 1
+    for attempt in range(1 + RETRIES):
+        tag = f'{stamp}-r{attempt}'
+        seconds, unmeasured = measured.estimate(pending, cost)
+        mem_gb = measured.mem_gb(pending, cost, policy) * oom
+        grant, plan = allocate(
+            len(pending),
+            replace(cost, mem_gb=mem_gb),
+            same_cluster,
+            workstation=machine.workstation,
+            policy=policy,
+            seconds=seconds,
+        )
+        run = runners[grant.account]
+        items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
+        setup = ('source .venv/bin/activate', 'export PYTHONPATH="$HOME/ci/bin${PYTHONPATH:+:$PYTHONPATH}"')
+        job = JobSpec(name=f'verdict-{spec.sha[:12]}', workdir=spec.tree, setup=setup, entry=f'{ITEM_MODULE}:run')
+        sub = submit(run, plan, Config(job=job, cost=cost, policy=policy), items, stamp=tag)
+        states = _wait(run, sub.job_id, sub.shards, poll, sleep)
+        streams = read_streams(run, f'{_ROOT}/trees/{spec.sha}/.lab-ci/{tag}')
+        pending = _fold(items, streams, outcomes, measured)
+        rounds.append({**_plan_record(plan, grant, sub.job_id, sub.run_dir), 'unmeasured': unmeasured})
+        if 'OUT_OF_MEMORY' in states.values():
+            oom *= 2
+        if not pending:
+            break
+    outcomes.update({node: 'lost' for group in pending for node in group})
     return {
         'sha': spec.sha,
         'platform': facts.get('platform', ''),
         'cluster': host,
         'python': facts.get('python', ''),
-        'plan': _plan_record(plan, grant, sub.job_id, sub.run_dir),
+        'plan': rounds[0],
+        'rounds': rounds,
         'outcomes': outcomes,
         'left': left,
+        **measured.record(),
     }
+
+
+def _fold(
+    items: list[dict[str, Any]], streams: dict[int, str], outcomes: dict[str, str], measured: Measured
+) -> list[list[str]]:
+    """Record one round's streams into *outcomes* and *measured*; return the unfinished ids, halved."""
+    pending: list[list[str]] = []
+    for index, item in enumerate(items):
+        group = item['ids']
+        folded = read_stream(streams.get(index, ''), group)
+        outcomes.update(folded['outcomes'])
+        measured.learn(group, folded)
+        rest = [n for n in group if n not in folded['outcomes']]
+        if folded['done'] is not None:
+            outcomes.update(dict.fromkeys(rest, 'missing'))
+            continue
+        half = (len(rest) + 1) // 2
+        pending += [part for part in (rest[:half], rest[half:]) if part]
+    return pending
+
+
+def read_streams(run: Runner, directory: str) -> dict[int, str]:
+    """Every item stream under *directory* (``<index>.jsonl``), keyed by item index -- one remote command."""
+    listing = 'for f in *.jsonl; do [ -e "$f" ] && echo "@@@ $f" && cat "$f"; done'
+    out = run(f'cd {directory} 2>/dev/null && {listing}; true', None)
+    streams: dict[int, list[str]] = {}
+    current: list[str] = []
+    for line in out.splitlines():
+        if line.startswith('@@@ ') and line.endswith('.jsonl'):
+            current = streams.setdefault(int(line[4:-6]), [])
+        else:
+            current.append(line)
+    return {index: '\n'.join(lines) for index, lines in streams.items()}
 
 
 def _plan_record(plan: Plan, grant: Grant, job_id: str, run_dir: str) -> dict[str, Any]:

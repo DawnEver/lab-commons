@@ -7,7 +7,8 @@ targets, run directory, every job id it took, shard count), so ``status``/``gath
 nothing more -- through whichever of those login hosts answers.
 
 ``verdict`` tests one commit on the cluster (:mod:`lab_commons.hpc.verdict`); ``-c`` there is optional
-and only its ``[cost]``/``[policy]`` are read.
+and only its ``[cost]``/``[policy]`` are read. ``--history`` names a previous verdict record whose measured
+durations, overheads and peaks plan this one; without it every file is priced at ``[cost]``.
 """
 
 from __future__ import annotations
@@ -187,6 +188,7 @@ def _verdict(args: argparse.Namespace, machine: Machine) -> int:
         lambda g: runner_for(g, _BUILD_TIMEOUT),
         cost=config.cost,
         policy=config.policy,
+        history=json.loads(args.history.read_text(encoding='utf-8')) if args.history else None,
     )
     write_record(record, args.output)
     _out(f'{spec.sha[:12]} on {record["cluster"]} ({record["platform"]}, python {record["python"]}): {summary(record)}')
@@ -215,6 +217,7 @@ def _parser() -> argparse.ArgumentParser:
         default=Path.cwd(),
         help='local repository: its [tool.lab_commons.platforms] at --sha, and the bundle if the remote lacks it',
     )
+    verdict.add_argument('--history', type=Path, help='a previous verdict record: its measurements plan this run')
     return parser
 
 

@@ -8,9 +8,13 @@ itself parallel says so in ``cost.cpus``; nothing here invents a width.
 
 THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 
-1. **Items per shard** -- enough to amortise start-up (``shard_minutes_min``), few enough to stay small
-   (``shard_minutes_max``), then grown until the array fits ``max_array`` and the QOS's per-user submit
-   limit (each array task is one job to Slurm). Decided per candidate, because the QOS differs.
+1. **Shards** -- consecutive items are packed until a shard holds enough padded time to amortise start-up
+   (``shard_minutes_min``) without passing ``shard_minutes_max``; both bounds are then grown until the
+   array fits ``max_array`` and the QOS's per-user submit limit (each array task is one job to Slurm).
+   An item's time is MEASURED when the caller has it (``seconds``, one per item) and ``cost.seconds``
+   otherwise; the wall limit is the SLOWEST shard's padded sum, never an average. Measured on Ada
+   (2026-10-09): a flat 120 s per test file planned 129-min shards that ran 1h25-2h07, and 23 of 99 hit
+   the limit. Decided per candidate, because the QOS differs.
 2. **Partition** -- the first candidate, in the caller's order, whose time ceiling (partition AND QOS)
    holds the shard's padded wall time; among those, the first that has a free slot now wins over one that
    would queue.
@@ -56,6 +60,8 @@ class Plan:
     makespan_minutes: float
     #: The ``--comment`` every task carries -- the workstation tag :func:`allocate` stamps.
     comment: str = ''
+    #: The grant's compute-node set-up (``module load ...``), run before the job's own; :func:`allocate` stamps it.
+    setup: tuple[str, ...] = ()
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""
@@ -117,18 +123,47 @@ def _ceiling(snapshot: Snapshot, partition: str, qos: str) -> float | None:
     return min(values) if values else None
 
 
-def _shard_size(n_items: int, seconds: float, policy: Policy, room: int | None) -> int:
-    """Items per shard: the policy window first, then grown until the array fits ``max_array`` and *room*."""
-    per_shard = max(1, math.ceil(policy.shard_minutes_min * 60 / seconds))
-    per_shard = max(1, min(per_shard, math.floor(policy.shard_minutes_max * 60 / seconds) or 1))
+def _pack(seconds: Sequence[float], low: float, high: float) -> list[tuple[int, int]]:
+    """Consecutive ranges: close a shard once it holds *low* seconds, never let one pass *high* unless alone."""
+    shards: list[tuple[int, int]] = []
+    start, held = 0, 0.0
+    for index, cost in enumerate(seconds):
+        if index > start and (held >= low or held + cost > high):
+            shards.append((start, index))
+            start, held = index, 0.0
+        held += cost
+    shards.append((start, len(seconds)))
+    return shards
+
+
+def _shards(seconds: Sequence[float], policy: Policy, room: int | None) -> list[tuple[int, int]]:
+    """The policy window first, then both bounds grown until the array fits ``max_array`` and *room*."""
     cap = policy.max_array if room is None else min(policy.max_array, room)
-    return max(per_shard, math.ceil(n_items / cap))
+    low, high = policy.shard_minutes_min * 60, policy.shard_minutes_max * 60
+    floor = sum(seconds) / cap
+    low, high = max(low, floor), max(high, floor)
+    while len(shards := _pack(seconds, low, high)) > cap:
+        low, high = low * 1.1, high * 1.1
+    return shards
 
 
 def make_plan(
-    n_items: int, cost: Cost, snapshot: Snapshot, *, cluster: Cluster, policy: Policy, limits: Limits
+    n_items: int,
+    cost: Cost,
+    snapshot: Snapshot,
+    *,
+    cluster: Cluster,
+    policy: Policy,
+    limits: Limits,
+    seconds: Sequence[float] | None = None,
 ) -> Plan:
-    """Decide items per shard, partition and throttle for *n_items* -- see the module docstring."""
+    """Decide shards, partition and throttle for *n_items* -- see the module docstring.
+
+    *seconds* is each item's measured time (``cost.seconds`` where absent); the margin is ``policy.safety``.
+    """
+    if seconds is not None and len(seconds) != n_items:
+        msg = f'{len(seconds)} measured times for {n_items} items'
+        raise ValueError(msg)
     if n_items < 1:
         msg = 'nothing to plan: the item list is empty'
         raise ValueError(msg)
@@ -136,7 +171,7 @@ def make_plan(
     if allowed < 1:
         msg = f'the quota ceiling of account {snapshot.quota.account!r} cannot fit even one item of {cost}'
         raise ValueError(msg)
-    seconds = cost.seconds * policy.safety
+    padded = [s * policy.safety for s in (seconds or [cost.seconds] * n_items)]
     candidates = cluster.partitions or tuple(snapshot.partitions)
     options = []
     refusals = []
@@ -153,18 +188,18 @@ def make_plan(
         if room == 0:
             refusals.append(f'{name}: qos {qos!r} submit limit already reached')
             continue
-        per_shard = _shard_size(n_items, seconds, policy, room)
-        minutes = max(1, math.ceil(per_shard * seconds / 60))
+        shards = _shards(padded, policy, room)
+        minutes = max(1, math.ceil(max(sum(padded[a:b]) for a, b in shards) / 60))
         ceiling = _ceiling(snapshot, name, qos)
         if ceiling is not None and minutes > ceiling:
             refusals.append(f'{name}: a {minutes}-min shard exceeds its {ceiling:.0f}-min ceiling')
             continue
-        options.append((name, qos, per_shard, minutes))
+        options.append((name, qos, shards, minutes))
     if not options:
         msg = f'no candidate partition can take this work: {"; ".join(refusals)}'
         raise ValueError(msg)
-    partition, qos, per_shard, minutes = next((o for o in options if free_slots(snapshot, o[0], cost) > 0), options[0])
-    shards = tuple((start, min(start + per_shard, n_items)) for start in range(0, n_items, per_shard))
+    partition, qos, chosen, minutes = next((o for o in options if free_slots(snapshot, o[0], cost) > 0), options[0])
+    shards = tuple(chosen)
     max_jobs = snapshot.quota.qos_max_jobs.get(qos)
     throttle = min(len(shards), allowed, max_jobs or len(shards))
     free = free_slots(snapshot, partition, cost)
@@ -205,6 +240,7 @@ def allocate(
     *,
     workstation: str,
     policy: Policy,
+    seconds: Sequence[float] | None = None,
 ) -> tuple[Grant, Plan]:
     """The grant whose plan finishes EARLIEST, planned on that grant's headroom. Pure.
 
@@ -224,7 +260,15 @@ def allocate(
             )
             continue
         try:
-            plan = make_plan(n_items, cost, snapshot, cluster=grant.cluster(), policy=policy, limits=Limits(cpus=room))
+            plan = make_plan(
+                n_items,
+                cost,
+                snapshot,
+                cluster=grant.cluster(),
+                policy=policy,
+                limits=Limits(cpus=room),
+                seconds=seconds,
+            )
         except ValueError as refused:
             refusals.append(f'{label}: {refused}')
             continue
@@ -233,4 +277,4 @@ def allocate(
         msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])
         raise ValueError(msg)
     *_, grant, plan = min(options, key=lambda o: o[:3])
-    return grant, replace(plan, comment=COMMENT_PREFIX + workstation)
+    return grant, replace(plan, comment=COMMENT_PREFIX + workstation, setup=grant.setup)
