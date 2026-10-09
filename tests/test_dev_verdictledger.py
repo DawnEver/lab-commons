@@ -137,3 +137,11 @@ def test_outcomes_from_several_workers_are_merged(tmp_path: Path) -> None:
 
 def test_no_outcomes_directory_reads_as_none_recorded(tmp_path: Path) -> None:
     assert read_outcomes(tmp_path / 'absent') == {}
+
+
+def test_the_recorder_is_a_hashable_plugin(tmp_path: Path) -> None:
+    """Pytest >= 8.4 keeps registered plugins in a set; a value-equality dataclass is unhashable there."""
+    recorder = OutcomeRecorder(directory=tmp_path)
+    assert {recorder} == {recorder}
+    assert OutcomeRecorder(directory=tmp_path) is not recorder
+    assert len({recorder, OutcomeRecorder(directory=tmp_path)}) == 2
