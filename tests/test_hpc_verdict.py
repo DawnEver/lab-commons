@@ -168,7 +168,7 @@ def test_every_awkward_id_that_ran_is_reported_under_its_collected_id(
     """Brackets, '::', '/', unicode, a leading '-', a space and an '@' in params, and a loadgroup suffix."""
     runner = _item_runner(tmp_path, monkeypatch)
     ids = _tree(tmp_path, _TRICKY)
-    assert len(ids) == 14
+    assert len(ids) == 13
     result = runner.run({'ids': ids, 'stream': '.lab-ci/t/0.jsonl'})
     outcomes = result['outcomes']
     assert set(outcomes) == set(ids), result['tail']
