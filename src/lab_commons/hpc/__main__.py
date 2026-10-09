@@ -24,6 +24,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.config import Config, Limits, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
@@ -177,6 +178,13 @@ def _retry(config: Config, run: Runner, record: dict[str, Any]) -> int:
 PENDING = 3
 
 
+def _only(path: Path | None) -> frozenset[str] | None:
+    """The ids an ``--only`` file selects, one per line; ``None`` runs everything collected."""
+    if path is None:
+        return None
+    return frozenset(line.strip() for line in path.read_text(encoding='utf-8').splitlines() if line.strip())
+
+
 def _verdict_submit(args: argparse.Namespace, machine: Machine, config: Config) -> int:
     spec = VerdictSpec(
         sha=args.sha,
@@ -187,6 +195,8 @@ def _verdict_submit(args: argparse.Namespace, machine: Machine, config: Config) 
         table=table_at(args.repo, args.sha),
         python=args.python,
         pack_from=args.repo,
+        builds=builds_at(args.repo, args.sha, install=args.install, python=args.python),
+        only=_only(args.only),
         needs=tuple(filter(None, args.needs.split(','))),
     )
     run_id = submit_verdict(
@@ -241,6 +251,7 @@ def _parser() -> argparse.ArgumentParser:
     verdict.add_argument(
         '--needs', default='', help='commands the login node must have beyond git and uv, comma-separated (cargo,cc)'
     )
+    verdict.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
     verdict.add_argument('--history', type=Path, help='a previous verdict record: its measurements plan this run')
     return parser
 

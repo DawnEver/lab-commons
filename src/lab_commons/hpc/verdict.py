@@ -51,6 +51,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.hpc.builds import Builds
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
@@ -64,6 +65,7 @@ __all__ = [
     'ACTIVE',
     'BUILD_FAILED',
     'BUILD_LOG',
+    'COLLECT_MODULE',
     'ITEM_MODULE',
     'NEEDS',
     'RETRIES',
@@ -110,8 +112,11 @@ _SHA_HEX: Final = 40
 
 _GIT: Final = shutil.which('git') or 'git'
 
-#: The tree's venv first on PATH, so its ``python`` runs -- the cluster is POSIX whatever box submits.
-_VENV: Final = 'PATH="$PWD/.venv/bin:$PATH"'
+#: Enter the tree's environment (venv, source roots, native build) -- written by :func:`build_script`.
+_ENV: Final = '. .lab-ci/env.sh'
+
+#: The per-file collector's name on the cluster (:mod:`lab_commons.hpc.collect`).
+COLLECT_MODULE: Final = 'lab_ci_collect'
 
 
 @dataclass(frozen=True)
@@ -127,6 +132,8 @@ class VerdictSpec:
     python: str = ''
     pack_from: Path | None = None
     needs: tuple[str, ...] = ()
+    builds: Builds = field(default_factory=Builds)
+    only: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         """A verdict is bound to a full commit id, never to a branch name that moves under it."""
@@ -171,56 +178,92 @@ def needs_script(spec: VerdictSpec) -> str:
     return f'for c in {wanted}; do command -v "$c" > /dev/null 2>&1 || echo "@@@ missing $c"; done; true'
 
 
-def build_script(spec: VerdictSpec) -> str:
-    """Add the tree, build its venv once, install the item runner. Prints ``@@@ facts`` then ``key=value`` lines.
+def _step(directory: str, log: str, build: str) -> list[str]:
+    """Shell lines building *directory* once with *build* (its own ``bash -e``), under a lock, log kept at *log*."""
+    return [
+        f'D={directory}; L={log}',
+        'if [ ! -f "$D/.lab-ci-installed" ]; then',
+        '  mkdir -p "$D" "$(dirname "$L")"',
+        '  exec 9> "$D.lock"; flock 9',
+        '  if [ ! -f "$D/.lab-ci-installed" ]; then',
+        f'    if ! bash -eo pipefail -c {shlex.quote(build)} > "$L" 2>&1; then',
+        f'      echo "{BUILD_FAILED} log=$L"; tail -n {_LOG_TAIL} "$L"; exit 0',
+        '    fi',
+        '    touch "$D/.lab-ci-installed"',
+        '  fi',
+        '  exec 9>&-',
+        'fi',
+    ]
 
-    The item runner's source arrives on stdin, so the script's first line is a ``cat``. A FAILED BUILD
-    STOPS THE VERDICT: the install runs in its own ``bash -e``, its output is kept in :data:`BUILD_LOG`
-    inside the tree, and a non-zero exit -- or no ``.venv/bin/python`` after it -- prints
-    :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09: an install that
-    failed (no ``cargo``) went on to submit 276 shards that all died on ``.venv/bin/activate``.
+
+def build_script(spec: VerdictSpec) -> str:
+    """Add the tree, build (or REUSE) its venv and native build, write its ``.lab-ci/env.sh``. Prints the facts.
+
+    The item runner's source arrives on stdin, so the script's first line is a ``cat``. Declared inputs
+    (:mod:`lab_commons.hpc.builds`) put the venv in ``~/ci/envs/<key>`` and the native build in
+    ``~/ci/native/<key>``, each built once per key under a ``flock``; the tree's ``source_roots`` reach
+    them through ``PYTHONPATH``. Undeclared, the venv is the tree's own ``.venv``. A FAILED BUILD STOPS THE
+    VERDICT: each build runs in its own ``bash -e``, its output is kept in a log next to what it builds
+    (:data:`BUILD_LOG` inside the tree for a tree's own venv), and a non-zero exit -- or no ``bin/python``
+    after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
+    shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
     """
-    cache, tree = f'{_ROOT}/cache.git', f'{_ROOT}/trees/{spec.sha}'
+    cache, tree, builds = f'{_ROOT}/cache.git', f'{_ROOT}/trees/{spec.sha}', spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
-    build = '\n'.join(
-        [
-            f'uv venv -q --allow-existing{python} .venv',
-            'export VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH"',
-            spec.install,
+    if builds.env_key:
+        env, env_log = f'{_ROOT}/envs/{builds.env_key}', f'{_ROOT}/envs/{builds.env_key}.log'
+    else:
+        env, env_log = f'{tree}/.venv', f'{tree}/{BUILD_LOG}'
+    activate = 'export VIRTUAL_ENV="$E" PATH="$E/bin:$PATH" UV_PROJECT_ENVIRONMENT="$E"'
+    lines = [
+        'set -eo pipefail',
+        f'cat > {_ROOT}/bin/{ITEM_MODULE}.py',
+        f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
+        f'cd {tree}',
+        'mkdir -p .lab-ci',
+        f'export E={env}',
+        *_step('"$E"', env_log, '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, spec.install])),
+        f'[ -x "$E/bin/python" ] || {{ echo "{BUILD_FAILED} no bin/python in $E after the build"; exit 0; }}',
+    ]
+    path = [f'{tree}/{root}' for root in builds.source_roots]
+    if builds.native_key:
+        native = f'{_ROOT}/native/{builds.native_key}'
+        lines += [
+            f'export N={native}',
+            *_step('"$N"', f'{native}.log', f'{activate}\nexport LAB_CI_NATIVE="$N"\n{builds.native_build}'),
         ]
-    )
-    return '\n'.join(
-        [
-            'set -eo pipefail',
-            f'cat > {_ROOT}/bin/{ITEM_MODULE}.py',
-            f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
-            f'cd {tree}',
-            'mkdir -p .lab-ci',
-            'if [ ! -f .venv/.lab-ci-installed ]; then',
-            f'  bash -eo pipefail -c {shlex.quote(build)} > {BUILD_LOG} 2>&1 || {{',
-            f'    echo "{BUILD_FAILED} exit $?"; tail -n {_LOG_TAIL} {BUILD_LOG}; exit 0; }}',
-            '  touch .venv/.lab-ci-installed',
-            'fi',
-            f'[ -x .venv/bin/python ] || {{ echo "{BUILD_FAILED} no .venv/bin/python after the build"; exit 0; }}',
-            'echo "@@@ facts"',
-            'echo "platform=$(uname -s | tr A-Z a-z)-$(uname -m)/glibc$(getconf GNU_LIBC_VERSION | cut -d" " -f2)"',
-            f'echo "python=$({_VENV} python -c "import platform; print(platform.python_version())")"',
-        ]
-    )
+        path.append(native)
+    pythonpath = ':'.join([*path, f'{_ROOT}/bin']).replace('"$HOME"', '$HOME')
+    lines += [
+        'printf \'export VIRTUAL_ENV="%s" PATH="%s/bin:$PATH"\\n\' "$E" "$E" > .lab-ci/env.sh',
+        f'echo "export PYTHONPATH=\\"{pythonpath}\\${{PYTHONPATH:+:\\$PYTHONPATH}}\\"" >> .lab-ci/env.sh',
+        'echo "@@@ facts"',
+        'echo "platform=$(uname -s | tr A-Z a-z)-$(uname -m)/glibc$(getconf GNU_LIBC_VERSION | cut -d" " -f2)"',
+        f'echo "python=$({_ENV} && python -c "import platform; print(platform.python_version())")"',
+    ]
+    return '\n'.join(lines)
 
 
 def collect_command(spec: VerdictSpec, *, also: str = '') -> str:
-    """``pytest --collect-only`` in the tree; ONE ``-m`` joins ``select`` and the marker expression *also*.
+    """Collect in the tree; ONE ``-m`` joins ``select`` and the marker expression *also*.
 
     One expression, because pytest keeps only the last ``-m`` -- a second one would silently drop the first.
+    When ``collect`` is paths only, the per-file cache (:mod:`lab_commons.hpc.collect`) recollects only the
+    files whose content changed; any option in it falls back to one plain ``pytest --collect-only``.
     """
     parts = [f'({spec.select})'] if spec.select else []
     if also:
         parts.append(f'({also})')
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
+    head = f'cd {_ROOT}/trees/{spec.sha} && {_ENV} && '
+    if any(token.startswith('-') for token in shlex.split(spec.collect)):
+        return (
+            f'{head}python -m pytest --collect-only -q -p no:cacheprovider'
+            f' --continue-on-collection-errors{select} {spec.collect}'
+        ).rstrip() + ' || true'
+    seed = shlex.quote(f'{spec.builds.env_key}:{spec.builds.native_key}:{spec.python}')
     return (
-        f'cd {_ROOT}/trees/{spec.sha} && {_VENV} python -m pytest --collect-only -q -p no:cacheprovider'
-        f' --continue-on-collection-errors{select} {spec.collect}'
+        f'{head}python {_ROOT}/bin/{COLLECT_MODULE}.py --cache {_ROOT}/collect --key {seed}{select} -- {spec.collect}'
     ).rstrip() + ' || true'
 
 
@@ -313,7 +356,7 @@ def _submit_round(
         seconds=seconds,
     )
     items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
-    setup = ('source .venv/bin/activate', 'export PYTHONPATH="$HOME/ci/bin${PYTHONPATH:+:$PYTHONPATH}"')
+    setup = (_ENV,)
     sha = state['sha']
     job = JobSpec(name=f'verdict-{sha[:12]}', workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run')
     sub = submit(runners[grant.account], plan, Config(job=job, cost=cost, policy=policy), items, stamp=tag)
@@ -362,15 +405,19 @@ def submit_verdict(
             msg = f'commit {spec.sha} is still missing on {host} after the pack was indexed'
             raise RuntimeError(msg)
 
-    item_source = (Path(__file__).with_name('pytest_item.py')).read_text(encoding='utf-8')
-    built = run(build_script(spec), item_source)
+    here = Path(__file__).parent
+    run(f'cat > {_ROOT}/bin/{COLLECT_MODULE}.py', (here / 'collect.py').read_text(encoding='utf-8'))
+    built = run(build_script(spec), (here / 'pytest_item.py').read_text(encoding='utf-8'))
     if BUILD_FAILED in built:
         tail = built.split(BUILD_FAILED, 1)[1].strip()
-        msg = f'the build of {spec.sha[:12]} failed on {host}; log kept at {spec.tree}/{BUILD_LOG}:\n{tail}'
+        msg = f'the build for {spec.sha[:12]} failed on {host}, nothing was submitted; {tail}'
         raise RuntimeError(msg)
     facts = _facts(built)
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)
+    if spec.only is not None:
+        ids = [node for node in ids if node in spec.only]
+        errored = [node for node in errored if any(n.split('::')[0] == node for n in spec.only)]
     if not ids:
         msg = f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass'
         raise RuntimeError(msg)

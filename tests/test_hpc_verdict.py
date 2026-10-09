@@ -17,6 +17,7 @@ from types import ModuleType
 
 import pytest
 
+from lab_commons.hpc.builds import Builds
 from lab_commons.hpc.config import Cost, Limits, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
@@ -287,7 +288,7 @@ class FakeVerdictCluster:
             return '@@@ build-failed exit 101\nerror: could not find `cargo`\n'
         if '@@@ facts' in command:
             return '@@@ facts\nplatform=linux-x86_64/glibc2.28\npython=3.13.1\n'
-        if '--collect-only' in command:
+        if '--collect-only' in command or 'lab_ci_collect.py --cache' in command:
             if '(win)' in command:
                 return 'tests/w.py::t\n'
             return 'tests/a.py::t1\ntests/a.py::t2\ntests/w.py::t\ntests/b.py::t3\ntests/b.py::t4\ntests/b.py::t5\n'
@@ -434,7 +435,9 @@ def test_a_gather_through_an_outage_raises_unreachable_and_loses_nothing() -> No
 def test_a_failed_build_stops_the_verdict_and_quotes_the_kept_log() -> None:
     """Measured 2026-10-09: an install that failed (no cargo) still submitted 276 shards that all died."""
     fake = FakeVerdictCluster(build_fails=True)
-    with pytest.raises(RuntimeError, match=r'(?s)build of a{12} failed .*' + BUILD_LOG + '.*could not find `cargo`'):
+    with pytest.raises(
+        RuntimeError, match=r'(?s)build for a{12} failed .*nothing was submitted.*could not find `cargo`'
+    ):
         _submit(fake)
     assert not fake.manifests, 'nothing was submitted'
 
@@ -450,7 +453,9 @@ def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
     spec = VerdictSpec(sha=SHA, repo_url='u', install='false; true', needs=('cargo',))
     script = build_script(spec)
     assert "bash -eo pipefail -c 'uv venv" in script, 'a failing first install line cannot be masked by the next'
-    assert '[ -x .venv/bin/python ]' in script
+    assert '[ -x "$E/bin/python" ]' in script
+    assert f'E="$HOME"/ci/trees/{SHA}/.venv' in script, 'undeclared: the tree keeps its own venv'
+    assert BUILD_LOG in script
     assert 'git uv cargo' in needs_script(spec)
 
 
@@ -470,6 +475,23 @@ def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
     bystander = theirs if builder is mine else mine
     assert builder.manifests, 'the rounds ran where the tree was built'
     assert not bystander.manifests, 'no round went to another user on the same cluster'
+
+
+def test_only_runs_the_ids_the_caller_selected() -> None:
+    fake = FakeVerdictCluster()
+    spec = VerdictSpec(sha=SHA, repo_url='u', install='true', only=frozenset({'tests/b.py::t4'}))
+    submit_verdict(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
+    assert [i['ids'] for i in fake.manifests[0]['items']] == [['tests/b.py::t4']]
+
+
+def test_declared_inputs_share_one_env_and_native_build_and_put_the_source_on_pythonpath() -> None:
+    builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', env_key='e1', native_key='n1')
+    script = build_script(VerdictSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds))
+    assert 'export E="$HOME"/ci/envs/e1' in script
+    assert 'export N="$HOME"/ci/native/n1' in script
+    assert 'flock 9' in script, 'two verdicts building one key wait for each other'
+    assert f'$HOME/ci/trees/{SHA}/src:$HOME/ci/native/n1:$HOME/ci/bin' in script
+    assert '.venv' not in script, 'no per-sha venv when the inputs are declared'
 
 
 def test_a_commit_off_the_remote_without_a_pack_source_is_refused() -> None:
