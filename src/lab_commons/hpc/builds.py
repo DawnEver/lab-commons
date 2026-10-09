@@ -79,6 +79,7 @@ def _oids(repo: Path, sha: str, paths: tuple[str, ...]) -> dict[str, str]:
             [_GIT, '-C', str(repo), 'rev-parse', '--verify', '-q', f'{sha}:{path.rstrip("/")}'],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=False,
         )
         out[path] = done.stdout.strip() if done.returncode == 0 else 'absent'

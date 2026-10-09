@@ -7,7 +7,8 @@ A file's ids are cached under ``<cache>/<global key>/<blob id>.json``; the GLOBA
 seed (the build keys, the marker expression), ``pyproject.toml`` and every ``conftest.py`` -- what can
 change the ids of a file whose own content did not change. Only files without a cached entry are
 collected, in ONE pytest call; a file that failed to collect is reported and never cached. The output is
-``pytest --collect-only -q``'s own shape (ids, then ``ERROR <file>`` lines), so the reader is unchanged.
+``pytest --collect-only -q``'s own shape (ids, then ``ERROR <file>`` lines), written to ``--out`` -- the
+caller ``cat``s it -- so the reader is unchanged.
 
 Test files are the tracked ``test_*.py`` / ``*_test.py`` under the given paths (all when none given).
 """
@@ -22,6 +23,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
+
+__all__ = ['main']
 
 _GLOBAL = ('pyproject.toml',)
 
@@ -50,7 +53,7 @@ def _collect(stale: list[str], marker: list[str]) -> tuple[dict[str, list[str]],
     argv = [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-p', 'no:cacheprovider', '--color=no']
     argv += ['-rE', '--continue-on-collection-errors', *marker, *stale]
     env = {k: v for k, v in os.environ.items() if k != 'PYTEST_ADDOPTS'}  # the ERROR summary is the protocol
-    text = subprocess.run(argv, capture_output=True, text=True, check=False, env=env).stdout
+    text = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', check=False, env=env).stdout
     fresh: dict[str, list[str]] = {path: [] for path in stale}
     # Both shapes pytest prints for a file that failed to import: the summary line and the section header.
     named = [m.group(1) for m in re.finditer(r'(?m)^(?:ERROR |_+ ERROR collecting )(\S+)', text)]
@@ -62,7 +65,7 @@ def _collect(stale: list[str], marker: list[str]) -> tuple[dict[str, list[str]],
 
 
 def main(argv: list[str]) -> int:
-    """``--cache DIR --key SEED [-m EXPR] -- [paths...]``."""
+    """``--cache DIR --key SEED --out FILE [-m EXPR] -- [paths...]``: the ids, then ERROR lines, into FILE."""
     split = argv.index('--')
     opts, roots = argv[:split], [r.removeprefix('./') for r in argv[split + 1 :] if r not in {'.', './'}]
     cache, seed = Path(opts[opts.index('--cache') + 1]), opts[opts.index('--key') + 1]
@@ -89,11 +92,8 @@ def main(argv: list[str]) -> int:
             found[path] = ids
             if path not in failed and path in files:
                 (store / f'{files[path]}.json').write_text(json.dumps(ids), encoding='utf-8')
-    for path in tests:
-        for node in found.get(path, ()):
-            print(node)  # noqa: T201 -- the output IS the protocol
-    for line in errors:
-        print(line)  # noqa: T201 -- the output IS the protocol
+    lines = [node for path in tests for node in found.get(path, ())] + errors
+    Path(opts[opts.index('--out') + 1]).write_text(''.join(f'{line}\n' for line in lines), encoding='utf-8')
     return 0
 
 

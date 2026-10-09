@@ -30,7 +30,9 @@ native = { inputs = ["rust"], build = "make" }
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run([_GIT, '-C', str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run(
+        [_GIT, '-C', str(repo), *args], capture_output=True, text=True, encoding='utf-8', check=True
+    ).stdout.strip()
 
 
 def _commit(repo: Path, files: dict[str, str]) -> str:
@@ -73,8 +75,10 @@ def test_a_new_sha_with_unchanged_inputs_keeps_both_keys_and_a_changed_input_mov
 
 
 def _collect(repo: Path, cache: Path) -> list[str]:
-    argv = [sys.executable, str(COLLECTOR), '--cache', str(cache), '--key', 'k', '--', 'tests']
-    return subprocess.run(argv, cwd=repo, capture_output=True, text=True, check=True).stdout.splitlines()
+    out = cache.parent / 'collected.txt'
+    argv = [sys.executable, str(COLLECTOR), '--cache', str(cache), '--key', 'k', '--out', str(out), '--', 'tests']
+    subprocess.run(argv, cwd=repo, check=True)
+    return out.read_text(encoding='utf-8').splitlines()
 
 
 def test_only_files_whose_content_changed_are_collected_again(repo: Path, tmp_path: Path) -> None:

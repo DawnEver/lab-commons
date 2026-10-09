@@ -29,6 +29,7 @@ from lab_commons.hpc.config import Config, Limits, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
 from lab_commons.hpc.platforms import table_at
+from lab_commons.hpc.records import summary, write_record
 from lab_commons.hpc.run import (
     TERMINAL_OK,
     Runner,
@@ -41,8 +42,9 @@ from lab_commons.hpc.run import (
     ssh_runner,
     submit,
 )
+from lab_commons.hpc.shell import VerdictSpec
 from lab_commons.hpc.slurm import Snapshot
-from lab_commons.hpc.verdict import VerdictSpec, gather_verdict, submit_verdict, summary, write_record
+from lab_commons.hpc.verdict import gather_verdict, submit_verdict
 from lab_commons.log import emit
 
 __all__ = ['main']

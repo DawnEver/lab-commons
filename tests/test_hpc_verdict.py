@@ -23,19 +23,11 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.plan import make_plan
 from lab_commons.hpc.pytest_item import canonical, outcome_of, read_stream
+from lab_commons.hpc.records import read_streams
 from lab_commons.hpc.run import Unreachable
+from lab_commons.hpc.shell import BUILD_LOG, VerdictSpec, build_script, needs_script, parse_ids
 from lab_commons.hpc.slurm import parse_snapshot
-from lab_commons.hpc.verdict import (
-    BUILD_LOG,
-    RETRIES,
-    VerdictSpec,
-    build_script,
-    gather_verdict,
-    needs_script,
-    parse_ids,
-    read_streams,
-    submit_verdict,
-)
+from lab_commons.hpc.verdict import RETRIES, gather_verdict, submit_verdict
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
