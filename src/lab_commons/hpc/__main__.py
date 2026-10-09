@@ -24,6 +24,7 @@ from typing import Any
 from lab_commons.hpc.config import Config, Limits, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
+from lab_commons.hpc.platforms import table_at
 from lab_commons.hpc.run import (
     TERMINAL_OK,
     Runner,
@@ -176,9 +177,9 @@ def _verdict(args: argparse.Namespace, machine: Machine) -> int:
         install=args.install,
         collect=args.collect,
         select=args.select,
-        not_covered=args.not_covered,
+        table=table_at(args.repo, args.sha),
         python=args.python,
-        bundle_from=args.bundle,
+        bundle_from=args.repo,
     )
     record = remote_verdict(
         spec,
@@ -190,6 +191,9 @@ def _verdict(args: argparse.Namespace, machine: Machine) -> int:
     write_record(record, args.output)
     _out(f'{spec.sha[:12]} on {record["cluster"]} ({record["platform"]}, python {record["python"]}): {summary(record)}')
     _out(f'written {args.output}')
+    _out(
+        f'record it as the linux part: python -m lab_commons.dev.platformparts record-linux {args.output} --tier <tier>'
+    )
     return 0
 
 
@@ -204,10 +208,12 @@ def _parser() -> argparse.ArgumentParser:
     verdict.add_argument('--install', help='shell, run once in the tree with its fresh .venv active')
     verdict.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
     verdict.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
-    verdict.add_argument('--not-covered', default='', help='marker expression this platform cannot run')
     verdict.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
     verdict.add_argument(
-        '--bundle', type=Path, help='local repository to bundle the commit from if the remote lacks it'
+        '--repo',
+        type=Path,
+        default=Path.cwd(),
+        help='local repository: its [tool.lab_commons.platforms] at --sha, and the bundle if the remote lacks it',
     )
     return parser
 
