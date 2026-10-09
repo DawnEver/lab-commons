@@ -33,7 +33,7 @@ from typing import Any, Final
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, allocate
-from lab_commons.hpc.run import Runner, gather, probe, shard_states, submit
+from lab_commons.hpc.run import Runner, Unreachable, gather, probe, shard_states, submit
 
 __all__ = [
     'ACTIVE',
@@ -194,11 +194,27 @@ def _bundle(repo: Path, sha: str) -> str:
     return base64.b64encode(done.stdout).decode('ascii')
 
 
+#: How long the cluster may stay unreachable while a verdict waits. The jobs keep running through an outage
+#: (a VPN drop, a login node reboot); only the watcher is cut off, so a drop is waited out, not fatal.
+OUTAGE_CEILING_S: Final = 6 * 3600.0
+
+
 def _wait(run: Runner, job_id: str, shards: int, poll: float, sleep: Callable[[float], None]) -> dict[int, str]:
+    unreachable_s = 0.0
     while True:
-        states = shard_states(run, [job_id])
-        if len(states) >= shards and not any(state in ACTIVE for state in states.values()):
-            return states
+        try:
+            states = shard_states(run, [job_id])
+        except Unreachable as exc:
+            unreachable_s += poll
+            if unreachable_s > OUTAGE_CEILING_S:
+                msg = (
+                    f'job {job_id} is still on the cluster but no login host answered for {unreachable_s:.0f} s: {exc}'
+                )
+                raise Unreachable(msg) from exc
+        else:
+            unreachable_s = 0.0
+            if len(states) >= shards and not any(state in ACTIVE for state in states.values()):
+                return states
         sleep(poll)
 
 
