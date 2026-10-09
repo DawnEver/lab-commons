@@ -13,9 +13,11 @@ commit (or ship a bundle); add the tree; build its venv on the login node with t
 command; collect node ids there; group them by file into items; re-allocate the real item count among
 the grants on that cluster; submit the array; poll ``sacct`` until no shard is active; gather.
 
-NOT COVERED IS NOT PASSED. Ids selected out by ``not_covered`` (a marker expression -- Windows-only
-vendors, say) are collected separately and recorded as ``not-covered``; an id whose shard died is
-``lost``; an id the junit file never mentions is ``missing``. Only ``passed`` means passed.
+NOT COVERED IS NOT PASSED. The commit's own ``[tool.lab_commons.platforms]`` table
+(:mod:`lab_commons.hpc.platforms`) says which markers linux cannot run; those ids are collected
+separately, recorded as ``not-covered``, and listed in the record's ``left`` with the platforms that CAN
+run each (``[]`` when none can) -- the input the next platform part selects from. An id whose shard died
+is ``lost``; an id the junit file never mentions is ``missing``. Only ``passed`` means passed.
 """
 
 from __future__ import annotations
@@ -26,13 +28,14 @@ import shlex
 import subprocess
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, allocate
+from lab_commons.hpc.platforms import PLATFORMS, cannot_run
 from lab_commons.hpc.run import Runner, Unreachable, gather, probe, shard_states, submit
 
 __all__ = [
@@ -74,7 +77,7 @@ class VerdictSpec:
     install: str
     collect: str = ''
     select: str = ''
-    not_covered: str = ''
+    table: dict[str, tuple[str, ...]] = field(default_factory=dict)
     python: str = ''
     bundle_from: Path | None = None
 
@@ -134,14 +137,14 @@ def build_script(spec: VerdictSpec) -> str:
     )
 
 
-def collect_command(spec: VerdictSpec, *, covered_only: bool = False) -> str:
-    """``pytest --collect-only`` in the tree; ONE ``-m`` joins ``select`` and, for *covered_only*, ``not_covered``.
+def collect_command(spec: VerdictSpec, *, also: str = '') -> str:
+    """``pytest --collect-only`` in the tree; ONE ``-m`` joins ``select`` and the marker expression *also*.
 
     One expression, because pytest keeps only the last ``-m`` -- a second one would silently drop the first.
     """
     parts = [f'({spec.select})'] if spec.select else []
-    if covered_only and spec.not_covered:
-        parts.append(f'not ({spec.not_covered})')
+    if also:
+        parts.append(f'({also})')
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
     return (
         f'cd {_ROOT}/trees/{spec.sha} && {_VENV} python -m pytest --collect-only -q -p no:cacheprovider'
@@ -229,7 +232,7 @@ def remote_verdict(
     sleep: Callable[[float], None] = time.sleep,
     stamp: str | None = None,
 ) -> dict[str, Any]:
-    """Run the flow in the module docstring; the record is ``{sha, platform, cluster, python, plan, outcomes}``."""
+    """The module docstring's flow; the record is ``{sha, platform, cluster, python, plan, outcomes, left}``."""
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
     grant, _ = allocate(1, cost, snapshots, workstation=machine.workstation, policy=policy)
@@ -252,10 +255,13 @@ def remote_verdict(
     if not ids:
         msg = f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass'
         raise RuntimeError(msg)
-    not_covered: set[str] = set()
-    if spec.not_covered:
-        covered = set(parse_ids(run(collect_command(spec, covered_only=True), None)))
-        not_covered = {node for node in ids if node not in covered}
+    cannot = {
+        platform: set(parse_ids(run(collect_command(spec, also=expr), None)))
+        for platform in PLATFORMS
+        if (expr := cannot_run(spec.table, platform))
+    }
+    not_covered = {node for node in ids if node in cannot.get('linux', set())}
+    left = {node: [p for p in PLATFORMS if node not in cannot.get(p, set())] for node in sorted(not_covered)}
     items = group_items([node for node in ids if node not in not_covered])
 
     same_cluster = [(g, s) for g, s in snapshots if g.same_cluster(grant)]
@@ -281,6 +287,7 @@ def remote_verdict(
         'python': facts.get('python', ''),
         'plan': _plan_record(plan, grant, sub.job_id, sub.run_dir),
         'outcomes': outcomes,
+        'left': left,
     }
 
 
