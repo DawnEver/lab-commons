@@ -43,6 +43,7 @@ __all__ = [
     'collect_command',
     'fetch_script',
     'group_items',
+    'parse_collection_errors',
     'parse_ids',
     'remote_verdict',
     'summary',
@@ -144,13 +145,22 @@ def collect_command(spec: VerdictSpec, *, covered_only: bool = False) -> str:
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
     return (
         f'cd {_ROOT}/trees/{spec.sha} && {_VENV} python -m pytest --collect-only -q -p no:cacheprovider'
-        f'{select} {spec.collect}'
-    ).rstrip()
+        f' --continue-on-collection-errors{select} {spec.collect}'
+    ).rstrip() + ' || true'
 
 
 def parse_ids(text: str) -> list[str]:
     """Node ids from ``pytest --collect-only -q`` -- the lines that carry ``::``, in collection order."""
-    return [line.strip() for line in text.splitlines() if '::' in line and not line.startswith(' ')]
+    return [line.strip() for line in text.splitlines() if '::' in line and not line.startswith((' ', 'ERROR '))]
+
+
+def parse_collection_errors(text: str) -> list[str]:
+    """Files (or node ids) that failed to COLLECT -- pytest's ``ERROR <path>[ - reason]`` summary lines.
+
+    A file that cannot be imported on this platform is a result for that file, never a reason to abort the
+    whole tree: it is recorded as ``error`` and every other file still runs.
+    """
+    return [line[len('ERROR ') :].split(' - ', 1)[0].strip() for line in text.splitlines() if line.startswith('ERROR ')]
 
 
 def group_items(ids: Sequence[str]) -> list[dict[str, Any]]:
@@ -221,7 +231,8 @@ def remote_verdict(
 
     item_source = (Path(__file__).with_name('pytest_item.py')).read_text(encoding='utf-8')
     facts = _facts(run(build_script(spec), item_source))
-    ids = parse_ids(run(collect_command(spec), None))
+    collected = run(collect_command(spec), None)
+    ids, errored = parse_ids(collected), parse_collection_errors(collected)
     if not ids:
         msg = f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass'
         raise RuntimeError(msg)
@@ -242,6 +253,7 @@ def remote_verdict(
     returned = {r['index']: r for shard in gather(run, sub.run_dir).values() for r in shard}
 
     outcomes: dict[str, str] = dict.fromkeys(sorted(not_covered), 'not-covered')
+    outcomes.update(dict.fromkeys(errored, 'error'))
     for index, item in enumerate(items):
         result = returned.get(index)
         got = result['value']['outcomes'] if result and result['ok'] else {}
