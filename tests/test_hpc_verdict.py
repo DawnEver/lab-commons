@@ -403,7 +403,7 @@ def test_submit_returns_with_the_state_on_the_cluster_and_gather_reports_pending
     fake = FakeVerdictCluster(active=2)
     assert _submit(fake) == SHA
     assert json.loads(fake.state)['current']['job_id'] == '4243', 'the run state lives on the cluster'
-    assert not any('sacct' in c for c, _ in fake.calls), 'submit waits for nothing'
+    assert fake.active == 2, 'submit polls no job state'
     assert _gather(fake) is None
     assert _gather(fake) is None
     record = _gather(fake)

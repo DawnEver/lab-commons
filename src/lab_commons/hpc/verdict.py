@@ -258,7 +258,7 @@ def collect_command(spec: VerdictSpec, *, also: str = '') -> str:
     head = f'cd {_ROOT}/trees/{spec.sha} && {_ENV} && '
     if any(token.startswith('-') for token in shlex.split(spec.collect)):
         return (
-            f'{head}python -m pytest --collect-only -q -p no:cacheprovider'
+            f'{head}python -m pytest --collect-only -q -p no:cacheprovider --color=no'
             f' --continue-on-collection-errors{select} {spec.collect}'
         ).rstrip() + ' || true'
     seed = shlex.quote(f'{spec.builds.env_key}:{spec.builds.native_key}:{spec.python}')
@@ -486,7 +486,8 @@ def gather_verdict(
     if 'record' in state:
         return state['record']
     current = state['current']
-    run = runners[current['account']]
+    account = tuple(current['account'])
+    run = runners[account]
     states = shard_states(run, [current['job_id']])
     if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
         return None
@@ -497,7 +498,7 @@ def gather_verdict(
     if 'OUT_OF_MEMORY' in states.values():
         state['oom'] *= 2
     if pending and len(state['rounds']) <= RETRIES:
-        grant = next(g for g in machine.grants if g.account == current['account'])
+        grant = next(g for g in machine.grants if g.account == account)
         snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if _shares_home(g, grant)]
         _submit_round(state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy)
         _save(home, state)

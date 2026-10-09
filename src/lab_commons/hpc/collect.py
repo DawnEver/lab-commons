@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,11 +47,14 @@ def _under(path: str, roots: list[str]) -> bool:
 
 def _collect(stale: list[str], marker: list[str]) -> tuple[dict[str, list[str]], list[str]]:
     """One ``pytest --collect-only`` over *stale*: ids per file (every stale file present) and ERROR lines."""
-    argv = [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-p', 'no:cacheprovider']
-    argv += ['--continue-on-collection-errors', *marker, *stale]
-    text = subprocess.run(argv, capture_output=True, text=True, check=False).stdout
+    argv = [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-p', 'no:cacheprovider', '--color=no']
+    argv += ['-rE', '--continue-on-collection-errors', *marker, *stale]
+    env = {k: v for k, v in os.environ.items() if k != 'PYTEST_ADDOPTS'}  # the ERROR summary is the protocol
+    text = subprocess.run(argv, capture_output=True, text=True, check=False, env=env).stdout
     fresh: dict[str, list[str]] = {path: [] for path in stale}
-    errors = [line for line in text.splitlines() if line.startswith('ERROR ')]
+    # Both shapes pytest prints for a file that failed to import: the summary line and the section header.
+    named = [m.group(1) for m in re.finditer(r'(?m)^(?:ERROR |_+ ERROR collecting )(\S+)', text)]
+    errors = [f'ERROR {path}' for path in dict.fromkeys(named)]
     for line in text.splitlines():
         if '::' in line and not line.startswith((' ', 'ERROR ')):
             fresh.setdefault(line.strip().split('::')[0], []).append(line.strip())
