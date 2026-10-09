@@ -56,6 +56,7 @@ def _imports_bare(module: str) -> subprocess.CompletedProcess[str]:
         [sys.executable, '-c', _BLOCKER, f'lab_commons.{module}'],
         capture_output=True,
         text=True,
+        encoding='utf-8',
         check=False,
         timeout=120,
         cwd=_ROOT,
