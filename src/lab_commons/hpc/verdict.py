@@ -4,14 +4,18 @@ EVERYTHING LIVES UNDER ``~/ci/`` ON THE CLUSTER, AND NOTHING ELSE IS TOUCHED. A 
 ``~/<repo>`` and its venv are someone's working state; a verdict must neither reinstall nor read them::
 
     ~/ci/cache.git              bare cache; fetched from the read-only HTTPS remote
-    ~/ci/bundles/<sha>.bundle   only when the commit is not on the remote (sent over stdin)
+    ~/ci/packs/<sha>.pack       only when the commit is not on the remote (sent over stdin, indexed here)
+    ~/ci/runs/<sha>/state.json  the run: its rounds, outcomes so far and the job of the round in flight
     ~/ci/trees/<sha>/           a worktree of the cache, with its OWN .venv (reused when present)
     ~/ci/bin/lab_ci_pytest_item.py   the item runner, shipped from this checkout (pytest_item.py)
 
 THE FLOW. Probe every grant and pick the cluster (:func:`lab_commons.hpc.plan.allocate`); fetch the
-commit (or ship a bundle); add the tree; build its venv on the login node with the caller's install
+commit (or ship a pack); add the tree; build its venv on the login node with the caller's install
 command; collect node ids there; group them by file into items; re-allocate the real item count among
-the grants on that cluster; submit the array; poll ``sacct`` until no shard is active; gather.
+the grants on that cluster; submit the array and leave the run's state on the cluster
+(:func:`submit_verdict`, minutes). Then each :func:`gather_verdict` is ONE short call: still active is
+pending; a finished round is folded, its unfinished ids re-submitted as the next round, or the record
+returned. NOTHING RESIDENT RUNS ON THE CALLER'S BOX, and the caller's repository is only READ.
 
 NOT COVERED IS NOT PASSED. The commit's own ``[tool.lab_commons.platforms]`` table
 (:mod:`lab_commons.hpc.platforms`) says which markers each platform cannot run; an id the
@@ -39,6 +43,7 @@ from __future__ import annotations
 import base64
 import json
 import shlex
+import shutil
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -53,20 +58,26 @@ from lab_commons.hpc.plan import Plan, allocate
 from lab_commons.hpc.platforms import LINUX, PLATFORMS, assign, cannot_run, runnable
 from lab_commons.hpc.pytest_item import read_stream
 from lab_commons.hpc.run import Runner, Unreachable, probe, shard_states, submit
+from lab_commons.hpc.slurm import Snapshot
 
 __all__ = [
     'ACTIVE',
+    'BUILD_FAILED',
+    'BUILD_LOG',
     'ITEM_MODULE',
+    'NEEDS',
     'RETRIES',
     'VerdictSpec',
     'build_script',
     'collect_command',
     'fetch_script',
+    'gather_verdict',
     'group_items',
+    'needs_script',
     'parse_collection_errors',
     'parse_ids',
     'read_streams',
-    'remote_verdict',
+    'submit_verdict',
     'summary',
     'write_record',
 ]
@@ -82,8 +93,22 @@ ITEM_MODULE: Final = 'lab_ci_pytest_item'
 
 _ROOT: Final = '"$HOME"/ci'
 
+#: Where a tree's build output is kept on the cluster, relative to the tree.
+BUILD_LOG: Final = '.lab-ci/build.log'
+
+#: The line :func:`build_script` prints instead of the facts when the build failed.
+BUILD_FAILED: Final = '@@@ build-failed'
+
+#: Lines of the build log a refusal quotes.
+_LOG_TAIL: Final = 40
+
+#: What every verdict needs on the login node, whatever it installs.
+NEEDS: Final = ('git', 'uv')
+
 #: Hex digits of a full SHA-1 commit id.
 _SHA_HEX: Final = 40
+
+_GIT: Final = shutil.which('git') or 'git'
 
 #: The tree's venv first on PATH, so its ``python`` runs -- the cluster is POSIX whatever box submits.
 _VENV: Final = 'PATH="$PWD/.venv/bin:$PATH"'
@@ -100,7 +125,8 @@ class VerdictSpec:
     select: str = ''
     table: dict[str, tuple[str, ...]] = field(default_factory=dict)
     python: str = ''
-    bundle_from: Path | None = None
+    pack_from: Path | None = None
+    needs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """A verdict is bound to a full commit id, never to a branch name that moves under it."""
@@ -115,42 +141,67 @@ class VerdictSpec:
 
 
 def fetch_script(spec: VerdictSpec) -> str:
-    """Make the cache hold the commit -- remote heads first, then a shipped bundle. Prints ``have``/``missing``."""
+    """Make the cache hold the commit -- remote heads, else a shipped pack indexed and named HERE; have/missing."""
     sha, url, cache = spec.sha, shlex.quote(spec.repo_url), f'{_ROOT}/cache.git'
     return '\n'.join(
         [
             'set -eu',
-            f'mkdir -p {_ROOT}/trees {_ROOT}/bundles {_ROOT}/bin',
+            f'mkdir -p {_ROOT}/trees {_ROOT}/packs {_ROOT}/bin {_ROOT}/runs',
             f'[ -d {cache} ] || git init -q --bare {cache}',
             f'have() {{ git -C {cache} cat-file -e {sha}^{{commit}} 2>/dev/null; }}',
             f'have || git -C {cache} fetch -q {url} "+refs/heads/*:refs/remotes/origin/*"',
             f'have || git -C {cache} fetch -q {url} {sha} 2>/dev/null || true',
-            f'B={_ROOT}/bundles/{sha}.bundle',
-            f'have || {{ [ -s "$B" ] && git -C {cache} fetch -q "$B" "+refs/lab-ci/*:refs/lab-ci/*"; }} || true',
+            f'P={_ROOT}/packs/{sha}.pack',
+            (
+                f'have || {{ [ -s "$P" ] && git -C {cache} index-pack --stdin < "$P" > /dev/null'
+                f' && git -C {cache} update-ref refs/lab-ci/{sha} {sha}; }} || true'
+            ),
             'if have; then echo have; else echo missing; fi',
         ]
     )
 
 
+def needs_script(spec: VerdictSpec) -> str:
+    """Print ``@@@ missing <command>`` for every prerequisite the login node lacks: :data:`NEEDS` plus ``spec.needs``.
+
+    Checked BEFORE anything is fetched or built, so a grant without ``cargo`` is named up front instead of
+    being discovered by a failed build -- or, as measured 2026-10-09, by 276 dead shards.
+    """
+    wanted = ' '.join(shlex.quote(c) for c in dict.fromkeys((*NEEDS, *spec.needs)))
+    return f'for c in {wanted}; do command -v "$c" > /dev/null 2>&1 || echo "@@@ missing $c"; done; true'
+
+
 def build_script(spec: VerdictSpec) -> str:
     """Add the tree, build its venv once, install the item runner. Prints ``@@@ facts`` then ``key=value`` lines.
 
-    The item runner's source arrives on stdin, so the script's first line is a ``cat``.
+    The item runner's source arrives on stdin, so the script's first line is a ``cat``. A FAILED BUILD
+    STOPS THE VERDICT: the install runs in its own ``bash -e``, its output is kept in :data:`BUILD_LOG`
+    inside the tree, and a non-zero exit -- or no ``.venv/bin/python`` after it -- prints
+    :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09: an install that
+    failed (no ``cargo``) went on to submit 276 shards that all died on ``.venv/bin/activate``.
     """
     cache, tree = f'{_ROOT}/cache.git', f'{_ROOT}/trees/{spec.sha}'
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
+    build = '\n'.join(
+        [
+            f'uv venv -q --allow-existing{python} .venv',
+            'export VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH"',
+            spec.install,
+        ]
+    )
     return '\n'.join(
         [
             'set -eo pipefail',
             f'cat > {_ROOT}/bin/{ITEM_MODULE}.py',
             f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
             f'cd {tree}',
+            'mkdir -p .lab-ci',
             'if [ ! -f .venv/.lab-ci-installed ]; then',
-            f'  uv venv -q --allow-existing{python} .venv',
-            '  export VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH"',
-            f'  {spec.install}',
+            f'  bash -eo pipefail -c {shlex.quote(build)} > {BUILD_LOG} 2>&1 || {{',
+            f'    echo "{BUILD_FAILED} exit $?"; tail -n {_LOG_TAIL} {BUILD_LOG}; exit 0; }}',
             '  touch .venv/.lab-ci-installed',
             'fi',
+            f'[ -x .venv/bin/python ] || {{ echo "{BUILD_FAILED} no .venv/bin/python after the build"; exit 0; }}',
             'echo "@@@ facts"',
             'echo "platform=$(uname -s | tr A-Z a-z)-$(uname -m)/glibc$(getconf GNU_LIBC_VERSION | cut -d" " -f2)"',
             f'echo "python=$({_VENV} python -c "import platform; print(platform.python_version())")"',
@@ -200,81 +251,124 @@ def _facts(text: str) -> dict[str, str]:
     return dict(line.split('=', 1) for line in tail.splitlines() if '=' in line)
 
 
-def _bundle(repo: Path, sha: str) -> str:
-    """A bundle of *sha* minus what the repo's remotes already hold, base64 for a text stdin.
+def _pack(repo: Path, sha: str) -> str:
+    """A pack of *sha*'s objects minus what the repo's remote-tracking refs already hold, base64 for a text stdin.
 
-    ``git bundle`` takes NAMED refs only, so the commit gets a temporary ``refs/lab-ci/<sha>`` for the
-    length of the call and loses it after -- the one write this makes to the caller's repository.
+    READ-ONLY, and that is the point: ``git bundle`` takes NAMED refs only, so the bundle this replaced
+    wrote a temporary ``refs/lab-ci/<sha>`` into the caller's checkout. ``pack-objects --revs --stdout``
+    takes the commit and the exclusions on stdin and writes nothing; the CLUSTER indexes the pack into its
+    cache and names the ref there (:func:`fetch_script`).
     """
-    ref = f'refs/lab-ci/{sha}'
-    git = ['git', '-C', str(repo)]
-    subprocess.run([*git, 'update-ref', ref, sha], check=True)
-    try:
-        done = subprocess.run(
-            [*git, 'bundle', 'create', '-', ref, '--not', '--remotes'], capture_output=True, check=True
-        )
-    finally:
-        subprocess.run([*git, 'update-ref', '-d', ref], check=True)
+    git = [_GIT, '-C', str(repo)]
+    remotes = subprocess.run(
+        [*git, 'for-each-ref', '--format=%(objectname)', 'refs/remotes'], capture_output=True, text=True, check=True
+    ).stdout.split()
+    revs = '\n'.join([sha, *(f'^{oid}' for oid in remotes)]) + '\n'
+    done = subprocess.run(
+        [*git, 'pack-objects', '--revs', '--stdout', '-q'], input=revs.encode('ascii'), capture_output=True, check=True
+    )
     return base64.b64encode(done.stdout).decode('ascii')
 
 
-#: How long the cluster may stay unreachable while a verdict waits. The jobs keep running through an outage
-#: (a VPN drop, a login node reboot); only the watcher is cut off, so a drop is waited out, not fatal.
-OUTAGE_CEILING_S: Final = 6 * 3600.0
+def _shares_home(grant: Grant, builder: Grant) -> bool:
+    """Whether *grant* may run a round of the tree *builder* built: same cluster AND same login user.
+
+    The tree, its venv and the item runner live in the BUILDER'S ``~/ci``. Measured 2026-10-09: two
+    grants on one cluster under different users (ezxmb14, ezzls2) -- the build ran in one home and the
+    rounds went to the other, whose ``~/ci/trees/<sha>`` held no ``.venv``, so 276 shards died on
+    ``.venv/bin/activate``. Same cluster is not same home.
+    """
+    return grant.same_cluster(builder) and grant.user == builder.user
 
 
-def _wait(run: Runner, job_id: str, shards: int, poll: float, sleep: Callable[[float], None]) -> dict[int, str]:
-    unreachable_s = 0.0
-    while True:
-        try:
-            states = shard_states(run, [job_id])
-        except Unreachable as exc:
-            unreachable_s += poll
-            if unreachable_s > OUTAGE_CEILING_S:
-                msg = (
-                    f'job {job_id} is still on the cluster but no login host answered for {unreachable_s:.0f} s: {exc}'
-                )
-                raise Unreachable(msg) from exc
-        else:
-            unreachable_s = 0.0
-            if len(states) >= shards and not any(state in ACTIVE for state in states.values()):
-                return states
-        sleep(poll)
+def _state_dir(sha: str) -> str:
+    return f'{_ROOT}/runs/{sha}'
 
 
-def remote_verdict(
+def _save(run: Runner, state: dict[str, Any]) -> None:
+    run(f'mkdir -p {_state_dir(state["sha"])} && cat > {_state_dir(state["sha"])}/state.json', json.dumps(state))
+
+
+def _submit_round(
+    state: dict[str, Any],
+    pending: list[list[str]],
+    *,
+    runners: dict[str, Runner],
+    snapshots: list[tuple[Grant, Snapshot]],
+    machine: Machine,
+    cost: Cost,
+    policy: Policy,
+) -> None:
+    """Plan and submit round ``len(state['rounds'])`` of *pending* among the grants of *snapshots*."""
+    tag = f'{state["stamp"]}-r{len(state["rounds"])}'
+    measured = Measured.of(state['measured'])
+    seconds, unmeasured = measured.estimate(pending, cost)
+    mem_gb = measured.mem_gb(pending, cost, policy) * state['oom']
+    grant, plan = allocate(
+        len(pending),
+        replace(cost, mem_gb=mem_gb),
+        snapshots,
+        workstation=machine.workstation,
+        policy=policy,
+        seconds=seconds,
+    )
+    items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
+    setup = ('source .venv/bin/activate', 'export PYTHONPATH="$HOME/ci/bin${PYTHONPATH:+:$PYTHONPATH}"')
+    sha = state['sha']
+    job = JobSpec(name=f'verdict-{sha[:12]}', workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run')
+    sub = submit(runners[grant.account], plan, Config(job=job, cost=cost, policy=policy), items, stamp=tag)
+    state['rounds'].append({**_plan_record(plan, grant, sub.job_id, sub.run_dir), 'unmeasured': unmeasured})
+    state['current'] = {
+        'account': grant.account,
+        'tag': tag,
+        'items': items,
+        'job_id': sub.job_id,
+        'shards': sub.shards,
+    }
+
+
+def submit_verdict(
     spec: VerdictSpec,
     machine: Machine,
     connect: Callable[[Grant], Runner],
     *,
     cost: Cost,
     policy: Policy,
-    poll: float = 30.0,
-    sleep: Callable[[float], None] = time.sleep,
     stamp: str | None = None,
     history: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """The module docstring's flow; *history* is a previous record, read for its measurements only.
+) -> str:
+    """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns the run id.
 
-    The record is ``{sha, platform, cluster, python, plan, rounds, outcomes, handed}`` plus the measurements.
+    The state is ``~/ci/runs/<sha>/state.json``; :func:`gather_verdict` reads it. *history* is a previous
+    record, read for its measurements only. Nothing here waits for a job.
     """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
     grant, _ = allocate(1, cost, snapshots, workstation=machine.workstation, policy=policy)
     run = runners[grant.account]
     host = grant.hosts[0]
+    said = run(needs_script(spec), None).splitlines()
+    lacking = [line.removeprefix('@@@ missing ') for line in said if line.startswith('@@@ missing ')]
+    if lacking:
+        msg = f'{grant.name} ({host}) lacks {", ".join(lacking)} on its login node; nothing was fetched or built'
+        raise RuntimeError(msg)
 
     if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
-        if spec.bundle_from is None:
-            msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to bundle it from'
+        if spec.pack_from is None:
+            msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to pack it from'
             raise RuntimeError(msg)
-        run(f'base64 -d > {_ROOT}/bundles/{spec.sha}.bundle', _bundle(spec.bundle_from, spec.sha))
+        run(f'base64 -d > {_ROOT}/packs/{spec.sha}.pack', _pack(spec.pack_from, spec.sha))
         if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
-            msg = f'commit {spec.sha} is still missing on {host} after the bundle was fetched'
+            msg = f'commit {spec.sha} is still missing on {host} after the pack was indexed'
             raise RuntimeError(msg)
 
     item_source = (Path(__file__).with_name('pytest_item.py')).read_text(encoding='utf-8')
-    facts = _facts(run(build_script(spec), item_source))
+    built = run(build_script(spec), item_source)
+    if BUILD_FAILED in built:
+        tail = built.split(BUILD_FAILED, 1)[1].strip()
+        msg = f'the build of {spec.sha[:12]} failed on {host}; log kept at {spec.tree}/{BUILD_LOG}:\n{tail}'
+        raise RuntimeError(msg)
+    facts = _facts(built)
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)
     if not ids:
@@ -286,52 +380,90 @@ def remote_verdict(
         if (expr := cannot_run(spec.table, platform))
     }
     handed = {node: can for node, can in sorted(runnable(ids, cannot).items()) if assign(can) != LINUX}
-
-    same_cluster = [(g, s) for g, s in snapshots if g.same_cluster(grant)]
-    stamp = stamp or time.strftime('%Y%m%d-%H%M%S')
     outcomes: dict[str, str] = dict.fromkeys(handed, 'not-covered')
     outcomes.update(dict.fromkeys(errored, 'error'))
-    measured = Measured.of(history or {})
-    rounds: list[dict[str, Any]] = []
-    pending = group_items([node for node in ids if node not in handed])
-    oom = 1
-    for attempt in range(1 + RETRIES):
-        tag = f'{stamp}-r{attempt}'
-        seconds, unmeasured = measured.estimate(pending, cost)
-        mem_gb = measured.mem_gb(pending, cost, policy) * oom
-        grant, plan = allocate(
-            len(pending),
-            replace(cost, mem_gb=mem_gb),
-            same_cluster,
-            workstation=machine.workstation,
-            policy=policy,
-            seconds=seconds,
-        )
-        run = runners[grant.account]
-        items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
-        setup = ('source .venv/bin/activate', 'export PYTHONPATH="$HOME/ci/bin${PYTHONPATH:+:$PYTHONPATH}"')
-        job = JobSpec(name=f'verdict-{spec.sha[:12]}', workdir=spec.tree, setup=setup, entry=f'{ITEM_MODULE}:run')
-        sub = submit(run, plan, Config(job=job, cost=cost, policy=policy), items, stamp=tag)
-        states = _wait(run, sub.job_id, sub.shards, poll, sleep)
-        streams = read_streams(run, f'{_ROOT}/trees/{spec.sha}/.lab-ci/{tag}')
-        pending = _fold(items, streams, outcomes, measured)
-        rounds.append({**_plan_record(plan, grant, sub.job_id, sub.run_dir), 'unmeasured': unmeasured})
-        if 'OUT_OF_MEMORY' in states.values():
-            oom *= 2
-        if not pending:
-            break
-    outcomes.update({node: 'lost' for group in pending for node in group})
-    return {
+    state: dict[str, Any] = {
         'sha': spec.sha,
+        'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
         'platform': facts.get('platform', ''),
         'cluster': host,
         'python': facts.get('python', ''),
-        'plan': rounds[0],
-        'rounds': rounds,
-        'outcomes': outcomes,
         'handed': handed,
-        **measured.record(),
+        'outcomes': outcomes,
+        'measured': Measured.of(history or {}).record(),
+        'rounds': [],
+        'oom': 1,
     }
+    pending = group_items([node for node in ids if node not in handed])
+    same_cluster = [(g, s) for g, s in snapshots if _shares_home(g, grant)]
+    _submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
+    _save(runners[state['current']['account']], state)
+    return spec.sha
+
+
+def _load(sha: str, machine: Machine, runners: dict[str, Runner]) -> tuple[dict[str, Any], Runner]:
+    """The state of *sha*'s run from whichever grant holds it; :class:`Unreachable` when no grant answered."""
+    answered = False
+    for grant in machine.grants:
+        try:
+            text = runners[grant.account](f'cat {_state_dir(sha)}/state.json 2>/dev/null || true', None)
+        except Unreachable:
+            continue
+        answered = True
+        if text.strip():
+            return json.loads(text), runners[grant.account]
+    if not answered:
+        msg = f'no login host of any grant answered; the jobs of {sha[:12]} keep running -- gather again later'
+        raise Unreachable(msg)
+    msg = f'no verdict of {sha} was submitted on any grant (no {_state_dir(sha)}/state.json)'
+    raise RuntimeError(msg)
+
+
+def gather_verdict(
+    sha: str,
+    machine: Machine,
+    connect: Callable[[Grant], Runner],
+    *,
+    cost: Cost,
+    policy: Policy,
+) -> dict[str, Any] | None:
+    """ONE short call: the record when the run is done, else ``None`` (pending).
+
+    A finished round is folded; what a killed shard left unfinished is re-submitted (up to :data:`RETRIES`
+    more rounds) and the call returns pending -- THE RETRIES ARE DRIVEN BY GATHER CALLS, nothing resident
+    waits. An outage raises :class:`Unreachable` and loses nothing: the jobs keep running and the state
+    stays on the cluster, so the next gather picks up where this one could not.
+    """
+    runners = {g.account: connect(g) for g in machine.grants}
+    state, home = _load(sha, machine, runners)
+    if 'record' in state:
+        return state['record']
+    current = state['current']
+    run = runners[current['account']]
+    states = shard_states(run, [current['job_id']])
+    if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
+        return None
+    measured = Measured.of(state['measured'])
+    streams = read_streams(run, f'{_ROOT}/trees/{sha}/.lab-ci/{current["tag"]}')
+    pending = _fold(current['items'], streams, state['outcomes'], measured)
+    state['measured'] = measured.record()
+    if 'OUT_OF_MEMORY' in states.values():
+        state['oom'] *= 2
+    if pending and len(state['rounds']) <= RETRIES:
+        grant = next(g for g in machine.grants if g.account == current['account'])
+        snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if _shares_home(g, grant)]
+        _submit_round(state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy)
+        _save(home, state)
+        return None
+    state['outcomes'].update({node: 'lost' for group in pending for node in group})
+    record = {
+        **{key: state[key] for key in ('sha', 'platform', 'cluster', 'python', 'rounds', 'outcomes', 'handed')},
+        'plan': state['rounds'][0],
+        **state['measured'],
+    }
+    state['record'] = record
+    _save(home, state)
+    return record
 
 
 def _fold(

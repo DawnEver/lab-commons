@@ -22,8 +22,19 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.plan import make_plan
 from lab_commons.hpc.pytest_item import canonical, outcome_of, read_stream
+from lab_commons.hpc.run import Unreachable
 from lab_commons.hpc.slurm import parse_snapshot
-from lab_commons.hpc.verdict import RETRIES, VerdictSpec, parse_ids, read_streams, remote_verdict
+from lab_commons.hpc.verdict import (
+    BUILD_LOG,
+    RETRIES,
+    VerdictSpec,
+    build_script,
+    gather_verdict,
+    needs_script,
+    parse_ids,
+    read_streams,
+    submit_verdict,
+)
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
@@ -241,20 +252,39 @@ class FakeVerdictCluster:
     """
 
     def __init__(
-        self, *, have: bool = True, dies: frozenset[str] = frozenset(), kills: int = 1, oom: bool = False
+        self,
+        *,
+        have: bool = True,
+        dies: frozenset[str] = frozenset(),
+        kills: int = 1,
+        oom: bool = False,
+        build_fails: bool = False,
+        lacking: tuple[str, ...] = (),
+        active: int = 0,
     ) -> None:
-        """*have*: whether the cache holds the commit; *oom*: round 0 reports OUT_OF_MEMORY."""
+        """*have*: the cache holds the commit; *oom*: round 0 is OUT_OF_MEMORY; *active*: sacct polls RUNNING."""
         self.have, self.dies, self.kills, self.oom = have, dies, kills, oom
+        self.build_fails, self.lacking, self.active = build_fails, lacking, active
+        self.state = ''
         self.calls: list[tuple[str, str | None]] = []
         self.manifests: list[dict] = []
         self.scripts: list[str] = []
 
-    def __call__(self, command: str, stdin: str | None = None) -> str:  # noqa: C901, PLR0911 -- one answer per verb
+    def __call__(self, command: str, stdin: str | None = None) -> str:  # noqa: C901, PLR0911, PLR0912 -- one answer per verb
         self.calls.append((command, stdin))
+        if command.endswith('state.json') and 'cat >' in command:
+            self.state = stdin or ''
+            return ''
+        if 'state.json' in command:
+            return self.state
+        if command.startswith('for c in'):
+            return ''.join(f'@@@ missing {c}\n' for c in self.lacking)
         if command.startswith('echo "@@@ nodes"'):
             return IDLE + '@@@ shared\n8 lc:ws=other\n'
         if 'cat-file' in command:
             return 'have\n' if self.have else 'missing\n'
+        if '@@@ facts' in command and self.build_fails:
+            return '@@@ build-failed exit 101\nerror: could not find `cargo`\n'
         if '@@@ facts' in command:
             return '@@@ facts\nplatform=linux-x86_64/glibc2.28\npython=3.13.1\n'
         if '--collect-only' in command:
@@ -267,6 +297,9 @@ class FakeVerdictCluster:
             self.scripts.append(stdin or '')
         if 'sbatch' in command:
             return f'{4242 + len(self.manifests)}\n'
+        if 'sacct' in command and self.active:
+            self.active -= 1
+            return '\n'.join(f'1_{i}|RUNNING' for i in range(9)) + '\n'
         if 'sacct' in command:
             state = 'OUT_OF_MEMORY' if self.oom and len(self.manifests) == 1 else 'TIMEOUT'
             return '\n'.join(f'1_{i}|{state if i == 0 else "COMPLETED"}' for i in range(9)) + '\n'
@@ -287,17 +320,27 @@ class FakeVerdictCluster:
         return '\n'.join(out) + '\n'
 
 
+MACHINE = Machine(workstation='ws-a', grants=(GRANT,))
+COST, POLICY = Cost(seconds=600), Policy(shard_minutes_min=1, shard_minutes_max=15)
+
+
+def _submit(fake: FakeVerdictCluster, **kw: object) -> str:
+    spec = VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true', table={'win': ('windows',)})
+    return submit_verdict(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0', **kw)
+
+
+def _gather(fake: FakeVerdictCluster) -> dict | None:
+    return gather_verdict(SHA, MACHINE, lambda _g: fake, cost=COST, policy=POLICY)
+
+
 def _verdict(fake: FakeVerdictCluster, **kw: object) -> dict:
-    return remote_verdict(
-        VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true', table={'win': ('windows',)}),
-        Machine(workstation='ws-a', grants=(GRANT,)),
-        lambda _g: fake,
-        cost=Cost(seconds=600),
-        policy=Policy(shard_minutes_min=1, shard_minutes_max=15),
-        sleep=lambda _s: None,
-        stamp='t0',
-        **kw,
-    )
+    """Submit, then gather until the record comes back -- each gather one short call, as a caller makes them."""
+    _submit(fake, **kw)
+    for _ in range(2 + RETRIES):
+        record = _gather(fake)
+        if record is not None:
+            return record
+    pytest.fail('the gathers never returned a record')
 
 
 def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> None:
@@ -355,9 +398,83 @@ def test_history_prices_the_plan_and_names_nothing_unmeasured() -> None:
     assert record['plan']['mem_mb'] == -(-3000 * 1.5 // 1)
 
 
-def test_a_commit_off_the_remote_without_a_bundle_is_refused() -> None:
+def test_submit_returns_with_the_state_on_the_cluster_and_gather_reports_pending_while_jobs_run() -> None:
+    fake = FakeVerdictCluster(active=2)
+    assert _submit(fake) == SHA
+    assert json.loads(fake.state)['current']['job_id'] == '4243', 'the run state lives on the cluster'
+    assert not any('sacct' in c for c, _ in fake.calls), 'submit waits for nothing'
+    assert _gather(fake) is None
+    assert _gather(fake) is None
+    record = _gather(fake)
+    assert record is not None
+    assert set(record['outcomes'].values()) == {'passed', 'not-covered'}
+    assert _gather(fake) == record, 'a finished run answers its record again'
+
+
+def test_a_retry_round_is_submitted_by_a_gather_and_returns_pending() -> None:
+    fake = FakeVerdictCluster(dies=frozenset({'tests/b.py'}))
+    _submit(fake)
+    assert _gather(fake) is None, 'the unfinished ids went out as round 1'
+    assert len(fake.manifests) == 2
+
+
+def test_a_gather_through_an_outage_raises_unreachable_and_loses_nothing() -> None:
+    fake = FakeVerdictCluster()
+    _submit(fake)
+
+    def down(_command: str, _stdin: str | None = None) -> str:
+        msg = 'ssh: connect to host login.example port 22: timed out'
+        raise Unreachable(msg)
+
+    with pytest.raises(Unreachable, match='keep running'):
+        gather_verdict(SHA, MACHINE, lambda _g: down, cost=COST, policy=POLICY)
+    assert _gather(fake) is not None
+
+
+def test_a_failed_build_stops_the_verdict_and_quotes_the_kept_log() -> None:
+    """Measured 2026-10-09: an install that failed (no cargo) still submitted 276 shards that all died."""
+    fake = FakeVerdictCluster(build_fails=True)
+    with pytest.raises(RuntimeError, match=r'(?s)build of a{12} failed .*' + BUILD_LOG + '.*could not find `cargo`'):
+        _submit(fake)
+    assert not fake.manifests, 'nothing was submitted'
+
+
+def test_a_missing_prerequisite_is_named_before_anything_is_fetched() -> None:
+    fake = FakeVerdictCluster(lacking=('cargo',))
+    with pytest.raises(RuntimeError, match='lacks cargo'):
+        _submit(fake)
+    assert not any('cat-file' in c for c, _ in fake.calls)
+
+
+def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
+    spec = VerdictSpec(sha=SHA, repo_url='u', install='false; true', needs=('cargo',))
+    script = build_script(spec)
+    assert "bash -eo pipefail -c 'uv venv" in script, 'a failing first install line cannot be masked by the next'
+    assert '[ -x .venv/bin/python ]' in script
+    assert 'git uv cargo' in needs_script(spec)
+
+
+def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
+    """Measured 2026-10-09: built as one user, submitted as another on the same cluster -- no venv there."""
+    other = Grant(user='you', hosts=GRANT.hosts, slurm_account='acct-free', cpus=640, partitions=GRANT.partitions)
+    mine, theirs = FakeVerdictCluster(dies=frozenset({'tests/b.py'})), FakeVerdictCluster()
+    machine = Machine(workstation='ws-a', grants=(GRANT, other))
+    connect = {GRANT.account: mine, other.account: theirs}
+
+    spec = VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true')
+    submit_verdict(spec, machine, lambda g: connect[g.account], cost=COST, policy=POLICY, stamp='t0')
+    builder = mine if any('@@@ facts' in c for c, _ in mine.calls) else theirs
+    for _ in range(2 + RETRIES):
+        if gather_verdict(SHA, machine, lambda g: connect[g.account], cost=COST, policy=POLICY) is not None:
+            break
+    bystander = theirs if builder is mine else mine
+    assert builder.manifests, 'the rounds ran where the tree was built'
+    assert not bystander.manifests, 'no round went to another user on the same cluster'
+
+
+def test_a_commit_off_the_remote_without_a_pack_source_is_refused() -> None:
     with pytest.raises(RuntimeError, match=r'not on https://g/r\.git'):
-        remote_verdict(
+        submit_verdict(
             VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true'),
             Machine(workstation='w', grants=(GRANT,)),
             lambda _g: FakeVerdictCluster(have=False),

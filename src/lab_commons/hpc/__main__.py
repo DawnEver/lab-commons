@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc <verb>`` -- probe, plan, submit, status, gather, retry, verdict.
+"""``python -m lab_commons.hpc <verb>`` -- probe, plan, submit, status, gather, retry, verdict {submit|gather}.
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
@@ -6,8 +6,10 @@ submission of a job file is recorded next to it as ``<job>.run.json`` (the grant
 targets, run directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need
 nothing more -- through whichever of those login hosts answers.
 
-``verdict`` tests one commit on the cluster (:mod:`lab_commons.hpc.verdict`); ``-c`` there is optional
-and only its ``[cost]``/``[policy]`` are read. ``--history`` names a previous verdict record whose measured
+``verdict submit`` tests one commit on the cluster (:mod:`lab_commons.hpc.verdict`) and returns once the
+first round is queued; ``verdict gather --sha <sha> -o <record>`` is one short call -- pending (exit
+:data:`PENDING`), or the record written to ``-o``. ``-c`` there is optional and only its
+``[cost]``/``[policy]`` are read. ``--history`` names a previous verdict record whose measured
 durations, overheads and peaks plan this one; without it every file is priced at ``[cost]``.
 """
 
@@ -29,6 +31,7 @@ from lab_commons.hpc.platforms import table_at
 from lab_commons.hpc.run import (
     TERMINAL_OK,
     Runner,
+    Unreachable,
     failover_runner,
     gather,
     probe,
@@ -38,7 +41,7 @@ from lab_commons.hpc.run import (
     submit,
 )
 from lab_commons.hpc.slurm import Snapshot
-from lab_commons.hpc.verdict import VerdictSpec, remote_verdict, summary, write_record
+from lab_commons.hpc.verdict import VerdictSpec, gather_verdict, submit_verdict, summary, write_record
 from lab_commons.log import emit
 
 __all__ = ['main']
@@ -170,8 +173,11 @@ def _retry(config: Config, run: Runner, record: dict[str, Any]) -> int:
     return 0
 
 
-def _verdict(args: argparse.Namespace, machine: Machine) -> int:
-    config = load_config(args.config) if args.config else Config()
+#: Exit status of a ``verdict gather`` that wrote no record yet: still running, re-submitted, or unreachable.
+PENDING = 3
+
+
+def _verdict_submit(args: argparse.Namespace, machine: Machine, config: Config) -> int:
     spec = VerdictSpec(
         sha=args.sha,
         repo_url=args.repo_url,
@@ -180,9 +186,10 @@ def _verdict(args: argparse.Namespace, machine: Machine) -> int:
         select=args.select,
         table=table_at(args.repo, args.sha),
         python=args.python,
-        bundle_from=args.repo,
+        pack_from=args.repo,
+        needs=tuple(filter(None, args.needs.split(','))),
     )
-    record = remote_verdict(
+    run_id = submit_verdict(
         spec,
         machine,
         lambda g: runner_for(g, _BUILD_TIMEOUT),
@@ -190,8 +197,21 @@ def _verdict(args: argparse.Namespace, machine: Machine) -> int:
         policy=config.policy,
         history=json.loads(args.history.read_text(encoding='utf-8')) if args.history else None,
     )
+    _out(f'submitted verdict {run_id}; gather it: python -m lab_commons.hpc verdict gather --sha {run_id} -o <record>')
+    return 0
+
+
+def _verdict_gather(args: argparse.Namespace, machine: Machine, config: Config) -> int:
+    try:
+        record = gather_verdict(args.sha, machine, runner_for, cost=config.cost, policy=config.policy)
+    except Unreachable as exc:
+        _out(f'pending: {exc}')
+        return PENDING
+    if record is None:
+        _out(f'pending: {args.sha[:12]} is still running on the cluster -- gather again later')
+        return PENDING
     write_record(record, args.output)
-    _out(f'{spec.sha[:12]} on {record["cluster"]} ({record["platform"]}, python {record["python"]}): {summary(record)}')
+    _out(f'{args.sha[:12]} on {record["cluster"]} ({record["platform"]}, python {record["python"]}): {summary(record)}')
     _out(f'written {args.output}')
     _out(
         f'record it as the linux part: python -m lab_commons.dev.platformparts record-linux {args.output} --tier <tier>'
@@ -202,8 +222,9 @@ def _verdict(args: argparse.Namespace, machine: Machine) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc', description=__doc__.splitlines()[0])
     parser.add_argument('verb', choices=['probe', 'plan', 'submit', 'status', 'gather', 'retry', 'verdict'])
+    parser.add_argument('step', nargs='?', choices=['submit', 'gather'], help='verdict only: submit, then gather')
     parser.add_argument('-c', '--config', type=Path, help='the job file (default hpc.toml; optional for verdict)')
-    parser.add_argument('-o', '--output', type=Path, help='gather: merged item results (JSON); verdict: the record')
+    parser.add_argument('-o', '--output', type=Path, help='gather: merged item results (JSON) or the verdict record')
     verdict = parser.add_argument_group('verdict')
     verdict.add_argument('--sha', help='the full commit id to test')
     verdict.add_argument('--repo-url', help='read-only HTTPS remote the cluster fetches from')
@@ -215,10 +236,19 @@ def _parser() -> argparse.ArgumentParser:
         '--repo',
         type=Path,
         default=Path.cwd(),
-        help='local repository: its [tool.lab_commons.platforms] at --sha, and the bundle if the remote lacks it',
+        help='local repository, READ only: its [tool.lab_commons.platforms] at --sha; a pack if the remote lacks it',
+    )
+    verdict.add_argument(
+        '--needs', default='', help='commands the login node must have beyond git and uv, comma-separated (cargo,cc)'
     )
     verdict.add_argument('--history', type=Path, help='a previous verdict record: its measurements plan this run')
     return parser
+
+
+_VERDICT_NEEDS = {
+    'submit': ('--sha', '--repo-url', '--install'),
+    'gather': ('--sha', '--output'),
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -227,11 +257,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     machine = load_grants()
     if args.verb == 'verdict':
-        given = {'--sha': args.sha, '--repo-url': args.repo_url, '--install': args.install, '--output': args.output}
-        missing = [flag for flag, value in given.items() if not value]
+        if args.step is None:
+            parser.error('verdict needs a step: submit, then gather')
+        values = {'--sha': args.sha, '--repo-url': args.repo_url, '--install': args.install, '--output': args.output}
+        missing = [flag for flag in _VERDICT_NEEDS[args.step] if not values[flag]]
         if missing:
-            parser.error(f'verdict needs {", ".join(missing)}')
-        return _verdict(args, machine)
+            parser.error(f'verdict {args.step} needs {", ".join(missing)}')
+        config = load_config(args.config) if args.config else Config()
+        step = _verdict_submit if args.step == 'submit' else _verdict_gather
+        return step(args, machine, config)
+    if args.step is not None:
+        parser.error(f'{args.verb} takes no step')
     config = load_config(args.config or Path('hpc.toml'))
     connect = runner_for
     if args.verb == 'probe':
