@@ -1,7 +1,7 @@
 """``lab_commons.hpc`` remote verdict: streamed outcomes, retried kills and measured plans.
 
-Every number in a docstring here was measured on Ada for the verdict of motronics 64c85da4d9
-(2026-10-09, job 7655849): 26233 passed, 13751 lost, 8786 missing. The item runner is exercised by
+Every number in a docstring here was measured on a real cluster for one downstream verdict
+(2026-10-09): 26233 passed, 13751 lost, 8786 missing. The item runner is exercised by
 REALLY running pytest on ids built to be awkward, because the defect behind ``missing`` was a mismatch
 between the id pytest collects and the id it reports -- a fake cannot reproduce that.
 """
@@ -58,9 +58,9 @@ def test_a_phase_decides_only_what_it_can(when: str, outcome: str, *, xfail: boo
 
 
 def test_the_xdist_group_suffix_is_stripped_only_back_to_a_collected_id() -> None:
-    """``--dist loadgroup`` turned ``t`` into ``t@heavy_parallel_0``; 8786 ran tests read as missing."""
+    """``--dist loadgroup`` turned ``t`` into ``t@group_0``; 8786 ran tests read as missing."""
     expected = {'tests/a.py::t[x@y]', 'tests/a.py::u'}
-    assert canonical('tests/a.py::u@heavy_parallel_0', expected) == 'tests/a.py::u'
+    assert canonical('tests/a.py::u@group_0', expected) == 'tests/a.py::u'
     assert canonical('tests/a.py::t[x@y]', expected) == 'tests/a.py::t[x@y]', 'an @ inside the id is the id'
     assert canonical('tests/a.py::v@g', expected) == 'tests/a.py::v@g', 'nothing collected: left alone'
 
@@ -126,7 +126,7 @@ _LOADGROUP = """
 def pytest_collection_modifyitems(items):
     for item in items:
         if item.get_closest_marker('grouped'):
-            item._nodeid = item.nodeid + '@heavy_parallel_0'
+            item._nodeid = item.nodeid + '@group_0'
 """
 
 
@@ -225,16 +225,16 @@ def test_measured_estimates_fall_back_only_for_files_never_measured() -> None:
 def test_memory_is_the_worst_measured_peak_with_margin() -> None:
     """3 shards were OOM-killed at 6 GB; the completed ones peaked at 5.15 GB."""
     measured = Measured(peaks_mb={'a.py': 5274.0, 'b.py': 900.0})
-    assert measured.mem_gb([['a.py::t'], ['b.py::t']], Cost(mem_gb=6), Policy(safety=1.5)) == pytest.approx(
-        5274.0 * 1.5 / 1024
-    )  # floor: relative 1e-6 default, the product is exact arithmetic
+    worst = measured.mem_gb([['a.py::t'], ['b.py::t']], Cost(mem_gb=6), Policy(safety=1.5))
+    # floor: abs=0.0 -- the same float product on both sides, so only the relative 1e-12 rounding is allowed
+    assert worst == pytest.approx(5274.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
     assert measured.mem_gb([['a.py::t'], ['c.py::t']], Cost(mem_gb=9), Policy(safety=1.5)) == 9, 'unmeasured: cost'
 
 
 # -- the verdict flow ------------------------------------------------------------------------------------
 
 
-class FakeAda:
+class FakeVerdictCluster:
     """A cluster answering the verdict flow; an item of a file in *dies* is killed in its first *kills* rounds.
 
     A killed item streams the first half of its ids (rounded down) and never closes.
@@ -287,11 +287,11 @@ class FakeAda:
         return '\n'.join(out) + '\n'
 
 
-def _verdict(ada: FakeAda, **kw: object) -> dict:
+def _verdict(fake: FakeVerdictCluster, **kw: object) -> dict:
     return remote_verdict(
         VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true', table={'win': ('windows',)}),
         Machine(workstation='ws-a', grants=(GRANT,)),
-        lambda _g: ada,
+        lambda _g: fake,
         cost=Cost(seconds=600),
         policy=Policy(shard_minutes_min=1, shard_minutes_max=15),
         sleep=lambda _s: None,
@@ -301,8 +301,8 @@ def _verdict(ada: FakeAda, **kw: object) -> dict:
 
 
 def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> None:
-    ada = FakeAda()
-    record = _verdict(ada)
+    fake = FakeVerdictCluster()
+    record = _verdict(fake)
     assert record['sha'] == SHA
     assert record['left'] == {'tests/w.py::t': ['windows']}, 'left names the platforms that CAN run it'
     assert (record['platform'], record['cluster'], record['python']) == (
@@ -317,29 +317,29 @@ def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> 
     assert set(record['outcomes'].values()) == {'passed', 'not-covered'}
     assert record['overheads'] == {'tests/a.py': 5.0, 'tests/b.py': 5.0}
     assert record['peaks_mb'] == {'tests/a.py': 2048.0, 'tests/b.py': 2048.0}
-    assert '#SBATCH --comment=lc:ws=ws-a' in ada.scripts[0]
-    assert 'cd "$HOME"/ci/trees/' + SHA in ada.scripts[0]
-    assert 'lab_ci_pytest_item' in json.dumps(ada.manifests[0])
+    assert '#SBATCH --comment=lc:ws=ws-a' in fake.scripts[0]
+    assert 'cd "$HOME"/ci/trees/' + SHA in fake.scripts[0]
+    assert 'lab_ci_pytest_item' in json.dumps(fake.manifests[0])
 
 
 def test_a_killed_shard_reruns_only_its_unfinished_ids_split_in_halves() -> None:
-    ada = FakeAda(dies=frozenset({'tests/b.py'}))
-    record = _verdict(ada)
-    assert len(ada.manifests) == 2
-    assert [i['ids'] for i in ada.manifests[1]['items']] == [['tests/b.py::t4'], ['tests/b.py::t5']]
+    fake = FakeVerdictCluster(dies=frozenset({'tests/b.py'}))
+    record = _verdict(fake)
+    assert len(fake.manifests) == 2
+    assert [i['ids'] for i in fake.manifests[1]['items']] == [['tests/b.py::t4'], ['tests/b.py::t5']]
     assert all(record['outcomes'][f'tests/b.py::t{n}'] == 'passed' for n in (3, 4, 5))
     assert len(record['rounds']) == 2
 
 
 def test_what_is_still_unfinished_after_the_retries_is_lost() -> None:
-    record = _verdict(FakeAda(dies=frozenset({'tests/b.py'}), kills=1 + RETRIES))
+    record = _verdict(FakeVerdictCluster(dies=frozenset({'tests/b.py'}), kills=1 + RETRIES))
     assert len(record['rounds']) == 1 + RETRIES
     assert record['outcomes']['tests/b.py::t3'] == 'passed', 'what a killed shard finished is kept'
     assert [record['outcomes'][f'tests/b.py::t{n}'] for n in (4, 5)] == ['lost', 'lost']
 
 
 def test_an_out_of_memory_round_doubles_the_memory_of_the_next() -> None:
-    record = _verdict(FakeAda(dies=frozenset({'tests/b.py'}), oom=True))
+    record = _verdict(FakeVerdictCluster(dies=frozenset({'tests/b.py'}), oom=True))
     first, second = record['rounds']
     assert second['mem_mb'] == 2 * first['mem_mb']
 
@@ -350,7 +350,7 @@ def test_history_prices_the_plan_and_names_nothing_unmeasured() -> None:
         'overheads': {'tests/a.py': 20.0, 'tests/b.py': 20.0},
         'peaks_mb': {'tests/a.py': 1000.0, 'tests/b.py': 3000.0},
     }
-    record = _verdict(FakeAda(), history=history)
+    record = _verdict(FakeVerdictCluster(), history=history)
     assert record['plan']['unmeasured'] == []
     assert record['plan']['mem_mb'] == -(-3000 * 1.5 // 1)
 
@@ -360,7 +360,7 @@ def test_a_commit_off_the_remote_without_a_bundle_is_refused() -> None:
         remote_verdict(
             VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true'),
             Machine(workstation='w', grants=(GRANT,)),
-            lambda _g: FakeAda(have=False),
+            lambda _g: FakeVerdictCluster(have=False),
             cost=Cost(),
             policy=Policy(),
         )

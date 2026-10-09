@@ -12,7 +12,7 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
    (``shard_minutes_min``) without passing ``shard_minutes_max``; both bounds are then grown until the
    array fits ``max_array`` and the QOS's per-user submit limit (each array task is one job to Slurm).
    An item's time is MEASURED when the caller has it (``seconds``, one per item) and ``cost.seconds``
-   otherwise; the wall limit is the SLOWEST shard's padded sum, never an average. Measured on Ada
+   otherwise; the wall limit is the SLOWEST shard's padded sum, never an average. Measured on a real cluster
    (2026-10-09): a flat 120 s per test file planned 129-min shards that ran 1h25-2h07, and 23 of 99 hit
    the limit. Decided per candidate, because the QOS differs.
 2. **Partition** -- the first candidate, in the caller's order, whose time ceiling (partition AND QOS)

@@ -27,9 +27,9 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     priority = 0                                  # optional; breaks a tie between equally fast grants
     partitions = ["shortq", "defq"]               # optional cluster facts: candidates, in preference order
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
-    setup = ["module load git-uoneasy/2.42.0-GCCcore-13.2.0"]   # optional: run first in every array task
+    setup = ["module load git/2.42.0"]   # optional: run first in every array task
 
-``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- Ada's
+``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster.s
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
 ``FileNotFoundError: 'git'`` there, while the login node has it) -- so it is declared once per grant and
 prepended to every shard script that grant submits, before the job's own set-up.

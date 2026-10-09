@@ -9,14 +9,14 @@ THE SAME FILE IS THE PYTEST PLUGIN. :func:`run` starts ``pytest -p lab_ci_pytest
 appends one JSON line per test phase to the item's stream file the moment pytest reports it, and
 :func:`run` appends a closing ``done`` line (exit code, wall seconds, peak RSS). A shard Slurm kills for
 time or memory therefore leaves every test it FINISHED on disk; an item without its ``done`` line is
-UNFINISHED and is re-run, never assumed. Measured on Ada (verdict of motronics 64c85da4d9, 2026-10-09):
+UNFINISHED and is re-run, never assumed. Measured on a real cluster (a downstream verdict, 2026-10-09):
 23 of 99 shards were killed at the wall limit, and the end-of-shard results file they never wrote took
 13751 ids down with them as ``lost`` -- finished ones included.
 
 THE ID IS PYTEST'S OWN ``nodeid``, NOT A JUNIT RE-MANGLING. The junit file this replaced was keyed on
 ``(classname, name)``, and pytest-xdist's ``--dist loadgroup`` appends ``@<group>`` to a grouped test's id
 inside its workers -- measured on the same run: ``name="test_unknown_attribute_raises_attribute_error
-@heavy_parallel_0"`` matched no collected id, and 8786 tests that RAN were recorded ``missing``. The run
+@group_0"`` matched no collected id, and 8786 tests that RAN were recorded ``missing``. The run
 asks for ``-n 0`` when xdist is installed (an item has one CPU; an xdist worker is a second interpreter
 importing the whole tree again, per file, for nothing), and :func:`canonical` strips a suffix that still
 arrives.
@@ -62,6 +62,7 @@ class _Report(Protocol):
     when: str
     outcome: str
     duration: float
+    longrepr: object
 
 
 def outcome_of(when: str, outcome: str, *, xfail: bool) -> str | None:
@@ -102,10 +103,15 @@ def pytest_collection_modifyitems(config: _Config, items: list[_Item]) -> None:
     items[:] = chosen
 
 
+def _xfailed(report: _Report) -> bool:
+    """A skip carries pytest's ``(path, line, reason)`` tuple; an xfail carries the failure it expected."""
+    return report.outcome == 'skipped' and not isinstance(report.longrepr, tuple)
+
+
 def pytest_runtest_logreport(report: _Report) -> None:
     """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
     target = os.environ.get(STREAM_ENV)
-    outcome = outcome_of(report.when, report.outcome, xfail=hasattr(report, 'wasxfail'))
+    outcome = outcome_of(report.when, report.outcome, xfail=_xfailed(report))
     if not target or outcome is None:
         return
     line = json.dumps({'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)})
@@ -151,7 +157,7 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
 
 def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
     """Exit code and the child's peak RSS in MB -- ``wait4`` where the OS has it, else no peak."""
-    if not hasattr(os, 'wait4'):
+    if sys.platform == 'win32':
         return proc.wait(), None
     _, status, usage = os.wait4(proc.pid, 0)
     proc.returncode = os.waitstatus_to_exitcode(status)
