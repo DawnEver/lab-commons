@@ -14,10 +14,11 @@ command; collect node ids there; group them by file into items; re-allocate the 
 the grants on that cluster; submit the array; poll ``sacct`` until no shard is active; gather.
 
 NOT COVERED IS NOT PASSED. The commit's own ``[tool.lab_commons.platforms]`` table
-(:mod:`lab_commons.hpc.platforms`) says which markers linux cannot run; those ids are collected
-separately, recorded as ``not-covered``, and listed in the record's ``left`` with the platforms that CAN
-run each (``[]`` when none can) -- the input the next platform part selects from. Only ``passed`` means
-passed.
+(:mod:`lab_commons.hpc.platforms`) says which markers each platform cannot run; an id the
+assignment rule (:func:`lab_commons.hpc.platforms.assign`) gives to another part is recorded as
+``not-covered`` and listed in the record's ``handed`` with the platforms that CAN run it (``[]`` when
+none can). Admission composes it with the other parts; no part reads it to choose its ids. Only
+``passed`` means passed.
 
 A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its outcomes as they happen
 (:mod:`lab_commons.hpc.pytest_item`); the verdict reads the streams, not the shards' end-of-run files.
@@ -49,7 +50,7 @@ from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.plan import Plan, allocate
-from lab_commons.hpc.platforms import PLATFORMS, cannot_run
+from lab_commons.hpc.platforms import LINUX, PLATFORMS, assign, cannot_run, runnable
 from lab_commons.hpc.pytest_item import read_stream
 from lab_commons.hpc.run import Runner, Unreachable, probe, shard_states, submit
 
@@ -255,7 +256,7 @@ def remote_verdict(
 ) -> dict[str, Any]:
     """The module docstring's flow; *history* is a previous record, read for its measurements only.
 
-    The record is ``{sha, platform, cluster, python, plan, rounds, outcomes, left}`` plus the measurements.
+    The record is ``{sha, platform, cluster, python, plan, rounds, outcomes, handed}`` plus the measurements.
     """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
@@ -284,16 +285,15 @@ def remote_verdict(
         for platform in PLATFORMS
         if (expr := cannot_run(spec.table, platform))
     }
-    not_covered = {node for node in ids if node in cannot.get('linux', set())}
-    left = {node: [p for p in PLATFORMS if node not in cannot.get(p, set())] for node in sorted(not_covered)}
+    handed = {node: can for node, can in sorted(runnable(ids, cannot).items()) if assign(can) != LINUX}
 
     same_cluster = [(g, s) for g, s in snapshots if g.same_cluster(grant)]
     stamp = stamp or time.strftime('%Y%m%d-%H%M%S')
-    outcomes: dict[str, str] = dict.fromkeys(sorted(not_covered), 'not-covered')
+    outcomes: dict[str, str] = dict.fromkeys(handed, 'not-covered')
     outcomes.update(dict.fromkeys(errored, 'error'))
     measured = Measured.of(history or {})
     rounds: list[dict[str, Any]] = []
-    pending = group_items([node for node in ids if node not in not_covered])
+    pending = group_items([node for node in ids if node not in handed])
     oom = 1
     for attempt in range(1 + RETRIES):
         tag = f'{stamp}-r{attempt}'
@@ -329,7 +329,7 @@ def remote_verdict(
         'plan': rounds[0],
         'rounds': rounds,
         'outcomes': outcomes,
-        'left': left,
+        'handed': handed,
         **measured.record(),
     }
 

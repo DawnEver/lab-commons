@@ -41,7 +41,7 @@ def _admit(rows: list[Entry], destination: str, *, clean: bool = True, gap: Path
     )
 
 
-def _part(platform: str, result: str, left: dict[str, list[str]], *, tier: str = 'heavy', env: str = ENV) -> Entry:
+def _part(platform: str, result: str, handed: dict[str, list[str]], *, tier: str = 'heavy', env: str = ENV) -> Entry:
     """A platform part's run entry for HEAD -- the shape :mod:`lab_commons.dev.platformparts` records."""
     return Entry(
         f'commit:{HEAD}' if platform == 'linux' else TREE,
@@ -52,33 +52,42 @@ def _part(platform: str, result: str, left: dict[str, list[str]], *, tier: str =
         commit=HEAD,
         log='part@d',
         part=platform,
-        left=left,
+        handed=handed,
     )
 
 
-LINUX_LEFT = {'tests/f.py::t': ['windows'], 'tests/j.py::t': ['windows']}
+LINUX_HANDED = {'tests/f.py::t': ['windows'], 'tests/j.py::t': ['windows']}
+WINDOWS_HANDED = {'tests/a.py::t': ['linux', 'windows']}
 
 
-def test_a_linux_and_a_windows_part_compose_into_an_admitted_verdict() -> None:
-    rows = [_part('linux', 'PASS', LINUX_LEFT), _part('windows', 'PASS', {})]
+@pytest.mark.parametrize('order', ['linux first', 'windows first'])
+def test_a_linux_and_a_windows_part_compose_in_either_order(order: str) -> None:
+    """The parts are independent: neither reads the other, so the recording order cannot matter."""
+    rows = [_part('linux', 'PASS', LINUX_HANDED), _part('windows', 'PASS', WINDOWS_HANDED)]
+    rows = rows if order == 'linux first' else rows[::-1]
     decided = _admit(rows, admission.INTEGRATION)
     assert decided.allowed, decided.message
     assert decided.message.count('[admission] cited:') == 2
     assert _admit(rows, admission.TRUNK).allowed, 'both parts heavy PASS: the trunk counts the composition'
 
 
-def test_a_missing_part_is_refused_naming_the_part_and_its_command() -> None:
-    """PLANTED CONTROL: the linux part alone leaves two windows-only tests unrun."""
-    decided = _admit([_part('linux', 'PASS', LINUX_LEFT)], admission.INTEGRATION)
+@pytest.mark.parametrize(
+    ('present', 'absent', 'command'),
+    [('linux', 'windows', '--platform windows'), ('windows', 'linux', 'lab_commons.hpc verdict')],
+)
+def test_a_missing_part_is_refused_naming_the_part_and_its_command(present: str, absent: str, command: str) -> None:
+    """PLANTED CONTROL: either part alone hands ids to the other, which is missing."""
+    handed = LINUX_HANDED if present == 'linux' else WINDOWS_HANDED
+    decided = _admit([_part(present, 'PASS', handed)], admission.INTEGRATION)
     assert not decided.allowed
-    assert 'missing the windows part' in decided.message
-    assert '--platform windows' in decided.message
+    assert f'missing the {absent} part' in decided.message
+    assert command in decided.message
 
 
 def test_a_fail_part_composes_a_fail_which_integration_admits_with_its_gap(tmp_path: Path) -> None:
     """PLANTED CONTROL: a FAIL in either part is a composed FAIL -- admitted to integration, never to the trunk."""
     failing = Entry(f'commit:{HEAD}', 'hpc:ada:linux-x86_64:python-3.13.1', 'tests/a.py::t', 'FAIL', 'heavy', HEAD, 'x')
-    rows = [_part('linux', 'FAIL', LINUX_LEFT), failing, _part('windows', 'PASS', {})]
+    rows = [_part('linux', 'FAIL', LINUX_HANDED), failing, _part('windows', 'PASS', WINDOWS_HANDED)]
     gap = tmp_path / 'gap.md'
     decided = _admit(rows, admission.INTEGRATION, gap=gap)
     assert decided.allowed
@@ -87,23 +96,26 @@ def test_a_fail_part_composes_a_fail_which_integration_admits_with_its_gap(tmp_p
     assert not _admit(rows, admission.TRUNK).allowed
 
 
-def test_a_test_no_part_ran_and_one_no_platform_can_run_are_refused_by_name() -> None:
-    """PLANTED CONTROL: the windows part also left a test, and one test no declared platform can run."""
-    left = {**LINUX_LEFT, 'tests/n.py::t': []}
-    rows = [_part('linux', 'PASS', left), _part('windows', 'PASS', {'tests/j.py::t': ['windows'], 'tests/n.py::t': []})]
+def test_an_id_runnable_nowhere_and_one_its_own_part_handed_off_are_refused_by_name() -> None:
+    """PLANTED CONTROL: one test no declared platform can run, and windows handing off a windows-assigned id."""
+    handed = {**LINUX_HANDED, 'tests/n.py::t': []}
+    rows = [
+        _part('linux', 'PASS', handed),
+        _part('windows', 'PASS', {**WINDOWS_HANDED, 'tests/j.py::t': ['windows'], 'tests/n.py::t': []}),
+    ]
     decided = _admit(rows, admission.INTEGRATION)
     assert not decided.allowed
     assert 'no declared platform can run 1 test(s): tests/n.py::t' in decided.message
-    assert 'tests/j.py::t' in decided.message
+    assert 'handed off by the part they are assigned to: tests/j.py::t' in decided.message
 
 
 def test_a_part_for_this_boxs_platform_counts_only_in_this_env() -> None:
-    rows = [_part('linux', 'PASS', LINUX_LEFT), _part('windows', 'PASS', {}, env='another-env')]
+    rows = [_part('linux', 'PASS', LINUX_HANDED), _part('windows', 'PASS', WINDOWS_HANDED, env='another-env')]
     assert not _admit(rows, admission.INTEGRATION).allowed
 
 
 def test_a_gate_tier_composition_is_not_a_trunk_pass() -> None:
-    rows = [_part('linux', 'PASS', LINUX_LEFT, tier='gate'), _part('windows', 'PASS', {}, tier='gate')]
+    rows = [_part('linux', 'PASS', LINUX_HANDED, tier='gate'), _part('windows', 'PASS', WINDOWS_HANDED, tier='gate')]
     assert _admit(rows, admission.INTEGRATION).allowed
     assert not _admit(rows, admission.TRUNK).allowed
 

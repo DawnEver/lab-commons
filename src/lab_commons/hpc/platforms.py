@@ -8,7 +8,9 @@
 
 A marker the table does not list runs everywhere. A test carrying several listed markers runs only
 where ALL of them can. A commit's verdict may then be COMPOSED of one part per platform
-(:mod:`lab_commons.dev.platformparts`): each part runs what its platform can and no earlier part ran.
+(:mod:`lab_commons.dev.platformparts`). Each id is ASSIGNED to exactly one part by :func:`assign`: the
+FIRST platform in :data:`PLATFORMS` order that can run it (linux, else windows, else macos). The
+assignment reads only the table and the id's markers, so every part can start at any time, in parallel.
 
 The table is read AT THE COMMIT being judged (``git show <sha>:pyproject.toml``), never from the
 working tree, so a part is selected by the declaration the commit itself carries. Standard library
@@ -21,12 +23,16 @@ import shutil
 import subprocess
 import tomllib
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-__all__ = ['PLATFORMS', 'cannot_run', 'host_platform', 'read_table', 'table_at']
+if TYPE_CHECKING:
+    from collections.abc import Collection, Iterable, Mapping, Sequence
 
-#: The platform names a part is named after -- what it ran ON, nothing else.
+__all__ = ['LINUX', 'PLATFORMS', 'assign', 'cannot_run', 'host_platform', 'read_table', 'runnable', 'table_at']
+
+#: The platform names a part is named after -- what it ran ON. THE ORDER IS THE ASSIGNMENT RULE (:func:`assign`).
 PLATFORMS: Final = ('linux', 'windows', 'macos')
+LINUX: Final = PLATFORMS[0]
 
 _GIT: Final = shutil.which('git') or 'git'
 
@@ -73,3 +79,13 @@ def cannot_run(table: dict[str, tuple[str, ...]], platform: str) -> str:
         msg = f'unknown platform {platform!r}; known: {PLATFORMS}'
         raise ValueError(msg)
     return ' or '.join(sorted(marker for marker, can in table.items() if platform not in can))
+
+
+def assign(can: Sequence[str]) -> str | None:
+    """THE ASSIGNMENT RULE: the part an id runs in -- the first of :data:`PLATFORMS` in *can*; ``None`` when none."""
+    return next((platform for platform in PLATFORMS if platform in can), None)
+
+
+def runnable(ids: Iterable[str], cannot: Mapping[str, Collection[str]]) -> dict[str, list[str]]:
+    """``{id: the platforms that can run it}`` from *cannot* (platform -> the ids collected by :func:`cannot_run`)."""
+    return {node: [p for p in PLATFORMS if node not in cannot.get(p, ())] for node in ids}

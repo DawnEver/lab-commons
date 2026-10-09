@@ -304,7 +304,7 @@ def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> 
     fake = FakeVerdictCluster()
     record = _verdict(fake)
     assert record['sha'] == SHA
-    assert record['left'] == {'tests/w.py::t': ['windows']}, 'left names the platforms that CAN run it'
+    assert record['handed'] == {'tests/w.py::t': ['windows']}, 'handed names the platforms that CAN run it'
     assert (record['platform'], record['cluster'], record['python']) == (
         'linux-x86_64/glibc2.28',
         'login.example',
