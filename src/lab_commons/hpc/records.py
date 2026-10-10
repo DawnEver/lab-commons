@@ -1,7 +1,8 @@
-"""A verdict's RESULTS: streams folded into outcomes, and the record written to the caller's ``-o``."""
+"""A run's RESULTS: streams folded into outcomes, and the record ``run-<sha>-<platform>-<req>.json.gz``."""
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from lab_commons.hpc.cluster import Runner
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.pytest_item import read_stream
 
-__all__ = ['fold', 'read_streams', 'summary', 'write_record']
+__all__ = ['fold', 'read_record', 'read_streams', 'record_name', 'summary', 'write_record']
 
 
 def fold(
@@ -66,7 +67,19 @@ def summary(record: dict[str, Any]) -> str:
     return ', '.join(f'{k}={v}' for k, v in sorted(counts.items()))
 
 
-def write_record(record: dict[str, Any], target: Path) -> None:
-    """The record as JSON at *target* -- the caller's chosen path, created with its parent."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(record, indent=1, sort_keys=True), encoding='utf-8')
+def record_name(record: dict[str, Any]) -> str:
+    """``run-<sha>-<platform>-<req>.json.gz`` -- one run of one sha on one platform, one request."""
+    return f'run-{record["sha"]}-{record["platform"]}-{record["req"]}.json.gz'
+
+
+def write_record(record: dict[str, Any], directory: Path) -> Path:
+    """The record gzipped under *directory* (created) at :func:`record_name`; returns its path."""
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / record_name(record)
+    target.write_bytes(gzip.compress(json.dumps(record, sort_keys=True).encode('utf-8'), mtime=0))
+    return target
+
+
+def read_record(path: Path) -> dict[str, Any]:
+    """The record :func:`write_record` wrote."""
+    return json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))

@@ -1,4 +1,4 @@
-"""What a verdict has MEASURED about a test tree, carried from one record to the next. Pure.
+"""What a run has MEASURED about a test tree, carried from one record to the next. Pure.
 
 THREE FACTS, EACH KEYED BY WHAT IT DESCRIBES. ``durations`` -- seconds per node id, the sum of its
 phases as pytest timed them; ``overheads`` -- seconds per test FILE that are not any test's (the
@@ -39,7 +39,7 @@ class Measured:
 
     @classmethod
     def of(cls, record: dict[str, Any]) -> Measured:
-        """The measurements a previous verdict record carries; an older record without them gives none."""
+        """The measurements a previous run record carries; an older record without them gives none."""
         return cls(
             durations=dict(record.get('durations', {})),
             overheads=dict(record.get('overheads', {})),

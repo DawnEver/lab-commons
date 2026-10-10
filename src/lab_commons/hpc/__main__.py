@@ -1,16 +1,18 @@
-"""``python -m lab_commons.hpc <verb>`` -- probe, plan, submit, status, gather, retry, verdict {submit|gather}.
+"""``python -m lab_commons.hpc <verb>`` -- probe, plan, submit, status, gather, retry, run {submit|gather}.
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
-submission of a job file is recorded next to it as ``<job>.submission.json`` (the grant it went to and its ssh
-targets, run directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need
+submission of a job file is recorded next to it as ``<job>.submission.json`` (the grant it went to and its
+ssh targets, run directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need
 nothing more -- through whichever of those login hosts answers.
 
-``verdict submit`` tests one commit on the cluster (:mod:`lab_commons.hpc.verdict`) and returns once the
-first round is queued; ``verdict gather --sha <sha> -o <record>`` is one short call -- pending (exit
-:data:`PENDING`), or the record written to ``-o``. ``-c`` there is optional and only its
-``[cost]``/``[policy]`` are read. ``--history`` names a previous verdict record whose measured
-durations, overheads and peaks plan this one; without it every file is priced at ``[cost]``.
+``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
+returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
+takes none. ``run gather --sha <sha> -o <dir>`` is one short call -- pending (exit :data:`PENDING`), or
+the record written to ``<dir>/run-<sha>-<platform>-<req>.json.gz``. ``-c`` there is optional and only its
+``[cost]``/``[policy]`` are read. ``--history`` names a previous run record whose measured durations,
+overheads and peaks plan this one; without it every file is priced at ``[cost]``. A retired verb is
+refused by name (:mod:`lab_commons.hpc.retired`).
 """
 
 from __future__ import annotations
@@ -41,10 +43,11 @@ from lab_commons.hpc.config import Config, Limits, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
 from lab_commons.hpc.platforms import table_at
-from lab_commons.hpc.records import summary, write_record
-from lab_commons.hpc.shell import VerdictSpec
+from lab_commons.hpc.records import read_record, summary, write_record
+from lab_commons.hpc.retired import refusal
+from lab_commons.hpc.run import gather_run, submit_run
+from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
 from lab_commons.hpc.slurm import Snapshot
-from lab_commons.hpc.verdict import gather_verdict, submit_verdict
 from lab_commons.log import emit
 
 __all__ = ['main']
@@ -177,7 +180,7 @@ def _retry(config: Config, run: Runner, record: dict[str, Any]) -> int:
     return 0
 
 
-#: Exit status of a ``verdict gather`` that wrote no record yet: still running, re-submitted, or unreachable.
+#: Exit status of a ``run gather`` that wrote no record yet: still running, re-submitted, or unreachable.
 PENDING = 3
 
 
@@ -188,8 +191,8 @@ def _only(path: Path | None) -> frozenset[str] | None:
     return frozenset(line.strip() for line in path.read_text(encoding='utf-8').splitlines() if line.strip())
 
 
-def _verdict_submit(args: argparse.Namespace, machine: Machine, config: Config) -> int:
-    spec = VerdictSpec(
+def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> int:
+    spec = RunSpec(
         sha=args.sha,
         repo_url=args.repo_url,
         install=args.install,
@@ -202,65 +205,69 @@ def _verdict_submit(args: argparse.Namespace, machine: Machine, config: Config) 
         only=_only(args.only),
         needs=tuple(filter(None, args.needs.split(','))),
     )
-    run_id = submit_verdict(
+    run_id = submit_run(
         spec,
         machine,
         lambda g: runner_for(g, _BUILD_TIMEOUT),
         cost=config.cost,
         policy=config.policy,
-        history=json.loads(args.history.read_text(encoding='utf-8')) if args.history else None,
+        history=read_record(args.history) if args.history else None,
     )
-    _out(f'submitted verdict {run_id}; gather it: python -m lab_commons.hpc verdict gather --sha {run_id} -o <record>')
+    _out(
+        f'submitted run {run_id} ({spec.scope}); gather it: '
+        f'python -m lab_commons.hpc run gather --sha {run_id} -o <dir>'
+    )
     return 0
 
 
-def _verdict_gather(args: argparse.Namespace, machine: Machine, config: Config) -> int:
+def _run_gather(args: argparse.Namespace, machine: Machine, config: Config) -> int:
     try:
-        record = gather_verdict(args.sha, machine, runner_for, cost=config.cost, policy=config.policy)
+        record = gather_run(args.sha, machine, runner_for, cost=config.cost, policy=config.policy)
     except Unreachable as exc:
         _out(f'pending: {exc}')
         return PENDING
     if record is None:
         _out(f'pending: {args.sha[:12]} is still running on the cluster -- gather again later')
         return PENDING
-    write_record(record, args.output)
-    _out(f'{args.sha[:12]} on {record["cluster"]} ({record["platform"]}, python {record["python"]}): {summary(record)}')
-    _out(f'written {args.output}')
-    _out(
-        f'record it as the linux part: python -m lab_commons.dev.platformparts record-linux {args.output} --tier <tier>'
-    )
+    path = write_record(record, args.output)
+    _out(f'{args.sha[:12]} on {record["cluster"]} ({record["system"]}, python {record["python"]}): {summary(record)}')
+    _out(f'written {path}')
+    _out(f'record it as the {record["platform"]} part: python -m lab_commons.dev.platformparts record {path}')
     return 0
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc', description=__doc__.splitlines()[0])
-    parser.add_argument('verb', choices=['probe', 'plan', 'submit', 'status', 'gather', 'retry', 'verdict'])
-    parser.add_argument('step', nargs='?', choices=['submit', 'gather'], help='verdict only: submit, then gather')
-    parser.add_argument('-c', '--config', type=Path, help='the job file (default hpc.toml; optional for verdict)')
-    parser.add_argument('-o', '--output', type=Path, help='gather: merged item results (JSON) or the verdict record')
-    verdict = parser.add_argument_group('verdict')
-    verdict.add_argument('--sha', help='the full commit id to test')
-    verdict.add_argument('--repo-url', help='read-only HTTPS remote the cluster fetches from')
-    verdict.add_argument('--install', help='shell, run once in the tree with its fresh .venv active')
-    verdict.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
-    verdict.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
-    verdict.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
-    verdict.add_argument(
+    parser.add_argument('verb', choices=['probe', 'plan', 'submit', 'status', 'gather', 'retry', 'run'])
+    parser.add_argument('step', nargs='?', choices=['submit', 'gather'], help='run only: submit, then gather')
+    parser.add_argument('-c', '--config', type=Path, help='the job file (default hpc.toml; optional for run)')
+    parser.add_argument(
+        '-o', '--output', type=Path, help='gather: merged item results (JSON); run gather: the record directory'
+    )
+    group = parser.add_argument_group('run')
+    group.add_argument('--scope', choices=[FULL, INCREMENTAL], help='run submit: every id, or only --only')
+    group.add_argument('--sha', help='the full commit id to test')
+    group.add_argument('--repo-url', help='read-only HTTPS remote the cluster fetches from')
+    group.add_argument('--install', help='shell, run once in the tree with its fresh .venv active')
+    group.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
+    group.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
+    group.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
+    group.add_argument(
         '--repo',
         type=Path,
         default=Path.cwd(),
         help='local repository, READ only: its [tool.lab_commons.platforms] at --sha; a pack if the remote lacks it',
     )
-    verdict.add_argument(
+    group.add_argument(
         '--needs', default='', help='commands the login node must have beyond git and uv, comma-separated (cargo,cc)'
     )
-    verdict.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
-    verdict.add_argument('--history', type=Path, help='a previous verdict record: its measurements plan this run')
+    group.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
+    group.add_argument('--history', type=Path, help='a previous run record: its measurements plan this run')
     return parser
 
 
-_VERDICT_NEEDS = {
-    'submit': ('--sha', '--repo-url', '--install'),
+_RUN_NEEDS = {
+    'submit': ('--sha', '--repo-url', '--install', '--scope'),
     'gather': ('--sha', '--output'),
 }
 
@@ -268,18 +275,29 @@ _VERDICT_NEEDS = {
 def main(argv: list[str] | None = None) -> int:
     """Parse the verb and dispatch it against this machine's grants."""
     parser = _parser()
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and (refused := refusal('lab_commons.hpc', argv[0])):
+        parser.error(refused)
     args = parser.parse_args(argv)
-    machine = load_grants()
-    if args.verb == 'verdict':
+    if args.verb == 'run':
         if args.step is None:
-            parser.error('verdict needs a step: submit, then gather')
-        values = {'--sha': args.sha, '--repo-url': args.repo_url, '--install': args.install, '--output': args.output}
-        missing = [flag for flag in _VERDICT_NEEDS[args.step] if not values[flag]]
+            parser.error('run needs a step: submit, then gather')
+        values = {
+            '--sha': args.sha,
+            '--repo-url': args.repo_url,
+            '--install': args.install,
+            '--output': args.output,
+            '--scope': args.scope,
+        }
+        missing = [flag for flag in _RUN_NEEDS[args.step] if not values[flag]]
         if missing:
-            parser.error(f'verdict {args.step} needs {", ".join(missing)}')
+            parser.error(f'run {args.step} needs {", ".join(missing)}')
+        if args.step == 'submit' and (args.scope == INCREMENTAL) != (args.only is not None):
+            parser.error('--scope incremental names its re-run ids with --only; --scope full takes no --only')
         config = load_config(args.config) if args.config else Config()
-        step = _verdict_submit if args.step == 'submit' else _verdict_gather
-        return step(args, machine, config)
+        step = _run_submit if args.step == 'submit' else _run_gather
+        return step(args, load_grants(), config)
+    machine = load_grants()
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
     config = load_config(args.config or Path('hpc.toml'))

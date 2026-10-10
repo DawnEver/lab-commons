@@ -1,4 +1,4 @@
-"""What a remote verdict RUNS ON THE CLUSTER: the spec, the shell it sends, and the parsing of what comes back.
+"""What a remote run RUNS ON THE CLUSTER: the spec, the shell it sends, and the parsing of what comes back.
 
 Every script here is a plain string handed to a :data:`lab_commons.hpc.cluster.Runner`; nothing in this module
 runs anything except :func:`pack`, which only READS the caller's repository. Paths stay under ``~/ci``.
@@ -22,12 +22,14 @@ __all__ = [
     'BUILD_LOG',
     'COLLECT_MODULE',
     'ENV',
+    'FULL',
+    'INCREMENTAL',
     'ITEM_MODULE',
     'NEEDS',
     'PREP_LOG',
     'ROOT',
     'TIME',
-    'VerdictSpec',
+    'RunSpec',
     'build_script',
     'collect_command',
     'facts',
@@ -64,11 +66,18 @@ _CARGO_TARGET: Final = f'{ROOT}/cargo-target'
 #: Lines of the build log a refusal quotes.
 _LOG_TAIL: Final = 40
 
-#: What every verdict needs on the login node, whatever it installs.
+#: What every run needs on the login node, whatever it installs.
 NEEDS: Final = ('git', 'uv')
 
 #: Hex digits of a full SHA-1 commit id.
 _SHA_HEX: Final = 40
+
+#: A run's scope: every collected id, or only the re-run ids that complete a base part (``RunSpec.only``).
+FULL: Final = 'full'
+INCREMENTAL: Final = 'incremental'
+
+#: Prints the tree venv's env hash (:func:`lab_commons.dev.envkey.env_key`) -- the key a base part is carried under.
+_ENV_KEY: Final = 'from lab_commons.dev.envkey import env_key, env_manifest; print(env_key(env_manifest()))'
 
 _GIT: Final = shutil.which('git') or 'git'
 
@@ -80,7 +89,7 @@ COLLECT_MODULE: Final = 'lab_ci_collect'
 
 
 @dataclass(frozen=True)
-class VerdictSpec:
+class RunSpec:
     """What to test and how to build it. Shell strings run on the cluster inside the tree."""
 
     sha: str
@@ -96,10 +105,15 @@ class VerdictSpec:
     only: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
-        """A verdict is bound to a full commit id, never to a branch name that moves under it."""
+        """A run is bound to a full commit id, never to a branch name that moves under it."""
         if len(self.sha) != _SHA_HEX or any(c not in '0123456789abcdef' for c in self.sha):
-            msg = f'a verdict needs the full 40-hex commit id, got {self.sha!r}'
+            msg = f'a run needs the full 40-hex commit id, got {self.sha!r}'
             raise ValueError(msg)
+
+    @property
+    def scope(self) -> str:
+        """Derived, never declared: :data:`INCREMENTAL` exactly when ``only`` narrows the ids."""
+        return FULL if self.only is None else INCREMENTAL
 
     @property
     def tree(self) -> str:
@@ -107,7 +121,7 @@ class VerdictSpec:
         return f'~/ci/trees/{self.sha}'
 
 
-def fetch_script(spec: VerdictSpec) -> str:
+def fetch_script(spec: RunSpec) -> str:
     """Make the cache hold the commit -- remote heads, else a shipped pack indexed and named HERE; have/missing."""
     sha, url, cache = spec.sha, shlex.quote(spec.repo_url), f'{ROOT}/cache.git'
     return '\n'.join(
@@ -128,7 +142,7 @@ def fetch_script(spec: VerdictSpec) -> str:
     )
 
 
-def needs_script(spec: VerdictSpec) -> str:
+def needs_script(spec: RunSpec) -> str:
     """Print ``@@@ missing <command>`` for every prerequisite the login node lacks: :data:`NEEDS` plus ``spec.needs``.
 
     Checked BEFORE anything is fetched or built, so a grant without ``cargo`` is named up front instead of
@@ -175,14 +189,14 @@ def parse_times(text: str) -> dict[str, int]:
     return times
 
 
-def build_script(spec: VerdictSpec) -> str:
+def build_script(spec: RunSpec) -> str:
     """Add the tree, build (or REUSE) its venv and native build, write its ``.lab-ci/env.sh``. Prints the facts.
 
     The item runner's source arrives on stdin, so the script's first line is a ``cat``. Declared inputs
     (:mod:`lab_commons.hpc.builds`) put the venv in ``~/ci/envs/<key>`` and the native build in
     ``~/ci/native/<key>``, each built once per key under a ``flock``; the tree's ``source_roots`` reach
     them through ``PYTHONPATH``. Undeclared, the venv is the tree's own ``.venv``. A FAILED BUILD STOPS THE
-    VERDICT: each build runs in its own ``bash -e``, its output is kept in a log next to what it builds
+    RUN: each build runs in its own ``bash -e``, its output is kept in a log next to what it builds
     (:data:`BUILD_LOG` inside the tree for a tree's own venv), and a non-zero exit -- or no ``bin/python``
     after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
     shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
@@ -229,11 +243,12 @@ def build_script(spec: VerdictSpec) -> str:
         'echo "@@@ facts"',
         'echo "platform=$(uname -s | tr A-Z a-z)-$(uname -m)/glibc$(getconf GNU_LIBC_VERSION | cut -d" " -f2)"',
         f'echo "python=$({ENV} && python -c "import platform; print(platform.python_version())")"',
+        f'echo "env=$({ENV} && python -c "{_ENV_KEY}" 2>/dev/null)"',
     ]
     return '\n'.join(lines)
 
 
-def collect_command(spec: VerdictSpec, *, also: str = '') -> str:
+def collect_command(spec: RunSpec, *, also: str = '') -> str:
     """Collect in the tree; ONE ``-m`` joins ``select`` and the marker expression *also*.
 
     One expression, because pytest keeps only the last ``-m`` -- a second one would silently drop the first.

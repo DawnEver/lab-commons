@@ -1,6 +1,6 @@
-"""One remote-verdict item on a compute node: run a group of pytest node ids, STREAM each one's outcome.
+"""One remote-run item on a compute node: run a group of pytest node ids, STREAM each one's outcome.
 
-STANDALONE AND STDLIB-ONLY ON PURPOSE. :mod:`lab_commons.hpc.verdict` ships this file's TEXT to the
+STANDALONE AND STDLIB-ONLY ON PURPOSE. :mod:`lab_commons.hpc.run` ships this file's TEXT to the
 cluster (``~/ci/bin/lab_ci_pytest_item.py``) and the array task imports it from there inside the tested
 tree's own venv -- so the code that runs is the one this checkout wrote, whatever version of
 ``lab_commons`` the tested project happens to pin. It imports nothing from ``lab_commons``.
@@ -9,7 +9,7 @@ THE SAME FILE IS THE PYTEST PLUGIN. :func:`run` starts ``pytest -p lab_ci_pytest
 appends one JSON line per test phase to the item's stream file the moment pytest reports it, and
 :func:`run` appends a closing ``done`` line (exit code, wall seconds, peak RSS). A shard Slurm kills for
 time or memory therefore leaves every test it FINISHED on disk; an item without its ``done`` line is
-UNFINISHED and is re-run, never assumed. Measured on a real cluster (a downstream verdict, 2026-10-09):
+UNFINISHED and is re-run, never assumed. Measured on a real cluster (a downstream run, 2026-10-09):
 23 of 99 shards were killed at the wall limit, and the end-of-shard results file they never wrote took
 13751 ids down with them as ``lost`` -- finished ones included.
 

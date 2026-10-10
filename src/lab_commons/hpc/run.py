@@ -1,7 +1,7 @@
-"""A remote verdict: one commit's test suite, sharded over a cluster, gathered into a record bound to the commit.
+"""A remote run: one commit's test suite, sharded over a cluster, gathered into a record bound to the commit.
 
 EVERYTHING LIVES UNDER ``~/ci/`` ON THE CLUSTER, AND NOTHING ELSE IS TOUCHED. A day-to-day checkout in
-``~/<repo>`` and its venv are someone's working state; a verdict must neither reinstall nor read them::
+``~/<repo>`` and its venv are someone's working state; a run must neither reinstall nor read them::
 
     ~/ci/cache.git              bare cache; fetched from the read-only HTTPS remote
     ~/ci/packs/<sha>.pack       only when the commit is not on the remote (sent over stdin, indexed here)
@@ -14,7 +14,7 @@ commit (or ship a pack); add the tree; build its venv on the login node with the
 command; collect node ids there; group them by file and PACK whole files into items of up to
 :func:`item_seconds` measured seconds, so start-up is paid per item, not per file; re-allocate the real item count among
 the grants on that cluster; submit the array and leave the run's state on the cluster
-(:func:`submit_verdict`, minutes). Then each :func:`gather_verdict` is ONE short call: still active is
+(:func:`submit_run`, minutes). Then each :func:`gather_run` is ONE short call: still active is
 pending; a finished round is folded, its unfinished ids re-submitted as the next round, or the record
 returned. NOTHING RESIDENT RUNS ON THE CALLER'S BOX, and the caller's repository is only READ.
 
@@ -26,14 +26,14 @@ none can). Admission composes it with the other parts; no part reads it to choos
 ``passed`` means passed.
 
 A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its outcomes as they happen
-(:mod:`lab_commons.hpc.pytest_item`); the verdict reads the streams, not the shards' end-of-run files.
+(:mod:`lab_commons.hpc.pytest_item`); the run reads the streams, not the shards' end-of-run files.
 An item whose stream never closed is unfinished: its unreported ids are re-submitted, split in halves,
 for up to :data:`RETRIES` more rounds -- a round after an ``OUT_OF_MEMORY`` asks for twice the memory --
 and only what is still unfinished after that is ``lost``. An item that closed without reporting an id
 recorded it ``missing``.
 
 THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
-minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next verdict reads them
+minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next run reads them
 back (``history``), so an item's time is its file's overhead plus its ids' durations, the array's
 memory is the worst measured peak times ``policy.safety``, and ``cost`` is the fallback only for a file
 never measured -- named in the plan as ``unmeasured``.
@@ -61,7 +61,7 @@ from lab_commons.hpc.shell import (
     ENV,
     ITEM_MODULE,
     ROOT,
-    VerdictSpec,
+    RunSpec,
     build_script,
     collect_command,
     facts,
@@ -75,7 +75,7 @@ from lab_commons.hpc.shell import (
 )
 from lab_commons.hpc.slurm import Snapshot
 
-__all__ = ['ACTIVE', 'RETRIES', 'gather_verdict', 'item_seconds', 'submit_verdict']
+__all__ = ['ACTIVE', 'RETRIES', 'gather_run', 'item_seconds', 'submit_run']
 
 
 def item_seconds(policy: Policy) -> float:
@@ -88,6 +88,21 @@ ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COM
 
 #: Rounds after the first that re-run what a killed shard left unfinished.
 RETRIES: Final = 2
+
+#: State keys the record carries as they are.
+_CARRIED: Final = (
+    'sha',
+    'scope',
+    'platform',
+    'system',
+    'env',
+    'cluster',
+    'python',
+    'prep',
+    'rounds',
+    'outcomes',
+    'handed',
+)
 
 
 def _shares_home(grant: Grant, builder: Grant) -> bool:
@@ -135,7 +150,7 @@ def _submit_round(
     items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
     setup = (ENV,)
     sha = state['sha']
-    job = JobSpec(name=f'verdict-{sha[:12]}', workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run')
+    job = JobSpec(name=f'run-{sha[:12]}', workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run')
     sub = submit(runners[grant.account], plan, Config(job=job, cost=cost, policy=policy), items, stamp=tag)
     state['rounds'].append({**_plan_record(plan, grant, sub.job_id, sub.run_dir), 'unmeasured': unmeasured})
     state['current'] = {
@@ -147,8 +162,8 @@ def _submit_round(
     }
 
 
-def submit_verdict(
-    spec: VerdictSpec,
+def submit_run(
+    spec: RunSpec,
     machine: Machine,
     connect: Callable[[Grant], Runner],
     *,
@@ -159,7 +174,7 @@ def submit_verdict(
 ) -> str:
     """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns the run id.
 
-    The state is ``~/ci/runs/<sha>/state.json``; :func:`gather_verdict` reads it. *history* is a previous
+    The state is ``~/ci/runs/<sha>/state.json``; :func:`gather_run` reads it. *history* is a previous
     record, read for its measurements only. Nothing here waits for a job.
     """
     runners = {g.account: connect(g) for g in machine.grants}
@@ -190,6 +205,12 @@ def submit_verdict(
         msg = f'the build for {spec.sha[:12]} failed on {host}, nothing was submitted; {tail}'
         raise RuntimeError(msg)
     told = facts(built)
+    if not told.get('env'):
+        msg = (
+            f'the venv built for {spec.sha[:12]} on {host} reported no env hash (lab_commons.dev.envkey is not '
+            'importable there), so its part could never be carried; nothing was submitted'
+        )
+        raise RuntimeError(msg)
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)
     if spec.only is not None:
@@ -209,7 +230,10 @@ def submit_verdict(
     state: dict[str, Any] = {
         'sha': spec.sha,
         'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
-        'platform': told.get('platform', ''),
+        'scope': spec.scope,
+        'platform': LINUX,
+        'system': told.get('platform', ''),
+        'env': told['env'],
         'cluster': host,
         'python': told.get('python', ''),
         'prep': {**parse_times(built), **parse_times(collected)},
@@ -241,11 +265,11 @@ def _load(sha: str, machine: Machine, runners: dict[str, Runner]) -> tuple[dict[
     if not answered:
         msg = f'no login host of any grant answered; the jobs of {sha[:12]} keep running -- gather again later'
         raise Unreachable(msg)
-    msg = f'no verdict of {sha} was submitted on any grant (no {_state_dir(sha)}/state.json)'
+    msg = f'no run of {sha} was submitted on any grant (no {_state_dir(sha)}/state.json)'
     raise RuntimeError(msg)
 
 
-def gather_verdict(
+def gather_run(
     sha: str,
     machine: Machine,
     connect: Callable[[Grant], Runner],
@@ -284,7 +308,10 @@ def gather_verdict(
         return None
     state['outcomes'].update({node: 'lost' for group in pending for node in group})
     record = {
-        **{key: state[key] for key in ('sha', 'platform', 'cluster', 'python', 'prep', 'rounds', 'outcomes', 'handed')},
+        **{key: state[key] for key in _CARRIED},
+        'req': state['stamp'],
+        'account': next(g.slurm_account for g in machine.grants if g.account == account),
+        'job_ids': [r['job_id'] for r in state['rounds']],
         'plan': state['rounds'][0],
         'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
         **state['measured'],

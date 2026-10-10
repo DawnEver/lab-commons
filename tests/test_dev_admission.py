@@ -73,7 +73,7 @@ def test_a_linux_and_a_windows_part_compose_in_either_order(order: str) -> None:
 
 @pytest.mark.parametrize(
     ('present', 'absent', 'command'),
-    [('linux', 'windows', '--platform windows'), ('windows', 'linux', 'lab_commons.hpc verdict')],
+    [('linux', 'windows', '--platform windows'), ('windows', 'linux', 'lab_commons.hpc run submit')],
 )
 def test_a_missing_part_is_refused_naming_the_part_and_its_command(present: str, absent: str, command: str) -> None:
     """PLANTED CONTROL: either part alone hands ids to the other, which is missing."""

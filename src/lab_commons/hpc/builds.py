@@ -18,7 +18,7 @@ interpreter request. A git dependency that FLOATS (a ``name @ git+<url>[@<ref>]`
 ``[tool.uv.sources]`` ``git`` table without a ``rev``) adds the CURRENT remote tip of its ref to the env
 key (``git ls-remote`` -- read-only, the pyproject is the one list), so a new upstream tip rebuilds the
 venv and an unchanged one reuses it; a 40-hex pin is already in the hashed pyproject.
-Undeclared: no key, and the verdict builds a venv per tree as before.
+Undeclared: no key, and the run builds a venv per tree as before.
 """
 
 from __future__ import annotations

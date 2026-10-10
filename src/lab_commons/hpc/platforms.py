@@ -7,7 +7,7 @@
     matlab = ["windows", "linux"]
 
 A marker the table does not list runs everywhere. A test carrying several listed markers runs only
-where ALL of them can. A commit's verdict may then be COMPOSED of one part per platform
+where ALL of them can. A commit's result may then be COMPOSED of one part per platform
 (:mod:`lab_commons.dev.platformparts`). Each id is ASSIGNED to exactly one part by :func:`assign`: the
 FIRST platform in :data:`PLATFORMS` order that can run it (linux, else windows, else macos). The
 assignment reads only the table and the id's markers, so every part can start at any time, in parallel.

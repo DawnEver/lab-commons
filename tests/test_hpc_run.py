@@ -1,6 +1,6 @@
-"""``lab_commons.hpc`` remote verdict: streamed outcomes, retried kills and measured plans.
+"""``lab_commons.hpc`` remote run: streamed outcomes, retried kills and measured plans.
 
-Every number in a docstring here was measured on a real cluster for one downstream verdict
+Every number in a docstring here was measured on a real cluster for one downstream run
 (2026-10-09): 26233 passed, 13751 lost, 8786 missing. The item runner is exercised by
 REALLY running pytest on ids built to be awkward, because the defect behind ``missing`` was a mismatch
 between the id pytest collects and the id it reports -- a fake cannot reproduce that.
@@ -24,12 +24,15 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.plan import make_plan
 from lab_commons.hpc.pytest_item import canonical, outcome_of, read_stream
-from lab_commons.hpc.records import read_streams
+from lab_commons.hpc.records import read_record, read_streams, record_name, write_record
+from lab_commons.hpc.run import RETRIES, gather_run, submit_run
 from lab_commons.hpc.shell import (
     BUILD_LOG,
+    FULL,
+    INCREMENTAL,
     PREP_LOG,
     TIME,
-    VerdictSpec,
+    RunSpec,
     build_script,
     collect_command,
     needs_script,
@@ -37,7 +40,6 @@ from lab_commons.hpc.shell import (
     parse_times,
 )
 from lab_commons.hpc.slurm import parse_snapshot
-from lab_commons.hpc.verdict import RETRIES, gather_verdict, submit_verdict
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
@@ -245,11 +247,11 @@ def test_memory_is_the_worst_measured_peak_with_margin() -> None:
     assert measured.mem_gb([['a.py::t'], ['c.py::t']], Cost(mem_gb=9), Policy(safety=1.5)) == 9, 'unmeasured: cost'
 
 
-# -- the verdict flow ------------------------------------------------------------------------------------
+# -- the run flow ------------------------------------------------------------------------------------
 
 
-class FakeVerdictCluster:
-    """A cluster answering the verdict flow; an item of a file in *dies* is killed in its first *kills* rounds.
+class FakeRunCluster:
+    """A cluster answering the run flow; an item of a file in *dies* is killed in its first *kills* rounds.
 
     A killed item streams the first half of its ids (rounded down) and never closes.
     """
@@ -264,10 +266,12 @@ class FakeVerdictCluster:
         build_fails: bool = False,
         lacking: tuple[str, ...] = (),
         active: int = 0,
+        env: str = 'e0ffee0123456789',
     ) -> None:
         """*have*: the cache holds the commit; *oom*: round 0 is OUT_OF_MEMORY; *active*: sacct polls RUNNING."""
         self.have, self.dies, self.kills, self.oom = have, dies, kills, oom
         self.build_fails, self.lacking, self.active = build_fails, lacking, active
+        self.env = env
         self.state = ''
         self.calls: list[tuple[str, str | None]] = []
         self.manifests: list[dict] = []
@@ -289,7 +293,7 @@ class FakeVerdictCluster:
         if '@@@ facts' in command and self.build_fails:
             return '@@@ build-failed exit 101\nerror: could not find `cargo`\n'
         if '@@@ facts' in command:
-            return '@@@ time env=12s\n@@@ facts\nplatform=linux-x86_64/glibc2.28\npython=3.13.1\n'
+            return f'@@@ time env=12s\n@@@ facts\nplatform=linux-x86_64/glibc2.28\npython=3.13.1\nenv={self.env}\n'
         if '--collect-only' in command or 'lab_ci_collect.py --cache' in command:
             if '(win)' in command:
                 return 'tests/w.py::t\n'
@@ -330,16 +334,16 @@ MACHINE = Machine(workstation='ws-a', grants=(GRANT,))
 COST, POLICY = Cost(seconds=600), Policy(shard_minutes_min=1, shard_minutes_max=15)
 
 
-def _submit(fake: FakeVerdictCluster, **kw: object) -> str:
-    spec = VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true', table={'win': ('windows',)})
-    return submit_verdict(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0', **kw)
+def _submit(fake: FakeRunCluster, **kw: object) -> str:
+    spec = RunSpec(sha=SHA, repo_url='https://g/r.git', install='true', table={'win': ('windows',)})
+    return submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0', **kw)
 
 
-def _gather(fake: FakeVerdictCluster) -> dict | None:
-    return gather_verdict(SHA, MACHINE, lambda _g: fake, cost=COST, policy=POLICY)
+def _gather(fake: FakeRunCluster) -> dict | None:
+    return gather_run(SHA, MACHINE, lambda _g: fake, cost=COST, policy=POLICY)
 
 
-def _verdict(fake: FakeVerdictCluster, **kw: object) -> dict:
+def _run(fake: FakeRunCluster, **kw: object) -> dict:
     """Submit, then gather until the record comes back -- each gather one short call, as a caller makes them."""
     _submit(fake, **kw)
     for _ in range(2 + RETRIES):
@@ -349,17 +353,20 @@ def _verdict(fake: FakeVerdictCluster, **kw: object) -> dict:
     pytest.fail('the gathers never returned a record')
 
 
-def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> None:
-    fake = FakeVerdictCluster()
-    record = _verdict(fake)
+def test_the_run_records_outcomes_and_never_passes_what_it_did_not_run() -> None:
+    fake = FakeRunCluster()
+    record = _run(fake)
     assert record['sha'] == SHA
     assert record['prep'] == {'env': 12, 'collect': 3}, 'prep time is measurable from the record'
     assert record['handed'] == {'tests/w.py::t': ['windows']}, 'handed names the platforms that CAN run it'
-    assert (record['platform'], record['cluster'], record['python']) == (
+    assert (record['platform'], record['system'], record['cluster'], record['python']) == (
+        'linux',
         'linux-x86_64/glibc2.28',
         'login.example',
         '3.13.1',
-    )
+    ), 'platform is the part it is; system is the box it ran on'
+    assert (record['scope'], record['req'], record['env']) == ('full', 't0', 'e0ffee0123456789')
+    assert (record['account'], record['job_ids']) == ('acct-free', ['4243'])
     assert record['plan']['comment'] == 'lc:ws=ws-a'
     assert record['plan']['job_id'] == '4243'
     assert record['plan']['unmeasured'] == ['tests/a.py', 'tests/b.py']
@@ -374,8 +381,8 @@ def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> 
 
 
 def test_a_killed_shard_reruns_only_its_unfinished_ids_split_in_halves() -> None:
-    fake = FakeVerdictCluster(dies=frozenset({'tests/b.py'}))
-    record = _verdict(fake)
+    fake = FakeRunCluster(dies=frozenset({'tests/b.py'}))
+    record = _run(fake)
     assert len(fake.manifests) == 2
     assert [i['ids'] for i in fake.manifests[1]['items']] == [['tests/b.py::t4'], ['tests/b.py::t5']]
     assert all(record['outcomes'][f'tests/b.py::t{n}'] == 'passed' for n in (3, 4, 5))
@@ -383,14 +390,14 @@ def test_a_killed_shard_reruns_only_its_unfinished_ids_split_in_halves() -> None
 
 
 def test_what_is_still_unfinished_after_the_retries_is_lost() -> None:
-    record = _verdict(FakeVerdictCluster(dies=frozenset({'tests/b.py'}), kills=1 + RETRIES))
+    record = _run(FakeRunCluster(dies=frozenset({'tests/b.py'}), kills=1 + RETRIES))
     assert len(record['rounds']) == 1 + RETRIES
     assert record['outcomes']['tests/b.py::t3'] == 'passed', 'what a killed shard finished is kept'
     assert [record['outcomes'][f'tests/b.py::t{n}'] for n in (4, 5)] == ['lost', 'lost']
 
 
 def test_an_out_of_memory_round_doubles_the_memory_of_the_next() -> None:
-    record = _verdict(FakeVerdictCluster(dies=frozenset({'tests/b.py'}), oom=True))
+    record = _run(FakeRunCluster(dies=frozenset({'tests/b.py'}), oom=True))
     first, second = record['rounds']
     assert second['mem_mb'] == 2 * first['mem_mb']
 
@@ -401,13 +408,13 @@ def test_history_prices_the_plan_and_names_nothing_unmeasured() -> None:
         'overheads': {'tests/a.py': 20.0, 'tests/b.py': 20.0},
         'peaks_mb': {'tests/a.py': 1000.0, 'tests/b.py': 3000.0},
     }
-    record = _verdict(FakeVerdictCluster(), history=history)
+    record = _run(FakeRunCluster(), history=history)
     assert record['plan']['unmeasured'] == []
     assert record['plan']['mem_mb'] == -(-3000 * 1.5 // 1)
 
 
 def test_submit_returns_with_the_state_on_the_cluster_and_gather_reports_pending_while_jobs_run() -> None:
-    fake = FakeVerdictCluster(active=2)
+    fake = FakeRunCluster(active=2)
     assert _submit(fake) == SHA
     assert json.loads(fake.state)['current']['job_id'] == '4243', 'the run state lives on the cluster'
     assert fake.active == 2, 'submit polls no job state'
@@ -420,14 +427,14 @@ def test_submit_returns_with_the_state_on_the_cluster_and_gather_reports_pending
 
 
 def test_a_retry_round_is_submitted_by_a_gather_and_returns_pending() -> None:
-    fake = FakeVerdictCluster(dies=frozenset({'tests/b.py'}))
+    fake = FakeRunCluster(dies=frozenset({'tests/b.py'}))
     _submit(fake)
     assert _gather(fake) is None, 'the unfinished ids went out as round 1'
     assert len(fake.manifests) == 2
 
 
 def test_a_gather_through_an_outage_raises_unreachable_and_loses_nothing() -> None:
-    fake = FakeVerdictCluster()
+    fake = FakeRunCluster()
     _submit(fake)
 
     def down(_command: str, _stdin: str | None = None) -> str:
@@ -435,13 +442,13 @@ def test_a_gather_through_an_outage_raises_unreachable_and_loses_nothing() -> No
         raise Unreachable(msg)
 
     with pytest.raises(Unreachable, match='keep running'):
-        gather_verdict(SHA, MACHINE, lambda _g: down, cost=COST, policy=POLICY)
+        gather_run(SHA, MACHINE, lambda _g: down, cost=COST, policy=POLICY)
     assert _gather(fake) is not None
 
 
-def test_a_failed_build_stops_the_verdict_and_quotes_the_kept_log() -> None:
+def test_a_failed_build_stops_the_run_and_quotes_the_kept_log() -> None:
     """Measured 2026-10-09: an install that failed (no cargo) still submitted 276 shards that all died."""
-    fake = FakeVerdictCluster(build_fails=True)
+    fake = FakeRunCluster(build_fails=True)
     with pytest.raises(
         RuntimeError, match=r'(?s)build for a{12} failed .*nothing was submitted.*could not find `cargo`'
     ):
@@ -450,14 +457,14 @@ def test_a_failed_build_stops_the_verdict_and_quotes_the_kept_log() -> None:
 
 
 def test_a_missing_prerequisite_is_named_before_anything_is_fetched() -> None:
-    fake = FakeVerdictCluster(lacking=('cargo',))
+    fake = FakeRunCluster(lacking=('cargo',))
     with pytest.raises(RuntimeError, match='lacks cargo'):
         _submit(fake)
     assert not any('cat-file' in c for c, _ in fake.calls)
 
 
 def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
-    spec = VerdictSpec(sha=SHA, repo_url='u', install='false; true', needs=('cargo',))
+    spec = RunSpec(sha=SHA, repo_url='u', install='false; true', needs=('cargo',))
     script = build_script(spec)
     assert "bash -eo pipefail -c 'uv venv" in script, 'a failing first install line cannot be masked by the next'
     assert '[ -x "$E/bin/python" ]' in script
@@ -469,15 +476,15 @@ def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
 def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
     """Measured 2026-10-09: built as one user, submitted as another on the same cluster -- no venv there."""
     other = Grant(user='you', hosts=GRANT.hosts, slurm_account='acct-free', cpus=640, partitions=GRANT.partitions)
-    mine, theirs = FakeVerdictCluster(dies=frozenset({'tests/b.py'})), FakeVerdictCluster()
+    mine, theirs = FakeRunCluster(dies=frozenset({'tests/b.py'})), FakeRunCluster()
     machine = Machine(workstation='ws-a', grants=(GRANT, other))
     connect = {GRANT.account: mine, other.account: theirs}
 
-    spec = VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true')
-    submit_verdict(spec, machine, lambda g: connect[g.account], cost=COST, policy=POLICY, stamp='t0')
+    spec = RunSpec(sha=SHA, repo_url='https://g/r.git', install='true')
+    submit_run(spec, machine, lambda g: connect[g.account], cost=COST, policy=POLICY, stamp='t0')
     builder = mine if any('@@@ facts' in c for c, _ in mine.calls) else theirs
     for _ in range(2 + RETRIES):
-        if gather_verdict(SHA, machine, lambda g: connect[g.account], cost=COST, policy=POLICY) is not None:
+        if gather_run(SHA, machine, lambda g: connect[g.account], cost=COST, policy=POLICY) is not None:
             break
     bystander = theirs if builder is mine else mine
     assert builder.manifests, 'the rounds ran where the tree was built'
@@ -485,28 +492,51 @@ def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
 
 
 def test_only_runs_the_ids_the_caller_selected() -> None:
-    fake = FakeVerdictCluster()
-    spec = VerdictSpec(sha=SHA, repo_url='u', install='true', only=frozenset({'tests/b.py::t4'}))
-    submit_verdict(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
+    fake = FakeRunCluster()
+    spec = RunSpec(sha=SHA, repo_url='u', install='true', only=frozenset({'tests/b.py::t4'}))
+    submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
     assert [i['ids'] for i in fake.manifests[0]['items']] == [['tests/b.py::t4']]
+    assert RunSpec(sha=SHA, repo_url='u', install='true', only=frozenset({'x'})).scope == INCREMENTAL
+    assert RunSpec(sha=SHA, repo_url='u', install='true').scope == FULL
+
+
+def test_every_round_adds_its_job_to_the_record() -> None:
+    record = _run(FakeRunCluster(dies=frozenset({'tests/b.py'})))
+    assert record['job_ids'] == ['4243', '4244'], 'a retry round is part of the same run'
+
+
+def test_a_venv_that_cannot_name_its_env_refuses_the_run() -> None:
+    """A run without its env hash cannot be carried as a base (P2); it is refused before any job."""
+    fake = FakeRunCluster(env='')
+    with pytest.raises(RuntimeError, match='env hash'):
+        _submit(fake)
+    assert not fake.manifests
+
+
+def test_the_record_is_named_for_its_sha_platform_and_request_and_round_trips_gzipped(tmp_path: Path) -> None:
+    record = _run(FakeRunCluster())
+    assert record_name(record) == f'run-{SHA}-linux-t0.json.gz'
+    path = write_record(record, tmp_path / 'runs')
+    assert path == tmp_path / 'runs' / record_name(record)
+    assert read_record(path) == record
 
 
 def test_declared_inputs_share_one_env_and_native_build_and_put_the_source_on_pythonpath() -> None:
     builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', env_key='e1', native_key='n1')
-    script = build_script(VerdictSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds))
+    script = build_script(RunSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds))
     assert 'export E="$HOME"/ci/envs/e1' in script
     assert 'export N="$HOME"/ci/native/n1' in script
-    assert 'flock 9' in script, 'two verdicts building one key wait for each other'
+    assert 'flock 9' in script, 'two runs building one key wait for each other'
     assert f'$HOME/ci/trees/{SHA}/src:$HOME/ci/native/n1:$HOME/ci/bin' in script
     assert '.venv' not in script, 'no per-sha venv when the inputs are declared'
 
 
 def test_a_commit_off_the_remote_without_a_pack_source_is_refused() -> None:
     with pytest.raises(RuntimeError, match=r'not on https://g/r\.git'):
-        submit_verdict(
-            VerdictSpec(sha=SHA, repo_url='https://g/r.git', install='true'),
+        submit_run(
+            RunSpec(sha=SHA, repo_url='https://g/r.git', install='true'),
             Machine(workstation='w', grants=(GRANT,)),
-            lambda _g: FakeVerdictCluster(have=False),
+            lambda _g: FakeRunCluster(have=False),
             cost=Cost(),
             policy=Policy(),
         )
@@ -514,7 +544,7 @@ def test_a_commit_off_the_remote_without_a_pack_source_is_refused() -> None:
 
 def test_env_and_native_builds_share_persistent_caches_and_cargo_is_locked() -> None:
     builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', env_key='e1', native_key='n1')
-    script = build_script(VerdictSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds))
+    script = build_script(RunSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds))
     assert ' UV_CACHE_DIR="$HOME"/ci/uv-cache' in script, 'one uv cache across every env key'
     assert 'export CARGO_TARGET_DIR="$HOME"/ci/cargo-target' in script, 'a rust edit compiles only changed crates'
     assert 'flock 8' in script, 'two native keys building at once take turns on the shared target'
@@ -522,7 +552,7 @@ def test_env_and_native_builds_share_persistent_caches_and_cargo_is_locked() -> 
 
 def test_prep_steps_are_timed_into_the_tree_log_and_the_record() -> None:
     builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', env_key='e1', native_key='n1')
-    spec = VerdictSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds, collect='tests')
+    spec = RunSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds, collect='tests')
     for script, step in (
         (build_script(spec), 'env'),
         (build_script(spec), 'native'),
@@ -533,7 +563,7 @@ def test_prep_steps_are_timed_into_the_tree_log_and_the_record() -> None:
     assert parse_times(f'x\n{TIME} env=12s\n{TIME} collect=3s\nt.py::a\n') == {'env': 12, 'collect': 3}
 
 
-class _RedCluster(FakeVerdictCluster):
+class _RedCluster(FakeRunCluster):
     """Every ``tests/a.py`` id fails with a reason; the rest pass."""
 
     def _streams(self) -> str:
@@ -548,7 +578,7 @@ class _RedCluster(FakeVerdictCluster):
 
 def test_the_record_names_why_each_red_failed() -> None:
     """A 3000-red run triages from the record: every failed/error id carries its crash line, nothing else does."""
-    record = _verdict(_RedCluster())
+    record = _run(_RedCluster())
     red = {n for n, o in record['outcomes'].items() if o == 'failed'}
     assert red
     assert record['reasons'] == {n: f'AssertionError: {n}' for n in red}
@@ -593,6 +623,6 @@ def test_round_zero_packs_measured_files_into_one_item() -> None:
         'durations': {f'tests/{f}.py::t{n}': 1.0 for f, n in (('a', 1), ('a', 2), ('b', 3), ('b', 4), ('b', 5))},
         'overheads': {'tests/a.py': 7.0, 'tests/b.py': 7.0},
     }
-    fake = FakeVerdictCluster()
+    fake = FakeRunCluster()
     _submit(fake, history=history)
     assert [len(i['ids']) for i in fake.manifests[0]['items']] == [5], 'two files, one start-up'
