@@ -111,11 +111,11 @@ def test_only_files_whose_content_changed_are_collected_again(repo: Path, tmp_pa
 
 FLOATING: Final = PYPROJECT.replace(
     '[tool.lab_commons.hpc]',
-    'dependencies = ["ai-lab @ git+https://forge/ai-lab", "numpy>=2"]\n'
+    'dependencies = ["dep-a @ git+https://forge/dep-a", "numpy>=2"]\n'
     '[project.optional-dependencies]\n'
-    'all = ["wdg-lab @ git+https://forge/wdg-lab@dev", "pinned @ git+https://forge/p@' + 'a' * 40 + '"]\n'
+    'all = ["dep-b @ git+https://forge/dep-b@dev", "pinned @ git+https://forge/p@' + 'a' * 40 + '"]\n'
     '[tool.uv.sources]\n'
-    'optimi-lab = { git = "https://forge/optimi-lab", branch = "main" }\n'
+    'dep-c = { git = "https://forge/dep-c", branch = "main" }\n'
     '[tool.lab_commons.hpc]',
 )
 
@@ -123,9 +123,9 @@ FLOATING: Final = PYPROJECT.replace(
 def test_the_env_key_folds_the_current_remote_tip_of_every_floating_git_dependency(repo: Path) -> None:
     sha = _commit(repo, {'pyproject.toml': FLOATING, 'uv.lock': 'a'})
     tips = {
-        ('https://forge/ai-lab', 'HEAD'): '1',
-        ('https://forge/wdg-lab', 'dev'): '2',
-        ('https://forge/optimi-lab', 'main'): '3',
+        ('https://forge/dep-a', 'HEAD'): '1',
+        ('https://forge/dep-b', 'dev'): '2',
+        ('https://forge/dep-c', 'main'): '3',
     }
     asked: list[tuple[str, str]] = []
 
@@ -136,7 +136,7 @@ def test_the_env_key_folds_the_current_remote_tip_of_every_floating_git_dependen
     before = builds_at(repo, sha, install='uv sync', python='3.13', tip=tip)
     assert sorted(asked) == sorted(tips), 'every floating source is asked once; a 40-hex pin is not'
     assert builds_at(repo, sha, install='uv sync', python='3.13', tip=tip) == before, 'an unchanged tip reuses'
-    tips['https://forge/wdg-lab', 'dev'] = '9'
+    tips['https://forge/dep-b', 'dev'] = '9'
     after = builds_at(repo, sha, install='uv sync', python='3.13', tip=tip)
     assert after.env_key != before.env_key, 'a new upstream tip rebuilds the venv'
     assert after.native_key != before.native_key, 'the native build links against the venv it was built in'
