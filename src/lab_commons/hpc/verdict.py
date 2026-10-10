@@ -70,6 +70,7 @@ from lab_commons.hpc.shell import (
     pack,
     parse_collection_errors,
     parse_ids,
+    parse_times,
 )
 from lab_commons.hpc.slurm import Snapshot
 
@@ -204,6 +205,7 @@ def submit_verdict(
         'platform': told.get('platform', ''),
         'cluster': host,
         'python': told.get('python', ''),
+        'prep': {**parse_times(built), **parse_times(collected)},
         'handed': handed,
         'outcomes': outcomes,
         'measured': Measured.of(history or {}).record(),
@@ -274,7 +276,7 @@ def gather_verdict(
         return None
     state['outcomes'].update({node: 'lost' for group in pending for node in group})
     record = {
-        **{key: state[key] for key in ('sha', 'platform', 'cluster', 'python', 'rounds', 'outcomes', 'handed')},
+        **{key: state[key] for key in ('sha', 'platform', 'cluster', 'python', 'prep', 'rounds', 'outcomes', 'handed')},
         'plan': state['rounds'][0],
         **state['measured'],
     }

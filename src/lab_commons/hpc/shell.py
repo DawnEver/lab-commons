@@ -24,7 +24,9 @@ __all__ = [
     'ENV',
     'ITEM_MODULE',
     'NEEDS',
+    'PREP_LOG',
     'ROOT',
+    'TIME',
     'VerdictSpec',
     'build_script',
     'collect_command',
@@ -35,6 +37,7 @@ __all__ = [
     'pack',
     'parse_collection_errors',
     'parse_ids',
+    'parse_times',
 ]
 
 #: The item runner's name on the cluster -- unique, so it can shadow nothing in the tested project.
@@ -47,6 +50,16 @@ BUILD_LOG: Final = '.lab-ci/build.log'
 
 #: The line :func:`build_script` prints instead of the facts when the build failed.
 BUILD_FAILED: Final = '@@@ build-failed'
+
+#: Where each preparation step's wall time is appended, relative to the tree (one line per step and run).
+PREP_LOG: Final = '.lab-ci/prep.log'
+
+#: The prefix of a ``<step>=<seconds>s`` timing line -- printed AND appended to :data:`PREP_LOG`.
+TIME: Final = '@@@ time'
+
+#: Persistent caches shared by every key: uv's (concurrency-safe by its own lock) and cargo's target dir.
+_UV_CACHE: Final = f'{ROOT}/uv-cache'
+_CARGO_TARGET: Final = f'{ROOT}/cargo-target'
 
 #: Lines of the build log a refusal quotes.
 _LOG_TAIL: Final = 40
@@ -143,6 +156,25 @@ def _step(directory: str, log: str, build: str) -> list[str]:
     ]
 
 
+def _timed(step: str, lines: list[str]) -> list[str]:
+    """*lines* then a :data:`TIME` line for *step*, printed and appended to :data:`PREP_LOG` (cwd: the tree)."""
+    return [
+        f'T_{step}=$(date +%s)',
+        *lines,
+        f'echo "{TIME} {step}=$(( $(date +%s) - T_{step} ))s" | tee -a {PREP_LOG}',
+    ]
+
+
+def parse_times(text: str) -> dict[str, int]:
+    """``{step: seconds}`` from the :data:`TIME` lines of *text*."""
+    times: dict[str, int] = {}
+    for line in text.splitlines():
+        if line.startswith(f'{TIME} ') and '=' in line:
+            step, _, seconds = line[len(TIME) + 1 :].partition('=')
+            times[step.strip()] = int(seconds.strip().rstrip('s'))
+    return times
+
+
 def build_script(spec: VerdictSpec) -> str:
     """Add the tree, build (or REUSE) its venv and native build, write its ``.lab-ci/env.sh``. Prints the facts.
 
@@ -154,6 +186,10 @@ def build_script(spec: VerdictSpec) -> str:
     (:data:`BUILD_LOG` inside the tree for a tree's own venv), and a non-zero exit -- or no ``bin/python``
     after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
     shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
+
+    Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`) and every native build ``CARGO_TARGET_DIR``
+    (:data:`_CARGO_TARGET`, under its own ``flock``), so a new key re-links cached wheels and a Rust edit
+    compiles only the crates it touched. Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).
     """
     cache, tree, builds = f'{ROOT}/cache.git', f'{ROOT}/trees/{spec.sha}', spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
@@ -168,17 +204,20 @@ def build_script(spec: VerdictSpec) -> str:
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
         'mkdir -p .lab-ci',
-        f'export E={env}',
-        *_step('"$E"', env_log, '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, spec.install])),
+        f'export E={env} UV_CACHE_DIR={_UV_CACHE}',
+        *_timed(
+            'env',
+            _step('"$E"', env_log, '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, spec.install])),
+        ),
         f'[ -x "$E/bin/python" ] || {{ echo "{BUILD_FAILED} no bin/python in $E after the build"; exit 0; }}',
     ]
     path = [f'{tree}/{root}' for root in builds.source_roots]
     if builds.native_key:
         native = f'{ROOT}/native/{builds.native_key}'
-        lines += [
-            f'export N={native}',
-            *_step('"$N"', f'{native}.log', f'{activate}\nexport LAB_CI_NATIVE="$N"\n{builds.native_build}'),
-        ]
+        cargo = f'export CARGO_TARGET_DIR={_CARGO_TARGET}\nmkdir -p "$CARGO_TARGET_DIR"'
+        cargo += '\nexec 8> "$CARGO_TARGET_DIR.lock"; flock 8'
+        build = f'{activate}\nexport LAB_CI_NATIVE="$N"\n{cargo}\n{builds.native_build}'
+        lines += [f'export N={native}', *_timed('native', _step('"$N"', f'{native}.log', build))]
         path.append(native)
     pythonpath = ':'.join([*path, f'{ROOT}/bin']).replace('"$HOME"', '$HOME')
     lines += [
@@ -204,15 +243,17 @@ def collect_command(spec: VerdictSpec, *, also: str = '') -> str:
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
     head = f'cd {ROOT}/trees/{spec.sha} && {ENV} && '
     if any(token.startswith('-') for token in shlex.split(spec.collect)):
-        return (
-            f'{head}python -m pytest --collect-only -q -p no:cacheprovider --color=no'
+        body = (
+            f'python -m pytest --collect-only -q -p no:cacheprovider --color=no'
             f' --continue-on-collection-errors{select} {spec.collect}'
         ).rstrip() + ' || true'
-    seed = shlex.quote(f'{spec.builds.env_key}:{spec.builds.native_key}:{spec.python}')
-    return (
-        f'{head}{{ python {ROOT}/bin/{COLLECT_MODULE}.py --cache {ROOT}/collect --key {seed}{select}'
-        f' --out .lab-ci/collected.txt -- {spec.collect} || true; }}; cat .lab-ci/collected.txt'
-    )
+    else:
+        seed = shlex.quote(f'{spec.builds.env_key}:{spec.builds.native_key}:{spec.python}')
+        body = (
+            f'{{ python {ROOT}/bin/{COLLECT_MODULE}.py --cache {ROOT}/collect --key {seed}{select}'
+            f' --out .lab-ci/collected.txt -- {spec.collect} || true; }}; cat .lab-ci/collected.txt'
+        )
+    return head + '; '.join(_timed('collect', [f'{{ {body}; }}']))
 
 
 def parse_ids(text: str) -> list[str]:
