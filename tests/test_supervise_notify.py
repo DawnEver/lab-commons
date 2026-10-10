@@ -9,6 +9,7 @@ payload, the address it is sent to, and the two answers for "nobody is listening
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Self
 
 import pytest
@@ -123,13 +124,14 @@ def test_a_socket_that_cannot_send_is_also_a_no(monkeypatch: pytest.MonkeyPatch)
     assert notify.watchdog() is False
 
 
-def test_the_real_socket_module_answers_rather_than_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_real_socket_module_answers_rather_than_raising(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """NOT A DOUBLE THIS TIME, and both platforms reach False by different routes.
 
     Where `AF_UNIX` is absent -- this development box -- the lookup raises. Where it is present and
     `/run/systemd/notify` does not exist -- any host with no manager on that path -- the send raises.
     Either way the answer is the same and it is False, which is what makes the module safe to leave
-    wired in everywhere.
+    wired in everywhere. The address is one that CANNOT exist: `/run/systemd/notify` is live on a
+    systemd host such as a CI runner, where the datagram is taken and the answer is rightly True.
     """
-    monkeypatch.setenv(notify.NOTIFY_SOCKET, _ADDRESS)
+    monkeypatch.setenv(notify.NOTIFY_SOCKET, str(tmp_path / 'no-manager' / 'notify'))
     assert notify.watchdog() is False
