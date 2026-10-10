@@ -46,12 +46,10 @@ __all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'l
 
 @dataclass(frozen=True)
 class Cluster:
-    """Where commands run and which partitions a plan may choose from -- built from a grant, not a job file."""
+    """Which partitions a plan may ask for and their QOS -- built from a grant (host and account are the grant's)."""
 
-    host: str = ''
     partitions: tuple[str, ...] = ()
     qos: dict[str, str] = field(default_factory=dict)
-    account: str = ''
 
 
 @dataclass(frozen=True)
@@ -95,10 +93,20 @@ class Policy:
     shard_minutes_max: float = 60.0
     safety: float = 1.5
     max_array: int = 1000
+    #: A task pending longer than this while a declared partition has a free slot is a STALL (``run status``).
+    stall_minutes: float = 30.0
+    #: How often ``run watch`` / ``run gather --wait`` re-read the cluster.
+    poll_seconds: float = 120.0
 
     def __post_init__(self) -> None:
         """A window that is empty or inverted cannot place a single shard."""
-        if not 0 < self.shard_minutes_min <= self.shard_minutes_max or self.safety < 1 or self.max_array < 1:
+        if (
+            not 0 < self.shard_minutes_min <= self.shard_minutes_max
+            or self.safety < 1
+            or self.max_array < 1
+            or self.stall_minutes <= 0
+            or self.poll_seconds <= 0
+        ):
             msg = f'an unusable policy: {self}'
             raise ValueError(msg)
 

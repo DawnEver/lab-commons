@@ -75,7 +75,7 @@ from lab_commons.hpc.shell import (
 )
 from lab_commons.hpc.slurm import Snapshot
 
-__all__ = ['ACTIVE', 'RETRIES', 'gather_run', 'item_seconds', 'submit_run']
+__all__ = ['ACTIVE', 'RETRIES', 'gather_run', 'item_seconds', 'load_state', 'shares_home', 'submit_run']
 
 
 def item_seconds(policy: Policy) -> float:
@@ -105,7 +105,7 @@ _CARRIED: Final = (
 )
 
 
-def _shares_home(grant: Grant, builder: Grant) -> bool:
+def shares_home(grant: Grant, builder: Grant) -> bool:
     """Whether *grant* may run a round of the tree *builder* built: same cluster AND same login user.
 
     The tree, its venv and the item runner live in the BUILDER'S ``~/ci``. Measured 2026-10-09: two
@@ -171,8 +171,8 @@ def submit_run(
     policy: Policy,
     stamp: str | None = None,
     history: dict[str, Any] | None = None,
-) -> str:
-    """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns the run id.
+) -> dict[str, Any]:
+    """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns that state.
 
     The state is ``~/ci/runs/<sha>/state.json``; :func:`gather_run` reads it. *history* is a previous
     record, read for its measurements only. Nothing here waits for a job.
@@ -245,13 +245,13 @@ def submit_run(
     }
     files = group_items([node for node in ids if node not in handed])
     pending = Measured.of(state['measured']).pack(files, cost, item_seconds(policy))
-    same_cluster = [(g, s) for g, s in snapshots if _shares_home(g, grant)]
+    same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
     _submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
     _save(runners[state['current']['account']], state)
-    return spec.sha
+    return state
 
 
-def _load(sha: str, machine: Machine, runners: dict[str, Runner]) -> tuple[dict[str, Any], Runner]:
+def load_state(sha: str, machine: Machine, runners: dict[str, Runner]) -> tuple[dict[str, Any], Runner]:
     """The state of *sha*'s run from whichever grant holds it; :class:`Unreachable` when no grant answered."""
     answered = False
     for grant in machine.grants:
@@ -285,7 +285,7 @@ def gather_run(
     stays on the cluster, so the next gather picks up where this one could not.
     """
     runners = {g.account: connect(g) for g in machine.grants}
-    state, home = _load(sha, machine, runners)
+    state, home = load_state(sha, machine, runners)
     if 'record' in state:
         return state['record']
     current = state['current']
@@ -302,7 +302,7 @@ def gather_run(
         state['oom'] *= 2
     if pending and len(state['rounds']) <= RETRIES:
         grant = next(g for g in machine.grants if g.account == account)
-        snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if _shares_home(g, grant)]
+        snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
         _submit_round(state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy)
         _save(home, state)
         return None

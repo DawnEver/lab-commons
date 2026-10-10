@@ -113,8 +113,8 @@ class Grant:
         return not set(self.hosts).isdisjoint(other.hosts)
 
     def cluster(self) -> Cluster:
-        """The planner's view of this grant: where to connect and what to ask for."""
-        return Cluster(host=self.hosts[0], partitions=self.partitions, qos=self.qos, account=self.slurm_account)
+        """The planner's view of this grant: which partitions it may ask for, and under which QOS."""
+        return Cluster(partitions=self.partitions, qos=self.qos)
 
 
 @dataclass(frozen=True)

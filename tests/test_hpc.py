@@ -94,18 +94,18 @@ def test_the_plan_fits_the_shard_window_and_the_quota() -> None:
     assert per_shard == 5  # free QOS takes 100 jobs per user: 500 items need 5 a shard (window alone: 4)
     assert plan.shards[-1][1] == 500
     assert plan.minutes == 8
-    assert plan.partition == 'shortq'
+    assert plan.partitions[0] == 'shortq'
     assert plan.qos == 'free'
     assert plan.throttle == 96
-    assert plan.free_slots == free_slots(snap, 'shortq', Cost(cpus=1, mem_gb=2, seconds=60))
+    assert plan.free_slots == free_slots(snap, plan.partitions, Cost(cpus=1, mem_gb=2, seconds=60))
 
 
 def test_a_long_shard_skips_partitions_whose_ceiling_it_breaks() -> None:
     snap = parse_snapshot(IDLE_CALLER)
     plan = make_plan(10, Cost(seconds=3 * 3600), snap, cluster=CLUSTER, policy=Policy(), limits=Limits())
-    assert plan.partition == 'shortq'  # devq's 1 h ceiling cannot hold a 4.5 h shard
+    assert plan.partitions[0] == 'shortq'  # devq's 1 h ceiling cannot hold a 4.5 h shard
     plan = make_plan(10, Cost(seconds=20 * 3600), snap, cluster=CLUSTER, policy=Policy(), limits=Limits())
-    assert plan.partition == 'defq'
+    assert plan.partitions[0] == 'defq'
     with pytest.raises(ValueError, match='no candidate partition can take'):
         make_plan(
             10, Cost(seconds=40 * 3600), snap, cluster=CLUSTER, policy=Policy(), limits=Limits()
@@ -257,7 +257,7 @@ def test_stdin_reaches_the_child_byte_for_byte() -> None:
 def test_a_small_batch_fits_the_dev_qos_submit_limit() -> None:
     snap = parse_snapshot(IDLE_CALLER)
     plan = make_plan(3, Cost(seconds=60), snap, cluster=CLUSTER, policy=Policy(), limits=Limits())
-    assert plan.partition == 'devq'
+    assert plan.partitions[0] == 'devq'
     assert len(plan.shards) <= (snap.quota.qos_max_submit['dev'] or 0)
 
 
@@ -265,4 +265,4 @@ def test_queued_jobs_use_up_the_submit_room() -> None:
     snap = parse_snapshot(IDLE_CALLER + '@@@ queued\n' + 'dev\n' * 4)
     assert snap.quota.submit_room('dev') == 0
     plan = make_plan(3, Cost(seconds=60), snap, cluster=CLUSTER, policy=Policy(), limits=Limits())
-    assert plan.partition == 'shortq'
+    assert plan.partitions[0] == 'shortq'

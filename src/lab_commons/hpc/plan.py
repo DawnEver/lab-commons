@@ -15,9 +15,12 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
    otherwise; the wall limit is the SLOWEST shard's padded sum, never an average. Measured on a real cluster
    (2026-10-09): a flat 120 s per test file planned 129-min shards that ran 1h25-2h07, and 23 of 99 hit
    the limit. Decided per candidate, because the QOS differs.
-2. **Partition** -- the first candidate, in the caller's order, whose time ceiling (partition AND QOS)
-   holds the shard's padded wall time; among those, the first that has a free slot now wins over one that
-   would queue.
+2. **Partitions** -- every candidate whose time ceiling (partition AND QOS) holds the shard's padded wall
+   time is admissible; the first, in the caller's order, with a free slot now (else the first) fixes the
+   QOS, and the plan asks for EVERY admissible candidate under that QOS as one ``--partition=a,b``, so
+   Slurm starts each task wherever it fits first. Measured 2026-10-10: array 7660516 named ``shortq``
+   alone and pended for hours while ``defq``, declared beside it, had idle nodes. One ``sbatch`` carries
+   one ``--qos``, so a candidate needing another QOS is never merged in.
 3. **Throttle** -- concurrent tasks = what the quota CEILING allows, so Slurm never holds tasks the caller
    could not run anyway. What the caller's running jobs hold, and the free slots, only inform the makespan
    estimate: both change by the minute, Slurm pends a task over the limit rather than refusing it, and
@@ -27,7 +30,7 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -47,7 +50,8 @@ __all__ = ['MIB', 'Plan', 'allocate', 'free_slots', 'headroom', 'make_plan', 'qu
 class Plan:
     """Everything ``sbatch`` needs, plus the estimate a human reads before submitting."""
 
-    partition: str
+    #: Every partition the array may start in, the grant's declared order kept -- ``--partition=a,b``.
+    partitions: tuple[str, ...]
     qos: str
     account: str
     cpus: int
@@ -67,7 +71,7 @@ class Plan:
         """One paragraph: what will be asked for and how long it should take."""
         gpu = f', {self.gpus} GPU' if self.gpus else ''
         return (
-            f'{len(self.shards)} array tasks on {self.partition} '
+            f'{len(self.shards)} array tasks on {",".join(self.partitions)} '
             f'(qos {self.qos or "default"}, account {self.account}); '
             f'each {self.cpus} CPU, {self.mem_mb / 1024:.1f} GB{gpu}, {self.minutes} min wall; '
             f'up to {self.throttle} at once ({self.free_slots} slots free now); '
@@ -75,13 +79,13 @@ class Plan:
         )
 
 
-def free_slots(snapshot: Snapshot, partition: str, cost: Cost) -> int:
-    """How many one-item tasks the partition's schedulable nodes could start right now."""
+def free_slots(snapshot: Snapshot, partitions: Collection[str], cost: Cost) -> int:
+    """How many one-item tasks the schedulable nodes of any of *partitions* could start now, each node once."""
     demand = cost.demands()
     return sum(
         fits({CPU.name: n.cpus, MEMORY.name: n.mem_mb * MIB, GPU.name: n.gpus}, demand)
         for n in snapshot.nodes
-        if n.schedulable and partition in n.partitions
+        if n.schedulable and not set(partitions).isdisjoint(n.partitions)
     )
 
 
@@ -198,14 +202,15 @@ def make_plan(
     if not options:
         msg = f'no candidate partition can take this work: {"; ".join(refusals)}'
         raise ValueError(msg)
-    partition, qos, chosen, minutes = next((o for o in options if free_slots(snapshot, o[0], cost) > 0), options[0])
+    _, qos, chosen, minutes = next((o for o in options if free_slots(snapshot, (o[0],), cost) > 0), options[0])
+    partitions = tuple(o[0] for o in options if o[1] == qos)
     shards = tuple(chosen)
     max_jobs = snapshot.quota.qos_max_jobs.get(qos)
     throttle = min(len(shards), allowed, max_jobs or len(shards))
-    free = free_slots(snapshot, partition, cost)
+    free = free_slots(snapshot, partitions, cost)
     running = max(1, min(throttle, free, quota_slots(snapshot, cost, limits, remaining=True)))
     return Plan(
-        partition=partition,
+        partitions=partitions,
         qos=qos,
         account=snapshot.quota.account,
         cpus=cost.cpus,
@@ -244,10 +249,13 @@ def allocate(
 ) -> tuple[Grant, Plan]:
     """The grant whose plan finishes EARLIEST, planned on that grant's headroom. Pure.
 
-    A tie goes to the higher ``priority``, then to the earlier grant in the file. No grant with room
+    A tie goes to the grant with MORE headroom -- measured now, pending jobs included (:func:`headroom`) --
+    then to the higher ``priority``, then to the earlier grant in the file. Two grants on one cluster plan
+    the same makespan for a small batch, so without the headroom key the first in the file took every run
+    however loaded it was. No grant with room
     raises, naming each account and why -- an empty answer is never a silent queue.
     """
-    options: list[tuple[float, int, int, Grant, Plan]] = []
+    options: list[tuple[float, int, int, int, Grant, Plan]] = []
     refusals = []
     for order, (grant, snapshot) in enumerate(candidates):
         room = headroom(snapshot, grant.cpus, workstation)
@@ -272,9 +280,9 @@ def allocate(
         except ValueError as refused:
             refusals.append(f'{label}: {refused}')
             continue
-        options.append((plan.makespan_minutes, -grant.priority, order, grant, plan))
+        options.append((plan.makespan_minutes, -room, -grant.priority, order, grant, plan))
     if not options:
         msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])
         raise ValueError(msg)
-    *_, grant, plan = min(options, key=lambda o: o[:3])
+    *_, grant, plan = min(options, key=lambda o: o[:4])
     return grant, replace(plan, comment=COMMENT_PREFIX + workstation if workstation else '', setup=grant.setup)

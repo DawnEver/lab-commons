@@ -162,7 +162,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
     """The array task script. The array range itself is an ``sbatch`` argument, so a resubmit reuses this."""
     directives = [
         f'--job-name={config.job.name}',
-        f'--partition={plan.partition}',
+        f'--partition={",".join(plan.partitions)}',
         f'--account={plan.account}' if plan.account else '',
         f'--qos={plan.qos}' if plan.qos else '',
         '--nodes=1',
