@@ -11,7 +11,8 @@ EVERYTHING LIVES UNDER ``~/ci/`` ON THE CLUSTER, AND NOTHING ELSE IS TOUCHED. A 
 
 THE FLOW. Probe every grant and pick the cluster (:func:`lab_commons.hpc.plan.allocate`); fetch the
 commit (or ship a pack); add the tree; build its venv on the login node with the caller's install
-command; collect node ids there; group them by file into items; re-allocate the real item count among
+command; collect node ids there; group them by file and PACK whole files into items of up to
+:func:`item_seconds` measured seconds, so start-up is paid per item, not per file; re-allocate the real item count among
 the grants on that cluster; submit the array and leave the run's state on the cluster
 (:func:`submit_verdict`, minutes). Then each :func:`gather_verdict` is ONE short call: still active is
 pending; a finished round is folded, its unfinished ids re-submitted as the next round, or the record
@@ -74,7 +75,13 @@ from lab_commons.hpc.shell import (
 )
 from lab_commons.hpc.slurm import Snapshot
 
-__all__ = ['ACTIVE', 'RETRIES', 'gather_verdict', 'submit_verdict']
+__all__ = ['ACTIVE', 'RETRIES', 'gather_verdict', 'item_seconds', 'submit_verdict']
+
+
+def item_seconds(policy: Policy) -> float:
+    """An item's budget: the shortest shard, unpadded -- so a padded item never alone passes ``shard_minutes_min``."""
+    return policy.shard_minutes_min * 60 / policy.safety
+
 
 #: Slurm states during which a shard may still write its results.
 ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COMPLETING', 'RESIZING', 'SUSPENDED'})
@@ -212,7 +219,8 @@ def submit_verdict(
         'rounds': [],
         'oom': 1,
     }
-    pending = group_items([node for node in ids if node not in handed])
+    files = group_items([node for node in ids if node not in handed])
+    pending = Measured.of(state['measured']).pack(files, cost, item_seconds(policy))
     same_cluster = [(g, s) for g, s in snapshots if _shares_home(g, grant)]
     _submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
     _save(runners[state['current']['account']], state)

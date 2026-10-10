@@ -552,3 +552,47 @@ def test_the_record_names_why_each_red_failed() -> None:
     red = {n for n, o in record['outcomes'].items() if o == 'failed'}
     assert red
     assert record['reasons'] == {n: f'AssertionError: {n}' for n in red}
+
+
+def test_a_multi_file_item_pays_one_start_up_and_its_memory_reads_every_file() -> None:
+    """4316 one-file items paid 9.5 h of start-up for 6.0 h of tests (measured 2026-10-10)."""
+    measured = Measured(
+        durations={'a.py::x': 2.0, 'b.py::y': 3.0},
+        overheads={'a.py': 7.0, 'b.py': 8.0},
+        peaks_mb={'a.py': 100.0, 'b.py': 4096.0},
+    )
+    seconds, unmeasured = measured.estimate([['a.py::x', 'b.py::y'], ['a.py::x', 'c.py::t']], Cost(seconds=120))
+    assert seconds == [8.0 + 2.0 + 3.0, 7.0 + 2.0 + 120.0], 'one start-up: the worst of the files'
+    assert unmeasured == ['c.py']
+    assert measured.mem_gb([['a.py::x', 'b.py::y']], Cost(mem_gb=1), Policy(safety=1.0)) == 4.0
+
+
+def test_whole_files_are_packed_into_items_up_to_the_budget() -> None:
+    measured = Measured(
+        durations={'a.py::x': 10.0, 'a.py::y': 10.0, 'b.py::z': 15.0, 'c.py::t': 50.0, 'd.py::u': 5.0},
+        overheads={'a.py': 7.0, 'b.py': 7.0, 'c.py': 7.0, 'd.py': 7.0},
+    )
+    files = [['a.py::x', 'a.py::y'], ['b.py::z'], ['c.py::t'], ['d.py::u']]
+    items = measured.pack(files, Cost(seconds=120), budget=45.0)
+    assert items == [['a.py::x', 'a.py::y', 'b.py::z'], ['c.py::t'], ['d.py::u']], (
+        'a file is never split; one over budget sits alone; the next does not join it'
+    )
+    assert measured.pack([['e.py::t'], ['f.py::t']], Cost(seconds=120), budget=45.0) == [['e.py::t'], ['f.py::t']]
+
+
+def test_a_multi_file_item_teaches_its_overhead_and_peak_to_every_file() -> None:
+    measured = Measured()
+    folded = {'seconds': {'a.py::x': 2.0, 'b.py::y': 3.0}, 'done': {'wall': 12.0, 'peak_mb': 900.0}}
+    measured.learn(['a.py::x', 'b.py::y'], folded)
+    assert measured.overheads == {'a.py': 7.0, 'b.py': 7.0}
+    assert measured.peaks_mb == {'a.py': 900.0, 'b.py': 900.0}
+
+
+def test_round_zero_packs_measured_files_into_one_item() -> None:
+    history = {
+        'durations': {f'tests/{f}.py::t{n}': 1.0 for f, n in (('a', 1), ('a', 2), ('b', 3), ('b', 4), ('b', 5))},
+        'overheads': {'tests/a.py': 7.0, 'tests/b.py': 7.0},
+    }
+    fake = FakeVerdictCluster()
+    _submit(fake, history=history)
+    assert [len(i['ids']) for i in fake.manifests[0]['items']] == [5], 'two files, one start-up'

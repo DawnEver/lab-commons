@@ -6,7 +6,7 @@ interpreter, the imports: an item's wall time minus its tests'); ``peaks_mb`` --
 file's pytest process. A newer measurement replaces an older one; nothing is averaged, because the code
 under test changed between the two.
 
-An item's estimate is its file's overhead plus its ids' durations; an id not yet timed in a file that
+An item's estimate is ONE overhead (the worst of its files') plus its ids' durations; an id not yet timed in a file that
 has others is priced at that file's mean. A file with NOTHING measured is priced at ``Cost.seconds`` and
 named, so a plan says how much of it is a guess.
 """
@@ -51,35 +51,74 @@ class Measured:
         return {'durations': self.durations, 'overheads': self.overheads, 'peaks_mb': self.peaks_mb}
 
     def learn(self, ids: Sequence[str], folded: dict[str, Any]) -> None:
-        """Take one item's folded stream (:func:`lab_commons.hpc.pytest_item.read_stream`)."""
+        """Take one item's folded stream (:func:`lab_commons.hpc.pytest_item.read_stream`).
+
+        An item may span several files and pays ONE start-up; every file it held is recorded with that
+        item's overhead and peak, an upper bound for the file alone, which :meth:`estimate` takes the max of.
+        """
         self.durations.update(folded['seconds'])
         done = folded['done']
         if done is None or not ids:
             return
-        name = _file(ids[0])
         tests = sum(folded['seconds'].values())
-        self.overheads[name] = round(max(0.0, float(done['wall']) - tests), 3)
-        if done.get('peak_mb') is not None:
-            self.peaks_mb[name] = float(done['peak_mb'])
+        overhead = round(max(0.0, float(done['wall']) - tests), 3)
+        for name in dict.fromkeys(_file(n) for n in ids):
+            self.overheads[name] = overhead
+            if done.get('peak_mb') is not None:
+                self.peaks_mb[name] = float(done['peak_mb'])
 
-    def estimate(self, items: Sequence[Sequence[str]], cost: Cost) -> tuple[list[float], list[str]]:
-        """Seconds per item, and the files priced at ``cost.seconds`` because nothing of them was measured."""
-        seconds, unmeasured = [], []
-        for ids in items:
-            name = _file(ids[0])
-            known = [self.durations[n] for n in ids if n in self.durations]
-            mates = [s for n, s in self.durations.items() if _file(n) == name] if len(known) < len(ids) else known
+    def _by_file(self) -> dict[str, list[float]]:
+        by: dict[str, list[float]] = {}
+        for node, seconds in self.durations.items():
+            by.setdefault(_file(node), []).append(seconds)
+        return by
+
+    def _seconds(self, ids: Sequence[str], cost: Cost, by: dict[str, list[float]]) -> tuple[float, list[str]]:
+        """One item: ONE start-up (its files' worst overhead) plus its tests; an unmeasured file is ``cost.seconds``."""
+        files: dict[str, list[str]] = {}
+        for node in ids:
+            files.setdefault(_file(node), []).append(node)
+        tests, overhead, unmeasured = 0.0, 0.0, []
+        for name, nodes in files.items():
+            mates = by.get(name, [])
             if not mates and name not in self.overheads:
-                seconds.append(cost.seconds)
+                tests += cost.seconds
                 unmeasured.append(name)
                 continue
             mean = sum(mates) / len(mates) if mates else 0.0
-            seconds.append(self.overheads.get(name, 0.0) + sum(self.durations.get(n, mean) for n in ids))
+            tests += sum(self.durations.get(n, mean) for n in nodes)
+            overhead = max(overhead, self.overheads.get(name, 0.0))
+        return overhead + tests, unmeasured
+
+    def estimate(self, items: Sequence[Sequence[str]], cost: Cost) -> tuple[list[float], list[str]]:
+        """Seconds per item, and the files priced at ``cost.seconds`` because nothing of them was measured."""
+        by = self._by_file()
+        seconds, unmeasured = [], []
+        for ids in items:
+            spent, guessed = self._seconds(ids, cost, by)
+            seconds.append(spent)
+            unmeasured += guessed
         return seconds, sorted(set(unmeasured))
+
+    def pack(self, files: Sequence[Sequence[str]], cost: Cost, budget: float) -> list[list[str]]:
+        """Whole files, consecutive, joined into items of up to *budget* estimated seconds -- one start-up each.
+
+        A file is never split (its ids, and any xdist ``@group`` among them, stay in one process); a file
+        over *budget* is an item alone. Measured 2026-10-10: 4316 one-file items paid 9.5 h of start-up for
+        6.0 h of tests.
+        """
+        by = self._by_file()
+        items: list[list[str]] = []
+        for ids in files:
+            if items and self._seconds([*items[-1], *ids], cost, by)[0] <= budget:
+                items[-1] = [*items[-1], *ids]
+            else:
+                items.append(list(ids))
+        return items
 
     def mem_gb(self, items: Sequence[Sequence[str]], cost: Cost, policy: Policy) -> float:
         """The worst measured peak of these items' files times ``policy.safety``; ``cost.mem_gb`` covers the rest."""
-        files = {_file(ids[0]) for ids in items}
+        files = {_file(n) for ids in items for n in ids}
         peaks = [self.peaks_mb[f] for f in files if f in self.peaks_mb]
         worst = max(peaks, default=0.0) * policy.safety / _MB_PER_GB
         return worst if len(peaks) == len(files) and worst > 0 else max(worst, cost.mem_gb)
