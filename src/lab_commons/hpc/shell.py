@@ -203,6 +203,9 @@ def build_script(spec: VerdictSpec) -> str:
         f'cat > {ROOT}/bin/{ITEM_MODULE}.py',
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
+        # a commit's tree INCLUDES its submodules at their pinned commits; without them the tests
+        # that read a submodule's data fail as if the code were broken (1240 ids, measured 2026-10-10)
+        '[ ! -f .gitmodules ] || git submodule update -q --init --recursive',
         'mkdir -p .lab-ci',
         f'export E={env} UV_CACHE_DIR={_UV_CACHE}',
         *_timed(
