@@ -194,18 +194,21 @@ def _only(path: Path | None) -> frozenset[str] | None:
 
 
 def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> int:
+    try:
+        builds = builds_at(args.repo, args.sha, python=args.python)
+    except ValueError as undeclared:
+        emit(f'run submit refused: {undeclared}', err=True)
+        return 2
     spec = RunSpec(
         sha=args.sha,
         repo_url=args.repo_url,
-        install=args.install,
         collect=args.collect,
         select=args.select,
         table=table_at(args.repo, args.sha),
         python=args.python,
         pack_from=args.repo,
-        builds=builds_at(args.repo, args.sha, install=args.install, python=args.python),
+        builds=builds,
         only=_only(args.only),
-        needs=tuple(filter(None, args.needs.split(','))),
     )
     state = submit_run(
         spec,
@@ -250,7 +253,7 @@ def _run_status(_args: argparse.Namespace, machine: Machine, config: Config) -> 
 
 #: Each ``run`` step and the flags it cannot do without.
 _RUN_NEEDS: Final = {
-    'submit': ('--sha', '--repo-url', '--install', '--scope'),
+    'submit': ('--sha', '--repo-url', '--scope'),
     'gather': ('--sha', '--output'),
     'watch': ('--output',),
     'status': (),
@@ -272,7 +275,6 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument('--scope', choices=[FULL, INCREMENTAL], help='run submit: every id, or only --only')
     group.add_argument('--sha', help='the full commit id to test')
     group.add_argument('--repo-url', help='read-only HTTPS remote the cluster fetches from')
-    group.add_argument('--install', help='shell, run once in the tree with its fresh .venv active')
     group.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
     group.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
     group.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
@@ -281,9 +283,6 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path.cwd(),
         help='local repository, READ only: its [tool.lab_commons.platforms] at --sha; a pack if the remote lacks it',
-    )
-    group.add_argument(
-        '--needs', default='', help='commands the login node must have beyond git and uv, comma-separated (cargo,cc)'
     )
     group.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
     group.add_argument('--history', type=Path, help='a previous run record: its measurements plan this run')
@@ -299,7 +298,6 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     values = {
         '--sha': args.sha,
         '--repo-url': args.repo_url,
-        '--install': args.install,
         '--output': args.output,
         '--scope': args.scope,
     }
@@ -333,6 +331,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and (refused := refusal('lab_commons.hpc', argv[0])):
         parser.error(refused)
+    for word in argv:
+        if (refused := refusal('run submit', word.split('=', 1)[0])) is not None:
+            parser.error(refused)
     args = parser.parse_args(argv)
     if args.verb == 'run':
         return _run(parser, args)

@@ -1,4 +1,4 @@
-"""``lab_commons.dev.boxlock`` — one CPU-saturating run at a time, refusing by name.
+"""``lab_commons.dev.cpuseat`` — one CPU-saturating run at a time, refusing by name.
 
 The lock is the broker that already ships in this package, so what is tested here is the POLICY:
 that a BOX-scoped seat is the exclusion whoever's pool name the run carries, that a per-box seat
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.dev.boxlock import BOX_POOL, BoxLock
+from lab_commons.dev.cpuseat import CPU_POOL, CpuSeat
 from lab_commons.resources import (
     BOX_SEATS,
     MEMORY,
@@ -62,7 +62,7 @@ def _take_a_second_seat(what: str, broker: Broker | None = None) -> None:
     into one ``with`` would put the ``pytest.raises`` around the very statements that must not
     raise.
     """
-    with BoxLock(what, broker=broker).held():
+    with CpuSeat(what, broker=broker).held():
         pytest.fail(f'{what} was admitted while the box was already held')
 
 
@@ -73,34 +73,34 @@ class TestTheExclusion:
         "Busy" sends its reader to the process table to guess, and guessing wrong kills somebody's
         evidence.
         """
-        with BoxLock('gate:integrate/main').held(), pytest.raises(Exhausted) as refusal:
+        with CpuSeat('gate:integrate/main').held(), pytest.raises(Exhausted) as refusal:
             _take_a_second_seat('heavy:feat/structural')
         assert 'gate:integrate/main' in str(refusal.value)
-        assert refusal.value.pool == BOX_POOL
+        assert refusal.value.pool == CPU_POOL
 
     def test_the_seat_is_free_again_once_the_holder_releases_it(self, slots) -> None:
-        with BoxLock('first').held():
+        with CpuSeat('first').held():
             pass
-        with BoxLock('second').held() as grant:
-            assert grant.pool == BOX_POOL
+        with CpuSeat('second').held() as grant:
+            assert grant.pool == CPU_POOL
 
     def test_a_dead_holders_record_is_free_not_held(self, slots) -> None:
         """The worst outcome of any crash is a file nobody counts, never a box nobody can use."""
-        dead = slots / seat(BOX_POOL)
+        dead = slots / seat(CPU_POOL)
         dead.parent.mkdir(parents=True, exist_ok=True)
         dead.write_text('{"job_kind": "pid", "job_ident": "999999999", "demands": {}}', encoding='utf-8')
-        with BoxLock('after a crash').held():
+        with CpuSeat('after a crash').held():
             pass
 
     def test_a_holder_with_no_name_is_refused_at_construction(self) -> None:
         with pytest.raises(ValueError, match='cannot be acted on'):
-            BoxLock('   ')
+            CpuSeat('   ')
 
 
 class TestWhatTheLockDeclares:
     def test_the_seats_rest_on_structural_constants_not_on_a_box_measurement(self, slots) -> None:
         """The rule is a property of the TOOL -- one at a time, everywhere -- not of this machine."""
-        with BoxLock('gate').held() as grant:
+        with CpuSeat('gate').held() as grant:
             assert grant.basis[BOX_SEATS.name] is Basis.STRUCTURAL
             assert grant.capacity[BOX_SEATS.name].value == 1
             assert grant.basis[SEATS.name] is Basis.STRUCTURAL
@@ -109,9 +109,9 @@ class TestWhatTheLockDeclares:
     def test_a_per_box_measurement_of_four_seats_cannot_lift_it(self, slots) -> None:
         """Declarations compose by taking the SMALLEST, so the structural constant always wins."""
         registry = CapacityRegistry()
-        registry.declare(BOX_POOL, Capacity.measured(SEATS.name, 4, on=Broker().hostname))
+        registry.declare(CPU_POOL, Capacity.measured(SEATS.name, 4, on=Broker().hostname))
         broker = Broker(registry)
-        with BoxLock('gate', broker=broker).held() as grant:
+        with CpuSeat('gate', broker=broker).held() as grant:
             conceded = grant.capacity[SEATS.name].value
             with pytest.raises(Exhausted):
                 _take_a_second_seat('heavy', broker)
@@ -127,7 +127,7 @@ class TestWhatTheLockDeclares:
         registry = CapacityRegistry()
         registry.declare('some-other-pool', Capacity.measured(BOX_SEATS.name, 8, on=Broker().hostname))
         registry.declare('some-other-pool', Capacity.structural(BOX_SEATS.name, 1, note='one at a time'))
-        with BoxLock('gate', broker=Broker(registry)).held() as grant:
+        with CpuSeat('gate', broker=Broker(registry)).held() as grant:
             assert grant.capacity[BOX_SEATS.name].value == 1
 
     def test_the_lock_demands_no_cores_so_a_wide_run_is_not_refused_by_its_own_lock(self, slots) -> None:
@@ -136,21 +136,21 @@ class TestWhatTheLockDeclares:
         Demanding cores would refuse exactly the runs this lock exists to serialise, so the seat is
         the exclusion and cores stay a caller's declaration.
         """
-        with BoxLock('gate').held() as grant:
+        with CpuSeat('gate').held() as grant:
             assert 'cpu' not in grant.demands
 
     def test_a_caller_can_declare_what_else_it_expects_to_consume(self, slots) -> None:
         """The lock excludes; it does not decide what a consumer's run costs. That is passed on."""
         roomy = Broker(read_memory=lambda: SystemMemory(total_bytes=64 * GIB, available_bytes=48 * GIB))
-        with BoxLock('gate', demands={MEMORY.name: 4096}, broker=roomy).held() as grant:
+        with CpuSeat('gate', demands={MEMORY.name: 4096}, broker=roomy).held() as grant:
             assert grant.demands[MEMORY.name] == 4096
 
 
 class TestAskingIsNotTaking:
     def test_holders_reports_the_live_holder(self, slots) -> None:
-        assert BoxLock.holders() == ()
-        with BoxLock('gate:integrate/main').held():
-            named = BoxLock.holders()
+        assert CpuSeat.holders() == ()
+        with CpuSeat('gate:integrate/main').held():
+            named = CpuSeat.holders()
         assert len(named) == 1
         assert named[0].what == 'gate:integrate/main'
 
@@ -159,10 +159,10 @@ class TestAskingIsNotTaking:
 
         Two agents reading it then refused each other over a phantom holder.
         """
-        BoxLock.holders()
-        BoxLock.holders()
-        assert BoxLock.holders() == ()
-        with BoxLock('gate').held():
+        CpuSeat.holders()
+        CpuSeat.holders()
+        assert CpuSeat.holders() == ()
+        with CpuSeat('gate').held():
             pass
 
     def test_the_records_live_outside_any_repository(self, slots) -> None:
@@ -171,8 +171,8 @@ class TestAskingIsNotTaking:
         It is what makes every worktree on the box contend through ONE set of records, whatever
         revision it has checked out.
         """
-        assert BoxLock.resource_dir() == slots
-        assert REPO_ROOT not in BoxLock.resource_dir().parents
+        assert CpuSeat.resource_dir() == slots
+        assert REPO_ROOT not in CpuSeat.resource_dir().parents
 
 
 class TestAnUnreadableSeatIsHeldNotTaken:
@@ -187,11 +187,11 @@ class TestAnUnreadableSeatIsHeldNotTaken:
     """
 
     def test_an_empty_pool_seat_is_not_read_as_free(self, slots) -> None:
-        planted = slots / seat(BOX_POOL)
+        planted = slots / seat(CPU_POOL)
         planted.parent.mkdir(parents=True, exist_ok=True)
         planted.write_text('', encoding='utf-8')
-        assert len(BoxLock.holders()) == 1
-        with pytest.raises(Exhausted) as refusal, BoxLock('heavy:feat/structural').held():
+        assert len(CpuSeat.holders()) == 1
+        with pytest.raises(Exhausted) as refusal, CpuSeat('heavy:feat/structural').held():
             pass
         assert refusal.value.dimension == SEATS.name
         assert planted.exists(), 'the unreadable seat was DELETED -- that is the theft, not a fix'
@@ -201,8 +201,8 @@ class TestAnUnreadableSeatIsHeldNotTaken:
         planted = slots / box_seat()
         planted.parent.mkdir(parents=True, exist_ok=True)
         planted.write_text('not a record at all', encoding='utf-8')
-        assert len(BoxLock.holders()) == 1
-        with pytest.raises(Exhausted) as refusal, BoxLock('heavy:feat/structural').held():
+        assert len(CpuSeat.holders()) == 1
+        with pytest.raises(Exhausted) as refusal, CpuSeat('heavy:feat/structural').held():
             pass
         assert refusal.value.dimension == BOX_SEATS.name
         assert planted.exists()
@@ -223,7 +223,7 @@ class TestWhatMakesTheLockBoxWide:
         """
         broker = Broker()
         with (
-            BoxLock('the kit').held(),
+            CpuSeat('the kit').held(),
             pytest.raises(Exhausted) as refusal,
             broker.admit('some-other-pool', {BOX_SEATS.name: 1}, what='a run that opted out'),
         ):
@@ -234,7 +234,7 @@ class TestWhatMakesTheLockBoxWide:
     def test_the_box_seat_is_free_again_once_the_holder_releases_it(self, slots) -> None:
         """A box-wide exclusion that outlives its holder would be a box nobody can use."""
         broker = Broker()
-        with BoxLock('first').held():
+        with CpuSeat('first').held():
             pass
         with broker.admit('some-other-pool', {BOX_SEATS.name: 1}, what='a peer') as grant:
             assert grant.demands[BOX_SEATS.name] == 1

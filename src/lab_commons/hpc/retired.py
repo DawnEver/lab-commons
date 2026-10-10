@@ -1,4 +1,4 @@
-"""RETIRED SPELLINGS of the test-run surface, each with its replacement -- the one place they may appear.
+"""RETIRED SPELLINGS of the dev and test-run surface, each with its replacement -- the one place they may appear.
 
 The noun that named three things (forge plan P1, user ruling 2026-10-09) was split into a RUN (one
 execution of a test set on one platform at one sha; its record is ``run-<sha>-<platform>-<req>.json.gz``),
@@ -33,6 +33,45 @@ RETIRED: Final[dict[str, str]] = {
     'admission --ledger': 'nothing: admission reads the forge, never the local ledger',
     'admission --gap': 'nothing: a failing part is a failure status on the forge, linked to its run record',
     '<job>.run.json': '<job>.submission.json (the last submission of a job file)',
+    # The machine's CPU seat and an environment's mutation seat are two resources with two names.
+    'BoxLock': 'lab_commons.dev.cpuseat.CpuSeat (the machine CPU seat, contended by runs only)',
+    'boxlock': 'lab_commons.dev.cpuseat',
+    'BOX_POOL': 'lab_commons.dev.cpuseat.CPU_POOL',
+    'EnvLock': 'lab_commons.dev.envseat.EnvironmentSeat (keyed by one environment prefix)',
+    'envlock': 'lab_commons.dev.envseat',
+    'hold_the_box': 'lab_commons.dev.boxwait.hold_run_seats (the CPU seat, then the environment seat)',
+    'refuse_if_locked': 'nothing: dep.mutate holds the TARGET environment seat and refuses naming its holder',
+    'LOCK_UNDECLARED': 'nothing: who may block a change is the target environment seat, not a port answer',
+    'lock_holders': 'lab_commons.dev.envseat.EnvironmentSeat.holders(prefix)',
+    'assert_the_holders_adapter_names_a_planted_holder': (
+        'famtests.depdoor.assert_a_verdict_in_another_environment_does_not_refuse'
+    ),
+    'assert_this_repo_supplies_both_halves_of_the_door': (
+        'famtests.depdoor.assert_this_repo_declares_its_verdict_anchors'
+    ),
+    'assert_a_port_declaring_neither_renders_both_gaps': (
+        'famtests.depdoor.assert_a_port_declaring_no_anchors_renders_the_gap'
+    ),
+    'BOTH_GAPS': 'famtests.depdoor.UNDECLARED_GAPS',
+    # One name for a platform result: a tests/<platform> part, read through platformparts.standing.
+    'lab/gate': 'tests/<platform> (a part, lab_commons.dev.platformparts)',
+    'lab/heavy': 'tests/<platform> parts of scope full (what the trunk admits)',
+    'GATE_CONTEXT': 'lab_commons.dev.platformparts.part_context(platform)',
+    'HEAVY_CONTEXT': 'lab_commons.dev.platformparts.part_context(platform)',
+    'gate_context': 'nothing: the queue reads tests/<platform> parts, not a declared context',
+    'heavy_context': 'nothing: the queue reads tests/<platform> parts, not a declared context',
+    'gate_ready': 'lab_commons.dev.integrator.lane_ready',
+    'HEAVY_NEEDED': 'lab_commons.dev.integrator.PARTS_NEEDED',
+    'heavy-needed': 'parts-needed',
+    'publish_verdict': 'lab_commons.dev.verify.post_part (a settled run posts its platform part)',
+    # The local verdict ledger was only a runner cache: it is the run cache now, and decides nothing.
+    'verdictledger': 'lab_commons.dev.runcache (the cache) and lab_commons.dev.outcomes (the pytest plugin)',
+    'record_promoted': 'lab_commons.dev.runcache.remember',
+    'LEDGER_REL': 'lab_commons.dev.runcache.CACHE_REL',
+    'output/verdicts/ledger.jsonl': 'output/runcache/runs.jsonl',
+    # How a cluster env is built is the commit's own declaration, read at --sha.
+    'run submit --install': "the commit's [tool.lab_commons.hpc] install, read at --sha",
+    'run submit --needs': "the commit's [tool.lab_commons.hpc] needs, read at --sha",
 }
 
 

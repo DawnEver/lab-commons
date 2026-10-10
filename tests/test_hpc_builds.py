@@ -15,7 +15,7 @@ from typing import Final
 
 import pytest
 
-from lab_commons.hpc.builds import builds_at, read_builds
+from lab_commons.hpc.builds import builds_at, floating_git, read_builds
 
 _GIT: Final = shutil.which('git') or 'git'
 COLLECTOR: Final = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / 'collect.py'
@@ -23,6 +23,7 @@ COLLECTOR: Final = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / '
 PYPROJECT: Final = """[project]
 name = "x"
 [tool.lab_commons.hpc]
+install = "uv sync"
 dependency_inputs = ["pyproject.toml", "uv.lock"]
 source_roots = ["src"]
 native = { inputs = ["rust"], build = "make" }
@@ -66,12 +67,44 @@ def test_a_new_sha_with_unchanged_inputs_keeps_both_keys_and_a_changed_input_mov
     source_only = _commit(repo, {'src/m.py': '2'})
     native_moved = _commit(repo, {'rust/lib.rs': 's'})
     lock_moved = _commit(repo, {'uv.lock': 'b'})
-    keys = [builds_at(repo, sha, install='uv sync', python='3.13') for sha in (first, source_only, native_moved)]
+    keys = [builds_at(repo, sha, python='3.13') for sha in (first, source_only, native_moved)]
     assert keys[0].env_key == keys[1].env_key == keys[2].env_key, 'a source edit or a rust edit keeps the venv'
     assert keys[0].native_key == keys[1].native_key != keys[2].native_key
-    moved = builds_at(repo, lock_moved, install='uv sync', python='3.13')
+    moved = builds_at(repo, lock_moved, python='3.13')
     assert moved.env_key != keys[0].env_key
-    assert builds_at(repo, first, install='uv sync --extra all', python='3.13').env_key != keys[0].env_key
+    reinstalled = _commit(repo, {'pyproject.toml': PYPROJECT.replace('"uv sync"', '"uv sync --extra all"')})
+    assert builds_at(repo, reinstalled, python='3.13').env_key not in {k.env_key for k in keys}
+
+
+UNDECLARED: Final = '[project]\nname = "x"\n[tool.lab_commons.hpc]\ninstall = "uv sync --no-install-project"\n'
+
+
+def test_every_env_is_keyed_by_every_input_that_builds_it_even_with_no_declared_inputs(repo: Path) -> None:
+    """PLANTED, the 2026-10-10 resubmit: a corrected install MUST move the key, or the old env is reused."""
+    first = _commit(repo, {'pyproject.toml': UNDECLARED})
+    wrong = builds_at(repo, first, python='3.13')
+    assert wrong.env_key, 'no env goes unkeyed'
+    fixed = _commit(repo, {'pyproject.toml': UNDECLARED.replace(' --no-install-project', '')})
+    assert builds_at(repo, fixed, python='3.13').env_key != wrong.env_key
+    assert builds_at(repo, first, python='3.12').env_key != wrong.env_key, 'the interpreter request is an input'
+    needing = _commit(repo, {'pyproject.toml': UNDECLARED + 'needs = ["cargo"]\n'})
+    assert builds_at(repo, needing, python='3.13').needs == ('cargo',)
+    assert builds_at(repo, needing, python='3.13').env_key != wrong.env_key, 'the needs are an input'
+    assert builds_at(repo, first, python='3.13') == wrong, 'and an unchanged recipe reuses'
+
+
+def test_a_commit_declaring_no_install_is_refused_naming_the_key(repo: Path) -> None:
+    sha = _commit(repo, {'pyproject.toml': '[project]\nname = "x"\n'})
+    with pytest.raises(ValueError, match=r'\[tool\.lab_commons\.hpc\] install'):
+        builds_at(repo, sha, python='3.13')
+
+
+def test_an_override_dependency_floats_like_any_other_git_requirement() -> None:
+    text = UNDECLARED.replace(
+        '[tool.lab_commons.hpc]',
+        '[tool.uv]\noverride-dependencies = ["lab-commons @ git+https://gitea/T/lab-commons.git"]\n[tool.lab_commons.hpc]',
+    )
+    assert floating_git(text) == (('https://gitea/T/lab-commons.git', 'HEAD'),)
 
 
 def _collect(repo: Path, cache: Path) -> list[str]:
@@ -133,10 +166,10 @@ def test_the_env_key_folds_the_current_remote_tip_of_every_floating_git_dependen
         asked.append((url, ref))
         return tips[url, ref]
 
-    before = builds_at(repo, sha, install='uv sync', python='3.13', tip=tip)
+    before = builds_at(repo, sha, python='3.13', tip=tip)
     assert sorted(asked) == sorted(tips), 'every floating source is asked once; a 40-hex pin is not'
-    assert builds_at(repo, sha, install='uv sync', python='3.13', tip=tip) == before, 'an unchanged tip reuses'
+    assert builds_at(repo, sha, python='3.13', tip=tip) == before, 'an unchanged tip reuses'
     tips['https://forge/dep-b', 'dev'] = '9'
-    after = builds_at(repo, sha, install='uv sync', python='3.13', tip=tip)
+    after = builds_at(repo, sha, python='3.13', tip=tip)
     assert after.env_key != before.env_key, 'a new upstream tip rebuilds the venv'
     assert after.native_key != before.native_key, 'the native build links against the venv it was built in'

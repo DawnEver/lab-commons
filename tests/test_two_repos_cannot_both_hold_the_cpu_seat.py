@@ -1,13 +1,13 @@
 """ONE-BOX-ONE-LOCK, proved the only way it can be: TWO REAL CHECKOUTS, TWO REAL INTERPRETERS.
 
 THE FAILURE MODE THIS EXISTS TO CATCH, and every part of it is SILENT. The adoption lands, every
-repo calls ``BoxLock``, and the seats never meet -- ``$LAB_COMMONS_RESOURCE_DIR`` set in one repo's
+repo calls ``CpuSeat``, and the seats never meet -- ``$LAB_COMMONS_RESOURCE_DIR`` set in one repo's
 environment and not the other, two ``lab_commons`` versions in two virtualenvs, or a ``Scope``
 regression that makes ``BOX_SEATS`` pool-scoped again. Both runs start, both succeed, both print a
 clean verdict, and the only symptom is a box that swaps. That is strictly WORSE than taking no lock
 at all, because a repo that refuses at least tells somebody.
 
-A SINGLE-PROCESS TEST CANNOT SEE ANY OF IT. Two ``BoxLock`` objects in one interpreter agree about
+A SINGLE-PROCESS TEST CANNOT SEE ANY OF IT. Two ``CpuSeat`` objects in one interpreter agree about
 the record root because they read the same ``os.environ``; the exclusion has to travel through the
 FILESYSTEM or this test is asserting that a dataclass equals itself. So: a holder in a subprocess
 with its own cwd, a real ``python -m lab_commons.dev.verify`` in a differently-named checkout, and
@@ -15,7 +15,7 @@ the verdict read off the second one's exit code and stdout.
 
 THE THREE FLOORS, without which a green here is vacuous:
 
-1. **The pool-name floor.** The holder names a pool of its OWN -- never ``BOX_POOL`` -- and demands
+1. **The pool-name floor.** The holder names a pool of its OWN -- never ``CPU_POOL`` -- and demands
    only ``BOX_SEATS``. If a future edit makes that dimension pool-scoped, the two never meet, verify
    is ADMITTED, and :func:`test_a_holder_under_its_own_pool_name_still_excludes_a_second_checkout`
    reds. Without this the suite would pass against a mechanism that only excludes repos which
@@ -44,7 +44,7 @@ import pytest
 #: rather than merely to refuse.
 HOLDER_WHAT = 'the alpha checkout gate'
 
-#: The holder's OWN pool name. Deliberately not ``BOX_POOL``: see floor 1 in the module docstring.
+#: The holder's OWN pool name. Deliberately not ``CPU_POOL``: see floor 1 in the module docstring.
 HOLDER_POOL = 'alpha-lane'
 
 #: Exit codes the refusal is judged by -- the same three ``verify`` publishes.
@@ -151,7 +151,7 @@ def test_a_holder_under_its_own_pool_name_still_excludes_a_second_checkout(
 ) -> None:
     """THE CHECK, with floors 1 and 3 inside it: B is refused INCONCLUSIVE and the refusal NAMES A.
 
-    The holder never mentions ``BOX_POOL``. What excludes is the box-SCOPED dimension, whose record
+    The holder never mentions ``CPU_POOL``. What excludes is the box-SCOPED dimension, whose record
     files are one set per box rather than one set per pool -- so a repo that names its own pool is
     contended with rather than invisible.
     """

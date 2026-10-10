@@ -79,7 +79,7 @@ def test_the_trunk_refuses_anything_but_every_part_a_full_pass(statuses: list[St
 
 
 def test_other_contexts_are_not_parts() -> None:
-    assert _trunk([_status('linux'), Status('lab/gate', 'failure', 'VERDICT result=fail', '')]).allowed
+    assert _trunk([_status('linux'), Status('ci/foreign', 'failure', 'not a part', '')]).allowed
 
 
 @pytest.mark.parametrize('error', [NoCredential('no stored credential'), OSError('connection refused')])

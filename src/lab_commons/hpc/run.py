@@ -162,6 +162,27 @@ def _submit_round(
     }
 
 
+#: How many lines of the collector's own output an empty-collection refusal quotes.
+_COLLECT_TAIL: Final = 25
+
+
+def _nothing_collected(spec: RunSpec, collected: str) -> str:
+    """The refusal for a collection that yielded no id, CARRYING the collector's own last lines.
+
+    An empty collection is almost always a failed one -- an import error in a conftest or a package the
+    install did not provide -- and a refusal that only says "nothing collected" hides the one line that
+    names the cause.
+    """
+    said = [line for line in collected.splitlines() if line.strip()][-_COLLECT_TAIL:]
+    quoted = '\n'.join(f'  | {line}' for line in said) or '  | (the collector printed nothing)'
+    return (
+        f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass. '
+        f'The collector said:\n{quoted}\n'
+        f"Remedy: fix the error above; an ImportError usually means the commit's "
+        f'[tool.lab_commons.hpc] install does not install what the tests import.'
+    )
+
+
 def submit_run(
     spec: RunSpec,
     machine: Machine,
@@ -217,8 +238,7 @@ def submit_run(
         ids = [node for node in ids if node in spec.only]
         errored = [node for node in errored if any(n.split('::')[0] == node for n in spec.only)]
     if not ids:
-        msg = f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass'
-        raise RuntimeError(msg)
+        raise RuntimeError(_nothing_collected(spec, collected))
     cannot = {
         platform: set(parse_ids(run(collect_command(spec, also=expr), None)))
         for platform in PLATFORMS

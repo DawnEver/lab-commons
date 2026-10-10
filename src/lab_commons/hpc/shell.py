@@ -19,7 +19,6 @@ from lab_commons.hpc.builds import Builds
 
 __all__ = [
     'BUILD_FAILED',
-    'BUILD_LOG',
     'COLLECT_MODULE',
     'ENV',
     'FULL',
@@ -46,9 +45,6 @@ __all__ = [
 ITEM_MODULE: Final = 'lab_ci_pytest_item'
 
 ROOT: Final = '"$HOME"/ci'
-
-#: Where a tree's build output is kept on the cluster, relative to the tree.
-BUILD_LOG: Final = '.lab-ci/build.log'
 
 #: The line :func:`build_script` prints instead of the facts when the build failed.
 BUILD_FAILED: Final = '@@@ build-failed'
@@ -90,17 +86,19 @@ COLLECT_MODULE: Final = 'lab_ci_collect'
 
 @dataclass(frozen=True)
 class RunSpec:
-    """What to test and how to build it. Shell strings run on the cluster inside the tree."""
+    """What to test and how to build it. Shell strings run on the cluster inside the tree.
+
+    HOW TO BUILD is the commit's own declaration, read into :attr:`builds` (:func:`lab_commons.hpc.builds.builds_at`):
+    the install command, the login-node needs and the env key over every input that builds the env.
+    """
 
     sha: str
     repo_url: str
-    install: str
     collect: str = ''
     select: str = ''
     table: dict[str, tuple[str, ...]] = field(default_factory=dict)
     python: str = ''
     pack_from: Path | None = None
-    needs: tuple[str, ...] = ()
     builds: Builds = field(default_factory=Builds)
     only: frozenset[str] | None = None
 
@@ -143,12 +141,12 @@ def fetch_script(spec: RunSpec) -> str:
 
 
 def needs_script(spec: RunSpec) -> str:
-    """Print ``@@@ missing <command>`` for every prerequisite the login node lacks: :data:`NEEDS` plus ``spec.needs``.
+    """Print ``@@@ missing <command>`` for each prerequisite the login node lacks: :data:`NEEDS` and the declared needs.
 
     Checked BEFORE anything is fetched or built, so a grant without ``cargo`` is named up front instead of
     being discovered by a failed build -- or, as measured 2026-10-09, by 276 dead shards.
     """
-    wanted = ' '.join(shlex.quote(c) for c in dict.fromkeys((*NEEDS, *spec.needs)))
+    wanted = ' '.join(shlex.quote(c) for c in dict.fromkeys((*NEEDS, *spec.builds.needs)))
     return f'for c in {wanted}; do command -v "$c" > /dev/null 2>&1 || echo "@@@ missing $c"; done; true'
 
 
@@ -195,9 +193,9 @@ def build_script(spec: RunSpec) -> str:
     The item runner's source arrives on stdin, so the script's first line is a ``cat``. Declared inputs
     (:mod:`lab_commons.hpc.builds`) put the venv in ``~/ci/envs/<key>`` and the native build in
     ``~/ci/native/<key>``, each built once per key under a ``flock``; the tree's ``source_roots`` reach
-    them through ``PYTHONPATH``. Undeclared, the venv is the tree's own ``.venv``. A FAILED BUILD STOPS THE
+    them through ``PYTHONPATH``. A FAILED BUILD STOPS THE
     RUN: each build runs in its own ``bash -e``, its output is kept in a log next to what it builds
-    (:data:`BUILD_LOG` inside the tree for a tree's own venv), and a non-zero exit -- or no ``bin/python``
+    (``~/ci/envs/<key>.log`` beside the env), and a non-zero exit -- or no ``bin/python``
     after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
     shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
 
@@ -207,10 +205,10 @@ def build_script(spec: RunSpec) -> str:
     """
     cache, tree, builds = f'{ROOT}/cache.git', f'{ROOT}/trees/{spec.sha}', spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
-    if builds.env_key:
-        env, env_log = f'{ROOT}/envs/{builds.env_key}', f'{ROOT}/envs/{builds.env_key}.log'
-    else:
-        env, env_log = f'{tree}/.venv', f'{tree}/{BUILD_LOG}'
+    if not builds.env_key or not builds.install:
+        msg = 'a build needs the declared install and its env key (lab_commons.hpc.builds.builds_at)'
+        raise ValueError(msg)
+    env, env_log = f'{ROOT}/envs/{builds.env_key}', f'{ROOT}/envs/{builds.env_key}.log'
     activate = 'export VIRTUAL_ENV="$E" PATH="$E/bin:$PATH" UV_PROJECT_ENVIRONMENT="$E"'
     lines = [
         'set -eo pipefail',
@@ -224,7 +222,7 @@ def build_script(spec: RunSpec) -> str:
         f'export E={env} UV_CACHE_DIR={_UV_CACHE}',
         *_timed(
             'env',
-            _step('"$E"', env_log, '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, spec.install])),
+            _step('"$E"', env_log, '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, builds.install])),
         ),
         f'[ -x "$E/bin/python" ] || {{ echo "{BUILD_FAILED} no bin/python in $E after the build"; exit 0; }}',
     ]

@@ -7,7 +7,7 @@ would hand the box to whoever is queued behind this process.
 
 WHICH REDS ARE REACHABLE, AND THE ONE THAT IS NOT. The entry-point arm, the private-pool arm, the
 rendezvous arm and the bounded-wait arm all take a per-repo input, so a wrong answer is plantable and
-is planted below. The exclusion arms drive the REAL ``BoxLock``: their red is "the family's lock
+is planted below. The exclusion arms drive the REAL ``CpuSeat``: their red is "the family's lock
 stopped excluding", which cannot be planted without replacing the thing under test -- so what is
 asserted for those is that the arm reaches its own green on a real lock, and their floor (a held box
 that names its holder) is driven separately. Saying that here rather than inventing a fake lock is
@@ -23,10 +23,10 @@ from pathlib import Path
 import pytest
 
 from lab_commons.dev import verify
-from lab_commons.dev.boxlock import BoxLock
 from lab_commons.dev.boxwait import PROGRESS_S, WAIT_S
+from lab_commons.dev.cpuseat import CpuSeat
 from lab_commons.dev.famtests.boxseat import (
-    HOLD_THE_BOX_PARAMETERS,
+    HOLD_RUN_SEATS_PARAMETERS,
     assert_a_pool_name_of_its_own_does_not_opt_a_run_out,
     assert_a_second_run_is_refused_while_one_holds_the_box,
     assert_asking_who_holds_the_box_is_not_taking_it,
@@ -61,7 +61,7 @@ def test_an_entry_point_whose_module_never_bound_the_call_reds() -> None:
     def a_runner_that_takes_nothing() -> int:
         return 0
 
-    with pytest.raises(AssertionError, match='as `hold_the_box`'):
+    with pytest.raises(AssertionError, match='as `hold_run_seats`'):
         assert_the_verdict_entry_point_takes_the_box(entry_point=a_runner_that_takes_nothing)
 
 
@@ -69,21 +69,21 @@ def test_an_entry_point_that_imports_the_call_without_making_it_reds(monkeypatch
     """PLANTED: the party-that-takes-none state -- the name is bound, and nothing calls it.
 
     This is the arm both forks were weakest on: asserting the IDENTITY alone passes on a module that
-    imports ``hold_the_box`` and never takes the seat, which is exactly what a refactor leaves behind.
+    imports ``hold_run_seats`` and never takes the seat, which is exactly what a refactor leaves behind.
     """
 
     def a_runner_that_only_imports_it() -> int:
         return 0
 
     module = sys.modules[a_runner_that_only_imports_it.__module__]
-    monkeypatch.setattr(module, 'hold_the_box', _the_family_function(), raising=False)
+    monkeypatch.setattr(module, 'hold_run_seats', _the_family_function(), raising=False)
     with pytest.raises(AssertionError, match='no longer calls'):
         assert_the_verdict_entry_point_takes_the_box(entry_point=a_runner_that_only_imports_it)
 
 
 def _the_family_function() -> object:
     """The very object the body compares identity against, fetched rather than re-imported by name."""
-    return sys.modules['lab_commons.dev.boxwait'].hold_the_box
+    return sys.modules['lab_commons.dev.boxwait'].hold_run_seats
 
 
 def test_a_second_run_is_refused_while_one_holds_the_box(records: Path) -> None:
@@ -130,7 +130,7 @@ def test_a_rendezvous_inside_the_tree_reds() -> None:
     on is a control that cannot fail -- exactly the shape this whole package exists to refuse.
     """
     with pytest.raises(AssertionError, match='A rendezvous a sibling repo cannot reach'):
-        assert_the_rendezvous_is_outside_this_repository(root=BoxLock.resource_dir())
+        assert_the_rendezvous_is_outside_this_repository(root=CpuSeat.resource_dir())
 
 
 def test_the_wait_is_bounded_and_narrates() -> None:
@@ -159,7 +159,7 @@ def test_the_parameter_pin_is_an_equality_not_a_superset(monkeypatch) -> None:
     other repo's caller. Here it reds, and the message names the addition.
     """
 
-    def hold_the_box_with_one_more(
+    def hold_run_seats_with_one_more(
         stack: contextlib.ExitStack,
         what: str,
         *,
@@ -169,14 +169,14 @@ def test_the_parameter_pin_is_an_equality_not_a_superset(monkeypatch) -> None:
     ) -> None:
         _ = (stack, what, wait_s, poll_s, a_new_required_thing)
 
-    monkeypatch.setattr('lab_commons.dev.famtests.boxseat.hold_the_box', hold_the_box_with_one_more)
+    monkeypatch.setattr('lab_commons.dev.famtests.boxseat.hold_run_seats', hold_run_seats_with_one_more)
     with pytest.raises(AssertionError, match='a_new_required_thing'):
         assert_the_wait_is_bounded_and_narrates(progress_share_ceiling=_A_SHARE)
 
 
 def test_the_parameter_pin_is_the_live_signature() -> None:
     """FLOOR ON THE PIN. An empty set would make the equality above a statement about nothing."""
-    assert frozenset({'stack', 'what', 'wait_s', 'poll_s'}) == HOLD_THE_BOX_PARAMETERS
+    assert frozenset({'stack', 'what', 'wait_s', 'poll_s'}) == HOLD_RUN_SEATS_PARAMETERS
 
 
 def test_the_box_pool_is_a_name_rather_than_a_measurement() -> None:
