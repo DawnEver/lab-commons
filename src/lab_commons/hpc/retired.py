@@ -32,6 +32,10 @@ RETIRED: Final[dict[str, str]] = {
     '--trunk-tier': 'nothing: the trunk admits parts of scope full read from the forge (lab_commons.dev.admission)',
     'admission --ledger': 'nothing: admission reads the forge, never the local ledger',
     'admission --gap': 'nothing: a failing part is a failure status on the forge, linked to its run record',
+    # A merge's deviations are checked when it is committed; a push does no audit work.
+    'unpublished_merges': 'nothing: python -m lab_commons.dev.mergeaudit <msg-file> audits the merge being committed',
+    'merge_refusals': 'lab_commons.dev.mergeaudit.pending (the commit-msg hook, on the one merge being committed)',
+    'mergeaudit.refusals': 'lab_commons.dev.mergeaudit.pending (the commit-msg hook, on the one merge being committed)',
     '<job>.run.json': '<job>.submission.json (the last submission of a job file)',
     # The machine's CPU seat and an environment's mutation seat are two resources with two names.
     'BoxLock': 'lab_commons.dev.cpuseat.CpuSeat (the machine CPU seat, contended by runs only)',

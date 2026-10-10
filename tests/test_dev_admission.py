@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.dev import admission
+from lab_commons.dev import admission, mergeaudit
 from lab_commons.dev.forge import NoCredential
 from lab_commons.dev.forgestatus import Status
 from lab_commons.dev.platformparts import Part, part_context
@@ -108,39 +108,20 @@ def test_the_parser_reads_the_last_verdict_in_either_grammar() -> None:
     assert admission.parse_verdict_line('no verdict here') is None
 
 
-def _no_merges(monkeypatch: pytest.MonkeyPatch, statuses: list[Status]) -> None:
+def _forge(monkeypatch: pytest.MonkeyPatch, statuses: list[Status]) -> None:
     monkeypatch.setattr(admission, '_head', lambda _root: HEAD)
-    monkeypatch.setattr(admission, 'unpublished_merges', lambda _root: ())
     monkeypatch.setattr(admission, 'unprompted_client', lambda _root: None)
     monkeypatch.setattr(admission, 'status_list', lambda _client, _sha: statuses)
 
 
 def test_the_cli_reads_the_forge_and_routes_each_destination(tmp_path: Path, monkeypatch) -> None:
-    _no_merges(monkeypatch, [_status('linux', 'FAIL')])
+    _forge(monkeypatch, [_status('linux', 'FAIL')])
     base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
     assert admission.main([*base, '--remote-ref', 'refs/heads/feat/x']) == 0
     assert admission.main([*base, '--remote-ref', 'refs/heads/integrate/main']) == 0
     assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 1
-    _no_merges(monkeypatch, [_status('linux')])
+    _forge(monkeypatch, [_status('linux')])
     assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 0
-
-
-def test_the_cli_refuses_a_push_carrying_an_unnamed_merge_deviation(tmp_path: Path, monkeypatch, capsys) -> None:
-    _no_merges(monkeypatch, [])
-    monkeypatch.setattr(admission, 'unpublished_merges', lambda _root: ('m1',))
-    seen: list[tuple[str, ...]] = []
-
-    def refused(_root: Path, merges: tuple[str, ...], roots: tuple[str, ...]) -> tuple[str, ...]:
-        seen.append(roots)
-        return (f'{merges[0]} LOST test_b',)
-
-    monkeypatch.setattr(admission, 'merge_refusals', refused)
-    argv = ['--root', str(tmp_path), '--trunk-ref', 'none', '--remote-ref', 'refs/heads/lane/x']
-    assert admission.main(argv) == 1
-    assert 'm1 LOST test_b' in capsys.readouterr().out
-    assert seen == [('tests',)]
-    monkeypatch.setattr(admission, 'merge_refusals', lambda *_: ())
-    assert admission.main(argv) == 0
 
 
 def _git(root: Path, *args: str) -> None:
@@ -148,17 +129,37 @@ def _git(root: Path, *args: str) -> None:
     subprocess.run(command, check=True, capture_output=True, timeout=60)
 
 
-def test_an_unborn_head_publishes_no_merge_and_a_born_one_names_its_merge(tmp_path: Path) -> None:
-    """A fresh repo's first push has no HEAD commit to walk: nothing to audit, never a crash.
+def test_a_push_publishing_many_unnamed_merges_does_no_audit_work(tmp_path: Path, monkeypatch) -> None:
+    """MERGE-DEVIATIONS-NAMED is checked when a merge is COMMITTED; a push never blocks on it.
 
-    The planted control is the same repo once born: one merge reachable from HEAD and no remote ref,
-    so an implementation that returned nothing everywhere would red here rather than pass vacuously.
+    The planted control: twenty unpublished merges, each LOSING a lane's test with no trailer -- the
+    exact history the push-time audit refused -- and every audit entry booby-trapped. Lane and
+    integration pushes admit; the trunk reads the forge alone.
     """
     _git(tmp_path, 'init', '-q', '-b', 'main')
-    assert admission.unpublished_merges(tmp_path) == ()
-    _git(tmp_path, 'commit', '-q', '--allow-empty', '-m', 'c1')
-    _git(tmp_path, 'checkout', '-q', '-b', 'side')
-    _git(tmp_path, 'commit', '-q', '--allow-empty', '-m', 'c2')
-    _git(tmp_path, 'checkout', '-q', 'main')
-    _git(tmp_path, 'merge', '-q', '--no-ff', '-m', 'm', 'side')
-    assert len(admission.unpublished_merges(tmp_path)) == 1
+    (tmp_path / 'tests').mkdir()
+    (tmp_path / 'tests' / 'test_a.py').write_text('def test_a():\n    assert 1\n', encoding='utf-8')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    for i in range(20):
+        _git(tmp_path, 'checkout', '-q', '-b', f'lane{i}')
+        (tmp_path / 'tests' / f'test_l{i}.py').write_text(f'def test_l{i}():\n    assert 1\n', encoding='utf-8')
+        _git(tmp_path, 'add', '-A')
+        _git(tmp_path, 'commit', '-q', '-m', f'lane {i}')
+        _git(tmp_path, 'checkout', '-q', 'main')
+        _git(tmp_path, 'commit', '-q', '--allow-empty', '-m', f'main {i}')
+        _git(tmp_path, 'merge', '-q', '--no-ff', '--no-commit', f'lane{i}')
+        (tmp_path / 'tests' / f'test_l{i}.py').unlink()
+        _git(tmp_path, 'add', '-A')
+        _git(tmp_path, 'commit', '-q', '-m', f'merge {i}')
+
+    def trap(*_a: object, **_k: object) -> None:
+        pytest.fail('a push ran the merge audit')
+
+    for name in ('audit', '_audit', 'unnamed', 'classify'):
+        monkeypatch.setattr(mergeaudit, name, trap)
+    monkeypatch.setattr(admission, 'unprompted_client', lambda _root: None)
+    monkeypatch.setattr(admission, 'status_list', lambda _client, _sha: [_status('linux')])
+    base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
+    for ref in ('refs/heads/feat/x', 'refs/heads/integrate/main', 'refs/heads/main'):
+        assert admission.main([*base, '--remote-ref', ref]) == 0
