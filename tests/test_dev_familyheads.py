@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lab_commons.dev import verify
+from lab_commons.dev import familyheads, verify
 from lab_commons.dev.familyheads import (
     CACHE_TTL_S,
     DEFAULT_DOOR,
@@ -30,14 +30,14 @@ def _dist(name: str, direct_url: dict[str, object] | None) -> SimpleNamespace:
     return SimpleNamespace(metadata={'Name': name}, read_text=lambda _name: text)
 
 
-def test_only_family_distributions_installed_from_git_are_read() -> None:
+def test_only_distributions_installed_from_git_are_read() -> None:
     vcs = {'url': _URL, 'vcs_info': {'vcs': 'git', 'commit_id': _OLD}}
     found = installed_family(
         lambda: [
             _dist('lab_commons', vcs),
-            _dist('numpy', vcs),
-            _dist('wdg-lab', {'url': 'file:///x', 'dir_info': {'editable': True}}),
-            _dist('optimi-lab', None),
+            _dist('numpy', {'url': 'https://files/numpy.whl', 'archive_info': {}}),
+            _dist('dep-b', {'url': 'file:///x', 'dir_info': {'editable': True}}),
+            _dist('dep-c', None),
         ]
     )
     assert found == (Installed('lab-commons', _URL, 'HEAD', _OLD),)
@@ -58,7 +58,7 @@ def test_a_commit_behind_its_head_is_stale_and_the_refusal_names_the_door(tmp_pa
 def test_a_commit_at_its_head_or_pinned_is_fresh(tmp_path: Path) -> None:
     """THE OTHER SIDE: fresh is silent, and a pinned commit never floats."""
     at_head = Installed('lab-commons', _URL, 'HEAD', _NEW)
-    pinned = Installed('wdg-lab', _URL, _OLD, _OLD)
+    pinned = Installed('dep-b', _URL, _OLD, _OLD)
     freshness = check(
         [at_head, pinned],
         cache=tmp_path / 'heads.json',
@@ -70,14 +70,14 @@ def test_a_commit_at_its_head_or_pinned_is_fresh(tmp_path: Path) -> None:
 
 
 def test_offline_is_unknown_and_said_never_read_as_fresh(tmp_path: Path) -> None:
-    one = Installed('ai-lab', _URL, 'main', _OLD)
+    one = Installed('dep-c', _URL, 'main', _OLD)
     freshness = check([one], cache=tmp_path / 'heads.json', ls_remote=lambda _u, _r: None)
     assert freshness.unknown == (one,)
     assert refusal(freshness, door='d') is None
     line = offline_line(freshness)
     assert line is not None
     assert 'UNKNOWN' in line
-    assert 'ai-lab' in line
+    assert 'dep-c' in line
 
 
 def test_the_head_is_cached_briefly(tmp_path: Path) -> None:
@@ -108,12 +108,8 @@ def test_the_sync_door_is_the_repos_declaration_else_the_shared_one(tmp_path: Pa
 def test_verify_refuses_a_stale_environment_before_anything_runs(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setattr(verify, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(verify, 'run_verify', lambda *_a, **_k: pytest.fail('a stale environment ran'))
-    monkeypatch.setattr(verify, 'installed_family', lambda: (Installed('lab-commons', _URL, 'HEAD', _OLD),))
-    monkeypatch.setattr(verify.CpuSeat, 'resource_dir', staticmethod(lambda **_k: tmp_path))
-
-    def forge_moved(installed: list[Installed], *, cache: Path) -> Freshness:
-        return check(installed, cache=cache, ls_remote=lambda _u, _r: _NEW)
-
-    monkeypatch.setattr(verify, 'check', forge_moved)
+    monkeypatch.setattr(familyheads, 'installed_family', lambda: (Installed('lab-commons', _URL, 'HEAD', _OLD),))
+    monkeypatch.setattr(familyheads, '_ls_remote', lambda _u, _r: _NEW)
+    monkeypatch.setattr(familyheads.CpuSeat, 'resource_dir', staticmethod(lambda **_k: tmp_path))
     assert verify.main(['--no-status']) == verify.EXIT_CODES[verify.Outcome.INCONCLUSIVE]
     assert 'STALE' in capsys.readouterr().err

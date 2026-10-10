@@ -34,7 +34,7 @@ def test_the_recorder_speaks_the_run_record_vocabulary_and_keeps_skip_reasons(tm
         _report('a::teardown_breaks', 'call', 'passed'),
         _report('a::teardown_breaks', 'teardown', 'failed'),
         _report('a::skipped', 'setup', 'skipped', longrepr=('a.py', 3, 'Skipped: needs a GPU')),
-        _report('a::expected', 'call', 'skipped', wasxfail='known'),
+        _report('a::expected', 'call', 'skipped', longrepr='AssertionError'),
     ):
         recorder.pytest_runtest_logreport(report)
     recorder.pytest_sessionfinish(SimpleNamespace(config=SimpleNamespace()))

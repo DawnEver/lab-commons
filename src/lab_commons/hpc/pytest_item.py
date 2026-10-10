@@ -63,6 +63,8 @@ class _Report(Protocol):
     outcome: str
     duration: float
     longrepr: object
+    #: Set by pytest on an xfailed report only -- read only once :func:`_xfailed` said so.
+    wasxfail: str
 
 
 def outcome_of(when: str, outcome: str, *, xfail: bool) -> str | None:
@@ -127,7 +129,7 @@ def _reason(report: _Report, outcome: str) -> str:
     if outcome == 'skipped' and isinstance(report.longrepr, tuple):
         return str(report.longrepr[-1]).removeprefix('Skipped: ')[:_WHY_CHARS]
     if outcome == 'xfailed':
-        return str(getattr(report, 'wasxfail', '') or _why(report.longrepr))[:_WHY_CHARS]
+        return str(report.wasxfail or _why(report.longrepr))[:_WHY_CHARS]
     return _why(report.longrepr)
 
 

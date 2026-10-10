@@ -62,7 +62,7 @@ def test_a_run_holds_its_own_environment_seat_and_no_other(tmp_path: Path) -> No
     """A run's seats are TWO resources: the CPU seat, and the seat of the environment it runs in only."""
     with contextlib.ExitStack() as stack:
         hold_run_seats(stack, 'verify:this-repo', wait_s=_WAIT_S, poll_s=_POLL_S)
-        assert [holder.what for holder in EnvironmentSeat.holders(sys.prefix)] == ['verify:this-repo']
+        assert {holder.what for holder in EnvironmentSeat.holders(sys.prefix)} == {'verify:this-repo'}
         assert EnvironmentSeat.holders(tmp_path / 'another-repo' / '.venv') == ()
         with pytest.raises(Exhausted), EnvironmentSeat(sys.prefix, 'dep:this-repo').held():
             pytest.fail('a mutation entered the environment a run holds')
