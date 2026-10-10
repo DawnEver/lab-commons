@@ -116,14 +116,9 @@ _WHY_CHARS = 300
 
 
 def _why(longrepr: object) -> str:
-    """The crash line of a failed phase: pytest's ``reprcrash.message``, else the repr's last non-empty line."""
-    crash = getattr(getattr(longrepr, 'reprcrash', None), 'message', None)
-    if crash:
-        text = str(crash).strip()
-    else:
-        lines = [line for line in str(longrepr).splitlines() if line.strip()]
-        text = lines[-1].strip() if lines else ''
-    return text.splitlines()[0][:_WHY_CHARS] if text else ''
+    """The crash line of a failed phase: the repr's last non-empty line (pytest ends it ``path:line: Error``)."""
+    lines = [line.strip() for line in str(longrepr).splitlines() if line.strip()]
+    return lines[-1][:_WHY_CHARS] if lines else ''
 
 
 def pytest_runtest_logreport(report: _Report) -> None:

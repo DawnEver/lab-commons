@@ -25,11 +25,6 @@ def _logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: SimpleNames
     return json.loads(stream.read_text(encoding='utf-8'))
 
 
-def test_a_failed_phase_streams_its_crash_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    crash = SimpleNamespace(reprcrash=SimpleNamespace(message='AssertionError: 1 != 2\nmore detail'))
-    assert _logged(tmp_path, monkeypatch, _report('call', 'failed', crash))['why'] == 'AssertionError: 1 != 2'
-
-
 def test_without_a_crash_the_last_non_empty_line_is_the_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     line = _logged(tmp_path, monkeypatch, _report('setup', 'failed', 'Traceback\n  x\nE   ' + 'v' * 400 + '\n\n'))
     assert line['outcome'] == 'error'
