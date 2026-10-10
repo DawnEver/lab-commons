@@ -12,7 +12,7 @@ Home-resolution precedence (per app):
   3. Platform-standard dirs (only when installed as a third-party pip package).
 """
 
-import datetime
+import datetime as dt
 import os
 from pathlib import Path
 
@@ -91,7 +91,7 @@ def _now_stamp() -> str:
     """The current wall-clock time as a filesystem-safe ``HH-MM-SS`` (patchable in tests)."""
     # DTZ005 waived: a run directory is read by a human on the box that wrote it, so LOCAL wall
     # clock is the correct reading; a UTC stamp would name a time nobody at that box observed.
-    return datetime.datetime.now().strftime(r'%H-%M-%S')  # noqa: DTZ005
+    return dt.datetime.now().strftime(r'%H-%M-%S')  # noqa: DTZ005
 
 
 def run_stamp() -> str:
@@ -112,7 +112,7 @@ _run_date: tuple[str, str, str] | None = None
 
 def _now_date() -> tuple[str, str, str]:
     """Current date as ``(yy, mm, dd)`` filesystem segments (patchable in tests)."""
-    now = datetime.datetime.now()  # noqa: DTZ005 -- local wall clock, for the same reason as _now_stamp
+    now = dt.datetime.now()  # noqa: DTZ005 -- local wall clock, for the same reason as _now_stamp
     return now.strftime(r'%y'), now.strftime(r'%m'), now.strftime(r'%d')
 
 
