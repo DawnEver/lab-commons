@@ -365,6 +365,7 @@ def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> 
     assert record['plan']['unmeasured'] == ['tests/a.py', 'tests/b.py']
     assert record['outcomes']['tests/w.py::t'] == 'not-covered'
     assert set(record['outcomes'].values()) == {'passed', 'not-covered'}
+    assert record['reasons'] == {}, 'a green run carries no reasons'
     assert record['overheads'] == {'tests/a.py': 5.0, 'tests/b.py': 5.0}
     assert record['peaks_mb'] == {'tests/a.py': 2048.0, 'tests/b.py': 2048.0}
     assert '#SBATCH --comment=lc:ws=ws-a' in fake.scripts[0]
@@ -530,3 +531,24 @@ def test_prep_steps_are_timed_into_the_tree_log_and_the_record() -> None:
         assert f'{TIME} {step}=' in script
         assert PREP_LOG in script
     assert parse_times(f'x\n{TIME} env=12s\n{TIME} collect=3s\nt.py::a\n') == {'env': 12, 'collect': 3}
+
+
+class _RedCluster(FakeVerdictCluster):
+    """Every ``tests/a.py`` id fails with a reason; the rest pass."""
+
+    def _streams(self) -> str:
+        out = []
+        for raw in super()._streams().splitlines():
+            line = json.loads(raw) if raw.startswith('{') else {}
+            if line.get('id', '').startswith('tests/a.py'):
+                line = {**line, 'outcome': 'failed', 'why': f'AssertionError: {line["id"]}'}
+            out.append(json.dumps(line) if line else raw)
+        return '\n'.join(out) + '\n'
+
+
+def test_the_record_names_why_each_red_failed() -> None:
+    """A 3000-red run triages from the record: every failed/error id carries its crash line, nothing else does."""
+    record = _verdict(_RedCluster())
+    red = {n for n, o in record['outcomes'].items() if o == 'failed'}
+    assert red
+    assert record['reasons'] == {n: f'AssertionError: {n}' for n in red}

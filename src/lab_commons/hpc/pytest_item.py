@@ -108,13 +108,34 @@ def _xfailed(report: _Report) -> bool:
     return report.outcome == 'skipped' and not isinstance(report.longrepr, tuple)
 
 
+#: The outcomes whose reason the stream keeps -- a 3000-red run is triaged from the record, not a re-run.
+_RED = ('failed', 'error')
+
+#: The longest reason kept: the crash line, not the traceback.
+_WHY_CHARS = 300
+
+
+def _why(longrepr: object) -> str:
+    """The crash line of a failed phase: pytest's ``reprcrash.message``, else the repr's last non-empty line."""
+    crash = getattr(getattr(longrepr, 'reprcrash', None), 'message', None)
+    if crash:
+        text = str(crash).strip()
+    else:
+        lines = [line for line in str(longrepr).splitlines() if line.strip()]
+        text = lines[-1].strip() if lines else ''
+    return text.splitlines()[0][:_WHY_CHARS] if text else ''
+
+
 def pytest_runtest_logreport(report: _Report) -> None:
     """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
     target = os.environ.get(STREAM_ENV)
     outcome = outcome_of(report.when, report.outcome, xfail=_xfailed(report))
     if not target or outcome is None:
         return
-    line = json.dumps({'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)})
+    entry: dict[str, Any] = {'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)}
+    if outcome in _RED:
+        entry['why'] = _why(report.longrepr)
+    line = json.dumps(entry)
     with Path(target).open('a', encoding='utf-8') as stream:
         stream.write(line + '\n')
 
@@ -128,15 +149,16 @@ def canonical(node: str, expected: set[str]) -> str:
 
 
 def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
-    """Fold one item's stream into ``{outcomes, seconds, done}``.
+    """Fold one item's stream into ``{outcomes, seconds, whys, done}``.
 
     ``outcomes`` holds only the ids the stream reports (the worst phase wins); ``seconds`` sums their
-    phases; ``done`` is the closing record, or ``None`` when the item never closed -- then every id it
-    did not report is still owed a run.
+    phases; ``whys`` holds the reason each red id's worst phase carried; ``done`` is the closing record,
+    or ``None`` when the item never closed -- then every id it did not report is still owed a run.
     """
     expected = set(node_ids)
     outcomes: dict[str, str] = {}
     seconds: dict[str, float] = {}
+    whys: dict[str, str] = {}
     done = None
     for raw in text.splitlines():
         try:
@@ -150,9 +172,11 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
         if node not in expected:
             continue
         outcome = line['outcome']
+        if 'why' in line and (node not in outcomes or _RANK.index(outcome) < _RANK.index(outcomes[node])):
+            whys[node] = line['why']
         outcomes[node] = min(outcomes.get(node, outcome), outcome, key=_RANK.index)
         seconds[node] = round(seconds.get(node, 0.0) + float(line.get('s', 0.0)), 3)
-    return {'outcomes': outcomes, 'seconds': seconds, 'done': done}
+    return {'outcomes': outcomes, 'seconds': seconds, 'whys': whys, 'done': done}
 
 
 def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
