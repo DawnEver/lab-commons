@@ -1,6 +1,6 @@
 """What a remote verdict RUNS ON THE CLUSTER: the spec, the shell it sends, and the parsing of what comes back.
 
-Every script here is a plain string handed to a :data:`lab_commons.hpc.run.Runner`; nothing in this module
+Every script here is a plain string handed to a :data:`lab_commons.hpc.cluster.Runner`; nothing in this module
 runs anything except :func:`pack`, which only READS the caller's repository. Paths stay under ``~/ci``.
 """
 

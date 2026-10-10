@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lab_commons.hpc.cluster import Runner
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.pytest_item import read_stream
-from lab_commons.hpc.run import Runner
 
 __all__ = ['fold', 'read_streams', 'summary', 'write_record']
 

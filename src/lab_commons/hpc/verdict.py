@@ -48,13 +48,13 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_states, submit
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.plan import Plan, allocate
 from lab_commons.hpc.platforms import LINUX, PLATFORMS, assign, cannot_run, runnable
 from lab_commons.hpc.records import fold, read_streams
-from lab_commons.hpc.run import Runner, Unreachable, probe, shard_states, submit
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
     COLLECT_MODULE,

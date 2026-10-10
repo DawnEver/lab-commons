@@ -8,7 +8,7 @@ reports it back (:mod:`lab_commons.hpc.slurm`). A stored usage figure would be a
 own state, wrong the moment a job ends.
 
 AN ACCOUNT IS ``(user, slurm_account)``, REACHED THROUGH ANY OF ITS LOGIN HOSTS. ``hosts`` is ordered: the
-runner (:func:`lab_commons.hpc.run.runner_for`) tries each with ``BatchMode`` ssh and a short connect timeout
+runner (:func:`lab_commons.hpc.cluster.runner_for`) tries each with ``BatchMode`` ssh and a short connect timeout
 and uses the first that answers. Every host of one grant shares Slurm and the home directory, so a run
 submitted through one is read back through another. Quota and the ``lc:ws=`` usage tags are per account.
 

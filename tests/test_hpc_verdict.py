@@ -18,13 +18,13 @@ from types import ModuleType
 import pytest
 
 from lab_commons.hpc.builds import Builds
+from lab_commons.hpc.cluster import Unreachable
 from lab_commons.hpc.config import Cost, Limits, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.plan import make_plan
 from lab_commons.hpc.pytest_item import canonical, outcome_of, read_stream
 from lab_commons.hpc.records import read_streams
-from lab_commons.hpc.run import Unreachable
 from lab_commons.hpc.shell import (
     BUILD_LOG,
     PREP_LOG,

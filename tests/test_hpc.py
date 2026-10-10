@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
+from lab_commons.hpc.cluster import _completed, gather, render_script, shard_states, submit
 from lab_commons.hpc.config import Cluster, Config, Cost, JobSpec, Limits, Policy, load_config
 from lab_commons.hpc.plan import free_slots, make_plan, quota_slots
-from lab_commons.hpc.run import _completed, gather, render_script, shard_states, submit
 from lab_commons.hpc.slurm import parse_minutes, parse_records, parse_snapshot, parse_tres
 from lab_commons.hpc.worker import main as worker_main
 from lab_commons.hpc.worker import run_shard

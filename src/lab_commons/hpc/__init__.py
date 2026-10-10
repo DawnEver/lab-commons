@@ -12,10 +12,10 @@ FOUR LAYERS, EACH IGNORANT OF THE ONE ABOVE IT::
     config  (one TOML file -- the single source of every number a run uses)
       -> slurm   (parse ``scontrol``/``sacctmgr`` text into a :class:`Snapshot`; pure, plus one probe)
       -> plan    (Snapshot + Work + Policy -> Plan; pure, no I/O)
-      -> run     (render the array script, submit, poll ``sacct``, gather results; I/O through a Runner)
+      -> cluster (render the array script, submit, poll ``sacct``, gather results; I/O through a Runner)
 
 and :mod:`lab_commons.hpc.worker` is what each array task executes on the compute node. The cluster is
-reached through a :data:`~lab_commons.hpc.run.Runner` -- a local shell on a login node, or ``ssh`` from a
+reached through a :data:`~lab_commons.hpc.cluster.Runner` -- a local shell on a login node, or ``ssh`` from a
 workstation -- so nothing above ``run`` knows which.
 
 WHERE a run may go is the MACHINE's, not the job's: :mod:`lab_commons.hpc.grants` reads this box's

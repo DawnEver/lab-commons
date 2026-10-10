@@ -2,7 +2,7 @@
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
-submission of a job file is recorded next to it as ``<job>.run.json`` (the grant it went to and its ssh
+submission of a job file is recorded next to it as ``<job>.submission.json`` (the grant it went to and its ssh
 targets, run directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need
 nothing more -- through whichever of those login hosts answers.
 
@@ -25,12 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from lab_commons.hpc.builds import builds_at
-from lab_commons.hpc.config import Config, Limits, load_config
-from lab_commons.hpc.grants import Grant, Machine, load_grants
-from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
-from lab_commons.hpc.platforms import table_at
-from lab_commons.hpc.records import summary, write_record
-from lab_commons.hpc.run import (
+from lab_commons.hpc.cluster import (
     TERMINAL_OK,
     Runner,
     Unreachable,
@@ -42,6 +37,11 @@ from lab_commons.hpc.run import (
     ssh_runner,
     submit,
 )
+from lab_commons.hpc.config import Config, Limits, load_config
+from lab_commons.hpc.grants import Grant, Machine, load_grants
+from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
+from lab_commons.hpc.platforms import table_at
+from lab_commons.hpc.records import summary, write_record
 from lab_commons.hpc.shell import VerdictSpec
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.verdict import gather_verdict, submit_verdict
@@ -57,9 +57,9 @@ _BUILD_TIMEOUT = 3 * 3600.0
 
 def _state_path(config: Config) -> Path:
     if config.source is None:
-        msg = 'a run is recorded next to its job file; this config was not loaded from one'
+        msg = 'a submission is recorded next to its job file; this config was not loaded from one'
         raise ValueError(msg)
-    return config.source.with_suffix('.run.json')
+    return config.source.with_suffix('.submission.json')
 
 
 def _items(config: Config) -> list[Any]:
