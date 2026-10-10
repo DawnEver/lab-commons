@@ -21,7 +21,17 @@ RETIRED: Final[dict[str, str]] = {
     'submit_verdict': 'lab_commons.hpc.run.submit_run',
     'gather_verdict': 'lab_commons.hpc.run.gather_run',
     'VerdictSpec': 'lab_commons.hpc.shell.RunSpec',
-    'record-linux': 'python -m lab_commons.dev.platformparts record <run-record> (platform and scope come from it)',
+    'record-linux': 'python -m lab_commons.dev.platformparts post <run-record> (platform and scope come from it)',
+    'platformparts record': (
+        'python -m lab_commons.dev.platformparts post <run-record> (a part is a tests/<platform> status on the forge, '
+        'not a ledger row)'
+    ),
+    'run_part': 'lab_commons.dev.platformparts.part_of (a record proves a Part, posted as a status)',
+    'parts_for': 'lab_commons.dev.platformparts.parts_of (the parts of a commit, read from its forge statuses)',
+    'record_gap': 'nothing: a failing part is a failure status on the forge, linked to its run record',
+    '--trunk-tier': 'nothing: the trunk admits parts of scope full read from the forge (lab_commons.dev.admission)',
+    'admission --ledger': 'nothing: admission reads the forge, never the local ledger',
+    'admission --gap': 'nothing: a failing part is a failure status on the forge, linked to its run record',
     '<job>.run.json': '<job>.submission.json (the last submission of a job file)',
 }
 

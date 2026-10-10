@@ -67,7 +67,7 @@ def settle(
                 f'{sha[:12]} on {record["cluster"]} ({record["system"]}, python {record["python"]}): {summary(record)}'
             )
             emit(f'written {path}')
-            emit(f'record it as the {record["platform"]} part: python -m lab_commons.dev.platformparts record {path}')
+            emit(f'post it as the {record["platform"]} part: python -m lab_commons.dev.platformparts post {path}')
         if not left:
             return 1 if red else 0
         if sleep is None:
