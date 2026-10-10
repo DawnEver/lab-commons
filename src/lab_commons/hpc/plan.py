@@ -10,7 +10,9 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 
 1. **Shards** -- consecutive items are packed until a shard holds enough padded time to amortise start-up
    (``shard_minutes_min``) without passing ``shard_minutes_max``; both bounds are then grown until the
-   array fits ``max_array`` and the QOS's per-user submit limit (each array task is one job to Slurm).
+   array fits ``max_array``, the QOS's per-user submit limit (each array task is one job to Slurm) and
+   what the quota CEILING runs at once -- ONE WAVE, so the makespan is the wall and never longer; a
+   second wave is cut only when one wave's wall would break the time ceiling.
    An item's time is MEASURED when the caller has it (``seconds``, one per item) and ``cost.seconds``
    otherwise; the wall limit is the SLOWEST shard's padded sum, never an average. Measured on a real cluster
    (2026-10-09): a flat 120 s per test file planned 129-min shards that ran 1h25-2h07, and 23 of 99 hit
@@ -151,6 +153,35 @@ def _shards(seconds: Sequence[float], policy: Policy, room: int | None) -> list[
     return shards
 
 
+def _wall(seconds: Sequence[float], shards: Sequence[tuple[int, int]]) -> int:
+    """The slowest shard's padded sum, in whole minutes."""
+    return max(1, math.ceil(max(sum(seconds[a:b]) for a, b in shards) / 60))
+
+
+def _one_wave(
+    padded: Sequence[float],
+    policy: Policy,
+    room: int | None,
+    *,
+    at_once: int,
+    ceiling: float | None,
+    min_minutes: float,
+) -> tuple[list[tuple[int, int]], int]:
+    """Shards no more than run *at_once*, so the makespan IS the wall; more only when *ceiling* forces it.
+
+    Measured 2026-10-10: a round planned 24 shards of 21 min for 17 concurrent tasks -- a 42-min makespan
+    under a 21-min wall, so every task was killed at half the time the round itself expected to take.
+    A second wave buys nothing a longer wall does not, and the longer wall is what a slow id needs.
+    *min_minutes* (a retry after a TIMEOUT) raises the wall, held to *ceiling*.
+    """
+    cap = at_once if room is None else min(room, at_once)
+    shards = _shards(padded, policy, cap)
+    if ceiling is not None and _wall(padded, shards) > ceiling:
+        shards = _shards(padded, policy, room)
+    floor = min_minutes if ceiling is None else min(min_minutes, ceiling)
+    return shards, max(_wall(padded, shards), math.ceil(floor))
+
+
 def make_plan(
     n_items: int,
     cost: Cost,
@@ -160,10 +191,13 @@ def make_plan(
     policy: Policy,
     limits: Limits,
     seconds: Sequence[float] | None = None,
+    min_minutes: float = 0.0,
 ) -> Plan:
     """Decide shards, partition and throttle for *n_items* -- see the module docstring.
 
     *seconds* is each item's measured time (``cost.seconds`` where absent); the margin is ``policy.safety``.
+    *min_minutes* is the least wall a task may ask for -- a retry after a TIMEOUT -- held to each
+    candidate's ceiling; the candidates granting the longest wall are preferred.
     """
     if seconds is not None and len(seconds) != n_items:
         msg = f'{len(seconds)} measured times for {n_items} items'
@@ -192,18 +226,20 @@ def make_plan(
         if room == 0:
             refusals.append(f'{name}: qos {qos!r} submit limit already reached')
             continue
-        shards = _shards(padded, policy, room)
-        minutes = max(1, math.ceil(max(sum(padded[a:b]) for a, b in shards) / 60))
         ceiling = _ceiling(snapshot, name, qos)
+        at_once = min(allowed, snapshot.quota.qos_max_jobs.get(qos) or allowed)
+        shards, minutes = _one_wave(padded, policy, room, at_once=at_once, ceiling=ceiling, min_minutes=min_minutes)
         if ceiling is not None and minutes > ceiling:
             refusals.append(f'{name}: a {minutes}-min shard exceeds its {ceiling:.0f}-min ceiling')
             continue
-        options.append((name, qos, shards, minutes))
+        options.append((name, qos, shards, minutes, ceiling))
     if not options:
         msg = f'no candidate partition can take this work: {"; ".join(refusals)}'
         raise ValueError(msg)
-    _, qos, chosen, minutes = next((o for o in options if free_slots(snapshot, (o[0],), cost) > 0), options[0])
-    partitions = tuple(o[0] for o in options if o[1] == qos)
+    longest = max(o[3] for o in options)
+    holds = [o for o in options if o[3] == longest] if min_minutes else options
+    _, qos, chosen, minutes, _ = next((o for o in holds if free_slots(snapshot, (o[0],), cost) > 0), holds[0])
+    partitions = tuple(o[0] for o in options if o[1] == qos and (o[4] is None or o[4] >= minutes))
     shards = tuple(chosen)
     max_jobs = snapshot.quota.qos_max_jobs.get(qos)
     throttle = min(len(shards), allowed, max_jobs or len(shards))
@@ -246,6 +282,7 @@ def allocate(
     workstation: str | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
+    min_minutes: float = 0.0,
 ) -> tuple[Grant, Plan]:
     """The grant whose plan finishes EARLIEST, planned on that grant's headroom. Pure.
 
@@ -276,6 +313,7 @@ def allocate(
                 policy=policy,
                 limits=Limits(cpus=room),
                 seconds=seconds,
+                min_minutes=min_minutes,
             )
         except ValueError as refused:
             refusals.append(f'{label}: {refused}')

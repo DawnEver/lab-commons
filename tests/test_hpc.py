@@ -91,12 +91,15 @@ def test_the_plan_fits_the_shard_window_and_the_quota() -> None:
     snap = parse_snapshot(IDLE_CALLER)
     plan = make_plan(500, Cost(cpus=1, mem_gb=2, seconds=60), snap, cluster=CLUSTER, policy=Policy(), limits=Limits())
     per_shard = plan.shards[0][1] - plan.shards[0][0]
-    assert per_shard == 5  # free QOS takes 100 jobs per user: 500 items need 5 a shard (window alone: 4)
+    # the quota runs 96 at once: 500 items in ONE wave need 6 a shard (submit limit alone: 5, window: 4)
+    assert per_shard == 6
+    assert len(plan.shards) <= plan.throttle, 'one wave: no task waits for another to finish'
+    assert plan.makespan_minutes == plan.minutes, 'the makespan is the wall, never longer'
     assert plan.shards[-1][1] == 500
-    assert plan.minutes == 8
+    assert plan.minutes == 9
     assert plan.partitions[0] == 'shortq'
     assert plan.qos == 'free'
-    assert plan.throttle == 96
+    assert plan.throttle == len(plan.shards) <= 96
     assert plan.free_slots == free_slots(snap, plan.partitions, Cost(cpus=1, mem_gb=2, seconds=60))
 
 

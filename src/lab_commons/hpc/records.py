@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -20,17 +21,26 @@ def fold(
     outcomes: dict[str, str],
     measured: Measured,
     reasons: dict[str, str],
+    *,
+    shards: Sequence[Sequence[int]],
+    wall: float,
 ) -> tuple[list[list[str]], bool]:
     """Record one round's streams; return the unfinished ids, halved, and whether an item was KILLED.
 
     An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
     they are retried, halved, like an item that never closed -- never stamped ``missing``.
+
+    WHAT A KILL COST IS MEASURED TOO. A shard (*shards*: item ranges) runs its items back to back under
+    *wall* seconds, so the first item of a shard that never closed was killed after the wall minus what
+    the items before it took; a signalled item says its own wall. That time goes to
+    :meth:`Measured.killed`, so the id the kill interrupted is never re-priced below it.
     """
     pending: list[list[str]] = []
     killed = False
-    for index, item in enumerate(items):
+    folds = [read_stream(streams.get(index, ''), item['ids']) for index, item in enumerate(items)]
+    spent = _killed_after(folds, shards, wall)
+    for index, (item, folded) in enumerate(zip(items, folds, strict=True)):
         group = item['ids']
-        folded = read_stream(streams.get(index, ''), group)
         outcomes.update(folded['outcomes'])
         reasons.update(folded['whys'])
         measured.learn(group, folded)
@@ -40,9 +50,26 @@ def fold(
         if folded['done'] is not None and not signalled:
             outcomes.update(dict.fromkeys(rest, 'missing'))
             continue
+        measured.killed(group, folded, spent.get(index, 0.0))
         half = (len(rest) + 1) // 2
         pending += [part for part in (rest[:half], rest[half:]) if part]
     return pending, killed
+
+
+def _killed_after(folds: list[dict[str, Any]], shards: Sequence[Sequence[int]], wall: float) -> dict[int, float]:
+    """Seconds each killed item ran: its own ``done`` wall when signalled, else what its shard's wall had left."""
+    spent: dict[int, float] = {}
+    for start, stop in shards:
+        left = wall
+        for index in range(start, stop):
+            done = folds[index]['done']
+            if done is None:
+                spent[index] = max(0.0, left)
+                break
+            if int(done.get('done', 0)) < 0:
+                spent[index] = float(done['wall'])
+            left -= float(done['wall'])
+    return spent
 
 
 def read_streams(run: Runner, directory: str) -> dict[int, str]:

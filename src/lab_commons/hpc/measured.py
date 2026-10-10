@@ -1,14 +1,21 @@
 """What a run has MEASURED about a test tree, carried from one record to the next. Pure.
 
-THREE FACTS, EACH KEYED BY WHAT IT DESCRIBES. ``durations`` -- seconds per node id, the sum of its
-phases as pytest timed them; ``overheads`` -- seconds per test FILE that are not any test's (the
-interpreter, the imports: an item's wall time minus its tests'); ``peaks_mb`` -- the peak RSS of a
-file's pytest process. A newer measurement replaces an older one; nothing is averaged, because the code
-under test changed between the two.
+FOUR FACTS, EACH KEYED BY WHAT IT DESCRIBES. ``durations`` -- seconds per node id, the sum of its
+phases as pytest timed them; ``floors`` -- seconds an id that NEVER FINISHED is known to take at least,
+because it was still running when its item was killed; ``overheads`` -- seconds per test FILE that are
+not any test's (the interpreter, the imports, module fixtures: an item's wall time minus its tests',
+shared among the item's files so the shares sum back to what was measured); ``peaks_mb`` -- the peak RSS
+of a file's pytest process. A newer measurement replaces an older one; nothing is averaged, because the
+code under test changed between the two. A finished id drops its floor: its duration is now known.
 
-An item's estimate is ONE overhead (the worst of its files') plus its ids' durations; an id not yet timed in a file that
-has others is priced at that file's mean. A file with NOTHING measured is priced at ``Cost.seconds`` and
-named, so a plan says how much of it is a guess.
+An item's estimate is its files' overheads plus its ids' durations, each id at least its floor; an id
+not yet timed in a file that has others is priced at that file's mean. A file with NOTHING measured is
+priced at ``Cost.seconds`` and named, so a plan says how much of it is a guess.
+
+AN ID THAT DIES IS PRICED FROM ITS DEATH, NOT FROM ITS SURVIVORS. Measured 2026-10-10 (a downstream
+run): a file whose expensive ids kept being killed was priced at the mean of the cheap ids that finished,
+so every retry was sized shorter than the wall the last one died at, and 325 ids were lost after three
+rounds.
 """
 
 from __future__ import annotations
@@ -31,9 +38,10 @@ def _file(node: str) -> str:
 
 @dataclass
 class Measured:
-    """The three measurements; :meth:`of` reads them from a record, :meth:`record` writes them back."""
+    """The four measurements; :meth:`of` reads them from a record, :meth:`record` writes them back."""
 
     durations: dict[str, float] = field(default_factory=dict)
+    floors: dict[str, float] = field(default_factory=dict)
     overheads: dict[str, float] = field(default_factory=dict)
     peaks_mb: dict[str, float] = field(default_factory=dict)
 
@@ -42,30 +50,56 @@ class Measured:
         """The measurements a previous run record carries; an older record without them gives none."""
         return cls(
             durations=dict(record.get('durations', {})),
+            floors=dict(record.get('floors', {})),
             overheads=dict(record.get('overheads', {})),
             peaks_mb=dict(record.get('peaks_mb', {})),
         )
 
     def record(self) -> dict[str, dict[str, float]]:
         """The record's keys for these measurements."""
-        return {'durations': self.durations, 'overheads': self.overheads, 'peaks_mb': self.peaks_mb}
+        return {
+            'durations': self.durations,
+            'floors': self.floors,
+            'overheads': self.overheads,
+            'peaks_mb': self.peaks_mb,
+        }
 
     def learn(self, ids: Sequence[str], folded: dict[str, Any]) -> None:
         """Take one item's folded stream (:func:`lab_commons.hpc.pytest_item.read_stream`).
 
-        An item may span several files and pays ONE start-up; every file it held is recorded with that
-        item's overhead and peak, an upper bound for the file alone, which :meth:`estimate` takes the max of.
+        An item may span several files and pays ONE wall; its overhead is SHARED equally among its files,
+        so :meth:`estimate`, which sums the shares, gives the same item back what it measured. Its peak is
+        recorded for every file, an upper bound for the file alone.
         """
         self.durations.update(folded['seconds'])
+        for node in folded['seconds']:
+            self.floors.pop(node, None)
         done = folded['done']
         if done is None or not ids:
             return
         tests = sum(folded['seconds'].values())
-        overhead = round(max(0.0, float(done['wall']) - tests), 3)
-        for name in dict.fromkeys(_file(n) for n in ids):
+        files = list(dict.fromkeys(_file(n) for n in ids))
+        overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
+        for name in files:
             self.overheads[name] = overhead
             if done.get('peak_mb') is not None:
                 self.peaks_mb[name] = float(done['peak_mb'])
+
+    def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float) -> None:
+        """An item killed after *spent* seconds: its first unfinished id ran for what the rest does not explain.
+
+        Pytest runs an item's ids in the order given, so the first id without an outcome is the one the
+        kill interrupted. It took at least *spent* minus the finished ids' durations and the files' known
+        overheads; that is its FLOOR. The ids after it never started and keep their estimate.
+        """
+        rest = [n for n in ids if n not in folded['outcomes']]
+        if not rest or spent <= 0:
+            return
+        files = dict.fromkeys(_file(n) for n in ids)
+        explained = sum(folded['seconds'].values()) + sum(self.overheads.get(f, 0.0) for f in files)
+        floor = round(spent - explained, 3)
+        if floor > 0:
+            self.floors[rest[0]] = max(self.floors.get(rest[0], 0.0), floor)
 
     def _by_file(self) -> dict[str, list[float]]:
         by: dict[str, list[float]] = {}
@@ -74,20 +108,21 @@ class Measured:
         return by
 
     def _seconds(self, ids: Sequence[str], cost: Cost, by: dict[str, list[float]]) -> tuple[float, list[str]]:
-        """One item: ONE start-up (its files' worst overhead) plus its tests; an unmeasured file is ``cost.seconds``."""
+        """One item: its files' overheads plus its tests, each at least its floor; unmeasured is ``cost.seconds``."""
         files: dict[str, list[str]] = {}
         for node in ids:
             files.setdefault(_file(node), []).append(node)
         tests, overhead, unmeasured = 0.0, 0.0, []
         for name, nodes in files.items():
             mates = by.get(name, [])
+            floors = sum(self.floors.get(n, 0.0) for n in nodes)
             if not mates and name not in self.overheads:
-                tests += cost.seconds
+                tests += max(cost.seconds, floors)
                 unmeasured.append(name)
                 continue
             mean = sum(mates) / len(mates) if mates else 0.0
-            tests += sum(self.durations.get(n, mean) for n in nodes)
-            overhead = max(overhead, self.overheads.get(name, 0.0))
+            tests += sum(max(self.durations.get(n, mean), self.floors.get(n, 0.0)) for n in nodes)
+            overhead += self.overheads.get(name, 0.0)
         return overhead + tests, unmeasured
 
     def estimate(self, items: Sequence[Sequence[str]], cost: Cost) -> tuple[list[float], list[str]]:
@@ -101,7 +136,7 @@ class Measured:
         return seconds, sorted(set(unmeasured))
 
     def pack(self, files: Sequence[Sequence[str]], cost: Cost, budget: float) -> list[list[str]]:
-        """Whole files, consecutive, joined into items of up to *budget* estimated seconds -- one start-up each.
+        """Whole files, consecutive, joined into items of up to *budget* estimated seconds -- one process each.
 
         A file is never split (its ids, and any xdist ``@group`` among them, stay in one process); a file
         over *budget* is an item alone. Measured 2026-10-10: 4316 one-file items paid 9.5 h of start-up for

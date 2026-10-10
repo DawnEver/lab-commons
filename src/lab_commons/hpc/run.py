@@ -28,8 +28,11 @@ none can). Admission composes it with the other parts; no part reads it to choos
 A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its outcomes as they happen
 (:mod:`lab_commons.hpc.pytest_item`); the run reads the streams, not the shards' end-of-run files.
 An item whose stream never closed is unfinished: its unreported ids are re-submitted, split in halves,
-for up to :data:`RETRIES` more rounds -- a round after an ``OUT_OF_MEMORY`` asks for twice the memory --
-and only what is still unfinished after that is ``lost``. An item that closed without reporting an id
+for up to :data:`RETRIES` more rounds -- a round after an ``OUT_OF_MEMORY`` asks for twice the memory,
+a round after a ``TIMEOUT`` for at least twice the minutes (held to the partition's ceiling, preferring
+one that holds them all), and the id a kill interrupted is priced at no less than the time it was given
+(:meth:`lab_commons.hpc.measured.Measured.killed`) -- and only what is still unfinished after that
+is ``lost``. An item that closed without reporting an id
 recorded it ``missing``.
 
 THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
@@ -146,6 +149,7 @@ def _submit_round(
         workstation=machine.workstation,
         policy=policy,
         seconds=seconds,
+        min_minutes=state.get('min_minutes', 0.0),
     )
     items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
     setup = (ENV,)
@@ -316,10 +320,22 @@ def gather_run(
         return None
     measured = Measured.of(state['measured'])
     streams = read_streams(run, f'{ROOT}/trees/{sha}/.lab-ci/{current["tag"]}')
-    pending, killed = fold(current['items'], streams, state['outcomes'], measured, state.setdefault('reasons', {}))
+    planned = state['rounds'][-1]
+    pending, killed = fold(
+        current['items'],
+        streams,
+        state['outcomes'],
+        measured,
+        state.setdefault('reasons', {}),
+        shards=planned['shards'],
+        wall=planned['minutes'] * 60,
+    )
     state['measured'] = measured.record()
-    if killed or 'OUT_OF_MEMORY' in states.values():
+    timed_out = 'TIMEOUT' in states.values()
+    if 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out):
         state['oom'] *= 2
+    if timed_out:
+        state['min_minutes'] = 2 * planned['minutes']
     if pending and len(state['rounds']) <= RETRIES:
         grant = next(g for g in machine.grants if g.account == account)
         snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
