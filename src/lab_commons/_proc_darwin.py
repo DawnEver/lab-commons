@@ -19,7 +19,15 @@ def _tool(*argv: str) -> str | None:
     if exe is None:
         return None
     try:
-        done = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, check=False, timeout=30)
+        done = subprocess.run(
+            [exe, *argv[1:]],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            check=False,
+            timeout=30,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout if done.returncode == 0 else None
