@@ -34,9 +34,12 @@ from __future__ import annotations
 import ctypes
 import os
 import signal
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from lab_commons import _proc_darwin
 
 __all__ = [
     'SystemMemory',
@@ -145,7 +148,12 @@ def system_memory() -> SystemMemory | None:
         A :class:`SystemMemory`, or ``None`` when unreadable.
 
     """
-    return _system_memory_windows() if os.name == 'nt' else _system_memory_procfs()
+    if os.name == 'nt':
+        return _system_memory_windows()
+    if sys.platform == 'darwin':
+        reading = _proc_darwin.memory()
+        return None if reading is None else SystemMemory(total_bytes=reading[0], available_bytes=reading[1])
+    return _system_memory_procfs()
 
 
 def _system_memory_windows() -> SystemMemory | None:
@@ -224,7 +232,7 @@ def working_set_bytes(pid: int) -> int | None:
     if pid <= 0:
         return None
     if os.name != 'nt':
-        return _working_set_bytes_procfs(pid)
+        return _proc_darwin.rss_bytes(pid) if sys.platform == 'darwin' else _working_set_bytes_procfs(pid)
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
@@ -321,6 +329,8 @@ def _process_rows() -> dict[int, tuple[str, int]] | None:
     (2026-08-19, 2026-08-21) by a damaged WMI, where it reports "not found" for live pids. The
     Win32 snapshot answers the question itself rather than asking a tool that can be broken.
     """
+    if sys.platform == 'darwin':
+        return _proc_darwin.process_rows()
     if os.name != 'nt':
         return _process_rows_procfs()
     kernel32 = _kernel32()

@@ -15,6 +15,7 @@ import os
 
 import pytest
 
+from lab_commons._proc_darwin import parse_ps_rows, parse_vm_stat
 from lab_commons.proc import (
     SystemMemory,
     descendants,
@@ -135,3 +136,30 @@ class TestKill:
         monkeypatch.setattr('lab_commons.proc.process_tree', lambda _pid: frozenset({10, 11}))
         monkeypatch.setattr('lab_commons.proc.kill_pid', lambda pid: pid == 11)
         assert kill_process_tree(10) == frozenset({11})
+
+
+class TestTheDarwinBackend:
+    """macOS has neither ``kernel32`` nor ``/proc``, so it reads ``ps``/``sysctl``/``vm_stat``.
+
+    Until 2026-10-10 every reader here answered NOTHING on macOS -- the unreadable-machine shape the
+    module docstring names as the defect -- and the macOS CI legs said so. The parsers are planted
+    here so a Windows desk exercises them; the live readings are the class tests above, on macOS.
+    """
+
+    def test_vm_stat_available_is_free_plus_inactive_pages(self) -> None:
+        text = (
+            'Mach Virtual Memory Statistics: (page size of 16384 bytes)\n'
+            'Pages free:                               1000.\n'
+            'Pages active:                             5000.\n'
+            'Pages inactive:                           3000.\n'
+            'Pages speculative:                         200.\n'
+        )
+        reading = parse_vm_stat(text, total_bytes=16 * 1024**3)
+        assert reading == (16 * 1024**3, 4000 * 16384)
+
+    def test_vm_stat_without_its_page_size_is_unreadable(self) -> None:
+        assert parse_vm_stat('Pages free: 1.\nPages inactive: 2.\n', total_bytes=1024**3) is None
+
+    def test_ps_rows_are_pid_to_name_and_parent(self) -> None:
+        text = '    1     0 /sbin/launchd\n  412     1 /usr/bin/some tool\n garbage\n'
+        assert parse_ps_rows(text) == {1: ('/sbin/launchd', 0), 412: ('/usr/bin/some tool', 1)}
