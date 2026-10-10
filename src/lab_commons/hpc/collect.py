@@ -48,12 +48,26 @@ def _under(path: str, roots: list[str]) -> bool:
     return not roots or any(path == r or path.startswith(r.rstrip('/') + '/') for r in roots)
 
 
+#: pytest exit codes for a run that failed AS A WHOLE (interrupted, internal error, usage error such as
+#: a bad ``-m`` expression): its empty id lists are not facts about any file and must never be cached.
+_RUN_FAILED = frozenset({2, 3, 4})
+
+
+class RunFailed(Exception):
+    """The collection run failed as a whole; carries pytest's last stderr line."""
+
+
 def _collect(stale: list[str], marker: list[str]) -> tuple[dict[str, list[str]], list[str]]:
     """One ``pytest --collect-only`` over *stale*: ids per file (every stale file present) and ERROR lines."""
     argv = [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-p', 'no:cacheprovider', '--color=no']
     argv += ['-rE', '--continue-on-collection-errors', *marker, *stale]
     env = {k: v for k, v in os.environ.items() if k != 'PYTEST_ADDOPTS'}  # the ERROR summary is the protocol
-    text = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', check=False, env=env).stdout
+    done = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', check=False, env=env)
+    if done.returncode in _RUN_FAILED:
+        tail = (done.stderr or done.stdout or '').strip().splitlines()
+        msg = f'pytest exit {done.returncode}: {tail[-1] if tail else "no output"}'
+        raise RunFailed(msg)
+    text = done.stdout
     fresh: dict[str, list[str]] = {path: [] for path in stale}
     # Both shapes pytest prints for a file that failed to import: the summary line and the section header.
     named = [m.group(1) for m in re.finditer(r'(?m)^(?:ERROR |_+ ERROR collecting )(\S+)', text)]
@@ -85,7 +99,13 @@ def main(argv: list[str]) -> int:
             stale.append(path)
     errors: list[str] = []
     if stale:
-        fresh, errors = _collect(stale, marker)
+        try:
+            fresh, errors = _collect(stale, marker)
+        except RunFailed as exc:
+            Path(opts[opts.index('--out') + 1]).write_text(
+                f'ERROR collection run failed -- {exc}' + chr(10), encoding='utf-8'
+            )
+            return 1
         failed = {line[len('ERROR ') :].split(' - ', 1)[0].strip() for line in errors}
         store.mkdir(parents=True, exist_ok=True)
         for path, ids in fresh.items():
