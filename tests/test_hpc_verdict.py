@@ -25,7 +25,17 @@ from lab_commons.hpc.plan import make_plan
 from lab_commons.hpc.pytest_item import canonical, outcome_of, read_stream
 from lab_commons.hpc.records import read_streams
 from lab_commons.hpc.run import Unreachable
-from lab_commons.hpc.shell import BUILD_LOG, VerdictSpec, build_script, needs_script, parse_ids
+from lab_commons.hpc.shell import (
+    BUILD_LOG,
+    PREP_LOG,
+    TIME,
+    VerdictSpec,
+    build_script,
+    collect_command,
+    needs_script,
+    parse_ids,
+    parse_times,
+)
 from lab_commons.hpc.slurm import parse_snapshot
 from lab_commons.hpc.verdict import RETRIES, gather_verdict, submit_verdict
 
@@ -279,11 +289,14 @@ class FakeVerdictCluster:
         if '@@@ facts' in command and self.build_fails:
             return '@@@ build-failed exit 101\nerror: could not find `cargo`\n'
         if '@@@ facts' in command:
-            return '@@@ facts\nplatform=linux-x86_64/glibc2.28\npython=3.13.1\n'
+            return '@@@ time env=12s\n@@@ facts\nplatform=linux-x86_64/glibc2.28\npython=3.13.1\n'
         if '--collect-only' in command or 'lab_ci_collect.py --cache' in command:
             if '(win)' in command:
                 return 'tests/w.py::t\n'
-            return 'tests/a.py::t1\ntests/a.py::t2\ntests/w.py::t\ntests/b.py::t3\ntests/b.py::t4\ntests/b.py::t5\n'
+            return (
+                '@@@ time collect=3s\n'
+                'tests/a.py::t1\ntests/a.py::t2\ntests/w.py::t\ntests/b.py::t3\ntests/b.py::t4\ntests/b.py::t5\n'
+            )
         if command.endswith('manifest.json'):
             self.manifests.append(json.loads(stdin or ''))
         if command.endswith('job.sh') and 'cat >' in command:
@@ -340,6 +353,7 @@ def test_the_verdict_records_outcomes_and_never_passes_what_it_did_not_run() -> 
     fake = FakeVerdictCluster()
     record = _verdict(fake)
     assert record['sha'] == SHA
+    assert record['prep'] == {'env': 12, 'collect': 3}, 'prep time is measurable from the record'
     assert record['handed'] == {'tests/w.py::t': ['windows']}, 'handed names the platforms that CAN run it'
     assert (record['platform'], record['cluster'], record['python']) == (
         'linux-x86_64/glibc2.28',
@@ -495,3 +509,24 @@ def test_a_commit_off_the_remote_without_a_pack_source_is_refused() -> None:
             cost=Cost(),
             policy=Policy(),
         )
+
+
+def test_env_and_native_builds_share_persistent_caches_and_cargo_is_locked() -> None:
+    builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', env_key='e1', native_key='n1')
+    script = build_script(VerdictSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds))
+    assert ' UV_CACHE_DIR="$HOME"/ci/uv-cache' in script, 'one uv cache across every env key'
+    assert 'export CARGO_TARGET_DIR="$HOME"/ci/cargo-target' in script, 'a rust edit compiles only changed crates'
+    assert 'flock 8' in script, 'two native keys building at once take turns on the shared target'
+
+
+def test_prep_steps_are_timed_into_the_tree_log_and_the_record() -> None:
+    builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', env_key='e1', native_key='n1')
+    spec = VerdictSpec(sha=SHA, repo_url='u', install='uv sync', builds=builds, collect='tests')
+    for script, step in (
+        (build_script(spec), 'env'),
+        (build_script(spec), 'native'),
+        (collect_command(spec), 'collect'),
+    ):
+        assert f'{TIME} {step}=' in script
+        assert PREP_LOG in script
+    assert parse_times(f'x\n{TIME} env=12s\n{TIME} collect=3s\nt.py::a\n') == {'env': 12, 'collect': 3}
