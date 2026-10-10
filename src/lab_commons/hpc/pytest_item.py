@@ -108,8 +108,9 @@ def _xfailed(report: _Report) -> bool:
     return report.outcome == 'skipped' and not isinstance(report.longrepr, tuple)
 
 
-#: The outcomes whose reason the stream keeps -- a 3000-red run is triaged from the record, not a re-run.
-_RED = ('failed', 'error')
+#: The outcomes whose reason the stream keeps -- a 3000-red run is triaged from the record, not a re-run, and
+#: a skip or xfail without its reason is an unexplained hole (measured 2026-10-10: 1127 empty skip reasons).
+_REASONED = ('failed', 'error', 'skipped', 'xfailed')
 
 #: The longest reason kept: the crash line, not the traceback.
 _WHY_CHARS = 300
@@ -121,6 +122,15 @@ def _why(longrepr: object) -> str:
     return lines[-1][:_WHY_CHARS] if lines else ''
 
 
+def _reason(report: _Report, outcome: str) -> str:
+    """Why a phase ended as it did: a skip's own reason, an xfail's expectation, else the crash line."""
+    if outcome == 'skipped' and isinstance(report.longrepr, tuple):
+        return str(report.longrepr[-1]).removeprefix('Skipped: ')[:_WHY_CHARS]
+    if outcome == 'xfailed':
+        return str(getattr(report, 'wasxfail', '') or _why(report.longrepr))[:_WHY_CHARS]
+    return _why(report.longrepr)
+
+
 def pytest_runtest_logreport(report: _Report) -> None:
     """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
     target = os.environ.get(STREAM_ENV)
@@ -128,8 +138,8 @@ def pytest_runtest_logreport(report: _Report) -> None:
     if not target or outcome is None:
         return
     entry: dict[str, Any] = {'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)}
-    if outcome in _RED:
-        entry['why'] = _why(report.longrepr)
+    if outcome in _REASONED:
+        entry['why'] = _reason(report, outcome)
     line = json.dumps(entry)
     # builtin open, not pathlib: a test that fakes os.name makes Path() spell a Windows path on the cluster
     with open(target, 'a', encoding='utf-8') as stream:  # noqa: PTH123
@@ -148,8 +158,8 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
     """Fold one item's stream into ``{outcomes, seconds, whys, done}``.
 
     ``outcomes`` holds only the ids the stream reports (the worst phase wins); ``seconds`` sums their
-    phases; ``whys`` holds the reason each red id's worst phase carried; ``done`` is the closing record,
-    or ``None`` when the item never closed -- then every id it did not report is still owed a run.
+    phases; ``whys`` holds the reason each red, skipped or xfailed id's worst phase carried; ``done`` is the
+    closing record, or ``None`` when the item never closed -- then every id it did not report is still owed a run.
     """
     expected = set(node_ids)
     outcomes: dict[str, str] = {}

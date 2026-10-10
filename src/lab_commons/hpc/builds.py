@@ -3,6 +3,8 @@ r"""CLUSTER BUILD REUSE -- a venv and a native build keyed by their REAL inputs,
 THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being judged)::
 
     [tool.lab_commons.hpc]
+    install = "uv sync --extra dev"                         # the venv's build command (required)
+    needs = ["cargo", "cc"]                                 # login-node commands beyond git and uv
     dependency_inputs = ["pyproject.toml", "uv.lock"]      # what the venv is a function of
     source_roots = ["src"]                                  # put on PYTHONPATH from each sha's tree
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
@@ -18,7 +20,10 @@ interpreter request. A git dependency that FLOATS (a ``name @ git+<url>[@<ref>]`
 ``[tool.uv.sources]`` ``git`` table without a ``rev``) adds the CURRENT remote tip of its ref to the env
 key (``git ls-remote`` -- read-only, the pyproject is the one list), so a new upstream tip rebuilds the
 venv and an unchanged one reuses it; a 40-hex pin is already in the hashed pyproject.
-Undeclared: no key, and the run builds a venv per tree as before.
+EVERY ENV HAS A KEY, AND THE KEY IS EVERY INPUT THAT BUILDS IT: the install command, the needs and the
+interpreter request always; the declared inputs when there are some, else the commit itself (a venv
+per commit). Measured 2026-10-10: a resubmit with a corrected install reused the tree's venv built by
+the first, because the venv was keyed by the tree alone.
 """
 
 from __future__ import annotations
@@ -50,6 +55,8 @@ class Builds:
     source_roots: tuple[str, ...] = ()
     native_inputs: tuple[str, ...] = ()
     native_build: str = ''
+    install: str = ''
+    needs: tuple[str, ...] = ()
     env_key: str = ''
     native_key: str = ''
 
@@ -59,6 +66,8 @@ def read_builds(text: str) -> Builds:
     raw = tomllib.loads(text).get('tool', {}).get('lab_commons', {}).get('hpc', {})
     native = raw.get('native', {})
     builds = Builds(
+        install=str(raw.get('install', '')),
+        needs=tuple(raw.get('needs', ())),
         dependency_inputs=tuple(raw.get('dependency_inputs', ())),
         source_roots=tuple(raw.get('source_roots', ())),
         native_inputs=tuple(native.get('inputs', ())),
@@ -99,6 +108,7 @@ _PINNED: Final = re.compile(r'[0-9a-f]{40}')
 def _requirements(raw: dict[str, Any]) -> Iterator[str]:
     project = raw.get('project', {})
     yield from project.get('dependencies', ())
+    yield from raw.get('tool', {}).get('uv', {}).get('override-dependencies', ())
     for group in (*project.get('optional-dependencies', {}).values(), *raw.get('dependency-groups', {}).values()):
         yield from (r for r in group if isinstance(r, str))
 
@@ -133,10 +143,13 @@ def remote_tip(url: str, ref: str) -> str:
     return words[0]
 
 
-def builds_at(
-    repo: Path, sha: str, *, install: str, python: str, tip: Callable[[str, str], str] = remote_tip
-) -> Builds:
-    """The declaration commit *sha* of *repo* carries, with its keys -- every git call here only READS."""
+def builds_at(repo: Path, sha: str, *, python: str, tip: Callable[[str, str], str] = remote_tip) -> Builds:
+    """The declaration commit *sha* of *repo* carries, with its keys -- every git call here only READS.
+
+    Raises:
+        ValueError: the commit declares no ``[tool.lab_commons.hpc] install`` -- a venv with no build command.
+
+    """
     text = subprocess.run(
         [_GIT, '-C', str(repo), 'show', f'{sha}:pyproject.toml'],
         capture_output=True,
@@ -145,11 +158,15 @@ def builds_at(
         check=True,
     ).stdout
     builds = read_builds(text)
-    env_key = ''
+    if not builds.install:
+        msg = f'{sha[:12]} declares no [tool.lab_commons.hpc] install, e.g. install = "uv sync --extra dev"'
+        raise ValueError(msg)
     if builds.dependency_inputs:
         oids = _oids(repo, sha, builds.dependency_inputs)
         oids.update({f'git+{url}@{ref}': tip(url, ref) for url, ref in floating_git(text)})
-        env_key = key_of(oids, install, python)
+    else:
+        oids = {'commit': sha}
+    env_key = key_of(oids, builds.install, python, *builds.needs)
     native_key = ''
     if builds.native_inputs:
         native_key = key_of(_oids(repo, sha, builds.native_inputs), builds.native_build, python, env_key)
