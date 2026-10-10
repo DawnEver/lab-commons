@@ -54,5 +54,23 @@ def test_fold_accumulates_reasons() -> None:
     }
     outcomes: dict[str, str] = {}
     reasons: dict[str, str] = {}
-    assert fold(items, streams, outcomes, Measured.of({}), reasons) == []
+    assert fold(items, streams, outcomes, Measured.of({}), reasons) == ([], False)
     assert reasons == {'t.py::a': 'boom'}
+
+
+def test_an_item_killed_by_a_signal_retries_its_unreported_ids() -> None:
+    items = [{'ids': ['t.py::a', 't.py::b', 't.py::c']}]
+    streams = {0: '{"id": "t.py::a", "outcome": "passed", "s": 0}\n{"done": -9, "wall": 14.7, "peak_mb": 1112.9}\n'}
+    outcomes: dict[str, str] = {}
+    pending, killed = fold(items, streams, outcomes, Measured.of({}), {})
+    assert killed
+    assert outcomes == {'t.py::a': 'passed'}, 'an OOM-killed item stamped its unreported ids missing'
+    assert sorted(node for part in pending for node in part) == ['t.py::b', 't.py::c']
+
+
+def test_an_item_that_closed_cleanly_still_stamps_unreported_ids_missing() -> None:
+    items = [{'ids': ['t.py::a', 't.py::b']}]
+    streams = {0: '{"id": "t.py::a", "outcome": "passed", "s": 0}\n{"done": 0, "wall": 1.0}\n'}
+    outcomes: dict[str, str] = {}
+    assert fold(items, streams, outcomes, Measured.of({}), {}) == ([], False)
+    assert outcomes == {'t.py::a': 'passed', 't.py::b': 'missing'}

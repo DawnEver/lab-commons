@@ -131,7 +131,8 @@ def pytest_runtest_logreport(report: _Report) -> None:
     if outcome in _RED:
         entry['why'] = _why(report.longrepr)
     line = json.dumps(entry)
-    with Path(target).open('a', encoding='utf-8') as stream:
+    # builtin open, not pathlib: a test that fakes os.name makes Path() spell a Windows path on the cluster
+    with open(target, 'a', encoding='utf-8') as stream:  # noqa: PTH123
         stream.write(line + '\n')
 
 

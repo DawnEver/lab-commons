@@ -19,9 +19,14 @@ def fold(
     outcomes: dict[str, str],
     measured: Measured,
     reasons: dict[str, str],
-) -> list[list[str]]:
-    """Record one round's streams into *outcomes*, *reasons* and *measured*; return the unfinished ids, halved."""
+) -> tuple[list[list[str]], bool]:
+    """Record one round's streams; return the unfinished ids, halved, and whether an item was KILLED.
+
+    An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
+    they are retried, halved, like an item that never closed -- never stamped ``missing``.
+    """
     pending: list[list[str]] = []
+    killed = False
     for index, item in enumerate(items):
         group = item['ids']
         folded = read_stream(streams.get(index, ''), group)
@@ -29,12 +34,14 @@ def fold(
         reasons.update(folded['whys'])
         measured.learn(group, folded)
         rest = [n for n in group if n not in folded['outcomes']]
-        if folded['done'] is not None:
+        signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
+        killed = killed or signalled
+        if folded['done'] is not None and not signalled:
             outcomes.update(dict.fromkeys(rest, 'missing'))
             continue
         half = (len(rest) + 1) // 2
         pending += [part for part in (rest[:half], rest[half:]) if part]
-    return pending
+    return pending, killed
 
 
 def read_streams(run: Runner, directory: str) -> dict[int, str]:
