@@ -52,12 +52,12 @@ def test_a_linux_and_a_windows_part_compose_in_either_order(order: str) -> None:
     assert 'windows=PASS/full' in decided.message
 
 
-def test_a_missing_part_is_refused_naming_the_part_and_its_command() -> None:
+def test_a_missing_part_is_refused_naming_the_part_and_its_producer() -> None:
     """PLANTED CONTROL: linux hands two ids to windows, and no windows part was posted."""
     decided = _trunk([_status('linux', hands={'windows': 2})])
     assert not decided.allowed
     assert 'missing the windows part (linux hands 2)' in decided.message
-    assert '--platform windows' in decided.message
+    assert 'forge tick` serving windows' in decided.message
 
 
 @pytest.mark.parametrize(
