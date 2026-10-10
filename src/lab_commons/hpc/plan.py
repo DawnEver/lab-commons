@@ -219,15 +219,15 @@ def make_plan(
     )
 
 
-def headroom(snapshot: Snapshot, share: int, workstation: str) -> int:
+def headroom(snapshot: Snapshot, share: int, workstation: str | None) -> int:
     """CPUs this workstation may still claim on a grant: ``min(share, quota - others) - mine``.
 
     *others* is every CPU the caller's jobs on the account hold that is NOT tagged with *workstation* --
     other boxes, and untagged jobs, which are someone's even if nobody said whose. A missing quota is no
     constraint beyond the share.
     """
-    mine = snapshot.usage.get(workstation, 0.0)
-    others = sum(cpus for tag, cpus in snapshot.usage.items() if tag != workstation)
+    mine = snapshot.usage.get(workstation, 0.0) if workstation else 0.0
+    others = sum(cpus for tag, cpus in snapshot.usage.items() if not workstation or tag != workstation)
     quota = snapshot.quota.cpus
     cap = share if quota is None else min(share, quota - others)
     return max(0, math.floor(cap - mine))
@@ -238,7 +238,7 @@ def allocate(
     cost: Cost,
     candidates: Sequence[tuple[Grant, Snapshot]],
     *,
-    workstation: str,
+    workstation: str | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
 ) -> tuple[Grant, Plan]:
@@ -277,4 +277,4 @@ def allocate(
         msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])
         raise ValueError(msg)
     *_, grant, plan = min(options, key=lambda o: o[:3])
-    return grant, replace(plan, comment=COMMENT_PREFIX + workstation, setup=grant.setup)
+    return grant, replace(plan, comment=COMMENT_PREFIX + workstation if workstation else '', setup=grant.setup)

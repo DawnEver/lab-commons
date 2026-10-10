@@ -12,7 +12,6 @@ helper); this file is plain text a user may paste into a bug report.
 Example::
 
     [hpc]
-    workstation = "lab-ws-07"
     [[hpc.grant]]
     user = "me"
     hosts = ["login1.cluster", "login2.cluster"]

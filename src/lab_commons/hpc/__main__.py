@@ -89,7 +89,8 @@ def _probe(config: Config, machine: Machine, connect: Connect) -> int:
             f'{grant.name} account {q.account} (qos {q.default_qos}): '
             f'quota cpus={q.cpus} mem_mb={q.mem_mb} gpus={q.gpus}'
         )
-        _out(f'  shares known here {here} of quota {q.cpus}; held {held}; headroom for {machine.workstation}: {room}')
+        box = machine.workstation or 'this unnamed box'
+        _out(f'  shares known here {here} of quota {q.cpus}; held {held}; headroom for {box}: {room}')
         _out(f'  one item ({config.cost}) -> {quota_slots(snapshot, config.cost, Limits(cpus=room))} concurrent')
         for name in grant.partitions or tuple(snapshot.partitions):
             part = snapshot.partitions.get(name)

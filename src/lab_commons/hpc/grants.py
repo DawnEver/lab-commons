@@ -17,8 +17,6 @@ NO SECRETS. ``user@host`` is the ``ssh`` target; keys, ports and jump hosts stay
 The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
 
     [hpc]
-    workstation = "lab-ws-07"                     # stable, unique among the boxes sharing an account
-
     [[hpc.grant]]
     user = "me"
     hosts = ["login1.cluster.example", "login2.cluster.example"]   # tried in order, >= 1
@@ -29,6 +27,10 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
     setup = ["module load git/2.42.0"]   # optional: run first in every array task
 
+THE WORKSTATION NAME IS THE HARNESS'S, NOT THIS FILE'S. It is ``$HARNESS_MACHINE`` when the machine's
+harness sets it, and ABSENT otherwise (a teammate without one): an absent box tags no job and so holds
+nothing tagged. One name, one source -- the retired ``[hpc] workstation`` key is refused by name.
+
 ``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster.s
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
 ``FileNotFoundError: 'git'`` there, while the login node has it) -- so it is declared once per grant and
@@ -37,16 +39,36 @@ prepended to every shard script that grant submits, before the job's own set-up.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Final
 
 from lab_commons.config import config_path, section
 from lab_commons.hpc.config import Cluster
 
-__all__ = ['COMMENT_PREFIX', 'Grant', 'Machine', 'load_grants']
+__all__ = ['COMMENT_PREFIX', 'MACHINE_ENV', 'Grant', 'Machine', 'load_grants', 'workstation']
 
 #: Every submitted job's ``--comment`` starts with this, followed by the workstation name.
 COMMENT_PREFIX: Final = 'lc:ws='
+
+#: The machine's name, set by the machine's harness; the one source of the workstation name.
+MACHINE_ENV: Final = 'HARNESS_MACHINE'
+
+#: Keys of ``[hpc]`` that were retired, each with its remedy.
+_RETIRED_KEYS: Final = {
+    'workstation': f'the name now comes from ${MACHINE_ENV} (set by the machine harness) -- delete the line',
+}
+
+
+def workstation() -> str | None:
+    """``$HARNESS_MACHINE`` when present and non-empty, else ``None``. A name with spaces or commas is refused."""
+    name = os.environ.get(MACHINE_ENV, '').strip()
+    if not name:
+        return None
+    if any(c.isspace() or c == ',' for c in name):
+        msg = f'${MACHINE_ENV} must be a name without spaces or commas, got {name!r}'
+        raise ValueError(msg)
+    return name
 
 
 @dataclass(frozen=True)
@@ -99,13 +121,13 @@ class Grant:
 class Machine:
     """A workstation's name and every grant it holds."""
 
-    workstation: str
+    workstation: str | None
     grants: tuple[Grant, ...]
 
     @property
     def comment(self) -> str:
-        """The ``--comment`` every job of this machine carries."""
-        return COMMENT_PREFIX + self.workstation
+        """The ``--comment`` every job of this machine carries; ``''`` for an unnamed machine."""
+        return COMMENT_PREFIX + self.workstation if self.workstation else ''
 
 
 _GRANT_KEYS: Final = frozenset(Grant.__dataclass_fields__)
@@ -126,13 +148,13 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
     if not raw:
         msg = f'{source}: no [hpc] table -- write one (see lab_commons.hpc.grants) to give this machine a grant'
         raise ValueError(msg)
-    unknown = set(raw) - {'workstation', 'grant'}
+    for key, remedy in _RETIRED_KEYS.items():
+        if key in raw:
+            msg = f'{source}: [hpc] {key} is retired: {remedy}'
+            raise ValueError(msg)
+    unknown = set(raw) - {'grant'}
     if unknown:
-        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "workstation"]'
-        raise ValueError(msg)
-    workstation = str(raw.get('workstation', '')).strip()
-    if not workstation or any(c.isspace() or c == ',' for c in workstation):
-        msg = f'{source}: workstation must be a non-empty name without spaces or commas, got {workstation!r}'
+        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant"]'
         raise ValueError(msg)
     grants = tuple(_grant(g, source) for g in raw.get('grant', []))
     if not grants:
@@ -144,4 +166,4 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
             msg = f'{source}: account {grant.account!r} is granted twice; one share per account'
             raise ValueError(msg)
         seen.add(grant.account)
-    return Machine(workstation=workstation, grants=grants)
+    return Machine(workstation=workstation(), grants=grants)

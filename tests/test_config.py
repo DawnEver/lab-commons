@@ -31,8 +31,8 @@ def test_a_missing_file_is_an_empty_config(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_a_section_is_its_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _point(tmp_path, monkeypatch, '[hpc]\nworkstation = "w"\n[viz]\ndpi = 150\n')
-    assert machine() == {'hpc': {'workstation': 'w'}, 'viz': {'dpi': 150}}
+    _point(tmp_path, monkeypatch, '[hpc]\ncpus = 1\n[viz]\ndpi = 150\n')
+    assert machine() == {'hpc': {'cpus': 1}, 'viz': {'dpi': 150}}
     assert section('viz') == {'dpi': 150}
     assert section('absent') == {}
 
