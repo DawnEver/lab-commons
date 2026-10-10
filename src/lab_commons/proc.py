@@ -33,14 +33,13 @@ from __future__ import annotations
 
 import ctypes
 import os
-import re
-import shutil
 import signal
-import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from lab_commons import _proc_darwin
 
 __all__ = [
     'SystemMemory',
@@ -151,7 +150,10 @@ def system_memory() -> SystemMemory | None:
     """
     if os.name == 'nt':
         return _system_memory_windows()
-    return _system_memory_darwin() if sys.platform == 'darwin' else _system_memory_procfs()
+    if sys.platform == 'darwin':
+        reading = _proc_darwin.memory()
+        return None if reading is None else SystemMemory(total_bytes=reading[0], available_bytes=reading[1])
+    return _system_memory_procfs()
 
 
 def _system_memory_windows() -> SystemMemory | None:
@@ -200,42 +202,6 @@ def _system_memory_procfs() -> SystemMemory | None:
     return SystemMemory(total_bytes=total, available_bytes=available)
 
 
-def _tool(*argv: str) -> str | None:
-    """*argv*'s stdout, or ``None`` when the tool is absent or fails -- the macOS readers' one door.
-
-    macOS has neither ``kernel32`` nor ``/proc``; its own tools are the stdlib-only reading there.
-    """
-    exe = shutil.which(argv[0])
-    if exe is None:
-        return None
-    try:
-        done = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, check=False, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout if done.returncode == 0 else None
-
-
-def _parse_vm_stat(text: str, *, total_bytes: int) -> SystemMemory | None:
-    """``vm_stat`` -> available = (free + inactive) pages, the reclaimable share, as psutil reads it.
-
-    No page size, no reading: guessing 4 KiB on Apple silicon (16 KiB pages) is a 4x error.
-    """
-    size = re.search(r'page size of (\d+) bytes', text)
-    pages = {key.strip(): int(value) for key, value in re.findall(r'^Pages ([a-z ]+):\s+(\d+)\.', text, re.MULTILINE)}
-    if size is None or total_bytes <= 0 or 'free' not in pages or 'inactive' not in pages:
-        return None
-    available = (pages['free'] + pages['inactive']) * int(size.group(1))
-    return SystemMemory(total_bytes=total_bytes, available_bytes=min(available, total_bytes))
-
-
-def _system_memory_darwin() -> SystemMemory | None:
-    total = (_tool('sysctl', '-n', 'hw.memsize') or '').strip()
-    text = _tool('vm_stat')
-    if not total.isdigit() or text is None:
-        return None
-    return _parse_vm_stat(text, total_bytes=int(total))
-
-
 class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):  # noqa: N801 -- mirrors the psapi struct name
     """The ``psapi`` struct. ``cb`` MUST be ``sizeof`` before the call, as with ``_MEMORYSTATUSEX``."""
 
@@ -266,7 +232,7 @@ def working_set_bytes(pid: int) -> int | None:
     if pid <= 0:
         return None
     if os.name != 'nt':
-        return _working_set_bytes_darwin(pid) if sys.platform == 'darwin' else _working_set_bytes_procfs(pid)
+        return _proc_darwin.rss_bytes(pid) if sys.platform == 'darwin' else _working_set_bytes_procfs(pid)
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
@@ -283,12 +249,6 @@ def working_set_bytes(pid: int) -> int | None:
         return int(counters.WorkingSetSize)
     finally:
         kernel32.CloseHandle(handle)
-
-
-def _working_set_bytes_darwin(pid: int) -> int | None:
-    """``ps -o rss=`` (KiB) -- macOS has no ``/proc/<pid>/status``."""
-    rss = (_tool('ps', '-o', 'rss=', '-p', str(pid)) or '').strip()
-    return int(rss) * 1024 if rss.isdigit() else None
 
 
 def _working_set_bytes_procfs(pid: int) -> int | None:
@@ -370,8 +330,7 @@ def _process_rows() -> dict[int, tuple[str, int]] | None:
     Win32 snapshot answers the question itself rather than asking a tool that can be broken.
     """
     if sys.platform == 'darwin':
-        text = _tool('ps', '-A', '-o', 'pid=,ppid=,comm=')
-        return None if text is None else (_parse_ps_rows(text) or None)
+        return _proc_darwin.process_rows()
     if os.name != 'nt':
         return _process_rows_procfs()
     kernel32 = _kernel32()
@@ -392,16 +351,6 @@ def _process_rows() -> dict[int, tuple[str, int]] | None:
     finally:
         kernel32.CloseHandle(snapshot)
     return rows or None
-
-
-def _parse_ps_rows(text: str) -> dict[int, tuple[str, int]]:
-    """``ps -o pid=,ppid=,comm=`` lines -> ``{pid: (image, parent_pid)}``; a malformed line is skipped."""
-    rows: dict[int, tuple[str, int]] = {}
-    for line in text.splitlines():
-        pid, ppid, *name = [*line.split(None, 2)]
-        if pid.isdigit() and ppid.isdigit():
-            rows[int(pid)] = (name[0] if name else '', int(ppid))
-    return rows
 
 
 def _process_rows_procfs() -> dict[int, tuple[str, int]] | None:

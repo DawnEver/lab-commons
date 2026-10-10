@@ -15,6 +15,7 @@ import os
 
 import pytest
 
+from lab_commons._proc_darwin import parse_ps_rows, parse_vm_stat
 from lab_commons.proc import (
     SystemMemory,
     descendants,
@@ -146,8 +147,6 @@ class TestTheDarwinBackend:
     """
 
     def test_vm_stat_available_is_free_plus_inactive_pages(self) -> None:
-        from lab_commons.proc import _parse_vm_stat  # noqa: PLC0415 -- private parser, planted
-
         text = (
             'Mach Virtual Memory Statistics: (page size of 16384 bytes)\n'
             'Pages free:                               1000.\n'
@@ -155,16 +154,12 @@ class TestTheDarwinBackend:
             'Pages inactive:                           3000.\n'
             'Pages speculative:                         200.\n'
         )
-        reading = _parse_vm_stat(text, total_bytes=16 * 1024**3)
-        assert reading == SystemMemory(total_bytes=16 * 1024**3, available_bytes=4000 * 16384)
+        reading = parse_vm_stat(text, total_bytes=16 * 1024**3)
+        assert reading == (16 * 1024**3, 4000 * 16384)
 
     def test_vm_stat_without_its_page_size_is_unreadable(self) -> None:
-        from lab_commons.proc import _parse_vm_stat  # noqa: PLC0415 -- private parser, planted
-
-        assert _parse_vm_stat('Pages free: 1.\nPages inactive: 2.\n', total_bytes=1024**3) is None
+        assert parse_vm_stat('Pages free: 1.\nPages inactive: 2.\n', total_bytes=1024**3) is None
 
     def test_ps_rows_are_pid_to_name_and_parent(self) -> None:
-        from lab_commons.proc import _parse_ps_rows  # noqa: PLC0415 -- private parser, planted
-
         text = '    1     0 /sbin/launchd\n  412     1 /usr/bin/some tool\n garbage\n'
-        assert _parse_ps_rows(text) == {1: ('/sbin/launchd', 0), 412: ('/usr/bin/some tool', 1)}
+        assert parse_ps_rows(text) == {1: ('/sbin/launchd', 0), 412: ('/usr/bin/some tool', 1)}
