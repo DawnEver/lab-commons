@@ -14,14 +14,19 @@ __all__ = ['fold', 'read_streams', 'summary', 'write_record']
 
 
 def fold(
-    items: list[dict[str, Any]], streams: dict[int, str], outcomes: dict[str, str], measured: Measured
+    items: list[dict[str, Any]],
+    streams: dict[int, str],
+    outcomes: dict[str, str],
+    measured: Measured,
+    reasons: dict[str, str],
 ) -> list[list[str]]:
-    """Record one round's streams into *outcomes* and *measured*; return the unfinished ids, halved."""
+    """Record one round's streams into *outcomes*, *reasons* and *measured*; return the unfinished ids, halved."""
     pending: list[list[str]] = []
     for index, item in enumerate(items):
         group = item['ids']
         folded = read_stream(streams.get(index, ''), group)
         outcomes.update(folded['outcomes'])
+        reasons.update(folded['whys'])
         measured.learn(group, folded)
         rest = [n for n in group if n not in folded['outcomes']]
         if folded['done'] is not None:

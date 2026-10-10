@@ -264,7 +264,7 @@ def gather_verdict(
         return None
     measured = Measured.of(state['measured'])
     streams = read_streams(run, f'{ROOT}/trees/{sha}/.lab-ci/{current["tag"]}')
-    pending = fold(current['items'], streams, state['outcomes'], measured)
+    pending = fold(current['items'], streams, state['outcomes'], measured, state.setdefault('reasons', {}))
     state['measured'] = measured.record()
     if 'OUT_OF_MEMORY' in states.values():
         state['oom'] *= 2
@@ -278,6 +278,7 @@ def gather_verdict(
     record = {
         **{key: state[key] for key in ('sha', 'platform', 'cluster', 'python', 'prep', 'rounds', 'outcomes', 'handed')},
         'plan': state['rounds'][0],
+        'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
         **state['measured'],
     }
     state['record'] = record
