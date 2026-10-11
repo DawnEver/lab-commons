@@ -7,8 +7,10 @@ read the trunk WAITS; the local ledger is never consulted.
 
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -124,21 +126,22 @@ def test_the_cli_reads_the_forge_and_routes_each_destination(tmp_path: Path, mon
     assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 0
 
 
-def test_the_hook_spelling_reads_the_remote_ref_pre_commit_sets(tmp_path: Path, monkeypatch) -> None:
-    """A pre-commit pre-push hook gets no argv for the ref; ``PRE_COMMIT_REMOTE_BRANCH`` carries it.
+def test_the_hook_spelling_reads_git_s_pre_push_lines_on_stdin(tmp_path: Path, monkeypatch) -> None:
+    """A pre-push hook gets the pushed refs on stdin, one line each, judged at the sha being pushed.
 
     PLANTED: the trunk with NO part posted is refused through the hook spelling -- the vacuous case.
     """
     _forge(monkeypatch, [])
     base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
-    monkeypatch.setenv('PRE_COMMIT_REMOTE_BRANCH', 'refs/heads/main')
+    sha = 'a' * 40
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(f'refs/heads/main {sha} refs/heads/main {"0" * 40}\n'))
     assert admission.main(base) == 1
-    monkeypatch.setenv('PRE_COMMIT_REMOTE_BRANCH', 'refs/heads/lane/x')
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(f'refs/heads/x {sha} refs/heads/lane/x {"0" * 40}\n'))
     assert admission.main(base) == 0
 
 
 def test_no_remote_ref_anywhere_is_a_refused_argv_and_never_an_admission(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv('PRE_COMMIT_REMOTE_BRANCH', raising=False)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(''))
     with pytest.raises(SystemExit) as refused:
         admission.main(['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main'])
     assert refused.value.code == 2

@@ -76,6 +76,25 @@ RETIRED: Final[dict[str, str]] = {
     # How a cluster env is built is the commit's own declaration, read at --sha.
     'run submit --install': "the commit's [tool.lab_commons.hpc] install, read at --sha",
     'run submit --needs': "the commit's [tool.lab_commons.hpc] needs, read at --sha",
+    # Git hooks are TOML run by one runner in the repo venv (user ruling 2026-10-11): no pre-commit framework.
+    '.pre-commit-config.yaml': (
+        '[[tool.lab_commons.hooks.<stage>]] in pyproject.toml over lab_commons/dev/githooks/base.toml'
+    ),
+    'PRE_COMMIT_REMOTE_BRANCH': "git's pre-push lines on stdin (lab_commons.dev.githooks.runner.parse_push_lines)",
+    'PRE_COMMIT_FROM_REF': "the remote sha of git's pre-push lines on stdin",
+    'PRE_COMMIT_TO_REF': "the local sha of git's pre-push lines on stdin",
+    'PRECOMMIT_BASE': 'lab_commons/dev/githooks/base.toml (the hook base, as TOML data)',
+    'HOOK_ID_CORE': 'lab_commons.dev.githooks.table.base_rows (the hook base, as TOML data)',
+    'hook_requirement': 'nothing: every hook runs in the repo venv, so no second lab-commons is installed',
+    'pre_commit install': 'python -m lab_commons.dev.hook_install --install',
+    'install_command': 'lab_commons.dev.hook_install.INSTALL_COMMAND',
+    'lab-with-venv': 'a hook row run = ["python", ...] (the runner already runs in the repo venv)',
+    'lab-issue-ref': 'python -m lab_commons.dev.issueref (the base commit-msg row)',
+    'githooks.bootstrap': 'lab_commons.dev.hook_install.shim (finds the checkout venv, execs the runner)',
+    'branch-push-only': 'a hook row`s refs regex (pre-push: run only for matching pushed refs)',
+    'lab_commons.dev.githooks bump-version': 'python -m lab_commons.dev.githooks script bump-version',
+    'lab_commons.dev.githooks branchset-push': 'python -m lab_commons.dev.githooks script branchset-push',
+    'lab_commons.dev.githooks cz-push-range': 'python -m lab_commons.dev.githooks script cz-push-range',
 }
 
 
