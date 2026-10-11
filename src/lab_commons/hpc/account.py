@@ -39,4 +39,8 @@ def cluster_account(run: Callable[[str, str | None], str]) -> ClusterAccount | N
         said = [line.strip() for line in run(_ASK, None).splitlines() if line.strip()]
     except (OSError, RuntimeError):
         return None
-    return ClusterAccount(said[0], said[1]) if len(said) == 2 else None  # noqa: PLR2004 -- two lines asked
+    match said:
+        case [cluster, account]:
+            return ClusterAccount(cluster, account)
+        case _:
+            return None
