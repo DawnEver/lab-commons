@@ -31,6 +31,7 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 
 from __future__ import annotations
 
+import heapq
 import math
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
@@ -45,7 +46,7 @@ from lab_commons.width import fits
 #: Slurm reports memory in MiB; :data:`~lab_commons.resources.MEMORY` counts bytes.
 MIB: Final = 1024**2
 
-__all__ = ['MIB', 'Plan', 'allocate', 'free_slots', 'headroom', 'make_plan', 'quota_slots']
+__all__ = ['MIB', 'Plan', 'allocate', 'balance', 'free_slots', 'headroom', 'make_plan', 'quota_slots']
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,32 @@ def _shards(seconds: Sequence[float], policy: Policy, room: int | None) -> list[
     while len(shards := _pack(seconds, low, high)) > cap:
         low, high = low * 1.1, high * 1.1
     return shards
+
+
+def balance(seconds: Sequence[float], shards: Sequence[tuple[int, int]]) -> tuple[list[int], tuple[tuple[int, int], ...]]:
+    """The same NUMBER of shards, refilled longest-processing-time first: ``(order, shards)``.
+
+    *order* permutes the items so each LPT bin is a consecutive range (the array script slices ranges);
+    within a bin the items keep their original order. The refill is kept only when its slowest shard is
+    faster than the given one's, else the input comes back unchanged. Measured 2026-10-11: consecutive
+    ranges of collection order put the heaviest files of one directory in one shard -- a 72-min shard
+    beside a median of 8, so the round's wall was its straggler.
+    """
+    slowest = max((sum(seconds[a:b]) for a, b in shards), default=0.0)
+    bins: list[list[int]] = [[] for _ in shards]
+    loads = [(0.0, n) for n in range(len(shards))]
+    for index in sorted(range(len(seconds)), key=lambda i: -seconds[i]):
+        load, n = heapq.heappop(loads)
+        bins[n].append(index)
+        heapq.heappush(loads, (load + seconds[index], n))
+    if not bins or max(load for load, _ in loads) >= slowest:
+        return list(range(len(seconds))), tuple(shards)
+    order, ranges, start = [], [], 0
+    for members in bins:
+        order += sorted(members)
+        ranges.append((start, start + len(members)))
+        start += len(members)
+    return order, tuple(ranges)
 
 
 def _wall(seconds: Sequence[float], shards: Sequence[tuple[int, int]]) -> int:

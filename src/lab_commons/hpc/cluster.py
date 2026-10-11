@@ -19,10 +19,12 @@ import shlex
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final
 
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant
+from lab_commons.hpc.phases import Clock
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
 from lab_commons.log import log
@@ -38,6 +40,7 @@ __all__ = [
     'probe',
     'render_script',
     'runner_for',
+    'shard_clock',
     'shard_states',
     'ssh_runner',
     'submit',
@@ -240,6 +243,9 @@ def submit(
     return Submission(run_dir=run_dir, job_id=job_id, shards=len(plan.shards))
 
 
+#: The ``sacct`` columns of a :class:`~lab_commons.hpc.phases.Clock`, in its field order.
+_CLOCK_FIELDS: Final = 'JobID,State,Submit,Start,End,ElapsedRaw,AllocCPUS'
+
 _TASK: Final = re.compile(r'^(\d+)_(\d+|\[[^\]]*\])$')
 
 
@@ -252,20 +258,42 @@ def _expand(spec: str) -> list[int]:
     return indices
 
 
-def shard_states(run: Runner, job_ids: Sequence[str]) -> dict[int, str]:
-    """Each shard's latest Slurm state across one or more submissions (a resubmit supersedes)."""
-    states: dict[int, str] = {}
+def _epoch(text: str) -> float | None:
+    """``sacct``'s local ``2026-10-11T02:36:16`` as epoch seconds; ``Unknown``/``None``/empty is ``None``."""
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def shard_clock(run: Runner, job_ids: Sequence[str]) -> dict[int, Clock]:
+    """Each shard's latest :class:`Clock` across one or more submissions (a resubmit supersedes)."""
+    clocks: dict[int, Clock] = {}
     for job_id in job_ids:
-        out = run(f'sacct -n -P -X -j {shlex.quote(job_id)} -o JobID,State', None)
+        out = run(f'sacct -n -P -X -j {shlex.quote(job_id)} -o {_CLOCK_FIELDS}', None)
         for line in out.splitlines():
-            task, _, state = line.partition('|')
+            task, *rest = line.split('|')
             match = _TASK.match(task.strip())
             if not match:
                 continue
+            state, submit, start, end, elapsed, cpus = (*rest, '', '', '', '', '', '')[:6]
+            clock = Clock(
+                state=state.split()[0] if state.strip() else 'UNKNOWN',
+                submit=_epoch(submit),
+                start=_epoch(start),
+                end=_epoch(end),
+                elapsed=float(elapsed or 0),
+                cpus=int(cpus or 1),
+            )
             index = match.group(2)
             for shard in _expand(index) if index.startswith('[') else [int(index)]:
-                states[shard] = state.split()[0] if state else 'UNKNOWN'
-    return states
+                clocks[shard] = clock
+    return clocks
+
+
+def shard_states(run: Runner, job_ids: Sequence[str]) -> dict[int, str]:
+    """Each shard's latest Slurm state -- the state column of :func:`shard_clock`."""
+    return {shard: clock.state for shard, clock in shard_clock(run, job_ids).items()}
 
 
 def gather(run: Runner, run_dir: str) -> dict[int, list[dict[str, Any]]]:

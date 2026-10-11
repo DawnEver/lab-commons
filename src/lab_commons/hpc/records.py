@@ -23,22 +23,26 @@ def fold(
     reasons: dict[str, str],
     *,
     shards: Sequence[Sequence[int]],
-    wall: float,
-) -> tuple[list[list[str]], bool]:
-    """Record one round's streams; return the unfinished ids, halved, and whether an item was KILLED.
+    walls: Sequence[float],
+) -> tuple[list[list[str]], bool, float]:
+    """Record one round's streams; return the unfinished ids, halved, whether an item was KILLED, and busy seconds.
+
+    *busy* is the sum of every closed item's own wall -- what the processes used of the cores charged.
 
     An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
     they are retried, halved, like an item that never closed -- never stamped ``missing``.
 
-    WHAT A KILL COST IS MEASURED TOO. A shard (*shards*: item ranges) runs its items back to back under
-    *wall* seconds, so the first item of a shard that never closed was killed after the wall minus what
-    the items before it took; a signalled item says its own wall. That time goes to
+    WHAT A KILL COST IS MEASURED TOO. A shard (*shards*: item ranges) runs its items back to back for
+    the seconds Slurm says it ran (*walls*, one per shard), so the first item of a shard that never closed
+    was killed after that minus what the items before it took; a signalled item says its own wall.
+    Measured 2026-10-11: a shard killed after 7 s was charged its whole 216-min PLANNED wall, so one id
+    carried a 12960 s floor it never ran. That time goes to
     :meth:`Measured.killed`, so the id the kill interrupted is never re-priced below it.
     """
     pending: list[list[str]] = []
     killed = False
     folds = [read_stream(streams.get(index, ''), item['ids']) for index, item in enumerate(items)]
-    spent = _killed_after(folds, shards, wall)
+    spent = _killed_after(folds, shards, walls)
     for index, (item, folded) in enumerate(zip(items, folds, strict=True)):
         group = item['ids']
         outcomes.update(folded['outcomes'])
@@ -53,13 +57,16 @@ def fold(
         measured.killed(group, folded, spent.get(index, 0.0))
         half = (len(rest) + 1) // 2
         pending += [part for part in (rest[:half], rest[half:]) if part]
-    return pending, killed
+    busy = sum(float(f['done']['wall']) for f in folds if f['done'] is not None)
+    return pending, killed, busy
 
 
-def _killed_after(folds: list[dict[str, Any]], shards: Sequence[Sequence[int]], wall: float) -> dict[int, float]:
+def _killed_after(
+    folds: list[dict[str, Any]], shards: Sequence[Sequence[int]], walls: Sequence[float]
+) -> dict[int, float]:
     """Seconds each killed item ran: its own ``done`` wall when signalled, else what its shard's wall had left."""
     spent: dict[int, float] = {}
-    for start, stop in shards:
+    for (start, stop), wall in zip(shards, walls, strict=True):
         left = wall
         for index in range(start, stop):
             done = folds[index]['done']
