@@ -15,8 +15,8 @@ missing); ``--wait`` blocks until the record. ``run watch -o <dir>`` is the same
 outstanding run -- one call any harness tick can make. ``run status`` says where each outstanding run is
 (queued with Slurm's reason, running k of n, done) and names a stall with its remedy. ``probe`` needs no
 job file. ``-c`` there is optional and only its
-``[cost]``/``[policy]`` are read. ``--history`` names a previous run record whose measured durations,
-overheads and peaks plan this one; without it every file is priced at ``[cost]``. A retired verb is
+``[cost]``/``[policy]`` are read. ``run submit`` plans from what the repository's last record measured
+(:mod:`lab_commons.hpc.learned`); a file never measured is priced at ``[cost]``. A retired verb is
 refused by name (:mod:`lab_commons.hpc.retired`).
 """
 
@@ -31,7 +31,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc import outstanding
+from lab_commons.hpc import learned, outstanding
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import (
     TERMINAL_OK,
@@ -48,7 +48,6 @@ from lab_commons.hpc.config import Config, Limits, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
 from lab_commons.hpc.platforms import table_at
-from lab_commons.hpc.records import read_record
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
@@ -216,7 +215,7 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
         lambda g: runner_for(g, _BUILD_TIMEOUT),
         cost=config.cost,
         policy=config.policy,
-        history=read_record(args.history) if args.history else None,
+        history=learned.learned(spec.repo_url),
     )
     outstanding.add(
         spec.sha,
@@ -285,7 +284,6 @@ def _parser() -> argparse.ArgumentParser:
         help='local repository, READ only: its [tool.lab_commons.platforms] at --sha; a pack if the remote lacks it',
     )
     group.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
-    group.add_argument('--history', type=Path, help='a previous run record: its measurements plan this run')
     return parser
 
 

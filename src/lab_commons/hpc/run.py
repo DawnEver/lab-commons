@@ -45,17 +45,19 @@ never measured -- named in the plan as ``unmeasured``.
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_states, submit
+from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
-from lab_commons.hpc.plan import Plan, allocate
+from lab_commons.hpc.phases import round_clock
+from lab_commons.hpc.plan import Plan, allocate, balance
 from lab_commons.hpc.platforms import LINUX, PLATFORMS, assign, cannot_run, runnable
 from lab_commons.hpc.records import fold, read_streams
 from lab_commons.hpc.shell import (
@@ -95,6 +97,7 @@ RETRIES: Final = 2
 #: State keys the record carries as they are.
 _CARRIED: Final = (
     'sha',
+    'repo',
     'scope',
     'platform',
     'system',
@@ -151,6 +154,9 @@ def _submit_round(
         seconds=seconds,
         min_minutes=state.get('min_minutes', 0.0),
     )
+    order, shards = balance(seconds, plan.shards)
+    pending = [pending[i] for i in order]
+    plan = _rewalled(plan, shards, [seconds[i] for i in order], policy, state.get('min_minutes', 0.0))
     items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
     setup = (ENV,)
     sha = state['sha']
@@ -164,6 +170,19 @@ def _submit_round(
         'job_id': sub.job_id,
         'shards': sub.shards,
     }
+
+
+def _rewalled(
+    plan: Plan, shards: tuple[tuple[int, int], ...], seconds: list[float], policy: Policy, min_minutes: float
+) -> Plan:
+    """*plan* over the balanced *shards*: its wall the slowest padded shard, never under *min_minutes*.
+
+    Never longer than the plan's own wall, which the partition ceiling already held.
+    """
+    slowest = max(sum(seconds[a:b]) for a, b in shards) * policy.safety
+    minutes = min(plan.minutes, max(1, math.ceil(slowest / 60), math.ceil(min_minutes)))
+    waves = plan.makespan_minutes // plan.minutes
+    return replace(plan, shards=shards, minutes=minutes, makespan_minutes=waves * minutes)
 
 
 #: How many lines of the collector's own output an empty-collection refusal quotes.
@@ -213,6 +232,7 @@ def submit_run(
         msg = f'{grant.name} ({host}) lacks {", ".join(lacking)} on its login node; nothing was fetched or built'
         raise RuntimeError(msg)
 
+    shipping = time.monotonic()
     if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
         if spec.pack_from is None:
             msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to pack it from'
@@ -224,6 +244,7 @@ def submit_run(
 
     here = Path(__file__).parent
     run(f'cat > {ROOT}/bin/{COLLECT_MODULE}.py', (here / 'collect.py').read_text(encoding='utf-8'))
+    shipped = round(time.monotonic() - shipping)
     built = run(build_script(spec), (here / 'pytest_item.py').read_text(encoding='utf-8'))
     if BUILD_FAILED in built:
         tail = built.split(BUILD_FAILED, 1)[1].strip()
@@ -253,6 +274,7 @@ def submit_run(
     outcomes.update(dict.fromkeys(errored, 'error'))
     state: dict[str, Any] = {
         'sha': spec.sha,
+        'repo': spec.repo_url,
         'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
         'scope': spec.scope,
         'platform': LINUX,
@@ -260,7 +282,7 @@ def submit_run(
         'env': told['env'],
         'cluster': host,
         'python': told.get('python', ''),
-        'prep': {**parse_times(built), **parse_times(collected)},
+        'prep': {'ship': shipped, **parse_times(built), **parse_times(collected)},
         'handed': handed,
         'outcomes': outcomes,
         'measured': Measured.of(history or {}).record(),
@@ -315,21 +337,27 @@ def gather_run(
     current = state['current']
     account = tuple(current['account'])
     run = runners[account]
-    states = shard_states(run, [current['job_id']])
+    clocks = shard_clock(run, [current['job_id']])
+    states = {shard: clock.state for shard, clock in clocks.items()}
     if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
         return None
     measured = Measured.of(state['measured'])
     streams = read_streams(run, f'{ROOT}/trees/{sha}/.lab-ci/{current["tag"]}')
     planned = state['rounds'][-1]
-    pending, killed = fold(
+    wall = planned['minutes'] * 60
+    walls = [
+        clocks[n].elapsed if n in clocks and clocks[n].elapsed > 0 else wall for n in range(len(planned['shards']))
+    ]
+    pending, killed, busy = fold(
         current['items'],
         streams,
         state['outcomes'],
         measured,
         state.setdefault('reasons', {}),
         shards=planned['shards'],
-        wall=planned['minutes'] * 60,
+        walls=walls,
     )
+    planned['clock'] = round_clock(clocks, busy)
     state['measured'] = measured.record()
     timed_out = 'TIMEOUT' in states.values()
     if 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out):

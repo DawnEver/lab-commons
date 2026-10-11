@@ -11,13 +11,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
-from lab_commons.hpc import outstanding
+from lab_commons.hpc import learned, outstanding
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant, Machine
+from lab_commons.hpc.phases import describe, phases
 from lab_commons.hpc.progress import where
 from lab_commons.hpc.records import summary, write_record
-from lab_commons.hpc.run import gather_run
+from lab_commons.hpc.run import gather_run, load_state
 from lab_commons.log import emit
 
 __all__ = ['PENDING', 'RED', 'settle', 'status']
@@ -60,12 +61,14 @@ def settle(
                 red = True
                 continue
             path = write_record(record, output)
+            learned.learn(record)
             outstanding.remove(sha)
             left.remove(sha)
             red = red or not RED.isdisjoint(record['outcomes'].values())
             emit(
                 f'{sha[:12]} on {record["cluster"]} ({record["system"]}, python {record["python"]}): {summary(record)}'
             )
+            emit(describe(phases(record)))
             emit(f'written {path}')
             emit(f'post it as the {record["platform"]} part: python -m lab_commons.dev.platformparts post {path}')
         if not left:
@@ -83,6 +86,8 @@ def status(machine: Machine, connect: Callable[[Grant], Runner], config: Config)
     for entry in entries:
         try:
             emit(where(entry['sha'], machine, connect, policy=config.policy).describe())
+            state, _ = load_state(entry['sha'], machine, {g.account: connect(g) for g in machine.grants})
+            emit(describe(phases(state)))
         except Unreachable as exc:
             emit(f'{entry["sha"][:12]}: unreachable: {exc}')
     return 0
