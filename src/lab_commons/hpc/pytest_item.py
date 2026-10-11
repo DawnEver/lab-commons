@@ -39,8 +39,10 @@ __all__ = [
     'STREAM_ENV',
     'canonical',
     'outcome_of',
+    'pytest_argv',
     'pytest_collection_modifyitems',
     'pytest_runtest_logreport',
+    'pytest_runtest_logstart',
     'read_stream',
     'run',
 ]
@@ -133,19 +135,29 @@ def _reason(report: _Report, outcome: str) -> str:
     return _why(report.longrepr)
 
 
+def _append(entry: dict[str, Any]) -> None:
+    target = os.environ.get(STREAM_ENV)
+    if not target:
+        return
+    # builtin open, not pathlib: a test that fakes os.name makes Path() spell a Windows path on the cluster
+    with open(target, 'a', encoding='utf-8') as stream:  # noqa: PTH123
+        stream.write(json.dumps(entry) + '\n')
+
+
+def pytest_runtest_logstart(nodeid: str, location: object) -> None:  # noqa: ARG001 -- pytest's hook signature
+    """Append a START line before the test's setup, so an exit before its outcome still names the id it hit."""
+    _append({'start': nodeid})
+
+
 def pytest_runtest_logreport(report: _Report) -> None:
     """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
-    target = os.environ.get(STREAM_ENV)
     outcome = outcome_of(report.when, report.outcome, xfail=_xfailed(report))
-    if not target or outcome is None:
+    if outcome is None:
         return
     entry: dict[str, Any] = {'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)}
     if outcome in _REASONED:
         entry['why'] = _reason(report, outcome)
-    line = json.dumps(entry)
-    # builtin open, not pathlib: a test that fakes os.name makes Path() spell a Windows path on the cluster
-    with open(target, 'a', encoding='utf-8') as stream:  # noqa: PTH123
-        stream.write(line + '\n')
+    _append(entry)
 
 
 def canonical(node: str, expected: set[str]) -> str:
@@ -157,17 +169,19 @@ def canonical(node: str, expected: set[str]) -> str:
 
 
 def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
-    """Fold one item's stream into ``{outcomes, seconds, whys, done}``.
+    """Fold one item's stream into ``{outcomes, seconds, whys, done, started}``.
 
     ``outcomes`` holds only the ids the stream reports (the worst phase wins); ``seconds`` sums their
     phases; ``whys`` holds the reason each red, skipped or xfailed id's worst phase carried; ``done`` is the
     closing record, or ``None`` when the item never closed -- then every id it did not report is still owed a run.
+    ``started`` is the last id the plugin STARTED -- the one in flight if the process exited before its outcome.
     """
     expected = set(node_ids)
     outcomes: dict[str, str] = {}
     seconds: dict[str, float] = {}
     whys: dict[str, str] = {}
     done = None
+    started = None
     for raw in text.splitlines():
         try:
             line = json.loads(raw)
@@ -175,6 +189,9 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
             continue  # the half-written last line of a killed task
         if 'done' in line:
             done = line
+            continue
+        if 'start' in line:
+            started = canonical(line['start'], expected)
             continue
         node = canonical(line['id'], expected)
         if node not in expected:
@@ -184,7 +201,7 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
             whys[node] = line['why']
         outcomes[node] = min(outcomes.get(node, outcome), outcome, key=_RANK.index)
         seconds[node] = round(seconds.get(node, 0.0) + float(line.get('s', 0.0)), 3)
-    return {'outcomes': outcomes, 'seconds': seconds, 'whys': whys, 'done': done}
+    return {'outcomes': outcomes, 'seconds': seconds, 'whys': whys, 'done': done, 'started': started}
 
 
 def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
@@ -196,17 +213,24 @@ def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
     return proc.returncode, round(usage.ru_maxrss / 1024, 1)  # Linux reports KiB
 
 
+def pytest_argv(item: dict[str, Any], files: list[str]) -> list[str]:
+    """The pytest command for *item*: this file as the plugin, serial, and ``--timeout`` when its scope declares one."""
+    serial = ['-n', '0'] if importlib.util.find_spec('xdist') else []
+    ceiling = ['--timeout', str(item['timeout_s'])] if item.get('timeout_s') else []
+    plugin = Path(__file__).stem
+    return [sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', '-p', plugin, '-q', *serial, *ceiling, *files]
+
+
 def run(item: dict[str, Any]) -> dict[str, Any]:
     """Run ``item['ids']`` streaming to ``item['stream']``; the folded stream plus the output's tail."""
     ids = list(item['ids'])
     stream = Path(item['stream'])
     stream.parent.mkdir(parents=True, exist_ok=True)
     stream.unlink(missing_ok=True)
-    serial = ['-n', '0'] if importlib.util.find_spec('xdist') else []
     chosen = stream.with_suffix('.ids.json')
     chosen.write_text(json.dumps(ids), encoding='utf-8')
     files = list(dict.fromkeys(node.split('::', maxsplit=1)[0] for node in ids))
-    argv = [sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', '-p', Path(__file__).stem, '-q', *serial, *files]
+    argv = pytest_argv(item, files)
     env = {**os.environ, STREAM_ENV: str(stream.resolve()), IDS_ENV: str(chosen.resolve())}
     start = time.monotonic()
     with tempfile.TemporaryFile() as out:

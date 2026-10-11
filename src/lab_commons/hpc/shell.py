@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from lab_commons.hpc.builds import Builds
+from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds
 
 __all__ = [
     'BUILD_FAILED',
@@ -68,9 +68,6 @@ NEEDS: Final = ('git', 'uv')
 #: Hex digits of a full SHA-1 commit id.
 _SHA_HEX: Final = 40
 
-#: A run's scope: every collected id, or only the re-run ids that complete a base part (``RunSpec.only``).
-FULL: Final = 'full'
-INCREMENTAL: Final = 'incremental'
 
 #: Prints the tree venv's env hash (:func:`lab_commons.dev.envkey.env_key`) -- the key a base part is carried under.
 _ENV_KEY: Final = 'from lab_commons.dev.envkey import env_key, env_manifest; print(env_key(env_manifest()))'
@@ -112,6 +109,11 @@ class RunSpec:
     def scope(self) -> str:
         """Derived, never declared: :data:`INCREMENTAL` exactly when ``only`` narrows the ids."""
         return FULL if self.only is None else INCREMENTAL
+
+    @property
+    def timeout_s(self) -> int | None:
+        """The pytest ``--timeout`` this run's scope declares; ``None`` keeps the tested repo's own default."""
+        return self.builds.timeout_s.get(self.scope)
 
     @property
     def tree(self) -> str:

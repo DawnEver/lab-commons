@@ -8,6 +8,7 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     dependency_inputs = ["pyproject.toml", "uv.lock"]      # what the venv is a function of
     source_roots = ["src"]                                  # put on PYTHONPATH from each sha's tree
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
+    timeout_s = { incremental = 300, full = 3000 }          # pytest --timeout per run scope (absent: the repo's own)
 
 A venv lives in ``~/ci/envs/<env key>`` and a native build in ``~/ci/native/<native key>``; each sha is
 only a ``git worktree`` whose ``source_roots`` reach the venv through ``PYTHONPATH`` -- no per-sha
@@ -34,17 +35,32 @@ import shutil
 import subprocess
 import tomllib
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlsplit
 
-__all__ = ['Builds', 'builds_at', 'floating_git', 'key_of', 'read_builds', 'remote_tip']
+__all__ = [
+    'FULL',
+    'INCREMENTAL',
+    'SCOPES',
+    'Builds',
+    'builds_at',
+    'floating_git',
+    'key_of',
+    'read_builds',
+    'remote_tip',
+]
 
 _GIT: Final = shutil.which('git') or 'git'
 
 #: Hex digits of a build key -- enough to never collide among one user's builds, short in a path.
 _KEY_HEX: Final = 24
+
+#: A run's scope: every collected id, or only the re-run ids that complete a base part (``RunSpec.only``).
+FULL: Final = 'full'
+INCREMENTAL: Final = 'incremental'
+SCOPES: Final = (FULL, INCREMENTAL)
 
 
 @dataclass(frozen=True)
@@ -59,6 +75,8 @@ class Builds:
     needs: tuple[str, ...] = ()
     env_key: str = ''
     native_key: str = ''
+    #: ``{scope: seconds}`` handed to pytest as ``--timeout``; a scope absent here keeps the repo's own default.
+    timeout_s: dict[str, int] = field(default_factory=dict)
 
 
 def read_builds(text: str) -> Builds:
@@ -72,7 +90,12 @@ def read_builds(text: str) -> Builds:
         source_roots=tuple(raw.get('source_roots', ())),
         native_inputs=tuple(native.get('inputs', ())),
         native_build=str(native.get('build', '')),
+        timeout_s=dict(raw.get('timeout_s', {})),
     )
+    bad = {k: v for k, v in builds.timeout_s.items() if k not in SCOPES or not isinstance(v, int) or v <= 0}
+    if bad:
+        msg = f'[tool.lab_commons.hpc] timeout_s {bad!r}: keys are scopes {SCOPES}, values positive whole seconds'
+        raise ValueError(msg)
     if builds.dependency_inputs and not builds.source_roots:
         msg = '[tool.lab_commons.hpc] dependency_inputs needs source_roots: a shared venv holds no sha source'
         raise ValueError(msg)

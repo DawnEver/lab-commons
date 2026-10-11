@@ -173,3 +173,13 @@ def test_the_env_key_folds_the_current_remote_tip_of_every_floating_git_dependen
     after = builds_at(repo, sha, python='3.13', tip=tip)
     assert after.env_key != before.env_key, 'a new upstream tip rebuilds the venv'
     assert after.native_key != before.native_key, 'the native build links against the venv it was built in'
+
+
+def test_the_per_scope_timeout_is_declared_data_and_an_unknown_scope_is_refused() -> None:
+    text = '[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {incremental = 300, full = 3000}\n'
+    assert read_builds(text).timeout_s == {'incremental': 300, 'full': 3000}
+    assert read_builds('[tool.lab_commons.hpc]\ninstall = "x"\n').timeout_s == {}
+    with pytest.raises(ValueError, match='timeout_s'):
+        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {heavy = 3000}\n')
+    with pytest.raises(ValueError, match='timeout_s'):
+        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {full = 0}\n')
