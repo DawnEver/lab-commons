@@ -25,8 +25,10 @@ named row until then; it reddened on the adoption, as designed, and the row went
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
+import yaml
 from _famconfig_delta import DELTAS, INSTALLED_STAGES, PRECOMMIT, PRECOMMIT_DELTA, PRECOMMIT_HOOK_FLOOR, REPO
 
 from lab_commons.dev.famconfig import HOOK_ID_CORE, RENDERED, artefact_base
@@ -42,6 +44,10 @@ from lab_commons.dev.famtests.configrender import (
 from lab_commons.dev.hook_install import PROTECTED, hook_installation, hooks_dir, install_command
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _config() -> dict:
+    return yaml.safe_load((ROOT / PRECOMMIT).read_text(encoding='utf-8'))
 
 #: The command this repo re-renders with. The kit's arm takes it with NO default, because the remedy
 #: is the repo's own -- one lab runs a Makefile target and the other an inline line, and a guessed
@@ -77,15 +83,26 @@ class TestTheConfigIsTheFamilysPlusNothing:
             config=ROOT / PRECOMMIT, extra_hook_ids=HOOK_ID_CORE, hook_floor=PRECOMMIT_HOOK_FLOOR
         )
 
-    def test_this_repo_adds_nothing_to_the_base_and_the_ceiling_says_so(self) -> None:
-        """THE RATCHET'S OTHER SIDE. An empty delta is a decision, and the next line must raise the ceiling."""
-        assert PRECOMMIT_DELTA.added == ()
+    def test_this_repo_adds_only_the_admission_hook_and_the_ceiling_is_its_size(self) -> None:
+        """THE RATCHET'S OTHER SIDE. One hook of its own, and the next line must raise the ceiling."""
+        ids = [line.split(':', 1)[1].strip() for line in PRECOMMIT_DELTA.added if line.lstrip().startswith('- id:')]
+        assert ids == ['admission']
         assert PRECOMMIT_DELTA.anchored == {}
         assert PRECOMMIT_DELTA.dropped == {}
-        assert PRECOMMIT_DELTA.ceiling == 0, (
-            'a nonzero ceiling on an empty delta is headroom nobody asked for; this repo runs no hook '
-            'of its own, so the first line added has to raise this in the same edit and say what for'
-        )
+        assert PRECOMMIT_DELTA.ceiling == len(PRECOMMIT_DELTA.added), 'headroom nobody asked for'
+
+    def test_the_trunk_push_runs_admission_against_the_declared_trunk(self) -> None:
+        """LIVE 2026-10-11: `git push origin main` was admitted with no part, because nothing ran at push.
+
+        The rendered file must reach `pre-push` with the admission module, and its trunk ref must be the
+        trunk this repo declares (`[tool.lab_commons.branchset] trunk`), or a trunk push reads as a lane.
+        """
+        hooks = {hook['id']: hook for repo in _config()['repos'] for hook in repo['hooks']}
+        gate = hooks.get('admission')
+        assert gate is not None, 'no admission hook: a trunk push here is admitted by nobody'
+        assert gate['stages'] == ['pre-push']
+        trunk = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['tool']['lab_commons']
+        assert gate['args'][:3] == ['lab_commons.dev.admission', '--trunk-ref', f'refs/heads/{trunk["branchset"]["trunk"]}']
 
     def test_a_planted_edit_to_a_base_line_is_refused_and_the_refusal_names_it(self, tmp_path: Path) -> None:
         """THE PLANTED CONTROL, both directions, through the same function the property uses.
@@ -131,14 +148,12 @@ class TestEveryDeclaredStageIsWired:
             f'one is a check nobody is performing. Update `_famconfig_delta.INSTALLED_STAGES` with why.'
         )
 
-    def test_this_repo_has_no_pre_push_hook_and_the_narrowing_rests_on_that(self) -> None:
-        """PINNED IN BOTH DIRECTIONS, and the premise is the repo's verdict rather than its config.
+    def test_this_repo_has_a_pre_push_hook_and_it_is_installed(self) -> None:
+        """PINNED IN BOTH DIRECTIONS: the admission hook is declared, so a checkout without it is unguarded.
 
-        `make verify` is this repo's whole verdict; a pre-push hook re-running it would block every
-        push, which is the shape the family kills on sight. Installing one is the right moment to
-        re-decide `default_stages`, not a thing to discover later as a miss.
+        `default_stages: [pre-commit]` costs nothing here: the one pre-push hook names its own stage.
         """
-        assert_pre_push_premise(hooks_dir=hooks_dir(ROOT), pre_push_installed=False)
+        assert_pre_push_premise(hooks_dir=hooks_dir(ROOT), pre_push_installed=True)
 
     def test_the_install_command_is_derived_from_the_config_rather_than_spelled(self) -> None:
         """A RESTATED STAGE LIST IS THE DEFECT `install_command` EXISTS FOR.

@@ -124,6 +124,26 @@ def test_the_cli_reads_the_forge_and_routes_each_destination(tmp_path: Path, mon
     assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 0
 
 
+def test_the_hook_spelling_reads_the_remote_ref_pre_commit_sets(tmp_path: Path, monkeypatch) -> None:
+    """A pre-commit pre-push hook gets no argv for the ref; ``PRE_COMMIT_REMOTE_BRANCH`` carries it.
+
+    PLANTED: the trunk with NO part posted is refused through the hook spelling -- the vacuous case.
+    """
+    _forge(monkeypatch, [])
+    base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
+    monkeypatch.setenv('PRE_COMMIT_REMOTE_BRANCH', 'refs/heads/main')
+    assert admission.main(base) == 1
+    monkeypatch.setenv('PRE_COMMIT_REMOTE_BRANCH', 'refs/heads/lane/x')
+    assert admission.main(base) == 0
+
+
+def test_no_remote_ref_anywhere_is_a_refused_argv_and_never_an_admission(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv('PRE_COMMIT_REMOTE_BRANCH', raising=False)
+    with pytest.raises(SystemExit) as refused:
+        admission.main(['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main'])
+    assert refused.value.code == 2
+
+
 def _git(root: Path, *args: str) -> None:
     command = [_GIT, '-C', str(root), '-c', 'user.email=t@t', '-c', 'user.name=t', *args]
     subprocess.run(command, check=True, capture_output=True, timeout=60)
