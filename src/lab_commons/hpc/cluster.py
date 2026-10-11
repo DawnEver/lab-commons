@@ -1,10 +1,11 @@
 """Talk to the cluster: probe it, submit a plan as one job array, read back states and results.
 
 EVERYTHING GOES THROUGH A RUNNER. A :data:`Runner` takes one shell command (and optional stdin) and
-returns its stdout; :func:`local_runner` runs it here (already on a login node), :func:`ssh_runner`
-runs it on a login node from a workstation. Files reach the cluster as ``cat > path`` on stdin, so a
-run needs no ``scp`` and no shared filesystem with the caller -- and a test drives every function below
-with a fake runner and no cluster.
+returns its stdout; :func:`local_runner` runs it here (already on a login node) and is the only runner
+that SUBMITS -- a part's producer runs on the cluster (``forge serve``); :func:`ssh_runner` runs it on a
+login node from a workstation, for a human's ``probe`` and ``run status`` only. Files reach the
+cluster as ``cat > path`` on stdin, so a run needs no ``scp`` and no shared filesystem with the caller
+-- and a test drives every function below with a fake runner and no cluster.
 
 THE RUN DIRECTORY IS THE RECORD. ``<workdir>/.lab-hpc/<name>-<stamp>/`` holds the manifest (items and
 shard ranges), the array script, one result file per shard and one log per task. Re-running a failed
@@ -13,9 +14,11 @@ shard re-reads the same manifest; nothing about a run lives only in the caller's
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import shlex
+import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -30,7 +33,9 @@ from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
 from lab_commons.log import log
 
 __all__ = [
+    'BUILD_TIMEOUT',
     'TERMINAL_OK',
+    'NotOnCluster',
     'Runner',
     'Submission',
     'Unreachable',
@@ -44,6 +49,7 @@ __all__ = [
     'shard_states',
     'ssh_runner',
     'submit',
+    'submitter',
 ]
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
@@ -53,6 +59,9 @@ type Runner = Callable[[str, str | None], str]
 TERMINAL_OK: Final = 'COMPLETED'
 
 _TIMEOUT: Final = 300.0
+
+#: A login-node build of a tree's venv (a Rust extension, say) needs far more than a probe's five minutes.
+BUILD_TIMEOUT: Final = 3 * 3600.0
 
 #: Seconds ``ssh`` waits for a login host to answer before the next one is tried.
 CONNECT_TIMEOUT: Final = 10
@@ -90,9 +99,31 @@ def _completed(argv: Sequence[str], stdin: str | None, timeout: float = _TIMEOUT
     return out
 
 
-def local_runner(command: str, stdin: str | None = None) -> str:
-    """Run *command* with ``bash -lc`` on this machine (a login node)."""
-    return _completed(['bash', '-lc', command], stdin)
+def local_runner(command: str, stdin: str | None = None, *, timeout: float = _TIMEOUT) -> str:
+    """Run *command* with ``bash -lc`` on this machine (a login node); *timeout* per command."""
+    return _completed(['bash', '-lc', command], stdin, timeout)
+
+
+class NotOnCluster(RuntimeError):
+    """A submitting step was asked for on a box with no ``sbatch``; the message names where it runs."""
+
+
+def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
+    """The runner every SUBMITTING step uses: this login node's own shell, whatever the grant.
+
+    A part's producer runs ON the cluster, pulled by ``forge serve`` (design 2026-10-11): no
+    workstation submits over ``ssh``, because that path is the VPN dependency the design removes.
+    Off a cluster (no ``sbatch`` on PATH) it raises :class:`NotOnCluster`.
+    """
+    if shutil.which('sbatch') is None:
+        msg = (
+            'this box has no sbatch: submitting and gathering run ON the cluster login node, where '
+            '`python -m lab_commons.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
+            'from a workstation only `run status` and `probe` reach the cluster, over ssh'
+        )
+        raise NotOnCluster(msg)
+    run = functools.partial(local_runner, timeout=timeout)
+    return lambda _grant: run
 
 
 def ssh_runner(host: str, timeout: float = _TIMEOUT) -> Runner:
