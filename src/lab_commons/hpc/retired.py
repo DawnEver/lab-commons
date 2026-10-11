@@ -37,6 +37,8 @@ RETIRED: Final[dict[str, str]] = {
     'merge_refusals': 'lab_commons.dev.mergeaudit.pending (the commit-msg hook, on the one merge being committed)',
     'mergeaudit.refusals': 'lab_commons.dev.mergeaudit.pending (the commit-msg hook, on the one merge being committed)',
     'run submit --history': "nothing: run submit plans from the repository's last record (lab_commons.hpc.learned)",
+    # A cluster part is pulled by the cluster and advanced one step per serve tick, never a blocking process.
+    'platformparts cluster': 'forge serve on the cluster login node (lab_commons.dev.forgerun advances the run)',
     '<job>.run.json': '<job>.submission.json (the last submission of a job file)',
     # The machine's CPU seat and an environment's mutation seat are two resources with two names.
     'BoxLock': 'lab_commons.dev.cpuseat.CpuSeat (the machine CPU seat, contended by runs only)',
