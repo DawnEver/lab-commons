@@ -154,7 +154,9 @@ def _shards(seconds: Sequence[float], policy: Policy, room: int | None) -> list[
     return shards
 
 
-def balance(seconds: Sequence[float], shards: Sequence[tuple[int, int]]) -> tuple[list[int], tuple[tuple[int, int], ...]]:
+def balance(
+    seconds: Sequence[float], shards: Sequence[tuple[int, int]]
+) -> tuple[list[int], tuple[tuple[int, int], ...]]:
     """The same NUMBER of shards, refilled longest-processing-time first: ``(order, shards)``.
 
     *order* permutes the items so each LPT bin is a consecutive range (the array script slices ranges);

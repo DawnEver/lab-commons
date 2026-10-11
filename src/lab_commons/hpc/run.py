@@ -345,7 +345,9 @@ def gather_run(
     streams = read_streams(run, f'{ROOT}/trees/{sha}/.lab-ci/{current["tag"]}')
     planned = state['rounds'][-1]
     wall = planned['minutes'] * 60
-    walls = [clocks[n].elapsed if n in clocks and clocks[n].elapsed > 0 else wall for n in range(len(planned['shards']))]
+    walls = [
+        clocks[n].elapsed if n in clocks and clocks[n].elapsed > 0 else wall for n in range(len(planned['shards']))
+    ]
     pending, killed, busy = fold(
         current['items'],
         streams,

@@ -15,6 +15,7 @@ from __future__ import annotations
 import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Any
 
 __all__ = ['Clock', 'describe', 'phases', 'round_clock']
@@ -63,7 +64,7 @@ def phases(run: Mapping[str, Any]) -> dict[str, float]:
     prep = float(sum(run.get('prep', {}).values()))
     if not clocks:
         return {'prep_s': prep}
-    gaps = [b['submit'] - a['end'] for a, b in zip(clocks, clocks[1:], strict=False)]
+    gaps = [b['submit'] - a['end'] for a, b in pairwise(clocks)]
     core = sum(c['core_s'] for c in clocks)
     busy = sum(c['busy_s'] for c in clocks)
     return {

@@ -5,7 +5,7 @@ remote URL: writing a run's record replaces it with the record's measurements
 (:class:`~lab_commons.hpc.measured.Measured`), and ``run submit`` plans from it. Machine-local, so it
 serves every grant the machine holds.
 
-WHY IT IS NOT A FLAG. Measured 2026-10-11: ``run submit --history <record>`` was optional and no caller
+WHY IT IS NOT A FLAG. Measured 2026-10-11: the submit flag naming a previous record was optional and no caller
 passed it, so every downstream run planned round 0 blind -- 4441 of 4441 files priced at ``[cost]`` and
 1 GB, 26 of 93 shards OUT_OF_MEMORY, two retry rounds that took 3.0 of the run's 4.2 hours.
 """
