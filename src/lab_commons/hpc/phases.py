@@ -3,7 +3,7 @@
 A SPEEDUP IS A NUMBER ONLY IF BOTH SIDES WERE MEASURED THE SAME WAY. Every round keeps a ``clock``
 (:func:`round_clock`): queue wait, round wall, straggler tail, the core-seconds Slurm charged and the
 seconds the item processes were busy. :func:`phases` folds the rounds and the login-node ``prep`` into
-one breakdown; :func:`describe` is the line ``run gather`` and ``run status`` print.
+one breakdown; :func:`describe` is the line ``run gather`` prints.
 
 Measured 2026-10-11 (a downstream full run, three rounds): 4.2 h wall, of which round 0 was 1.2 h and
 the two retry rounds 3.0 h; 37 core-hours charged for 33 the processes were busy. None of that was in the

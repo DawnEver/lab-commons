@@ -93,9 +93,9 @@ class Policy:
     shard_minutes_max: float = 60.0
     safety: float = 1.5
     max_array: int = 1000
-    #: A task pending longer than this while a declared partition has a free slot is a STALL (``run status``).
+    #: A task pending longer than this while a declared partition has a free slot is a STALL (``run gather``).
     stall_minutes: float = 30.0
-    #: How often ``run watch`` / ``run gather --wait`` re-read the cluster.
+    #: How often ``run gather --wait`` re-reads the cluster.
     poll_seconds: float = 120.0
 
     def __post_init__(self) -> None:

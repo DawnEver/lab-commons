@@ -1,8 +1,8 @@
-"""Settle outstanding remote runs: gather each, optionally wait, write records, say where the rest are.
+"""Settle remote runs: gather each, optionally wait, write records, say where the rest are.
 
-THE ONE CODE PATH of ``run gather [--wait]`` and ``run watch``; ``run status`` reads the same list
-(:mod:`lab_commons.hpc.outstanding`) and the same :func:`lab_commons.hpc.progress.where`. A written record
-takes its run off the list. Notification is NOT here: a harness tick runs ``run watch`` and reads its exit.
+THE ONE CODE PATH of ``run gather [--wait]`` and of ``forge serve``'s gather step; where a run still
+pending is comes from :func:`lab_commons.hpc.progress.where`. Notification is NOT here: ``forge serve``
+posts a run's progress on its claim and raises alarms (:mod:`lab_commons.dev.forgerun`).
 """
 
 from __future__ import annotations
@@ -11,17 +11,17 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
-from lab_commons.hpc import learned, outstanding
+from lab_commons.hpc import learned
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.phases import describe, phases
 from lab_commons.hpc.progress import where
 from lab_commons.hpc.records import summary, write_record
-from lab_commons.hpc.run import gather_run, load_state
+from lab_commons.hpc.run import gather_run
 from lab_commons.log import emit
 
-__all__ = ['PENDING', 'RED', 'settle', 'status']
+__all__ = ['PENDING', 'RED', 'settle']
 
 #: Exit status of a gather that wrote no record yet: still running, re-submitted, or unreachable.
 PENDING: Final = 3
@@ -62,7 +62,6 @@ def settle(
                 continue
             path = write_record(record, output)
             learned.learn(record)
-            outstanding.remove(sha)
             left.remove(sha)
             red = red or not RED.isdisjoint(record['outcomes'].values())
             emit(
@@ -76,18 +75,3 @@ def settle(
         if sleep is None:
             return PENDING
         sleep(config.policy.poll_seconds)
-
-
-def status(machine: Machine, connect: Callable[[Grant], Runner], config: Config) -> int:
-    """Where every outstanding run is, one line each (two when it stalls)."""
-    entries = outstanding.outstanding()
-    if not entries:
-        emit(f'no outstanding run ({outstanding.directory()} is empty)')
-    for entry in entries:
-        try:
-            emit(where(entry['sha'], machine, connect, policy=config.policy).describe())
-            state, _ = load_state(entry['sha'], machine, {g.account: connect(g) for g in machine.grants})
-            emit(describe(phases(state)))
-        except Unreachable as exc:
-            emit(f'{entry["sha"][:12]}: unreachable: {exc}')
-    return 0
