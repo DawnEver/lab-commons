@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def _config() -> dict:
     return yaml.safe_load((ROOT / PRECOMMIT).read_text(encoding='utf-8'))
 
+
 #: The command this repo re-renders with. The kit's arm takes it with NO default, because the remedy
 #: is the repo's own -- one lab runs a Makefile target and the other an inline line, and a guessed
 #: remedy is a refusal nobody can act on. This repo has no render target, so the line IS the remedy.
@@ -102,7 +103,11 @@ class TestTheConfigIsTheFamilysPlusNothing:
         assert gate is not None, 'no admission hook: a trunk push here is admitted by nobody'
         assert gate['stages'] == ['pre-push']
         trunk = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['tool']['lab_commons']
-        assert gate['args'][:3] == ['lab_commons.dev.admission', '--trunk-ref', f'refs/heads/{trunk["branchset"]["trunk"]}']
+        assert gate['args'][:3] == [
+            'lab_commons.dev.admission',
+            '--trunk-ref',
+            f'refs/heads/{trunk["branchset"]["trunk"]}',
+        ]
 
     def test_a_planted_edit_to_a_base_line_is_refused_and_the_refusal_names_it(self, tmp_path: Path) -> None:
         """THE PLANTED CONTROL, both directions, through the same function the property uses.
