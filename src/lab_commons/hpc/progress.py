@@ -23,6 +23,8 @@ __all__ = ['Progress', 'parse_queue', 'where']
 #: One round trip: the cluster's clock, then each task of the job -- state, Slurm's reason, the partitions
 #: it may start in, and when it was submitted. Both times are the cluster's clock, so no timezone is mixed.
 _QUEUE: Final = 'date +%Y-%m-%dT%H:%M:%S; squeue -h -r -j {job} -o "%T|%r|%P|%V"'
+#: squeue's refusal of a job id it has aged out: the job left the queue long ago, so the run is finished.
+_FORGOTTEN: Final = 'Invalid job id specified'
 
 
 @dataclass(frozen=True)
@@ -133,7 +135,13 @@ def where(sha: str, machine: Machine, connect: Callable[[Grant], Runner], *, pol
         last = state['rounds'][-1]
         return Progress(sha=sha, job_id=last['job_id'], shards=len(last['shards']), finished=True)
     current = state['current']
-    pending, running, reasons, partitions, minutes = parse_queue(home(_QUEUE.format(job=current['job_id']), None))
+    try:
+        queue = home(_QUEUE.format(job=current['job_id']), None)
+    except RuntimeError as exc:
+        if _FORGOTTEN not in str(exc):
+            raise
+        return Progress(sha=sha, job_id=current['job_id'], shards=current['shards'], finished=True)
+    pending, running, reasons, partitions, minutes = parse_queue(queue)
     progress = Progress(
         sha=sha,
         job_id=current['job_id'],
