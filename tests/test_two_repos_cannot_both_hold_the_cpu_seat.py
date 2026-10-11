@@ -48,7 +48,7 @@ HOLDER_WHAT = 'the alpha checkout gate'
 HOLDER_POOL = 'alpha-lane'
 
 #: Exit codes the refusal is judged by -- the same three ``verify`` publishes.
-PASS, FAIL, INCONCLUSIVE = 0, 1, 2
+PASS, FAIL, INCONCLUSIVE = 0, 1, 3
 
 #: How long to wait for the holder's sentinel before calling the planted subprocess broken. A
 #: ceiling on the WAIT, not a sleep: the loop returns the moment the file appears.
