@@ -49,7 +49,7 @@ from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
 from lab_commons.hpc.platforms import table_at
 from lab_commons.hpc.retired import refusal
-from lab_commons.hpc.run import submit_run
+from lab_commons.hpc.run import NotSubmitted, submit_run
 from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.watch import settle, status
@@ -61,6 +61,10 @@ type Connect = Callable[[Grant], Runner]
 
 #: A login-node build of a tree's venv (a Rust extension, say) needs far more than a probe's five minutes.
 _BUILD_TIMEOUT = 3 * 3600.0
+
+#: The producer contract's INCONCLUSIVE (``lab_commons.dev.producer.ProducerExit``, which hpc may not import):
+#: ``run submit`` exits with it when nothing was submitted, so a failed build is never read as a red run.
+_NOT_SUBMITTED = 3
 
 
 def _state_path(config: Config) -> Path:
@@ -209,14 +213,18 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
         builds=builds,
         only=_only(args.only),
     )
-    state = submit_run(
-        spec,
-        machine,
-        lambda g: runner_for(g, _BUILD_TIMEOUT),
-        cost=config.cost,
-        policy=config.policy,
-        history=learned.learned(spec.repo_url),
-    )
+    try:
+        state = submit_run(
+            spec,
+            machine,
+            lambda g: runner_for(g, _BUILD_TIMEOUT),
+            cost=config.cost,
+            policy=config.policy,
+            history=learned.learned(spec.repo_url),
+        )
+    except NotSubmitted as why:
+        emit(f'run submit inconclusive: {why}', err=True)
+        return _NOT_SUBMITTED
     outstanding.add(
         spec.sha,
         repo=spec.repo_url,

@@ -80,7 +80,23 @@ from lab_commons.hpc.shell import (
 )
 from lab_commons.hpc.slurm import Snapshot
 
-__all__ = ['ACTIVE', 'RETRIES', 'gather_run', 'item_seconds', 'load_state', 'shares_home', 'submit_run']
+__all__ = [
+    'ACTIVE',
+    'RETRIES',
+    'NotSubmitted',
+    'gather_run',
+    'item_seconds',
+    'load_state',
+    'shares_home',
+    'submit_run',
+]
+
+
+class NotSubmitted(RuntimeError):
+    """:func:`submit_run` stopped before any job was queued; no test ran, so it is not a red run.
+
+    A missing need, an unfetchable commit, a failed build or an empty collection: the CLI exits INCONCLUSIVE.
+    """
 
 
 def item_seconds(policy: Policy) -> float:
@@ -230,17 +246,17 @@ def submit_run(
     lacking = [line.removeprefix('@@@ missing ') for line in said if line.startswith('@@@ missing ')]
     if lacking:
         msg = f'{grant.name} ({host}) lacks {", ".join(lacking)} on its login node; nothing was fetched or built'
-        raise RuntimeError(msg)
+        raise NotSubmitted(msg)
 
     shipping = time.monotonic()
     if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
         if spec.pack_from is None:
             msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to pack it from'
-            raise RuntimeError(msg)
+            raise NotSubmitted(msg)
         run(f'base64 -d > {ROOT}/packs/{spec.sha}.pack', pack(spec.pack_from, spec.sha))
         if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
             msg = f'commit {spec.sha} is still missing on {host} after the pack was indexed'
-            raise RuntimeError(msg)
+            raise NotSubmitted(msg)
 
     here = Path(__file__).parent
     run(f'cat > {ROOT}/bin/{COLLECT_MODULE}.py', (here / 'collect.py').read_text(encoding='utf-8'))
@@ -249,21 +265,21 @@ def submit_run(
     if BUILD_FAILED in built:
         tail = built.split(BUILD_FAILED, 1)[1].strip()
         msg = f'the build for {spec.sha[:12]} failed on {host}, nothing was submitted; {tail}'
-        raise RuntimeError(msg)
+        raise NotSubmitted(msg)
     told = facts(built)
     if not told.get('env'):
         msg = (
             f'the venv built for {spec.sha[:12]} on {host} reported no env hash (lab_commons.dev.envkey is not '
             'importable there), so its part could never be carried; nothing was submitted'
         )
-        raise RuntimeError(msg)
+        raise NotSubmitted(msg)
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)
     if spec.only is not None:
         ids = [node for node in ids if node in spec.only]
         errored = [node for node in errored if any(n.split('::')[0] == node for n in spec.only)]
     if not ids:
-        raise RuntimeError(_nothing_collected(spec, collected))
+        raise NotSubmitted(_nothing_collected(spec, collected))
     cannot = {
         platform: set(parse_ids(run(collect_command(spec, also=expr), None)))
         for platform in PLATFORMS
