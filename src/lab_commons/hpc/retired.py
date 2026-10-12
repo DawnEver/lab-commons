@@ -102,6 +102,13 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.dev.githooks bump-version': 'python -m lab_commons.dev.githooks script bump-version',
     'lab_commons.dev.githooks branchset-push': 'python -m lab_commons.dev.githooks script branchset-push',
     'lab_commons.dev.githooks cz-push-range': 'python -m lab_commons.dev.githooks script cz-push-range',
+    # Where a run is and what the cluster can take are read from the forge, from any machine; no verb asks over ssh.
+    'lab_commons.hpc probe': (
+        'python -m lab_commons.dev.forge queue (each cluster host card carries its headroom, partitions and quota)'
+    ),
+    'lab_commons.hpc run status': 'python -m lab_commons.dev.forge queue (each run in flight shows its progress)',
+    'lab_commons.hpc run watch': 'forge serve on the cluster login node (it gathers each run it owns, a step a tick)',
+    'lab_commons.hpc.outstanding': 'lab_commons.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
 }
 
 

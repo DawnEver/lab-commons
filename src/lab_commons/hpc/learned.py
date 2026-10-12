@@ -1,6 +1,6 @@
 """What the last run of a repository MEASURED, carried to its next submit -- one file per repository.
 
-``<config dir>/hpc-learned/<key>.json`` (beside :mod:`lab_commons.hpc.outstanding`), keyed by the
+``<config dir>/hpc-learned/<key>.json`` (beside the machine file), keyed by the
 remote URL: writing a run's record replaces it with the record's measurements
 (:class:`~lab_commons.hpc.measured.Measured`), and ``run submit`` plans from it. Machine-local, so it
 serves every grant the machine holds.

@@ -3,7 +3,8 @@
 EVERYTHING GOES THROUGH A RUNNER. A :data:`Runner` takes one shell command (and optional stdin) and
 returns its stdout; :func:`local_runner` runs it here (already on a login node) and is the only runner
 that SUBMITS -- a part's producer runs on the cluster (``forge serve``); :func:`ssh_runner` runs it on a
-login node from a workstation, for a human's ``probe`` and ``run status`` only. Files reach the
+login node from a workstation, for the job-file verbs (``plan``/``submit``/``status``/``gather``/``retry``) only;
+where a commit's run is, and what the cluster can take, is read from the forge. Files reach the
 cluster as ``cat > path`` on stdin, so a run needs no ``scp`` and no shared filesystem with the caller
 -- and a test drives every function below with a fake runner and no cluster.
 
@@ -119,7 +120,7 @@ def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
         msg = (
             'this box has no sbatch: submitting and gathering run ON the cluster login node, where '
             '`python -m lab_commons.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
-            'from a workstation only `run status` and `probe` reach the cluster, over ssh'
+            'from any machine `python -m lab_commons.dev.forge queue` shows where each run is'
         )
         raise NotOnCluster(msg)
     run = functools.partial(local_runner, timeout=timeout)

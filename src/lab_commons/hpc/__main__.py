@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc <verb>`` -- probe, plan, submit, status, gather, retry, run {submit|gather|watch|status}.
+"""``python -m lab_commons.hpc <verb>`` -- plan, submit, status, gather, retry, run {submit|gather}.
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
@@ -8,16 +8,15 @@ nothing more -- through whichever of those login hosts answers.
 
 ``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
 returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
-takes none; it records the run in :mod:`lab_commons.hpc.outstanding`, the machine's one list.
-``run gather --sha <sha> -o <dir>`` is one short call -- where the run is and exit :data:`PENDING`, or the
-record written to ``<dir>/run-<sha>-<platform>-<req>.json.gz`` (exit 1 if any id is red, lost or
-missing); ``--wait`` blocks until the record. ``run watch -o <dir>`` is the same path over every
-outstanding run. ``run submit|gather|watch`` RUN ON THE CLUSTER LOGIN NODE with its own shell
-(:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused on a box
-without ``sbatch`` -- no workstation submits over ssh. ``run status`` says where each outstanding run is
-(queued with Slurm's reason, running k of n, done) and names a stall with its remedy. ``probe`` needs no
-job file. ``-c`` there is optional and only its
-``[cost]``/``[policy]`` are read. ``run submit`` plans from what the repository's last record measured
+takes none. ``run gather --sha <sha> -o <dir>`` is one short call -- where the run is and exit
+:data:`PENDING`, or the record written to ``<dir>/run-<sha>-<platform>-<req>.json.gz`` (exit 1 if any id is
+red, lost or missing); ``--wait`` blocks until the record. Both RUN ON THE CLUSTER LOGIN NODE with its
+own shell (:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused
+on a box without ``sbatch`` -- no workstation submits over ssh. WHERE A RUN IS, AND WHAT THE CLUSTER CAN
+TAKE, IS READ FROM THE FORGE: ``python -m lab_commons.dev.forge queue`` shows each run's progress on its
+claim and each serving host's card (headroom, partitions, quota), so no verb reaches the cluster to ask.
+``-c`` is optional for ``run`` and only its ``[cost]``/``[policy]`` are read. ``run submit`` plans from what
+the repository's last record measured
 (:mod:`lab_commons.hpc.learned`); a file never measured is priced at ``[cost]``. A retired verb is
 refused by name (:mod:`lab_commons.hpc.retired`). ``deploy [--dry-run|--remove]`` makes this account's
 login host a ``forge serve`` host in one run (:mod:`lab_commons.hpc.deploy`).
@@ -34,7 +33,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc import deploy, learned, outstanding
+from lab_commons.hpc import deploy, learned
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import (
     TERMINAL_OK,
@@ -49,15 +48,15 @@ from lab_commons.hpc.cluster import (
     submit,
     submitter,
 )
-from lab_commons.hpc.config import Config, Limits, load_config
+from lab_commons.hpc.config import Config, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
-from lab_commons.hpc.plan import Plan, allocate, free_slots, headroom, quota_slots
+from lab_commons.hpc.plan import Plan, allocate
 from lab_commons.hpc.platforms import table_at
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import NotSubmitted, submit_run
 from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
 from lab_commons.hpc.slurm import Snapshot
-from lab_commons.hpc.watch import settle, status
+from lab_commons.hpc.watch import settle
 from lab_commons.log import emit
 
 __all__ = ['main']
@@ -90,30 +89,6 @@ def _snapshots(machine: Machine, connect: Connect) -> list[tuple[Grant, Snapshot
 
 def _out(text: str) -> None:
     emit(text)
-
-
-def _probe(config: Config, machine: Machine, connect: Connect) -> int:
-    snapshots = _snapshots(machine, connect)
-    for grant, snapshot in snapshots:
-        q = snapshot.quota
-        here = sum(g.cpus for g, _ in snapshots if g.account == grant.account and g.same_cluster(grant))
-        held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items())) or 'nothing'
-        room = headroom(snapshot, grant.cpus, machine.workstation)
-        _out(
-            f'{grant.name} account {q.account} (qos {q.default_qos}): '
-            f'quota cpus={q.cpus} mem_mb={q.mem_mb} gpus={q.gpus}'
-        )
-        box = machine.workstation or 'this unnamed box'
-        _out(f'  shares known here {here} of quota {q.cpus}; held {held}; headroom for {box}: {room}')
-        _out(f'  one item ({config.cost}) -> {quota_slots(snapshot, config.cost, Limits(cpus=room))} concurrent')
-        for name in grant.partitions or tuple(snapshot.partitions):
-            part = snapshot.partitions.get(name)
-            if part is not None:
-                _out(
-                    f'    {name:<14} max {part.max_minutes} min, '
-                    f'{free_slots(snapshot, (name,), config.cost)} item slots free'
-                )
-    return 0
 
 
 def _allocate(config: Config, machine: Machine, connect: Connect) -> tuple[Grant, Plan]:
@@ -227,15 +202,9 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
     except NotSubmitted as why:
         emit(f'run submit inconclusive: {why}', err=True)
         return _NOT_SUBMITTED
-    outstanding.add(
-        spec.sha,
-        repo=spec.repo_url,
-        grant=state['rounds'][0]['grant'],
-        job_ids=[r['job_id'] for r in state['rounds']],
-    )
     _out(
-        f'submitted run {spec.sha} ({spec.scope}); wait for it: python -m lab_commons.hpc run watch -o <dir> '
-        f'(or run gather --sha {spec.sha} -o <dir> [--wait])'
+        f'submitted run {spec.sha} ({spec.scope}) as round 0 of {len(state["rounds"])}; '
+        f'wait for it: python -m lab_commons.hpc run gather --sha {spec.sha} -o <dir> [--wait]'
     )
     return 0
 
@@ -248,36 +217,20 @@ def _run_gather(args: argparse.Namespace, machine: Machine, config: Config) -> i
     return settle([args.sha], machine, submitter(), config, args.output, sleep=_sleep if args.wait else None)
 
 
-def _run_watch(args: argparse.Namespace, machine: Machine, config: Config) -> int:
-    shas = [entry['sha'] for entry in outstanding.outstanding()]
-    if not shas:
-        _out(f'no outstanding run ({outstanding.directory()} is empty)')
-        return 0
-    return settle(shas, machine, submitter(), config, args.output, sleep=_sleep)
-
-
-def _run_status(_args: argparse.Namespace, machine: Machine, config: Config) -> int:
-    return status(machine, runner_for, config)
-
-
 #: Each ``run`` step and the flags it cannot do without.
 _RUN_NEEDS: Final = {
     'submit': ('--sha', '--repo-url', '--scope'),
     'gather': ('--sha', '--output'),
-    'watch': ('--output',),
-    'status': (),
 }
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc', description=__doc__.splitlines()[0])
-    parser.add_argument('verb', choices=['probe', 'plan', 'submit', 'status', 'gather', 'retry', 'run'])
+    parser.add_argument('verb', choices=['plan', 'submit', 'status', 'gather', 'retry', 'run'])
+    parser.add_argument('step', nargs='?', choices=list(_RUN_NEEDS), help='run only: submit, then gather')
+    parser.add_argument('-c', '--config', type=Path, help='the job file; run needs none ([cost]/[policy])')
     parser.add_argument(
-        'step', nargs='?', choices=list(_RUN_NEEDS), help='run only: submit, then gather/watch; status lists them'
-    )
-    parser.add_argument('-c', '--config', type=Path, help='the job file; probe and run need none ([cost]/[policy])')
-    parser.add_argument(
-        '-o', '--output', type=Path, help='gather: merged item results (JSON); run gather/watch: the record directory'
+        '-o', '--output', type=Path, help='gather: merged item results (JSON); run gather: the record directory'
     )
     parser.add_argument('--wait', action='store_true', help='run gather: block until the run has its record')
     group = parser.add_argument_group('run')
@@ -300,9 +253,9 @@ def _parser() -> argparse.ArgumentParser:
 def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     """``run <step>``: check the step's flags, then dispatch it."""
     if args.step is None:
-        parser.error('run needs a step: submit, then gather or watch; status lists what is outstanding')
+        parser.error('run needs a step: submit, then gather')
     if args.wait and args.step != 'gather':
-        parser.error('--wait belongs to run gather; run watch always waits')
+        parser.error('--wait belongs to run gather')
     values = {
         '--sha': args.sha,
         '--repo-url': args.repo_url,
@@ -315,7 +268,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.step == 'submit' and (args.scope == INCREMENTAL) != (args.only is not None):
         parser.error('--scope incremental names its re-run ids with --only; --scope full takes no --only')
     config = load_config(args.config) if args.config else Config()
-    steps = {'submit': _run_submit, 'gather': _run_gather, 'watch': _run_watch, 'status': _run_status}
+    steps = {'submit': _run_submit, 'gather': _run_gather}
     try:
         return steps[args.step](args, load_grants(), config)
     except NotOnCluster as off:
@@ -324,14 +277,12 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
 
 def _job_config(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Config:
-    """The job file ``-c`` names; ``probe`` alone may go without one. Never a guessed file in the cwd."""
+    """The job file ``-c`` names. Never a guessed file in the cwd."""
     if args.config is None:
-        if args.verb != 'probe':
-            parser.error(
-                f'{args.verb} reads a job file and the submission recorded beside it; pass -c <job file> '
-                '(the one submit used). A commit test is `run submit`/`run gather --sha`, which need none.'
-            )
-        return Config()
+        parser.error(
+            f'{args.verb} reads a job file and the submission recorded beside it; pass -c <job file> '
+            '(the one submit used). A commit test is `run submit`/`run gather --sha`, which need none.'
+        )
     if not args.config.is_file():
         parser.error(f'no job file at {args.config}; pass -c <job file> naming an existing one')
     return load_config(args.config)
@@ -345,6 +296,8 @@ def main(argv: list[str] | None = None) -> int:
         return deploy.main(argv[1:])
     if argv and (refused := refusal('lab_commons.hpc', argv[0])):
         parser.error(refused)
+    if argv[:1] == ['run'] and len(argv) > 1 and (refused := refusal('lab_commons.hpc run', argv[1])):
+        parser.error(refused)
     for word in argv:
         if (refused := refusal('run submit', word.split('=', 1)[0])) is not None:
             parser.error(refused)
@@ -356,8 +309,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f'{args.verb} takes no step')
     config = _job_config(parser, args)
     connect = runner_for
-    if args.verb == 'probe':
-        return _probe(config, machine, connect)
     if args.verb == 'plan':
         return _plan(config, machine, connect)
     if args.verb == 'submit':
