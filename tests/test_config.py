@@ -86,11 +86,11 @@ def test_a_bad_user_table_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyP
     ('text', 'name', 'where'),
     [
         (
-            '[motronics.utils]\ntext_editor_command = "start"\n',
-            'motronics',
-            r'\[motronics\.utils\]\.text_editor_command',
+            '[consumer_a.utils]\ntext_editor_command = "start"\n',
+            'consumer_a',
+            r'\[consumer_a\.utils\]\.text_editor_command',
         ),
-        ('[wdg_lab]\nlog_level = "INFO"\n', 'wdg_lab', r'\[wdg_lab\]\.log_level'),
+        ('[consumer_b]\nlog_level = "INFO"\n', 'consumer_b', r'\[consumer_b\]\.log_level'),
         ('[[pkg.row]]\nlog_date_format = "%d"\n', 'pkg', r'\[pkg\.row\]\.log_date_format'),
     ],
 )
@@ -104,6 +104,6 @@ def test_a_package_table_repeating_a_shared_key_is_refused(
 
 def test_a_package_table_without_shared_keys_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PLANTED CONTROL: the refusal is about a SHARED key, not about any key a package owns."""
-    _point(tmp_path, monkeypatch, '[motronics.utils]\nlog_level_note = "x"\n[user]\nlog_level = "INFO"\n')
-    assert section('motronics') == {'utils': {'log_level_note': 'x'}}
+    _point(tmp_path, monkeypatch, '[consumer_a.utils]\nlog_level_note = "x"\n[user]\nlog_level = "INFO"\n')
+    assert section('consumer_a') == {'utils': {'log_level_note': 'x'}}
     assert section('user') == {'log_level': 'INFO'}

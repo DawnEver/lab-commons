@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Final
 
@@ -80,7 +80,7 @@ class User:
 
     #: The command that opens a text file.
     text_editor_command: str = 'notepad.exe'
-    #: Logging threshold, one of :data:`LOG_LEVELS` (case-insensitive in the file).
+    #: Logging threshold, one of :data:`LOG_LEVELS`; :func:`user` upper-cases the file's spelling.
     log_level: str = 'INFO'
     #: :class:`logging.Formatter` format of a log file; carries file and line.
     log_file_format: str = '%(asctime)s %(levelname)s %(message)s 	location: %(filename)s line%(lineno)d'
@@ -90,16 +90,14 @@ class User:
     log_date_format: str = '%m/%d/%Y %H:%M:%S'
 
     def __post_init__(self) -> None:
-        """Refuse a non-string value and an unknown level; normalise the level to upper case."""
-        for field in fields(self):
-            if not isinstance(getattr(self, field.name), str):
-                msg = f'[{USER_TABLE}] {field.name} must be a string, got {getattr(self, field.name)!r}'
+        """Refuse a non-string value and a level outside :data:`LOG_LEVELS`."""
+        for key, value in asdict(self).items():
+            if not isinstance(value, str):
+                msg = f'[{USER_TABLE}] {key} must be a string, got {value!r}'
                 raise TypeError(msg)
-        level = self.log_level.upper()
-        if level not in LOG_LEVELS:
+        if self.log_level not in LOG_LEVELS:
             msg = f'[{USER_TABLE}] log_level must be one of {sorted(LOG_LEVELS)}, got {self.log_level!r}'
             raise ValueError(msg)
-        object.__setattr__(self, 'log_level', level)
 
 
 #: The keys lab-commons owns in :data:`USER_TABLE`; no package table may repeat one.
@@ -140,4 +138,5 @@ def user() -> User:
     if unknown := sorted(set(table) - SHARED_KEYS):
         msg = f'{config_path()}: [{USER_TABLE}] has no key {unknown[0]!r}; known: {sorted(SHARED_KEYS)}'
         raise ValueError(msg)
-    return User(**table)
+    level = table.get('log_level')
+    return User(**table) if not isinstance(level, str) else User(**{**table, 'log_level': level.upper()})
