@@ -18,7 +18,7 @@ credential with ``git ls-remote`` BEFORE anything changes; clone or update each 
 ``.venv`` with the repo's own ``[tool.lab_commons.hpc] install`` (and its ``native`` build), skipped when
 the key of its inputs is unchanged; install ``cmake`` through uv when a repo ``needs`` it and the host has
 none; warn, naming the recipe, when a repo declares an rclone artefact store this account's remote cannot
-reach (:func:`lab_commons.dev.artefacts.remote_problem`; parts with outputs are then not claimed here);
+reach (:func:`lab_commons.hpc.rclone.probe`; parts with outputs are then not claimed here);
 replace this tool's marked crontab lines (one per repo, every 5 min, under ``flock -n``) and touch no
 other line; run one tick of each and print it. ``--dry-run`` reads but changes nothing; ``--remove``
 deletes the marked lines only. No credential is ever printed: a failed ``ls-remote`` reports its exit code.
@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Final
 
 from lab_commons.config import config_path
-from lab_commons.dev.artefacts import RCLONE, ArtefactRefused, load_config, remote_problem
 from lab_commons.hpc.deploy_spec import (
     DEFAULT_PYTHON,
     DEFAULT_ROOT,
@@ -52,6 +51,7 @@ from lab_commons.hpc.deploy_spec import (
     tick_command,
 )
 from lab_commons.hpc.deploy_steps import Step, Tools, build, declared, update
+from lab_commons.hpc.rclone import declared_remote, probe
 from lab_commons.log import emit
 
 __all__ = ['deploy', 'main']
@@ -178,15 +178,11 @@ def _tick(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
 
 
 def _artefacts(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
-    checkout = checkout_of(spec, home, repo)
-    try:
-        declared_rclone = load_config(checkout).backend == RCLONE
-    except ArtefactRefused:
-        declared_rclone = True  # a broken table is reported by the probe, naming the key
-    if not declared_rclone:
+    remote = declared_remote(checkout_of(spec, home, repo))
+    if not remote:
         emit(f'  {repo.name}: no rclone artefact store declared')
         return 0
-    why = remote_problem(checkout, rclone=step.tools.rclone)
+    why = probe(remote, rclone=step.tools.rclone)
     emit(f'  {repo.name}: ' + (f'WARNING {why}' if why else 'the rclone remote answers'), err=bool(why))
     return 0  # a warning, never a refusal: most parts declare no large outputs
 
@@ -218,6 +214,7 @@ def deploy(argv: Sequence[str], *, home: Path, hostname: str, tools: Tools | Non
         lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', update),
         lambda: _cmake(step, spec, home),
         lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', build),
+        lambda: _each(step, spec, home, '[artefacts] the rclone remote, where a repo declares one', _artefacts),
         lambda: _cron(step, spec, home),
         lambda: _each(step, spec, home, '[tick] one now, per repo', _tick),
     )
