@@ -141,3 +141,63 @@ def test_staleness_names_the_main_checkouts_lag_and_the_fast_forward(repo: Path,
 def test_the_report_door_exits_zero_and_prints_the_lag(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert integrationhome.main(['report', '--root', str(repo)]) == 0
     assert 'integration-home' in capsys.readouterr().out
+
+
+# PUSH-FROM-ITS-OWN-BRANCH -- the incident (2026-10-13): the main checkout was on the user's
+# `feat/optimization`; `git push origin HEAD:integrate/main` from there published the user's unreviewed
+# commit onto the integration branch. Each case is a REAL push to a bare origin through a REAL pre-push hook.
+
+
+def _install_pre_push(main: Path) -> None:
+    hooks = main / 'push-hooks'
+    hooks.mkdir()
+    python = Path(sys.executable).as_posix()
+    (hooks / 'pre-push').write_text(
+        f'#!/bin/sh\nexec "{python}" -m lab_commons.dev.integrationhome pre-push "$@"\n',
+        encoding='utf-8',
+        newline='\n',
+    )
+    (hooks / 'pre-push').chmod(0o755)
+    subprocess.run([_GIT, 'config', 'core.hooksPath', hooks.as_posix()], cwd=main, check=True)
+
+
+def _remote_sha(main: Path, branch: str) -> str:
+    return _git(main, 'ls-remote', 'origin', f'refs/heads/{branch}').split()[0]
+
+
+@pytest.mark.parametrize('protected', ['int/line', 'stable'])
+def test_head_pushed_onto_a_protected_branch_from_another_branch_is_refused_and_names_the_remedy(
+    repo: Path, protected: str
+) -> None:
+    _install_pre_push(repo)
+    _git(repo, 'checkout', 'lane/x')
+    _git(repo, 'commit', '--allow-empty', '-m', 'feat: unreviewed')
+    done = _commit(repo, 'push', 'origin', f'HEAD:{protected}')
+    assert done.returncode != 0, done.stderr
+    assert 'PUSH-FROM-ITS-OWN-BRANCH' in done.stderr
+    assert 'refs/heads/lane/x' in done.stderr
+    assert 'checkout whose HEAD is' in done.stderr
+    assert 'lane branch' in done.stderr
+    assert _remote_sha(repo, protected) != _git(repo, 'rev-parse', 'HEAD')
+
+
+def test_a_detached_head_and_another_named_branch_are_refused(repo: Path) -> None:
+    _install_pre_push(repo)
+    _git(repo, 'checkout', 'lane/x')
+    _git(repo, 'commit', '--allow-empty', '-m', 'feat: unreviewed')
+    assert _commit(repo, 'push', 'origin', 'lane/x:int/line').returncode != 0
+    _git(repo, 'checkout', '--detach')
+    assert _commit(repo, 'push', 'origin', 'HEAD:int/line').returncode != 0
+
+
+def test_head_from_the_checkout_on_that_branch_and_a_lane_push_are_permitted(repo: Path) -> None:
+    """``with-retry.sh push origin HEAD:<integration>`` from the main checkout on it names its own ref."""
+    _install_pre_push(repo)
+    _git(repo, 'checkout', 'int/line')
+    _git(repo, 'commit', '--allow-empty', '-m', 'chore(merge): lane')
+    done = _commit(repo, 'push', 'origin', 'HEAD:int/line')
+    assert done.returncode == 0, done.stderr
+    assert _remote_sha(repo, 'int/line') == _git(repo, 'rev-parse', 'HEAD')
+    _git(repo, 'checkout', 'lane/x')
+    _git(repo, 'commit', '--allow-empty', '-m', 'feat: lane')
+    assert _commit(repo, 'push', 'origin', 'HEAD:lane/x').returncode == 0
