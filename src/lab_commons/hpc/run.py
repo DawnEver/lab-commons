@@ -173,7 +173,8 @@ def _submit_round(
     order, shards = balance(seconds, plan.shards)
     pending = [pending[i] for i in order]
     plan = _rewalled(plan, shards, [seconds[i] for i in order], policy, state.get('min_minutes', 0.0))
-    items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl'} for i, group in enumerate(pending)]
+    ceiling = {'timeout_s': state['timeout_s']} if state.get('timeout_s') else {}
+    items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl', **ceiling} for i, group in enumerate(pending)]
     setup = (ENV,)
     sha = state['sha']
     job = JobSpec(name=f'run-{sha[:12]}', workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run')
@@ -293,6 +294,7 @@ def submit_run(
         'repo': spec.repo_url,
         'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
         'scope': spec.scope,
+        'timeout_s': spec.timeout_s,
         'platform': LINUX,
         'system': told.get('platform', ''),
         'env': told['env'],

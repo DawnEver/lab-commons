@@ -6,7 +6,10 @@
     femm = ["windows"]            # a marker -> the platforms that can run a test carrying it
     matlab = ["windows", "linux"]
 
-A marker the table does not list runs everywhere. A test carrying several listed markers runs only
+A marker the table does not list runs everywhere. A REQUIREMENT OF THE HOST is a marker like any other:
+``dev_checkout = ["windows"]`` sends a test asserting a developer checkout (hooks installed, branches on
+origin, worktree placement) only to the parts that run in one -- assigned there, never skipped where the
+cluster's bare per-sha tree would red it. A test carrying several listed markers runs only
 where ALL of them can. A commit's result may then be COMPOSED of one part per platform
 (:mod:`lab_commons.dev.platformparts`). Each id is ASSIGNED to exactly one part by :func:`assign`: the
 FIRST platform in :data:`PLATFORMS` order that can run it (linux, else windows, else macos). The

@@ -29,6 +29,11 @@ def fold(
 
     *busy* is the sum of every closed item's own wall -- what the processes used of the cores charged.
 
+    An item that EXITED (``done`` >= 0) before reporting every id names the id it was running: its last
+    START line, when that id has no outcome. It is ``failed`` with the exit as its reason, and only the ids
+    after it are re-queued; with no unreported START to name it (a file that never imported, an id no longer
+    collected), the unreported ids are ``missing``.
+
     An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
     they are retried, halved, like an item that never closed -- never stamped ``missing``.
 
@@ -52,7 +57,14 @@ def fold(
         signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
         killed = killed or signalled
         if folded['done'] is not None and not signalled:
-            outcomes.update(dict.fromkeys(rest, 'missing'))
+            hit = folded['started']
+            if hit not in rest:
+                outcomes.update(dict.fromkeys(rest, 'missing'))
+                continue
+            outcomes[hit] = 'failed'
+            reasons[hit] = f'the item exited {folded["done"]["done"]} while this test ran; the ids after it re-run'
+            after = [n for n in rest if n != hit]
+            pending += [after] if after else []
             continue
         measured.killed(group, folded, spent.get(index, 0.0))
         half = (len(rest) + 1) // 2
