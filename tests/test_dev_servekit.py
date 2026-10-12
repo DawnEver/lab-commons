@@ -44,7 +44,7 @@ class _Host:
     def run(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         """Git runs for real; the reinstall and the re-exec are recorded and succeed."""
         if Path(argv[0]).name.startswith('git'):
-            return subprocess.run(argv, **kwargs)  # noqa: PLW1510 -- the caller passes check
+            return subprocess.run(argv, check=bool(kwargs.pop('check', False)), **kwargs)
         self.calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, '', '')
 
