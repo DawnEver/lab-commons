@@ -122,7 +122,9 @@ def write_record(record: dict[str, Any], directory: Path) -> Path:
     """The record gzipped under *directory* (created) at :func:`record_name`; returns its path."""
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / record_name(record)
-    target.write_bytes(gzip.compress(json.dumps(record, sort_keys=True).encode('utf-8'), mtime=0))
+    partial = target.with_name(target.name + '.partial')  # atomic: a crash never leaves half a record
+    partial.write_bytes(gzip.compress(json.dumps(record, sort_keys=True).encode('utf-8'), mtime=0))
+    partial.replace(target)
     return target
 
 
