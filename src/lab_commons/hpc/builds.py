@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlsplit
 
+from lab_commons.hpc.declared import kit_tables
+
 __all__ = [
     'FULL',
     'INCREMENTAL',
@@ -81,7 +83,7 @@ class Builds:
 
 def read_builds(text: str) -> Builds:
     """The ``[tool.lab_commons.hpc]`` declaration of pyproject *text*; absent is an empty :class:`Builds`."""
-    raw = tomllib.loads(text).get('tool', {}).get('lab_commons', {}).get('hpc', {})
+    raw = kit_tables(text).get('hpc', {})
     native = raw.get('native', {})
     builds = Builds(
         install=str(raw.get('install', '')),

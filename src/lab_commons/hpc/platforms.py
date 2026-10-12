@@ -30,12 +30,11 @@ only, like the rest of :mod:`lab_commons.hpc`.
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
+
+from lab_commons.hpc.declared import kit_tables, pyproject_at
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, Mapping, Sequence
@@ -63,8 +62,6 @@ CAPABILITY_ROWS: Final = frozenset({'dev_checkout', 'node', 'jmag'})
 
 #: The spelling of a part (a platform or an engine) -- also what a status context and a description carry.
 PART_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
-
-_GIT: Final = shutil.which('git') or 'git'
 
 _BY_SYS: Final = {'linux': 'linux', 'win32': 'windows', 'darwin': 'macos'}
 
@@ -125,7 +122,7 @@ def _capability(name: str, value: object) -> tuple[bool, tuple[str, ...]]:
 
 def read_table(text: str) -> Table:
     """Both axes from pyproject *text*; absent is empty, a malformed or misplaced row is refused naming the fix."""
-    declared: dict[str, Any] = tomllib.loads(text).get('tool', {}).get('lab_commons', {})
+    declared = kit_tables(text)
     rows: dict[str, tuple[str, ...]] = {}
     for marker, value in declared.get('platforms', {}).items():
         if marker in CAPABILITY_ROWS:
@@ -150,17 +147,9 @@ def read_table(text: str) -> Table:
     return Table(rows=rows, engines=tuple(sorted(engines)), hosts=tuple(sorted(hosts)))
 
 
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        [_GIT, '-C', str(repo), *args], capture_output=True, text=True, encoding='utf-8', check=True
-    ).stdout
-
-
 def table_at(repo: Path, sha: str) -> Table:
     """The table as commit *sha* of *repo* declares it; a commit carrying no pyproject declares none."""
-    if not _git(repo, 'ls-tree', '--name-only', sha, '--', 'pyproject.toml').strip():
-        return Table()
-    return read_table(_git(repo, 'show', f'{sha}:pyproject.toml'))
+    return read_table(pyproject_at(repo, sha))
 
 
 def cannot_run(table: Table, part: str) -> str:
