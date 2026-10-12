@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Final
 
 from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds
+from lab_commons.hpc.platforms import Table
 
 __all__ = [
     'BUILD_FAILED',
@@ -93,7 +94,7 @@ class RunSpec:
     repo_url: str
     collect: str = ''
     select: str = ''
-    table: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    table: Table = field(default_factory=Table)
     python: str = ''
     pack_from: Path | None = None
     builds: Builds = field(default_factory=Builds)
