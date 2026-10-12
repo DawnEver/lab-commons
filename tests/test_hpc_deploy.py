@@ -7,7 +7,7 @@ box: it logs its argv to ``calls.log`` and keeps its state in files under the te
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
@@ -183,3 +183,39 @@ def test_the_rendered_declaration_reads_back(tmp_path: Path) -> None:
     )
     path = _write(tmp_path / 'config.toml', deploy_spec.render(spec))
     assert deploy_spec.load(path) == spec
+
+
+FAKE_RCLONE: Final = r"""
+import pathlib, sys
+with pathlib.Path(sys.argv[1]).open('a') as f: f.write('rclone ' + ' '.join(sys.argv[3:]) + '\n')
+if sys.argv[2] != 'present':
+    sys.stderr.write("didn't find section in config file\n"); sys.exit(1)
+"""
+
+
+@pytest.mark.parametrize('state', ['missing', 'present'])
+def test_a_repo_declaring_rclone_artefacts_has_its_remote_checked_and_a_missing_one_warns(
+    box: Box, tmp_path: Path, capsys: pytest.CaptureFixture[str], state: str
+) -> None:
+    """A missing remote WARNS with the recipe and the deploy still completes; PLANTED CONTROL: present is quiet."""
+    assert box.run(*DECLARE) == 0
+    alpha = box.home / deploy_spec.DEFAULT_ROOT / 'alpha' / 'pyproject.toml'
+    alpha.write_text(
+        '[tool.lab_commons.hpc]\ninstall = "uv sync"\n'
+        '[tool.lab_commons.artefacts]\nbackend = "rclone"\nremote = "hpc-data:motronics"\n',
+        encoding='utf-8',
+    )
+    rclone = (sys.executable, str(_write(tmp_path / 'rclone.py', FAKE_RCLONE)), str(box.calls), state)
+    with_rclone = Box(box.home, box.machine, box.crontab, box.calls, replace(box.tools, rclone=rclone))
+    capsys.readouterr()
+    assert with_rclone.run() == 0, 'a missing remote is a warning, never a refusal'
+    out, err = capsys.readouterr()
+    assert 'rclone lsd hpc-data: --max-depth 1' in box.logged()
+    assert 'beta: no rclone artefact store declared' in out
+    if state == 'missing':
+        assert 'alpha: WARNING' in err
+        assert 'rclone authorize "onedrive"' in err
+        assert 'documentLibrary' in err
+    else:
+        assert 'alpha: the rclone remote answers' in out
+        assert 'WARNING' not in err

@@ -17,7 +17,9 @@ STEPS, each one reporting, each one safe to repeat: refuse off the declared host
 credential with ``git ls-remote`` BEFORE anything changes; clone or update each checkout; build its
 ``.venv`` with the repo's own ``[tool.lab_commons.hpc] install`` (and its ``native`` build), skipped when
 the key of its inputs is unchanged; install ``cmake`` through uv when a repo ``needs`` it and the host has
-none; replace this tool's marked crontab lines (one per repo, every 5 min, under ``flock -n``) and touch no
+none; warn, naming the recipe, when a repo declares an rclone artefact store this account's remote cannot
+reach (:func:`lab_commons.dev.artefacts.remote_problem`; parts with outputs are then not claimed here);
+replace this tool's marked crontab lines (one per repo, every 5 min, under ``flock -n``) and touch no
 other line; run one tick of each and print it. ``--dry-run`` reads but changes nothing; ``--remove``
 deletes the marked lines only. No credential is ever printed: a failed ``ls-remote`` reports its exit code.
 """
@@ -33,6 +35,7 @@ from pathlib import Path
 from typing import Final
 
 from lab_commons.config import config_path
+from lab_commons.dev.artefacts import RCLONE, ArtefactRefused, load_config, remote_problem
 from lab_commons.hpc.deploy_spec import (
     DEFAULT_PYTHON,
     DEFAULT_ROOT,
@@ -172,6 +175,20 @@ def _tick(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
         busy = ' (1 also means a tick of this host is still running)' if rc == 1 else ''
         emit(f'  tick {repo.name} exited {rc}{busy}')
     return 0  # a red tick is reported, never a reason to undo the deployment
+
+
+def _artefacts(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
+    checkout = checkout_of(spec, home, repo)
+    try:
+        declared_rclone = load_config(checkout).backend == RCLONE
+    except ArtefactRefused:
+        declared_rclone = True  # a broken table is reported by the probe, naming the key
+    if not declared_rclone:
+        emit(f'  {repo.name}: no rclone artefact store declared')
+        return 0
+    why = remote_problem(checkout, rclone=step.tools.rclone)
+    emit(f'  {repo.name}: ' + (f'WARNING {why}' if why else 'the rclone remote answers'), err=bool(why))
+    return 0  # a warning, never a refusal: most parts declare no large outputs
 
 
 def deploy(argv: Sequence[str], *, home: Path, hostname: str, tools: Tools | None = None) -> int:

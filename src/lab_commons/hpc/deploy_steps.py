@@ -26,6 +26,7 @@ class Tools:
     crontab: tuple[str, ...] = ('crontab',)
     uv: tuple[str, ...] = ('uv',)
     sh: tuple[str, ...] = ('bash', '-lc')
+    rclone: tuple[str, ...] = ('rclone',)
 
 
 class Step:
