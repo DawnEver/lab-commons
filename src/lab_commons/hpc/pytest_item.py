@@ -144,7 +144,7 @@ def _append(entry: dict[str, Any]) -> None:
         stream.write(json.dumps(entry) + '\n')
 
 
-def pytest_runtest_logstart(nodeid: str, location: object) -> None:  # noqa: ARG001 -- pytest's hook signature
+def pytest_runtest_logstart(nodeid: str) -> None:
     """Append a START line before the test's setup, so an exit before its outcome still names the id it hit."""
     _append({'start': nodeid})
 
