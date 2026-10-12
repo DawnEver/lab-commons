@@ -12,7 +12,9 @@ takes none; it records the run in :mod:`lab_commons.hpc.outstanding`, the machin
 ``run gather --sha <sha> -o <dir>`` is one short call -- where the run is and exit :data:`PENDING`, or the
 record written to ``<dir>/run-<sha>-<platform>-<req>.json.gz`` (exit 1 if any id is red, lost or
 missing); ``--wait`` blocks until the record. ``run watch -o <dir>`` is the same path over every
-outstanding run -- one call any harness tick can make. ``run status`` says where each outstanding run is
+outstanding run. ``run submit|gather|watch`` RUN ON THE CLUSTER LOGIN NODE with its own shell
+(:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused on a box
+without ``sbatch`` -- no workstation submits over ssh. ``run status`` says where each outstanding run is
 (queued with Slurm's reason, running k of n, done) and names a stall with its remedy. ``probe`` needs no
 job file. ``-c`` there is optional and only its
 ``[cost]``/``[policy]`` are read. ``run submit`` plans from what the repository's last record measured
@@ -35,6 +37,7 @@ from lab_commons.hpc import learned, outstanding
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import (
     TERMINAL_OK,
+    NotOnCluster,
     Runner,
     failover_runner,
     gather,
@@ -43,6 +46,7 @@ from lab_commons.hpc.cluster import (
     shard_states,
     ssh_runner,
     submit,
+    submitter,
 )
 from lab_commons.hpc.config import Config, Limits, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
@@ -58,9 +62,6 @@ from lab_commons.log import emit
 __all__ = ['main']
 
 type Connect = Callable[[Grant], Runner]
-
-#: A login-node build of a tree's venv (a Rust extension, say) needs far more than a probe's five minutes.
-_BUILD_TIMEOUT = 3 * 3600.0
 
 #: The producer contract's INCONCLUSIVE (``lab_commons.dev.producer.ProducerExit``, which hpc may not import):
 #: ``run submit`` exits with it when nothing was submitted, so a failed build is never read as a red run.
@@ -217,7 +218,7 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
         state = submit_run(
             spec,
             machine,
-            lambda g: runner_for(g, _BUILD_TIMEOUT),
+            submitter(),
             cost=config.cost,
             policy=config.policy,
             history=learned.learned(spec.repo_url),
@@ -243,7 +244,7 @@ _sleep = time.sleep
 
 
 def _run_gather(args: argparse.Namespace, machine: Machine, config: Config) -> int:
-    return settle([args.sha], machine, runner_for, config, args.output, sleep=_sleep if args.wait else None)
+    return settle([args.sha], machine, submitter(), config, args.output, sleep=_sleep if args.wait else None)
 
 
 def _run_watch(args: argparse.Namespace, machine: Machine, config: Config) -> int:
@@ -251,7 +252,7 @@ def _run_watch(args: argparse.Namespace, machine: Machine, config: Config) -> in
     if not shas:
         _out(f'no outstanding run ({outstanding.directory()} is empty)')
         return 0
-    return settle(shas, machine, runner_for, config, args.output, sleep=_sleep)
+    return settle(shas, machine, submitter(), config, args.output, sleep=_sleep)
 
 
 def _run_status(_args: argparse.Namespace, machine: Machine, config: Config) -> int:
@@ -314,7 +315,11 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         parser.error('--scope incremental names its re-run ids with --only; --scope full takes no --only')
     config = load_config(args.config) if args.config else Config()
     steps = {'submit': _run_submit, 'gather': _run_gather, 'watch': _run_watch, 'status': _run_status}
-    return steps[args.step](args, load_grants(), config)
+    try:
+        return steps[args.step](args, load_grants(), config)
+    except NotOnCluster as off:
+        emit(f'run {args.step} refused: {off}', err=True)
+        return 2
 
 
 def _job_config(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Config:
