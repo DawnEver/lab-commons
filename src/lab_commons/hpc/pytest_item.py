@@ -38,8 +38,8 @@ __all__ = [
     'IDS_ENV',
     'STREAM_ENV',
     'canonical',
+    'item_argv',
     'outcome_of',
-    'pytest_argv',
     'pytest_collection_modifyitems',
     'pytest_runtest_logreport',
     'pytest_runtest_logstart',
@@ -213,7 +213,7 @@ def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
     return proc.returncode, round(usage.ru_maxrss / 1024, 1)  # Linux reports KiB
 
 
-def pytest_argv(item: dict[str, Any], files: list[str]) -> list[str]:
+def item_argv(item: dict[str, Any], files: list[str]) -> list[str]:
     """The pytest command for *item*: this file as the plugin, serial, and ``--timeout`` when its scope declares one."""
     serial = ['-n', '0'] if importlib.util.find_spec('xdist') else []
     ceiling = ['--timeout', str(item['timeout_s'])] if item.get('timeout_s') else []
@@ -230,7 +230,7 @@ def run(item: dict[str, Any]) -> dict[str, Any]:
     chosen = stream.with_suffix('.ids.json')
     chosen.write_text(json.dumps(ids), encoding='utf-8')
     files = list(dict.fromkeys(node.split('::', maxsplit=1)[0] for node in ids))
-    argv = pytest_argv(item, files)
+    argv = item_argv(item, files)
     env = {**os.environ, STREAM_ENV: str(stream.resolve()), IDS_ENV: str(chosen.resolve())}
     start = time.monotonic()
     with tempfile.TemporaryFile() as out:
