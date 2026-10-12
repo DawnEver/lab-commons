@@ -19,7 +19,8 @@ without ``sbatch`` -- no workstation submits over ssh. ``run status`` says where
 job file. ``-c`` there is optional and only its
 ``[cost]``/``[policy]`` are read. ``run submit`` plans from what the repository's last record measured
 (:mod:`lab_commons.hpc.learned`); a file never measured is priced at ``[cost]``. A retired verb is
-refused by name (:mod:`lab_commons.hpc.retired`).
+refused by name (:mod:`lab_commons.hpc.retired`). ``deploy [--dry-run|--remove]`` makes this account's
+login host a ``forge serve`` host in one run (:mod:`lab_commons.hpc.deploy`).
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc import learned, outstanding
+from lab_commons.hpc import deploy, learned, outstanding
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import (
     TERMINAL_OK,
@@ -340,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
     """Parse the verb and dispatch it against this machine's grants."""
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ['deploy']:
+        return deploy.main(argv[1:])
     if argv and (refused := refusal('lab_commons.hpc', argv[0])):
         parser.error(refused)
     for word in argv:
