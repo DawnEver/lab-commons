@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,21 +17,38 @@ def _report(when: str, outcome: str, longrepr: object) -> SimpleNamespace:
     return SimpleNamespace(nodeid='t.py::a', when=when, outcome=outcome, duration=0.1, longrepr=longrepr)
 
 
-def _logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: SimpleNamespace) -> dict:
-    stream = tmp_path / 's.jsonl'
-    monkeypatch.setenv(pytest_item.STREAM_ENV, str(stream))
-    pytest_item.pytest_runtest_logreport(report)
-    return json.loads(stream.read_text(encoding='utf-8'))
-
-
-def test_without_a_crash_the_last_non_empty_line_is_the_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    line = _logged(tmp_path, monkeypatch, _report('setup', 'failed', 'Traceback\n  x\nE   ' + 'v' * 400 + '\n\n'))
+def test_without_a_crash_the_last_non_empty_line_is_the_reason() -> None:
+    line = pytest_item.entry_of(_report('setup', 'failed', 'Traceback\n  x\nE   ' + 'v' * 400 + '\n\n'))
+    assert line is not None
     assert line['outcome'] == 'error'
     assert line['why'] == ('E   ' + 'v' * 400)[:300]
 
 
-def test_a_passing_phase_carries_no_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert 'why' not in _logged(tmp_path, monkeypatch, _report('call', 'passed', None))
+def test_a_passing_phase_carries_no_reason() -> None:
+    line = pytest_item.entry_of(_report('call', 'passed', None))
+    assert line is not None
+    assert 'why' not in line
+
+
+def test_a_test_that_redirects_the_stream_variable_still_reports_to_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plugin's stream is the RUN's, bound when the plugin loads; a test's environment cannot redirect it.
+
+    THE CLUSTER INCIDENT, 2026-10-12: the two tests above once set ``LAB_CI_STREAM`` themselves. The
+    plugin read that variable on every append, so their own outcomes went to THEIR stream and the run
+    recorded both ``missing`` -- an inconclusive verdict from two passing tests.
+    """
+    inner = tmp_path / 'test_inner.py'
+    inner.write_text(
+        'def test_redirects(monkeypatch, tmp_path):\n'
+        f"    monkeypatch.setenv('{pytest_item.STREAM_ENV}', str(tmp_path / 'elsewhere.jsonl'))\n",
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('PYTHONPATH', str(Path(pytest_item.__file__).parent))
+    monkeypatch.chdir(tmp_path)
+    done = pytest_item.run({'ids': ['test_inner.py::test_redirects'], 'stream': str(tmp_path / 'run.jsonl')})
+    assert done['outcomes'] == {'test_inner.py::test_redirects': 'passed'}, done['tail']
 
 
 def test_the_worst_phase_reason_wins_with_its_outcome() -> None:

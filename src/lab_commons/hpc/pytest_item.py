@@ -32,12 +32,13 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 __all__ = [
     'IDS_ENV',
     'STREAM_ENV',
     'canonical',
+    'entry_of',
     'item_argv',
     'outcome_of',
     'pytest_collection_modifyitems',
@@ -135,8 +136,14 @@ def _reason(report: _Report, outcome: str) -> str:
     return _why(report.longrepr)
 
 
+#: The stream this process appends to, BOUND ONCE when the plugin loads -- the RUN's, never a test's.
+#: Read per append until 2026-10-12, when two tests that set ``LAB_CI_STREAM`` themselves sent their own
+#: outcomes to their own stream and the cluster run recorded them ``missing``.
+_TARGET: Final = os.environ.get(STREAM_ENV)
+
+
 def _append(entry: dict[str, Any]) -> None:
-    target = os.environ.get(STREAM_ENV)
+    target = _TARGET
     if not target:
         return
     # builtin open, not pathlib: a test that fakes os.name makes Path() spell a Windows path on the cluster
@@ -149,15 +156,21 @@ def pytest_runtest_logstart(nodeid: str) -> None:
     _append({'start': nodeid})
 
 
-def pytest_runtest_logreport(report: _Report) -> None:
-    """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
+def entry_of(report: _Report) -> dict[str, Any] | None:
+    """The stream line one phase report contributes; ``None`` when the phase decides nothing."""
     outcome = outcome_of(report.when, report.outcome, xfail=_xfailed(report))
     if outcome is None:
-        return
+        return None
     entry: dict[str, Any] = {'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)}
     if outcome in _REASONED:
         entry['why'] = _reason(report, outcome)
-    _append(entry)
+    return entry
+
+
+def pytest_runtest_logreport(report: _Report) -> None:
+    """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
+    if (entry := entry_of(report)) is not None:
+        _append(entry)
 
 
 def canonical(node: str, expected: set[str]) -> str:
