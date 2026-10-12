@@ -15,7 +15,7 @@ from lab_commons.hpc.builds import Builds, key_of, read_builds
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of
 from lab_commons.log import emit
 
-__all__ = ['Step', 'Tools', 'build', 'declared', 'update']
+__all__ = ['Step', 'Tools', 'build', 'declared', 'overlay_argv', 'update']
 
 
 @dataclass(frozen=True)
@@ -133,13 +133,22 @@ def _lab_commons(
     if _stamped(stamp, key):
         emit(f'  {checkout.name}: lab-commons current ({head[:12]})')
         return 0
-    python = checkout / '.venv' / 'bin' / 'python'
-    argv = [*step.tools.uv, 'pip', 'install', '--no-config', '--python', str(python)]
-    argv += ['--reinstall-package', LAB_COMMONS, f'{LAB_COMMONS} @ {lab.as_uri()}']
+    argv = overlay_argv(step.tools.uv, checkout / '.venv' / 'bin' / 'python', lab)
     if rc := step.change(f'{checkout.name}: lab-commons {head[:12]} from {lab}', argv, cwd=home, env=env):
         return rc
     stamp.write_text(key, encoding='utf-8')
     return 0
+
+
+def overlay_argv(uv: Sequence[str], python: Path, lab: Path) -> list[str]:
+    """Install the lab-commons checkout *lab* into the venv of *python*, over whatever sha it pins.
+
+    Run OUTSIDE the project (``--no-config``): inside it, uv's sources would put the pin back. The deploy
+    runs it once per served repo, and a serve tick whose kit moved runs it for its own venv
+    (:mod:`lab_commons.dev.servekit`).
+    """
+    return [*uv, 'pip', 'install', '--no-config', '--python', str(python), '--reinstall-package', LAB_COMMONS,
+            f'{LAB_COMMONS} @ {lab.as_uri()}']  # fmt: skip
 
 
 def _native(step: Step, home: Path, checkout: Path, builds: Builds, env: dict[str, str]) -> int:
