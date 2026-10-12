@@ -348,7 +348,7 @@ def test_a_repo_declaring_rclone_artefacts_has_its_remote_checked_and_a_missing_
     alpha = box.home / deploy_spec.DEFAULT_ROOT / 'alpha' / 'pyproject.toml'
     alpha.write_text(
         '[tool.lab_commons.hpc]\ninstall = "uv sync"\n'
-        '[tool.lab_commons.artefacts]\nbackend = "rclone"\nremote = "hpc-data:motronics"\n',
+        '[tool.lab_commons.artefacts]\nbackend = "rclone"\nremote = "hpc-data:consumer-a"\n',
         encoding='utf-8',
     )
     rclone = (sys.executable, str(_write(tmp_path / 'rclone.py', FAKE_RCLONE)), str(box.calls), state)
