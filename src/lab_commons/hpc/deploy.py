@@ -1,13 +1,17 @@
 """``python -m lab_commons.hpc deploy`` -- make this account's login host a ``forge serve`` host, in one run.
 
-WHAT IS DEPLOYED IS DATA, declared once in lab-commons' own ``pyproject.toml`` (``--config``)::
+WHAT IS DEPLOYED IS DATA in this account's machine file (:mod:`lab_commons.config`, ``[deploy]``) -- never in
+a tracked file, since the forge, its repos and the login host are private to the deployment::
 
-    [tool.lab_commons.deploy]
+    [deploy]
     host = "<login host>"          # the ONE host whose crontab serves this account (cron is per host)
     root = "src"                   # the served checkouts live in ~/<root>/<name>
     python = "3.13"                # a uv-managed CPython: manylinux wheels run on an old glibc
     serve = ["--mode", "integrate"]
     repos = [{ name = "<repo>", url = "<https url>", ref = "<branch>" }, ...]
+
+The first run DECLARES it with ``--host <host> --repo <name>=<url>@<ref> ...`` (written once; a later run
+with flags that disagree is refused, naming the file); every later run reads it.
 
 STEPS, each one reporting, each one safe to repeat: refuse off the declared host; check every repo's
 credential with ``git ls-remote`` BEFORE anything changes; clone or update each checkout; build its
@@ -29,13 +33,25 @@ import subprocess
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Final
 
+from lab_commons.config import config_path
 from lab_commons.hpc.builds import Builds, key_of, read_builds
 from lab_commons.log import emit
 
-__all__ = ['MARK', 'Deployment', 'Repo', 'Tools', 'cmake_needed', 'cron_lines', 'deploy', 'load', 'merge_crontab']
+__all__ = [
+    'MARK',
+    'Deployment',
+    'Repo',
+    'Tools',
+    'cmake_needed',
+    'cron_lines',
+    'deploy',
+    'load',
+    'merge_crontab',
+    'render',
+]
 
 #: Every crontab line this tool owns ends with this comment plus the repo's name.
 MARK: Final = '# lab-commons-deploy:'
@@ -47,6 +63,13 @@ _CREDENTIAL_REMEDY: Final = (
 )
 
 _which = shutil.which
+
+DEFAULT_ROOT: Final = 'src'
+DEFAULT_PYTHON: Final = '3.13'
+DEFAULT_SERVE: Final = ('--mode', 'integrate')
+
+#: The interpreter a cron line runs: the line is a Linux login node's, so the POSIX venv layout is the only one.
+_VENV_PYTHON: Final = str(PurePosixPath('.venv', 'bin', 'python'))
 
 
 @dataclass(frozen=True)
@@ -60,7 +83,7 @@ class Repo:
 
 @dataclass(frozen=True)
 class Deployment:
-    """The ``[tool.lab_commons.deploy]`` table."""
+    """The ``[deploy]`` table of the machine file."""
 
     host: str
     root: str
@@ -79,23 +102,47 @@ class Tools:
     sh: tuple[str, ...] = ('bash', '-lc')
 
 
-def load(path: Path) -> Deployment:
-    """The deployment *path* declares; a missing table or key is refused by name."""
-    raw = tomllib.loads(path.read_text(encoding='utf-8')).get('tool', {}).get('lab_commons', {}).get('deploy')
+def load(path: Path) -> Deployment | None:
+    """The ``[deploy]`` table of the machine file at *path*; ``None`` when undeclared, a missing key refused."""
+    raw = tomllib.loads(path.read_text(encoding='utf-8')).get('deploy') if path.is_file() else None
     if not raw:
-        msg = f'{path} declares no [tool.lab_commons.deploy] table; run from a lab-commons checkout or pass --config'
-        raise ValueError(msg)
+        return None
     try:
         return Deployment(
             host=raw['host'],
-            root=raw['root'],
-            python=raw['python'],
-            serve=tuple(raw['serve']),
+            root=raw.get('root', DEFAULT_ROOT),
+            python=raw.get('python', DEFAULT_PYTHON),
+            serve=tuple(raw.get('serve', DEFAULT_SERVE)),
             repos=tuple(Repo(r['name'], r['url'], r['ref']) for r in raw['repos']),
         )
     except KeyError as missing:
-        msg = f'[tool.lab_commons.deploy] in {path} lacks {missing}'
+        msg = f'[deploy] in {path} lacks {missing}'
         raise ValueError(msg) from None
+
+
+def _toml(value: str) -> str:
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def render(spec: Deployment) -> str:
+    """*spec* as the ``[deploy]`` TOML table :func:`load` reads back."""
+    repos = ''.join(
+        f'  {{ name = {_toml(r.name)}, url = {_toml(r.url)}, ref = {_toml(r.ref)} }},\n' for r in spec.repos
+    )
+    serve = ', '.join(_toml(a) for a in spec.serve)
+    return (
+        f'\n[deploy]\nhost = {_toml(spec.host)}\nroot = {_toml(spec.root)}\npython = {_toml(spec.python)}\n'
+        f'serve = [{serve}]\nrepos = [\n{repos}]\n'
+    )
+
+
+def _repo(text: str) -> Repo:
+    name, _, rest = text.partition('=')
+    url, _, ref = rest.rpartition('@')
+    if not (name and url.startswith('https://') and ref):
+        msg = f'--repo {text!r}: expected <name>=<https url>@<branch>'
+        raise argparse.ArgumentTypeError(msg)
+    return Repo(name, url, ref)
 
 
 def cron_lines(spec: Deployment, home: Path) -> list[str]:
@@ -124,7 +171,7 @@ def _tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool) -> str
     command = (
         f'PATH={path}; cd {shlex.quote(str(_checkout(spec, home, repo)))} && '
         f'flock -n {shlex.quote(str(cache / f"lab-forge-{repo.name}.lock"))} '
-        f'.venv/bin/python -m lab_commons.dev.forge serve {serve}'
+        f'{_VENV_PYTHON} -m lab_commons.dev.forge serve {serve}'
     )
     return command + (f' >> {shlex.quote(str(cache / f"lab-forge-{repo.name}.log"))} 2>&1' if log else '')
 
@@ -140,7 +187,7 @@ class _Step:
         self.tools, self.dry = tools, dry
 
     def read(self, argv: Sequence[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)
+        return subprocess.run(argv, input=stdin, capture_output=True, text=True, encoding='utf-8', check=False)
 
     def change(
         self,
@@ -160,6 +207,8 @@ class _Step:
             input=stdin,
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             check=False,
             cwd=cwd,
             env={**os.environ, **(env or {})},
@@ -261,13 +310,45 @@ def _crontab(step: _Step, lines: Sequence[str]) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc deploy', description=__doc__.splitlines()[0])
-    parser.add_argument(
-        '--config', type=Path, default=Path('pyproject.toml'), help='the file declaring [tool.lab_commons.deploy]'
-    )
+    parser = argparse.ArgumentParser(prog='lab_commons.hpc deploy', description=__doc__.splitlines()[0])
+    parser.add_argument('--config', type=Path, help='the machine file holding [deploy] (default: lab_commons.config)')
+    parser.add_argument('--host', help='declare: the one login host serving this account')
+    parser.add_argument('--repo', type=_repo, action='append', default=[], help='declare: <name>=<https url>@<branch>')
+    parser.add_argument('--root', default=DEFAULT_ROOT, help='declare: checkouts live in ~/<root>/<name>')
+    parser.add_argument('--python', default=DEFAULT_PYTHON, help='declare: the uv-managed interpreter request')
     parser.add_argument('--dry-run', action='store_true', help='print every action; change nothing')
     parser.add_argument('--remove', action='store_true', help='delete the marked crontab lines only')
     return parser
+
+
+def _resolve(args: argparse.Namespace, path: Path) -> Deployment | str:
+    """The declared deployment (stored, else from the flags); a refusal is returned as its message."""
+    stored = load(path)
+    if not (args.host or args.repo):
+        return stored or (
+            f'no [deploy] in {path}: declare it once with --host <login host> --repo <name>=<https url>@<branch> ...'
+        )
+    if not (args.host and args.repo):
+        return 'a declaration needs both --host and at least one --repo'
+    given = Deployment(args.host, args.root, args.python, DEFAULT_SERVE, tuple(args.repo))
+    if stored is not None and stored != given:
+        return f'{path} already declares a different [deploy]; edit it there, or run without --host/--repo'
+    return given
+
+
+def _declare(step: _Step, spec: Deployment, path: Path) -> int:
+    """Store a first declaration once the host and every credential have passed."""
+    if load(path) is not None:
+        return 0
+    emit('[declare]')
+    if step.dry:
+        emit(f'  [dry-run] declare [deploy] in {path}')
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a', encoding='utf-8') as out:
+        out.write(render(spec))
+    emit(f'  declared [deploy] in {path}')
+    return 0
 
 
 def _credentials(step: _Step, spec: Deployment) -> int:
@@ -325,13 +406,17 @@ def _tick(step: _Step, spec: Deployment, home: Path, repo: Repo) -> int:
 def deploy(argv: Sequence[str], *, home: Path, hostname: str, tools: Tools | None = None) -> int:
     """Run the deployment *argv* asks for; 0 done, 2 refused (the message names the remedy)."""
     args = _parser().parse_args(list(argv))
-    spec = load(args.config)
+    path = args.config or config_path()
+    spec = _resolve(args, path)
+    if isinstance(spec, str):
+        emit(f'deploy refused: {spec}', err=True)
+        return 2
     short = hostname.split('.', 1)[0]
     emit(f'[host] account {os.environ.get("USER") or os.environ.get("USERNAME", "?")} on {short}')
     if short != spec.host:
         emit(
-            f'deploy refused: this account serves from {spec.host} ([tool.lab_commons.deploy] host in '
-            f'{args.config}); this is {short}. ssh to {spec.host} and run it there.',
+            f'deploy refused: this account serves from {spec.host} ([deploy] host in '
+            f'{path}); this is {short}. ssh to {spec.host} and run it there.',
             err=True,
         )
         return 2
@@ -341,6 +426,7 @@ def deploy(argv: Sequence[str], *, home: Path, hostname: str, tools: Tools | Non
         return _crontab(step, [])
     phases = (
         lambda: _credentials(step, spec),
+        lambda: _declare(step, spec, path),
         lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', _update),
         lambda: _cmake(step, spec, home),
         lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', _build),

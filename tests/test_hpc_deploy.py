@@ -7,6 +7,7 @@ box: it logs its argv to ``calls.log`` and keeps its state in files under the te
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -15,6 +16,7 @@ import pytest
 from lab_commons.hpc import deploy
 
 URL: Final = 'https://forge.example/team'
+DECLARE: Final = ('--host', 'login02', '--repo', f'alpha={URL}/alpha.git@trunk', '--repo', f'beta={URL}/beta.git@trunk')
 
 FAKE_CRONTAB: Final = r"""
 import pathlib, sys
@@ -48,128 +50,133 @@ with pathlib.Path(sys.argv[1]).open('a') as f: f.write(sys.argv[2] + ' ' + ' '.j
 """
 
 
+@dataclass(frozen=True)
+class Box:
+    """One fake login node: its home, machine file, crontab state and the log every fake appends to."""
+
+    home: Path
+    machine: Path
+    crontab: Path
+    calls: Path
+    tools: deploy.Tools
+
+    def run(self, *argv: str, host: str = 'login02.int.cluster') -> int:
+        return deploy.deploy([*argv, '--config', str(self.machine)], home=self.home, hostname=host, tools=self.tools)
+
+    def logged(self) -> str:
+        return self.calls.read_text(encoding='utf-8') if self.calls.exists() else ''
+
+
 def _write(path: Path, text: str) -> Path:
     path.write_text(text, encoding='utf-8')
     return path
 
 
 @pytest.fixture
-def box(tmp_path: Path) -> dict[str, object]:
+def box(tmp_path: Path) -> Box:
     home = tmp_path / 'home'
     home.mkdir()
     calls = tmp_path / 'calls.log'
-    config = _write(
-        tmp_path / 'pyproject.toml',
-        f"""
-[tool.lab_commons.deploy]
-host = "login02"
-root = "src"
-python = "3.13"
-serve = ["--mode", "integrate"]
-repos = [
-  {{ name = "alpha", url = "{URL}/alpha.git", ref = "integrate/main" }},
-  {{ name = "beta", url = "{URL}/beta.git", ref = "integrate/main" }},
-]
-""",
-    )
-    crontab_py = _write(tmp_path / 'crontab.py', FAKE_CRONTAB)
-    git_py = _write(tmp_path / 'git.py', FAKE_GIT)
-    logger = _write(tmp_path / 'logger.py', FAKE_LOGGER)
+    crontab = tmp_path / 'crontab.txt'
+    logger = str(_write(tmp_path / 'logger.py', FAKE_LOGGER))
     tools = deploy.Tools(
-        git=(sys.executable, str(git_py), str(calls)),
-        crontab=(sys.executable, str(crontab_py), str(tmp_path / 'crontab.txt')),
-        uv=(sys.executable, str(logger), str(calls), 'uv'),
-        sh=(sys.executable, str(logger), str(calls), 'sh'),
+        git=(sys.executable, str(_write(tmp_path / 'git.py', FAKE_GIT)), str(calls)),
+        crontab=(sys.executable, str(_write(tmp_path / 'crontab.py', FAKE_CRONTAB)), str(crontab)),
+        uv=(sys.executable, logger, str(calls), 'uv'),
+        sh=(sys.executable, logger, str(calls), 'sh'),
     )
-    return {'home': home, 'calls': calls, 'config': config, 'tools': tools, 'tmp': tmp_path}
+    return Box(home, tmp_path / 'machine' / 'config.toml', crontab, calls, tools)
 
 
-def _deploy(box: dict[str, object], *argv: str, host: str = 'login02.int.cluster') -> int:
-    return deploy.deploy(
-        [*argv, '--config', str(box['config'])],
-        home=box['home'],  # type: ignore[arg-type]
-        hostname=host,
-        tools=box['tools'],  # type: ignore[arg-type]
-    )
-
-
-def _crontab(box: dict[str, object]) -> str:
-    return (box['tmp'] / 'crontab.txt').read_text(encoding='utf-8')  # type: ignore[operator]
-
-
-def test_twice_gives_one_marked_line_per_repo_and_keeps_the_users_own(box: dict[str, object]) -> None:
-    _write(box['tmp'] / 'crontab.txt', '0 1 * * * echo mine\n')  # type: ignore[operator]
-    assert _deploy(box) == 0
-    assert _deploy(box) == 0
-    lines = _crontab(box).splitlines()
+def test_twice_gives_one_marked_line_per_repo_and_keeps_the_users_own(box: Box) -> None:
+    _write(box.crontab, '0 1 * * * echo mine\n')
+    assert box.run(*DECLARE) == 0
+    assert box.run() == 0  # the second run reads the declaration the first one stored
+    lines = box.crontab.read_text(encoding='utf-8').splitlines()
     assert lines[0] == '0 1 * * * echo mine'
     marked = [line for line in lines if deploy.MARK in line]
-    assert len(marked) == 2
     assert {line.rsplit(deploy.MARK, 1)[1] for line in marked} == {'alpha', 'beta'}
+    assert len(marked) == 2
     alpha = next(line for line in marked if line.endswith('alpha'))
     assert alpha.startswith('*/5 * * * * ')
     assert 'flock -n' in alpha
     assert 'lab_commons.dev.forge serve --mode integrate' in alpha
-    calls = Path(box['calls']).read_text(encoding='utf-8')  # type: ignore[arg-type]
+    calls = box.logged()
     assert calls.count('git clone') == 2  # the second run updates, never re-clones
-    assert 'git -C' in calls
-    assert 'fetch' in calls
+    assert 'fetch -q origin +refs/heads/trunk' in calls
 
 
-def test_remove_deletes_only_the_marked_lines(box: dict[str, object]) -> None:
-    _write(box['tmp'] / 'crontab.txt', '0 1 * * * echo mine\n')  # type: ignore[operator]
-    assert _deploy(box) == 0
-    assert _deploy(box, '--remove') == 0
-    assert _crontab(box) == '0 1 * * * echo mine\n'
-
-
-def test_the_wrong_host_is_refused_naming_the_declared_one(
-    box: dict[str, object], capsys: pytest.CaptureFixture[str]
+def test_the_declaration_is_stored_once_and_a_disagreeing_one_is_refused(
+    box: Box, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert _deploy(box, host='login01.int.cluster') == 2
+    assert box.run(*DECLARE) == 0
+    stored = deploy.load(box.machine)
+    assert stored is not None
+    assert stored.host == 'login02'
+    assert [r.name for r in stored.repos] == ['alpha', 'beta']
+    assert box.run(*DECLARE) == 0
+    assert box.machine.read_text(encoding='utf-8').count('[deploy]') == 1
+    assert box.run('--host', 'login02', '--repo', f'gamma={URL}/gamma.git@trunk') == 2
+    assert str(box.machine) in capsys.readouterr().err
+
+
+def test_an_undeclared_box_names_the_flags(box: Box, capsys: pytest.CaptureFixture[str]) -> None:
+    assert box.run() == 2
+    assert '--host <login host> --repo' in capsys.readouterr().err
+
+
+def test_remove_deletes_only_the_marked_lines(box: Box) -> None:
+    _write(box.crontab, '0 1 * * * echo mine\n')
+    assert box.run(*DECLARE) == 0
+    assert box.run('--remove') == 0
+    assert box.crontab.read_text(encoding='utf-8') == '0 1 * * * echo mine\n'
+
+
+def test_the_wrong_host_is_refused_naming_the_declared_one(box: Box, capsys: pytest.CaptureFixture[str]) -> None:
+    assert box.run(*DECLARE, host='login01.int.cluster') == 2
     err = capsys.readouterr().err
     assert 'login02' in err
-    assert '[tool.lab_commons.deploy]' in err
-    assert not Path(box['calls']).exists()  # type: ignore[arg-type]
+    assert '[deploy]' in err
+    assert box.logged() == ''
+    assert not box.machine.exists()
 
 
 def test_a_credential_failure_names_the_remedy_and_changes_nothing(
-    box: dict[str, object], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    box: Box, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('FAKE_GIT_DENY', 'beta')
-    assert _deploy(box) == 2
+    assert box.run(*DECLARE) == 2
     err = capsys.readouterr().err
     assert 'beta' in err
     assert '~/.git-credentials' in err
-    calls = Path(box['calls']).read_text(encoding='utf-8')  # type: ignore[arg-type]
-    assert 'clone' not in calls
-    assert not (box['tmp'] / 'crontab.txt').exists()  # type: ignore[operator]
+    assert 'clone' not in box.logged()
+    assert not box.crontab.exists()
 
 
-def test_dry_run_touches_nothing_and_prints_every_action(
-    box: dict[str, object], capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert _deploy(box, '--dry-run') == 0
+def test_dry_run_touches_nothing_and_prints_every_action(box: Box, capsys: pytest.CaptureFixture[str]) -> None:
+    assert box.run(*DECLARE, '--dry-run') == 0
     out = capsys.readouterr().out
-    assert not (box['tmp'] / 'crontab.txt').exists()  # type: ignore[operator]
-    assert list(Path(box['home']).iterdir()) == []  # type: ignore[arg-type]
-    calls = Path(box['calls']).read_text(encoding='utf-8')  # type: ignore[arg-type]
-    assert {line.split()[0] + ' ' + line.split()[1] for line in calls.splitlines()} <= {
-        'git ls-remote',
-        'crontab -l',
-    }
-    for action in ('git clone', 'uv sync --extra dev', 'crontab', 'tick'):
+    assert not box.crontab.exists()
+    assert not box.machine.exists()
+    assert list(box.home.iterdir()) == []
+    assert {' '.join(line.split()[:2]) for line in box.logged().splitlines()} <= {'git ls-remote', 'crontab -l'}
+    for action in ('declare [deploy]', 'git clone', 'uv sync --extra dev', 'crontab', 'tick'):
         assert action in out
-    assert out.count('[dry-run]') >= 6
+    assert out.count('[dry-run]') >= 7
 
 
-def test_the_venv_is_built_once_per_declaration(box: dict[str, object]) -> None:
-    assert _deploy(box) == 0
-    assert _deploy(box) == 0
-    calls = Path(box['calls']).read_text(encoding='utf-8')  # type: ignore[arg-type]
-    assert calls.count('uv sync --extra dev') == 2  # one per repo, not per run
+def test_the_venv_is_built_once_per_declaration(box: Box) -> None:
+    assert box.run(*DECLARE) == 0
+    assert box.run() == 0
+    assert box.logged().count('uv sync --extra dev') == 2  # one per repo, not per run
 
 
 def test_cmake_comes_from_uv_only_when_declared_and_absent() -> None:
     assert deploy.cmake_needed([('a', ('cargo', 'cmake')), ('b', ('cc',))], which=lambda _n: None) == ['a']
     assert deploy.cmake_needed([('a', ('cmake',))], which=lambda _n: '/usr/bin/cmake') == []
+
+
+def test_the_rendered_declaration_reads_back(tmp_path: Path) -> None:
+    spec = deploy.Deployment('h', 'src', '3.13', ('--mode', 'integrate'), (deploy.Repo('a', 'https://x/a"b', 'r'),))
+    path = _write(tmp_path / 'config.toml', deploy.render(spec))
+    assert deploy.load(path) == spec
