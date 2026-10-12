@@ -45,9 +45,9 @@ log = pathlib.Path(sys.argv[1])
 args = sys.argv[2:]
 with log.open('a') as f: f.write('git ' + ' '.join(args) + '\n')
 if args[:3] == ['config', '--global', '--get']:
-    helper = os.environ.get('FAKE_GIT_HELPER', 'store')
-    sys.stdout.write(helper + '\n' if helper else '')
-    sys.exit(0 if helper else 1)
+    helper = os.environ.get('FAKE_GIT_HELPER', 'store')  # 'unset': an empty variable does not survive Windows
+    sys.stdout.write('' if helper == 'unset' else helper + '\n')
+    sys.exit(1 if helper == 'unset' else 0)
 if 'rev-parse' in args and args[-1] == 'HEAD':
     head = pathlib.Path(args[args.index('-C') + 1], '.git', 'HEAD_SHA')
     sys.stdout.write(head.read_text() if head.exists() else 'a' * 40)
@@ -195,7 +195,7 @@ def test_dry_run_touches_nothing_and_prints_every_action(box: Box, capsys: pytes
     out = capsys.readouterr().out
     assert not box.crontab.exists()
     assert not box.machine.exists()
-    assert list(box.home.iterdir()) == []
+    assert [p.name for p in box.home.iterdir()] == ['.git-credentials'], 'only the token the fixture stored'
     reads = {'git ls-remote', 'git config', 'crontab -l', 'id -un', 'sacctmgr -nP'}
     assert {' '.join(line.split()[:2]) for line in box.logged().splitlines()} <= reads
     for action in ('declare [deploy]', 'git clone', 'uv sync --extra dev', 'crontab', 'tick'):
@@ -254,7 +254,7 @@ def test_a_token_the_api_refuses_is_refused_before_anything_changes(
 def test_an_unset_credential_helper_is_refused_naming_the_fix(
     box: Box, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv('FAKE_GIT_HELPER', '')
+    monkeypatch.setenv('FAKE_GIT_HELPER', 'unset')
     assert box.run(*DECLARE) == 2
     assert 'git config --global credential.helper store' in capsys.readouterr().err
     assert 'ls-remote' not in box.logged()
