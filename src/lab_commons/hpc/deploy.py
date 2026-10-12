@@ -26,35 +26,33 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import shutil
 import socket
-import subprocess
-import tomllib
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Final
 
 from lab_commons.config import config_path
-from lab_commons.hpc.builds import Builds, key_of, read_builds
+from lab_commons.hpc.deploy_spec import (
+    DEFAULT_PYTHON,
+    DEFAULT_ROOT,
+    DEFAULT_SERVE,
+    Deployment,
+    Repo,
+    checkout_of,
+    cmake_needed,
+    cron_lines,
+    load,
+    merge_crontab,
+    parse_repo,
+    render,
+    tick_command,
+)
+from lab_commons.hpc.deploy_steps import Step, Tools, build, declared, update
 from lab_commons.log import emit
 
-__all__ = [
-    'MARK',
-    'Deployment',
-    'Repo',
-    'Tools',
-    'cmake_needed',
-    'cron_lines',
-    'deploy',
-    'load',
-    'merge_crontab',
-    'render',
-]
+__all__ = ['deploy', 'main']
 
-#: Every crontab line this tool owns ends with this comment plus the repo's name.
-MARK: Final = '# lab-commons-deploy:'
 
 _CREDENTIAL_REMEDY: Final = (
     'store your OWN forge token for it once: `git config --global credential.helper store`, then '
@@ -64,237 +62,8 @@ _CREDENTIAL_REMEDY: Final = (
 
 _which = shutil.which
 
-DEFAULT_ROOT: Final = 'src'
-DEFAULT_PYTHON: Final = '3.13'
-DEFAULT_SERVE: Final = ('--mode', 'integrate')
 
-#: The interpreter a cron line runs: the line is a Linux login node's, so the POSIX venv layout is the only one.
-_VENV_PYTHON: Final = str(PurePosixPath('.venv', 'bin', 'python'))
-
-
-@dataclass(frozen=True)
-class Repo:
-    """One served repository: its checkout name, HTTPS remote and the branch the checkout follows."""
-
-    name: str
-    url: str
-    ref: str
-
-
-@dataclass(frozen=True)
-class Deployment:
-    """The ``[deploy]`` table of the machine file."""
-
-    host: str
-    root: str
-    python: str
-    serve: tuple[str, ...]
-    repos: tuple[Repo, ...]
-
-
-@dataclass(frozen=True)
-class Tools:
-    """The argv prefix of every program the deploy runs; a test swaps in fakes."""
-
-    git: tuple[str, ...] = ('git',)
-    crontab: tuple[str, ...] = ('crontab',)
-    uv: tuple[str, ...] = ('uv',)
-    sh: tuple[str, ...] = ('bash', '-lc')
-
-
-def load(path: Path) -> Deployment | None:
-    """The ``[deploy]`` table of the machine file at *path*; ``None`` when undeclared, a missing key refused."""
-    raw = tomllib.loads(path.read_text(encoding='utf-8')).get('deploy') if path.is_file() else None
-    if not raw:
-        return None
-    try:
-        return Deployment(
-            host=raw['host'],
-            root=raw.get('root', DEFAULT_ROOT),
-            python=raw.get('python', DEFAULT_PYTHON),
-            serve=tuple(raw.get('serve', DEFAULT_SERVE)),
-            repos=tuple(Repo(r['name'], r['url'], r['ref']) for r in raw['repos']),
-        )
-    except KeyError as missing:
-        msg = f'[deploy] in {path} lacks {missing}'
-        raise ValueError(msg) from None
-
-
-def _toml(value: str) -> str:
-    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
-
-
-def render(spec: Deployment) -> str:
-    """*spec* as the ``[deploy]`` TOML table :func:`load` reads back."""
-    repos = ''.join(
-        f'  {{ name = {_toml(r.name)}, url = {_toml(r.url)}, ref = {_toml(r.ref)} }},\n' for r in spec.repos
-    )
-    serve = ', '.join(_toml(a) for a in spec.serve)
-    return (
-        f'\n[deploy]\nhost = {_toml(spec.host)}\nroot = {_toml(spec.root)}\npython = {_toml(spec.python)}\n'
-        f'serve = [{serve}]\nrepos = [\n{repos}]\n'
-    )
-
-
-def _repo(text: str) -> Repo:
-    name, _, rest = text.partition('=')
-    url, _, ref = rest.rpartition('@')
-    if not (name and url.startswith('https://') and ref):
-        msg = f'--repo {text!r}: expected <name>=<https url>@<branch>'
-        raise argparse.ArgumentTypeError(msg)
-    return Repo(name, url, ref)
-
-
-def cron_lines(spec: Deployment, home: Path) -> list[str]:
-    """One marked line per served repo: every 5 min, ``flock -n`` so a host never overlaps itself."""
-    return [f'*/5 * * * * {_tick_command(spec, home, repo, log=True)} {MARK}{repo.name}' for repo in spec.repos]
-
-
-def merge_crontab(current: str, lines: Sequence[str]) -> str:
-    """*current* without any line this tool marked, plus *lines*; every other line kept in place."""
-    kept = [line for line in current.splitlines() if MARK not in line]
-    text = '\n'.join([*kept, *lines])
-    return text + '\n' if text else ''
-
-
-def cmake_needed(declared: Sequence[tuple[str, Sequence[str]]], *, which: Callable[[str], str | None]) -> list[str]:
-    """The repos whose ``needs`` name ``cmake`` when the host has none on PATH."""
-    if which('cmake') is not None:
-        return []
-    return [name for name, needs in declared if 'cmake' in needs]
-
-
-def _tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool) -> str:
-    path = ':'.join([str(home / '.local/bin'), str(home / '.cargo/bin'), '/usr/local/bin', '/usr/bin', '/bin'])
-    cache = home / '.cache'
-    serve = ' '.join(shlex.quote(a) for a in spec.serve)
-    command = (
-        f'PATH={path}; cd {shlex.quote(str(_checkout(spec, home, repo)))} && '
-        f'flock -n {shlex.quote(str(cache / f"lab-forge-{repo.name}.lock"))} '
-        f'{_VENV_PYTHON} -m lab_commons.dev.forge serve {serve}'
-    )
-    return command + (f' >> {shlex.quote(str(cache / f"lab-forge-{repo.name}.log"))} 2>&1' if log else '')
-
-
-def _checkout(spec: Deployment, home: Path, repo: Repo) -> Path:
-    return home / spec.root / repo.name
-
-
-class _Step:
-    """Runs or, under ``--dry-run``, only prints each changing action; read-only calls always run."""
-
-    def __init__(self, tools: Tools, *, dry: bool) -> None:
-        self.tools, self.dry = tools, dry
-
-    def read(self, argv: Sequence[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(argv, input=stdin, capture_output=True, text=True, encoding='utf-8', check=False)
-
-    def change(
-        self,
-        what: str,
-        argv: Sequence[str],
-        *,
-        stdin: str | None = None,
-        cwd: Path | None = None,
-        env: Mapping[str, str] | None = None,
-    ) -> int:
-        if self.dry:
-            emit(f'  [dry-run] {what}')
-            return 0
-        emit(f'  {what}')
-        done = subprocess.run(
-            argv,
-            input=stdin,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            check=False,
-            cwd=cwd,
-            env={**os.environ, **(env or {})},
-        )
-        for line in (done.stdout + done.stderr).strip().splitlines()[-20:]:
-            emit(f'    | {line}')
-        return done.returncode
-
-
-def _key(step: _Step, checkout: Path, paths: Sequence[str], *recipe: str) -> str:
-    oids = {}
-    for path in paths:
-        done = step.read([*step.tools.git, '-C', str(checkout), 'rev-parse', '--verify', '-q', f'HEAD:{path}'])
-        oids[path] = done.stdout.strip() if done.returncode == 0 else 'absent'
-    return key_of(oids, *recipe)
-
-
-def _declared(checkout: Path) -> Builds:
-    pyproject = checkout / 'pyproject.toml'
-    return read_builds(pyproject.read_text(encoding='utf-8')) if pyproject.is_file() else Builds()
-
-
-def _stamped(path: Path, key: str) -> bool:
-    return path.is_file() and path.read_text(encoding='utf-8') == key
-
-
-def _build(step: _Step, spec: Deployment, home: Path, repo: Repo) -> int:
-    checkout = _checkout(spec, home, repo)
-    if step.dry:
-        step.change(f'{repo.name}: build .venv with its [tool.lab_commons.hpc] install (e.g. uv sync --extra dev)', [])
-        step.change(f'{repo.name}: its native build, when declared, into {checkout / ".lab-native"}', [])
-        return 0
-    builds = _declared(checkout)
-    if not builds.install:
-        emit(f'  {repo.name} declares no [tool.lab_commons.hpc] install; refused', err=True)
-        return 2
-    env = {'UV_PYTHON': spec.python, 'UV_PYTHON_PREFERENCE': 'only-managed', 'UV_CACHE_DIR': str(home / 'ci/uv-cache')}
-    inputs = builds.dependency_inputs or ('pyproject.toml', 'uv.lock')
-    env_key = _key(step, checkout, inputs, builds.install, spec.python, *builds.needs)
-    stamp = checkout / '.venv' / '.lab-deploy-env'
-    if _stamped(stamp, env_key):
-        emit(f'  {repo.name}: .venv current (key {env_key[:12]})')
-    else:
-        if rc := step.change(f'{repo.name}: {builds.install}', [*step.tools.sh, builds.install], cwd=checkout, env=env):
-            return rc
-        stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.write_text(env_key, encoding='utf-8')
-    return _native(step, home, checkout, builds, {**env, 'ENV_KEY': env_key}) if builds.native_build else 0
-
-
-def _native(step: _Step, home: Path, checkout: Path, builds: Builds, env: dict[str, str]) -> int:
-    """The repo's native build into ``<checkout>/.lab-native``, sharing the cluster runs' cargo target."""
-    key = _key(step, checkout, builds.native_inputs, builds.native_build, env['UV_PYTHON'], env.pop('ENV_KEY'))
-    out = checkout / '.lab-native'
-    stamp = out / '.lab-deploy-native'
-    if _stamped(stamp, key):
-        emit(f'  {checkout.name}: native build current (key {key[:12]})')
-        return 0
-    script = f'mkdir -p "$CARGO_TARGET_DIR" && exec 8> "$CARGO_TARGET_DIR.lock" && flock 8 && {builds.native_build}'
-    env |= {'LAB_CI_NATIVE': str(out), 'CARGO_TARGET_DIR': str(home / 'ci/cargo-target')}
-    if rc := step.change(
-        f'{checkout.name}: native {builds.native_build}', [*step.tools.sh, script], cwd=checkout, env=env
-    ):
-        return rc
-    out.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(key, encoding='utf-8')
-    return 0
-
-
-def _update(step: _Step, spec: Deployment, home: Path, repo: Repo) -> int:
-    checkout, git = _checkout(spec, home, repo), step.tools.git
-    if not (checkout / '.git').exists():
-        argv = [*git, 'clone', '-q', '-b', repo.ref, repo.url, str(checkout)]
-        return step.change(f'git clone -b {repo.ref} {repo.url} {checkout}', argv)
-    remote = f'refs/remotes/origin/{repo.ref}'
-    rc = step.change(
-        f'{repo.name}: git fetch origin {repo.ref}',
-        [*git, '-C', str(checkout), 'fetch', '-q', 'origin', f'+refs/heads/{repo.ref}:{remote}'],
-    )
-    return rc or step.change(
-        f'{repo.name}: git checkout -B {repo.ref} origin/{repo.ref}',
-        [*git, '-C', str(checkout), 'checkout', '-q', '-B', repo.ref, remote],
-    )
-
-
-def _crontab(step: _Step, lines: Sequence[str]) -> int:
+def _crontab(step: Step, lines: Sequence[str]) -> int:
     listed = step.read([*step.tools.crontab, '-l'])
     current = listed.stdout if listed.returncode == 0 else ''
     if listed.returncode and 'no crontab' not in listed.stderr:
@@ -313,7 +82,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='lab_commons.hpc deploy', description=__doc__.splitlines()[0])
     parser.add_argument('--config', type=Path, help='the machine file holding [deploy] (default: lab_commons.config)')
     parser.add_argument('--host', help='declare: the one login host serving this account')
-    parser.add_argument('--repo', type=_repo, action='append', default=[], help='declare: <name>=<https url>@<branch>')
+    parser.add_argument(
+        '--repo', type=parse_repo, action='append', default=[], help='declare: <name>=<https url>@<branch>'
+    )
     parser.add_argument('--root', default=DEFAULT_ROOT, help='declare: checkouts live in ~/<root>/<name>')
     parser.add_argument('--python', default=DEFAULT_PYTHON, help='declare: the uv-managed interpreter request')
     parser.add_argument('--dry-run', action='store_true', help='print every action; change nothing')
@@ -336,7 +107,7 @@ def _resolve(args: argparse.Namespace, path: Path) -> Deployment | str:
     return given
 
 
-def _declare(step: _Step, spec: Deployment, path: Path) -> int:
+def _declare(step: Step, spec: Deployment, path: Path) -> int:
     """Store a first declaration once the host and every credential have passed."""
     if load(path) is not None:
         return 0
@@ -351,7 +122,7 @@ def _declare(step: _Step, spec: Deployment, path: Path) -> int:
     return 0
 
 
-def _credentials(step: _Step, spec: Deployment) -> int:
+def _credentials(step: Step, spec: Deployment) -> int:
     emit('[credentials] git ls-remote per served repo')
     denied = []
     for repo in spec.repos:
@@ -365,7 +136,7 @@ def _credentials(step: _Step, spec: Deployment) -> int:
     return 0
 
 
-def _each(step: _Step, spec: Deployment, home: Path, title: str, act: Callable[..., int]) -> int:
+def _each(step: Step, spec: Deployment, home: Path, title: str, act: Callable[..., int]) -> int:
     emit(title)
     for repo in spec.repos:
         if rc := act(step, spec, home, repo):
@@ -373,10 +144,10 @@ def _each(step: _Step, spec: Deployment, home: Path, title: str, act: Callable[.
     return 0
 
 
-def _cmake(step: _Step, spec: Deployment, home: Path) -> int:
+def _cmake(step: Step, spec: Deployment, home: Path) -> int:
     emit('[tools] cmake, when a repo needs it')
-    declared = [] if step.dry else [(r.name, _declared(_checkout(spec, home, r)).needs) for r in spec.repos]
-    wanting = cmake_needed(declared, which=_which)
+    needs = [] if step.dry else [(r.name, declared(checkout_of(spec, home, r)).needs) for r in spec.repos]
+    wanting = cmake_needed(needs, which=_which)
     if not wanting:
         return 0
     return step.change(
@@ -384,7 +155,7 @@ def _cmake(step: _Step, spec: Deployment, home: Path) -> int:
     )
 
 
-def _cron(step: _Step, spec: Deployment, home: Path) -> int:
+def _cron(step: Step, spec: Deployment, home: Path) -> int:
     emit('[cron] one marked line per served repo')
     if not step.dry:
         (home / '.cache').mkdir(parents=True, exist_ok=True)
@@ -394,8 +165,8 @@ def _cron(step: _Step, spec: Deployment, home: Path) -> int:
     return rc
 
 
-def _tick(step: _Step, spec: Deployment, home: Path, repo: Repo) -> int:
-    command = _tick_command(spec, home, repo, log=False)
+def _tick(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
+    command = tick_command(spec, home, repo, log=False)
     rc = step.change(f'tick {repo.name}: {command}', [*step.tools.sh, command])
     if not step.dry:
         busy = ' (1 also means a tick of this host is still running)' if rc == 1 else ''
@@ -420,16 +191,16 @@ def deploy(argv: Sequence[str], *, home: Path, hostname: str, tools: Tools | Non
             err=True,
         )
         return 2
-    step = _Step(tools or Tools(), dry=args.dry_run)
+    step = Step(tools or Tools(), dry=args.dry_run)
     if args.remove:
         emit('[cron] removing the marked lines')
         return _crontab(step, [])
     phases = (
         lambda: _credentials(step, spec),
         lambda: _declare(step, spec, path),
-        lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', _update),
+        lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', update),
         lambda: _cmake(step, spec, home),
-        lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', _build),
+        lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', build),
         lambda: _cron(step, spec, home),
         lambda: _each(step, spec, home, '[tick] one now, per repo', _tick),
     )

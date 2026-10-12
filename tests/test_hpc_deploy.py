@@ -13,7 +13,8 @@ from typing import Final
 
 import pytest
 
-from lab_commons.hpc import deploy
+from lab_commons.hpc import deploy, deploy_spec
+from lab_commons.hpc.deploy_steps import Tools
 
 URL: Final = 'https://forge.example/team'
 DECLARE: Final = ('--host', 'login02', '--repo', f'alpha={URL}/alpha.git@trunk', '--repo', f'beta={URL}/beta.git@trunk')
@@ -58,7 +59,7 @@ class Box:
     machine: Path
     crontab: Path
     calls: Path
-    tools: deploy.Tools
+    tools: Tools
 
     def run(self, *argv: str, host: str = 'login02.int.cluster') -> int:
         return deploy.deploy([*argv, '--config', str(self.machine)], home=self.home, hostname=host, tools=self.tools)
@@ -79,7 +80,7 @@ def box(tmp_path: Path) -> Box:
     calls = tmp_path / 'calls.log'
     crontab = tmp_path / 'crontab.txt'
     logger = str(_write(tmp_path / 'logger.py', FAKE_LOGGER))
-    tools = deploy.Tools(
+    tools = Tools(
         git=(sys.executable, str(_write(tmp_path / 'git.py', FAKE_GIT)), str(calls)),
         crontab=(sys.executable, str(_write(tmp_path / 'crontab.py', FAKE_CRONTAB)), str(crontab)),
         uv=(sys.executable, logger, str(calls), 'uv'),
@@ -94,8 +95,8 @@ def test_twice_gives_one_marked_line_per_repo_and_keeps_the_users_own(box: Box) 
     assert box.run() == 0  # the second run reads the declaration the first one stored
     lines = box.crontab.read_text(encoding='utf-8').splitlines()
     assert lines[0] == '0 1 * * * echo mine'
-    marked = [line for line in lines if deploy.MARK in line]
-    assert {line.rsplit(deploy.MARK, 1)[1] for line in marked} == {'alpha', 'beta'}
+    marked = [line for line in lines if deploy_spec.MARK in line]
+    assert {line.rsplit(deploy_spec.MARK, 1)[1] for line in marked} == {'alpha', 'beta'}
     assert len(marked) == 2
     alpha = next(line for line in marked if line.endswith('alpha'))
     assert alpha.startswith('*/5 * * * * ')
@@ -110,7 +111,7 @@ def test_the_declaration_is_stored_once_and_a_disagreeing_one_is_refused(
     box: Box, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert box.run(*DECLARE) == 0
-    stored = deploy.load(box.machine)
+    stored = deploy_spec.load(box.machine)
     assert stored is not None
     assert stored.host == 'login02'
     assert [r.name for r in stored.repos] == ['alpha', 'beta']
@@ -172,11 +173,13 @@ def test_the_venv_is_built_once_per_declaration(box: Box) -> None:
 
 
 def test_cmake_comes_from_uv_only_when_declared_and_absent() -> None:
-    assert deploy.cmake_needed([('a', ('cargo', 'cmake')), ('b', ('cc',))], which=lambda _n: None) == ['a']
-    assert deploy.cmake_needed([('a', ('cmake',))], which=lambda _n: '/usr/bin/cmake') == []
+    assert deploy_spec.cmake_needed([('a', ('cargo', 'cmake')), ('b', ('cc',))], which=lambda _n: None) == ['a']
+    assert deploy_spec.cmake_needed([('a', ('cmake',))], which=lambda _n: '/usr/bin/cmake') == []
 
 
 def test_the_rendered_declaration_reads_back(tmp_path: Path) -> None:
-    spec = deploy.Deployment('h', 'src', '3.13', ('--mode', 'integrate'), (deploy.Repo('a', 'https://x/a"b', 'r'),))
-    path = _write(tmp_path / 'config.toml', deploy.render(spec))
-    assert deploy.load(path) == spec
+    spec = deploy_spec.Deployment(
+        'h', 'src', '3.13', ('--mode', 'integrate'), (deploy_spec.Repo('a', 'https://x/a"b', 'r'),)
+    )
+    path = _write(tmp_path / 'config.toml', deploy_spec.render(spec))
+    assert deploy_spec.load(path) == spec
