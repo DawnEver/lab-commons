@@ -16,6 +16,10 @@ __all__ = ['RETIRED', 'refusal']
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
+    'ONE-RUN-AFTER-INTEGRATION': 'VERDICTS-FROM-THE-FORGE (the forge serve producer runs the full suite, once per sha)',
+    'SUBAGENT-NO-HEAVY-NO-PUSH': 'SUBAGENT-NO-PUSH (a full tier refuses everyone outside the producer)',
+    'SUBAGENT_NO_HEAVY_NO_PUSH': 'lab_commons.dev._deny_subagent_row.SUBAGENT_NO_PUSH',
     'lab_commons.hpc verdict': 'python -m lab_commons.hpc run submit|gather (a run, not a verdict)',
     'lab_commons.hpc.verdict': 'lab_commons.hpc.run',
     'submit_verdict': 'lab_commons.hpc.run.submit_run',
