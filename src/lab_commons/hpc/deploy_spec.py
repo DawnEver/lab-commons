@@ -8,26 +8,29 @@ from __future__ import annotations
 import argparse
 import shlex
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Final
+from typing import Any, Final
 
 __all__ = [
     'DEFAULT_PYTHON',
     'DEFAULT_ROOT',
     'DEFAULT_SERVE',
+    'LAB_COMMONS',
     'MARK',
     'Deployment',
     'Repo',
     'checkout_of',
-    'cmake_needed',
     'cron_lines',
+    'has_grant',
     'load',
     'merge_crontab',
     'parse_repo',
     'render',
+    'render_grant',
     'tick_command',
+    'tick_dirs',
 ]
 
 #: Every crontab line this tool owns ends with this comment plus the repo's name.
@@ -36,6 +39,9 @@ MARK: Final = '# lab-commons-deploy:'
 DEFAULT_ROOT: Final = 'src'
 DEFAULT_PYTHON: Final = '3.13'
 DEFAULT_SERVE: Final = ('--mode', 'integrate')
+
+#: The served repo every tick RUNS: its checkout is installed into every other served venv.
+LAB_COMMONS: Final = 'lab-commons'
 
 #: The interpreter a cron line runs: the line is a Linux login node's, so the POSIX venv layout is the only one.
 _VENV_PYTHON: Final = str(PurePosixPath('.venv', 'bin', 'python'))
@@ -52,13 +58,15 @@ class Repo:
 
 @dataclass(frozen=True)
 class Deployment:
-    """The ``[deploy]`` table of the machine file."""
+    """The ``[deploy]`` table of the machine file; the last two declare this account's grant."""
 
     host: str
     root: str
     python: str
     serve: tuple[str, ...]
     repos: tuple[Repo, ...]
+    slurm_account: str = ''  # needed only when sacctmgr names several
+    partitions: tuple[str, ...] = ()
 
 
 def load(path: Path) -> Deployment | None:
@@ -73,6 +81,8 @@ def load(path: Path) -> Deployment | None:
             python=raw.get('python', DEFAULT_PYTHON),
             serve=tuple(raw.get('serve', DEFAULT_SERVE)),
             repos=tuple(Repo(r['name'], r['url'], r['ref']) for r in raw['repos']),
+            slurm_account=raw.get('slurm_account', ''),
+            partitions=tuple(raw.get('partitions', ())),
         )
     except KeyError as missing:
         msg = f'[deploy] in {path} lacks {missing}'
@@ -88,11 +98,30 @@ def render(spec: Deployment) -> str:
     repos = ''.join(
         f'  {{ name = {_toml(r.name)}, url = {_toml(r.url)}, ref = {_toml(r.ref)} }},\n' for r in spec.repos
     )
-    serve = ', '.join(_toml(a) for a in spec.serve)
+    account = f'slurm_account = {_toml(spec.slurm_account)}\n' if spec.slurm_account else ''
     return (
         f'\n[deploy]\nhost = {_toml(spec.host)}\nroot = {_toml(spec.root)}\npython = {_toml(spec.python)}\n'
-        f'serve = [{serve}]\nrepos = [\n{repos}]\n'
+        f'serve = {_list(spec.serve)}\n{account}partitions = {_list(spec.partitions)}\nrepos = [\n{repos}]\n'
     )
+
+
+def _list(values: Sequence[str]) -> str:
+    return '[' + ', '.join(_toml(v) for v in values) + ']'
+
+
+def render_grant(grant: Mapping[str, Any]) -> str:
+    """*grant* as the ``[[hpc.grant]]`` table :mod:`lab_commons.hpc.grants` reads."""
+    rows = ''.join(
+        f'{key} = {_list(value) if isinstance(value, list) else value if isinstance(value, int) else _toml(value)}\n'
+        for key, value in grant.items()
+    )
+    return f'\n[[hpc.grant]]\n{rows}'
+
+
+def has_grant(path: Path, user: str) -> bool:
+    """Whether the machine file at *path* already grants *user* a share."""
+    raw = tomllib.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    return any(grant.get('user') == user for grant in raw.get('hpc', {}).get('grant', []))
 
 
 def parse_repo(text: str) -> Repo:
@@ -105,9 +134,11 @@ def parse_repo(text: str) -> Repo:
     return Repo(name, url, ref)
 
 
-def cron_lines(spec: Deployment, home: Path) -> list[str]:
+def cron_lines(spec: Deployment, home: Path, *, slurm: Sequence[str] = ()) -> list[str]:
     """One marked line per served repo: every 5 min, ``flock -n`` so a host never overlaps itself."""
-    return [f'*/5 * * * * {tick_command(spec, home, repo, log=True)} {MARK}{repo.name}' for repo in spec.repos]
+    return [
+        f'*/5 * * * * {tick_command(spec, home, repo, log=True, slurm=slurm)} {MARK}{repo.name}' for repo in spec.repos
+    ]
 
 
 def merge_crontab(current: str, lines: Sequence[str]) -> str:
@@ -117,16 +148,9 @@ def merge_crontab(current: str, lines: Sequence[str]) -> str:
     return text + '\n' if text else ''
 
 
-def cmake_needed(declared: Sequence[tuple[str, Sequence[str]]], *, which: Callable[[str], str | None]) -> list[str]:
-    """The repos whose ``needs`` name ``cmake`` when the host has none on PATH."""
-    if which('cmake') is not None:
-        return []
-    return [name for name, needs in declared if 'cmake' in needs]
-
-
-def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool) -> str:
+def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: Sequence[str] = ()) -> str:
     """The shell command of one tick of *repo*: cron PATH, its checkout, ``flock -n``, ``forge serve``."""
-    path = ':'.join([str(home / '.local/bin'), str(home / '.cargo/bin'), '/usr/local/bin', '/usr/bin', '/bin'])
+    path = ':'.join(tick_dirs(home, slurm))
     cache = home / '.cache'
     serve = ' '.join(shlex.quote(a) for a in spec.serve)
     command = (
@@ -135,6 +159,16 @@ def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool) -> str:
         f'{_VENV_PYTHON} -m lab_commons.dev.forge serve {serve}'
     )
     return command + (f' >> {shlex.quote(str(cache / f"lab-forge-{repo.name}.log"))} 2>&1' if log else '')
+
+
+def tick_dirs(home: Path, slurm: Sequence[str] = ()) -> list[str]:
+    """The directories of a tick's PATH, in order: cron's own PATH is not the login shell's.
+
+    *slurm* is where ``sbatch``, ``sacct`` and ``squeue`` resolved when the deploy ran -- a site install
+    (``/opt/slurm/<version>/bin``) that cron's PATH never names.
+    """
+    base = [str(home / '.local/bin'), str(home / '.cargo/bin'), '/usr/local/bin', '/usr/bin', '/bin']
+    return [*base, *(d for d in dict.fromkeys(slurm) if d not in base)]
 
 
 def checkout_of(spec: Deployment, home: Path, repo: Repo) -> Path:

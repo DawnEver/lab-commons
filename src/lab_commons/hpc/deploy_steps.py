@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lab_commons.hpc.builds import Builds, key_of, read_builds
-from lab_commons.hpc.deploy_spec import Deployment, Repo, checkout_of
+from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of
 from lab_commons.log import emit
 
 __all__ = ['Step', 'Tools', 'build', 'declared', 'update']
@@ -26,14 +26,17 @@ class Tools:
     crontab: tuple[str, ...] = ('crontab',)
     uv: tuple[str, ...] = ('uv',)
     sh: tuple[str, ...] = ('bash', '-lc')
+    id: tuple[str, ...] = ('id',)
+    sacctmgr: tuple[str, ...] = ('sacctmgr',)
+    rclone: tuple[str, ...] = ('rclone',)
 
 
 class Step:
     """Runs or, under ``--dry-run``, only prints each changing action; read-only calls always run."""
 
-    def __init__(self, tools: Tools, *, dry: bool) -> None:
-        """Run through *tools*; *dry* prints each changing action instead."""
-        self.tools, self.dry = tools, dry
+    def __init__(self, tools: Tools, *, dry: bool, path: str = '') -> None:
+        """Run through *tools*; *dry* prints each changing action instead; *path*, when set, is every change's PATH."""
+        self.tools, self.dry, self.path = tools, dry, path
 
     def read(self, argv: Sequence[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         """Run a READ-ONLY *argv*, also under ``--dry-run``."""
@@ -62,7 +65,7 @@ class Step:
             errors='replace',
             check=False,
             cwd=cwd,
-            env={**os.environ, **(env or {})},
+            env={**os.environ, **({'PATH': self.path} if self.path else {}), **(env or {})},
         )
         for line in (done.stdout + done.stderr).strip().splitlines()[-20:]:
             emit(f'    | {line}')
@@ -92,6 +95,8 @@ def build(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
     checkout = checkout_of(spec, home, repo)
     if step.dry:
         step.change(f'{repo.name}: build .venv with its [tool.lab_commons.hpc] install (e.g. uv sync --extra dev)', [])
+        if repo.name != LAB_COMMONS:
+            step.change(f'{repo.name}: install the served lab-commons checkout over its pinned one', [])
         step.change(f'{repo.name}: its native build, when declared, into {checkout / ".lab-native"}', [])
         return 0
     builds = declared(checkout)
@@ -109,7 +114,32 @@ def build(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
             return rc
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(env_key, encoding='utf-8')
+    if repo.name != LAB_COMMONS and (rc := _lab_commons(step, spec, home, checkout, env_key=env_key, env=env)):
+        return rc
     return _native(step, home, checkout, builds, {**env, 'ENV_KEY': env_key}) if builds.native_build else 0
+
+
+def _lab_commons(
+    step: Step, spec: Deployment, home: Path, checkout: Path, *, env_key: str, env: Mapping[str, str]
+) -> int:
+    """Install the host's lab-commons checkout over the sha *checkout*'s pyproject pins, keyed by that checkout's HEAD.
+
+    Run from *home* with ``--no-config``: inside the project, uv's sources would put the pin back.
+    """
+    lab = checkout_of(spec, home, next(r for r in spec.repos if r.name == LAB_COMMONS))
+    head = step.read([*step.tools.git, '-C', str(lab), 'rev-parse', 'HEAD']).stdout.strip()
+    key = key_of({LAB_COMMONS: head or 'absent'}, env_key)
+    stamp = checkout / '.venv' / '.lab-deploy-lab-commons'
+    if _stamped(stamp, key):
+        emit(f'  {checkout.name}: lab-commons current ({head[:12]})')
+        return 0
+    python = checkout / '.venv' / 'bin' / 'python'
+    argv = [*step.tools.uv, 'pip', 'install', '--no-config', '--python', str(python)]
+    argv += ['--reinstall-package', LAB_COMMONS, f'{LAB_COMMONS} @ {lab.as_uri()}']
+    if rc := step.change(f'{checkout.name}: lab-commons {head[:12]} from {lab}', argv, cwd=home, env=env):
+        return rc
+    stamp.write_text(key, encoding='utf-8')
+    return 0
 
 
 def _native(step: Step, home: Path, checkout: Path, builds: Builds, env: dict[str, str]) -> int:
