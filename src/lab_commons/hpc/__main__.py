@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc <verb>`` -- plan, submit, status, gather, retry, run {submit|gather}.
+"""``python -m lab_commons.hpc <verb>`` -- plan, submit, status, gather, retry, run {submit|gather|build}.
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
@@ -8,10 +8,13 @@ nothing more -- through whichever of those login hosts answers.
 
 ``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
 returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
-takes none. ``run gather --sha <sha> -o <dir>`` is one short call -- where the run is and exit
-:data:`PENDING`, or the record written to ``<dir>/run-<sha>-<platform>-<req>.json.gz`` (exit 1 if any id is
-red, lost or missing); ``--wait`` blocks until the record. Both RUN ON THE CLUSTER LOGIN NODE with its
-own shell (:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused
+takes none. ``run build --sha <sha> --repo-url <url>`` is ``run submit``'s fetch and build alone: it
+prints the ``workdir``/``setup`` a job file names to run ANY entry over its items in that commit's tree and
+env (``submit -c``), and collects, submits and records nothing. ``run gather --sha <sha> -o <dir>`` is
+one short call -- where the run is and exit :data:`PENDING`, or the record written to
+``<dir>/run-<sha>-<platform>-<req>.json.gz`` (exit 1 if any id is red, lost or missing); ``--wait``
+blocks until the record. All three RUN ON THE CLUSTER LOGIN NODE with its own shell
+(:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused
 on a box without ``sbatch`` -- no workstation submits over ssh. WHERE A RUN IS, AND WHAT THE CLUSTER CAN
 TAKE, IS READ FROM THE FORGE: ``python -m lab_commons.dev.forge queue`` shows each run's progress on its
 claim and each serving host's card (headroom, partitions, quota), so no verb reaches the cluster to ask.
@@ -53,8 +56,8 @@ from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.hpc.plan import Plan, allocate
 from lab_commons.hpc.platforms import table_at
 from lab_commons.hpc.retired import refusal
-from lab_commons.hpc.run import NotSubmitted, submit_run
-from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
+from lab_commons.hpc.run import NotSubmitted, build_run, submit_run
+from lab_commons.hpc.shell import ENV, FULL, INCREMENTAL, ROOT, RunSpec
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.watch import settle
 from lab_commons.log import emit
@@ -209,6 +212,25 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
     return 0
 
 
+def _run_build(args: argparse.Namespace, _machine: Machine, _config: Config) -> int:
+    try:
+        builds = builds_at(args.repo, args.sha, python=args.python)
+    except ValueError as undeclared:
+        emit(f'run build refused: {undeclared}', err=True)
+        return 2
+    spec = RunSpec(sha=args.sha, repo_url=args.repo_url, python=args.python, pack_from=args.repo, builds=builds)
+    try:
+        built = build_run(spec, submitter()(None), 'this login node')
+    except NotSubmitted as why:
+        emit(f'run build inconclusive: {why}', err=True)
+        return _NOT_SUBMITTED
+    tree = f'{ROOT}/trees/{args.sha}'.replace('"$HOME"', '~')
+    _out(f'built {args.sha} (env {built["env"]}); a job file runs any entry there with:')
+    _out(f'workdir = "{tree}"')
+    _out(f'setup = ["{ENV}"]')
+    return 0
+
+
 #: ``time.sleep``, named so a test drives the poll loop without waiting.
 _sleep = time.sleep
 
@@ -221,6 +243,7 @@ def _run_gather(args: argparse.Namespace, machine: Machine, config: Config) -> i
 _RUN_NEEDS: Final = {
     'submit': ('--sha', '--repo-url', '--scope'),
     'gather': ('--sha', '--output'),
+    'build': ('--sha', '--repo-url'),
 }
 
 
@@ -268,7 +291,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.step == 'submit' and (args.scope == INCREMENTAL) != (args.only is not None):
         parser.error('--scope incremental names its re-run ids with --only; --scope full takes no --only')
     config = load_config(args.config) if args.config else Config()
-    steps = {'submit': _run_submit, 'gather': _run_gather}
+    steps = {'submit': _run_submit, 'gather': _run_gather, 'build': _run_build}
     try:
         return steps[args.step](args, load_grants(), config)
     except NotOnCluster as off:

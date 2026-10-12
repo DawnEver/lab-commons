@@ -223,6 +223,48 @@ def _nothing_collected(spec: RunSpec, collected: str) -> str:
     )
 
 
+def build_run(spec: RunSpec, run: Runner, where: str) -> dict[str, Any]:
+    """Fetch *spec*'s commit into ``~/ci/trees/<sha>`` and build its env there; its facts, plus ``prep`` times.
+
+    The first half of :func:`submit_run` and the whole of ``run build``: nothing is collected or submitted
+    and no run state is written, so a job file (:mod:`lab_commons.hpc.config`) whose ``workdir`` is the
+    tree and whose ``setup`` is :data:`~lab_commons.hpc.shell.ENV` runs ANY entry in the env a test run uses.
+    *where* names the login node in a refusal.
+    """
+    said = run(needs_script(spec), None).splitlines()
+    lacking = [line.removeprefix('@@@ missing ') for line in said if line.startswith('@@@ missing ')]
+    if lacking:
+        msg = f'{where} lacks {", ".join(lacking)} on its login node; nothing was fetched or built'
+        raise NotSubmitted(msg)
+
+    shipping = time.monotonic()
+    if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
+        if spec.pack_from is None:
+            msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to pack it from'
+            raise NotSubmitted(msg)
+        run(f'base64 -d > {ROOT}/packs/{spec.sha}.pack', pack(spec.pack_from, spec.sha))
+        if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
+            msg = f'commit {spec.sha} is still missing on {where} after the pack was indexed'
+            raise NotSubmitted(msg)
+
+    here = Path(__file__).parent
+    run(f'cat > {ROOT}/bin/{COLLECT_MODULE}.py', (here / 'collect.py').read_text(encoding='utf-8'))
+    shipped = round(time.monotonic() - shipping)
+    built = run(build_script(spec), (here / 'pytest_item.py').read_text(encoding='utf-8'))
+    if BUILD_FAILED in built:
+        tail = built.split(BUILD_FAILED, 1)[1].strip()
+        msg = f'the build for {spec.sha[:12]} failed on {where}, nothing was submitted; {tail}'
+        raise NotSubmitted(msg)
+    told: dict[str, Any] = dict(facts(built))
+    if not told.get('env'):
+        msg = (
+            f'the venv built for {spec.sha[:12]} on {where} reported no env hash (lab_commons.dev.envkey is not '
+            'importable there), so its part could never be carried; nothing was submitted'
+        )
+        raise NotSubmitted(msg)
+    return {**told, 'prep': {'ship': shipped, **parse_times(built)}}
+
+
 def submit_run(
     spec: RunSpec,
     machine: Machine,
@@ -243,37 +285,7 @@ def submit_run(
     grant, _ = allocate(1, cost, snapshots, workstation=machine.workstation, policy=policy)
     run = runners[grant.account]
     host = grant.hosts[0]
-    said = run(needs_script(spec), None).splitlines()
-    lacking = [line.removeprefix('@@@ missing ') for line in said if line.startswith('@@@ missing ')]
-    if lacking:
-        msg = f'{grant.name} ({host}) lacks {", ".join(lacking)} on its login node; nothing was fetched or built'
-        raise NotSubmitted(msg)
-
-    shipping = time.monotonic()
-    if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
-        if spec.pack_from is None:
-            msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to pack it from'
-            raise NotSubmitted(msg)
-        run(f'base64 -d > {ROOT}/packs/{spec.sha}.pack', pack(spec.pack_from, spec.sha))
-        if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
-            msg = f'commit {spec.sha} is still missing on {host} after the pack was indexed'
-            raise NotSubmitted(msg)
-
-    here = Path(__file__).parent
-    run(f'cat > {ROOT}/bin/{COLLECT_MODULE}.py', (here / 'collect.py').read_text(encoding='utf-8'))
-    shipped = round(time.monotonic() - shipping)
-    built = run(build_script(spec), (here / 'pytest_item.py').read_text(encoding='utf-8'))
-    if BUILD_FAILED in built:
-        tail = built.split(BUILD_FAILED, 1)[1].strip()
-        msg = f'the build for {spec.sha[:12]} failed on {host}, nothing was submitted; {tail}'
-        raise NotSubmitted(msg)
-    told = facts(built)
-    if not told.get('env'):
-        msg = (
-            f'the venv built for {spec.sha[:12]} on {host} reported no env hash (lab_commons.dev.envkey is not '
-            'importable there), so its part could never be carried; nothing was submitted'
-        )
-        raise NotSubmitted(msg)
+    told = build_run(spec, run, f'{grant.name} ({host})')
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)
     if spec.only is not None:
@@ -300,7 +312,7 @@ def submit_run(
         'env': told['env'],
         'cluster': host,
         'python': told.get('python', ''),
-        'prep': {'ship': shipped, **parse_times(built), **parse_times(collected)},
+        'prep': {**told['prep'], **parse_times(collected)},
         'handed': handed,
         'outcomes': outcomes,
         'measured': Measured.of(history or {}).record(),
