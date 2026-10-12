@@ -66,6 +66,7 @@ here is per-box, and the box is the thing that crashes.
 from __future__ import annotations
 
 import contextlib
+import getpass
 import json
 import os
 import platform
@@ -1090,9 +1091,15 @@ class Broker:
     # -- where the records live -----------------------------------------------------------------
 
     def resource_dir(self) -> Path:
-        """Where this box keeps its reservation records -- OS temp, never a repository."""
+        """Where this box keeps its reservation records -- OS temp, never a repository.
+
+        The default root is THIS USER's: a multi-user ``/tmp`` (a cluster login or compute node) is
+        shared with strangers, and a root another user created under a restrictive umask refuses
+        every write of ours with ``PermissionError``.
+        """
         override = self._resource_dir or os.environ.get(RESOURCE_DIR_ENV)
-        path = Path(override) if override else Path(tempfile.gettempdir()) / 'lab-commons-resources'
+        default = Path(tempfile.gettempdir()) / f'lab-commons-resources-{getpass.getuser()}'
+        path = Path(override) if override else default
         path.mkdir(parents=True, exist_ok=True)
         return path
 

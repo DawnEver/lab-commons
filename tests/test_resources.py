@@ -9,6 +9,7 @@ redirected per test, because "box-global" is the property under test and cannot 
 without testing nothing.
 """
 
+import getpass
 import os
 import tempfile
 import threading
@@ -470,6 +471,16 @@ class TestTheRecordDoesNotDependOnTheCallerRevision:
         # which revision each has checked out. The tree is not where machine state goes.
         monkeypatch.delenv('LAB_COMMONS_RESOURCE_DIR', raising=False)
         assert str(Broker(registry).resource_dir()).startswith(tempfile.gettempdir())
+
+    def test_the_default_resource_root_belongs_to_its_user(self, registry, monkeypatch, tmp_path) -> None:
+        # Measured on Ada 2026-10-12: a shared /tmp held `lab-commons-resources` created by ANOTHER
+        # user under umask 0027, and every seat this user took died in mkstemp with PermissionError.
+        # A multi-user /tmp is shared mutable state; the default root must be this user's own.
+        monkeypatch.delenv('LAB_COMMONS_RESOURCE_DIR', raising=False)
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+        root = Broker(registry).resource_dir()
+        assert root.parent == tmp_path
+        assert root.name == f'lab-commons-resources-{getpass.getuser()}'
 
     def test_a_record_written_by_an_unknown_future_version_is_still_counted(self, broker, registry) -> None:
         # Forward compatibility is the whole point of a box-global shared medium: a holder written
