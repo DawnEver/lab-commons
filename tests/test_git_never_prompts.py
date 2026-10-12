@@ -17,5 +17,7 @@ def test_the_env_carries_every_no_prompt_value() -> None:
 def test_git_reads_credential_interactive_never() -> None:
     git = shutil.which('git')
     assert git is not None
-    done = subprocess.run([git, 'config', 'credential.interactive'], capture_output=True, text=True, check=False)
+    done = subprocess.run(
+        [git, 'config', 'credential.interactive'], capture_output=True, text=True, encoding='utf-8', check=False
+    )
     assert done.stdout.strip() == 'never'
