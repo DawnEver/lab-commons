@@ -66,7 +66,6 @@ here is per-box, and the box is the thing that crashes.
 from __future__ import annotations
 
 import contextlib
-import getpass
 import json
 import os
 import platform
@@ -1098,8 +1097,7 @@ class Broker:
         every write of ours with ``PermissionError``.
         """
         override = self._resource_dir or os.environ.get(RESOURCE_DIR_ENV)
-        default = Path(tempfile.gettempdir()) / f'lab-commons-resources-{getpass.getuser()}'
-        path = Path(override) if override else default
+        path = Path(override or Path(tempfile.gettempdir()) / f'lab-commons-resources-{Path.home().name}')
         path.mkdir(parents=True, exist_ok=True)
         return path
 

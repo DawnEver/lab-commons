@@ -9,12 +9,12 @@ redirected per test, because "box-global" is the property under test and cannot 
 without testing nothing.
 """
 
-import getpass
 import os
 import tempfile
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -480,7 +480,7 @@ class TestTheRecordDoesNotDependOnTheCallerRevision:
         monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
         root = Broker(registry).resource_dir()
         assert root.parent == tmp_path
-        assert root.name == f'lab-commons-resources-{getpass.getuser()}'
+        assert root.name == f'lab-commons-resources-{Path.home().name}'
 
     def test_a_record_written_by_an_unknown_future_version_is_still_counted(self, broker, registry) -> None:
         # Forward compatibility is the whole point of a box-global shared medium: a holder written
