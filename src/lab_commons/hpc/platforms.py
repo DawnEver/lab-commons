@@ -152,6 +152,18 @@ def table_at(repo: Path, sha: str) -> Table:
     return read_table(pyproject_at(repo, sha))
 
 
+def declared_at(repo: Path, sha: str) -> tuple[Table, str]:
+    """``(table, '')`` at *sha*, or ``(empty, why)`` when the kit refuses that sha's declaration.
+
+    A refusal (a misplaced row, an unknown table, unparsable TOML) belongs to the ONE sha carrying it:
+    a reader ranging over many shas blocks that candidate by name and goes on serving the rest.
+    """
+    try:
+        return table_at(repo, sha), ''
+    except ValueError as why:  # OutdatedKit and TOMLDecodeError are ValueErrors
+        return Table(), f'declaration at {sha[:12]} refused: {why}'
+
+
 def cannot_run(table: Table, part: str) -> str:
     """The marker expression selecting every test *part* cannot run; ``''`` when it can run all."""
     if part in table.engines:
