@@ -58,7 +58,7 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance
-from lab_commons.hpc.platforms import LINUX, PLATFORMS, assign, cannot_run, runnable
+from lab_commons.hpc.platforms import LINUX, assign, cannot_run, runnable
 from lab_commons.hpc.records import fold, read_streams
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
@@ -283,7 +283,7 @@ def submit_run(
         raise NotSubmitted(_nothing_collected(spec, collected))
     cannot = {
         platform: set(parse_ids(run(collect_command(spec, also=expr), None)))
-        for platform in PLATFORMS
+        for platform in spec.table.parts
         if (expr := cannot_run(spec.table, platform))
     }
     handed = {node: can for node, can in sorted(runnable(ids, cannot).items()) if assign(can) != LINUX}
