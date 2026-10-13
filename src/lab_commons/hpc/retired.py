@@ -40,7 +40,7 @@ RETIRED: Final[dict[str, str]] = {
     'unpublished_merges': 'nothing: python -m lab_commons.dev.mergeaudit <msg-file> audits the merge being committed',
     'merge_refusals': 'lab_commons.dev.mergeaudit.pending (the commit-msg hook, on the one merge being committed)',
     'mergeaudit.refusals': 'lab_commons.dev.mergeaudit.pending (the commit-msg hook, on the one merge being committed)',
-    'run submit --history': "nothing: run submit plans from the repository's last record (lab_commons.hpc.learned)",
+    'run submit --history': "nothing: run submit plans from the repository's last record (lab_commons.compute.learned)",
     # A cluster part is pulled by the cluster and advanced one step per serve tick, never a blocking process.
     'platformparts cluster': 'forge serve on the cluster login node (lab_commons.dev.forgerun advances the run)',
     '<job>.run.json': '<job>.submission.json (the last submission of a job file)',
@@ -115,6 +115,10 @@ RETIRED: Final[dict[str, str]] = {
     ', Headroom': 'lab_commons.compute.model.Supply',
     'box_headroom': 'lab_commons.compute.probe.box (free cores, memory, OS and tools measured now)',
     'no free core': "the admission's lacking resource: 'no headroom: lacking cpu' (lab_commons.compute.model.admit)",
+    # One measured demand table for every host: per test and per (producer, need-set) job (compute step 4).
+    'lab_commons.hpc.learned': 'lab_commons.compute.learned (the one measured demand table)',
+    'lab_commons.hpc.measured': 'lab_commons.compute.learned.Measured',
+    'hpc-learned': 'compute-learned (beside the machine config, lab_commons.compute.learned.directory)',
     'lab_commons.hpc.outstanding': 'lab_commons.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
 }
 

@@ -1,6 +1,23 @@
-"""What a run has MEASURED about a test tree, carried from one record to the next. Pure.
+"""THE ONE MEASURED DEMAND TABLE: what a repository's finished runs measured, carried to its next admission.
 
-FOUR FACTS, EACH KEYED BY WHAT IT DESCRIBES. ``durations`` -- seconds per node id, the sum of its
+ONE FILE PER REPOSITORY, ``<config dir>/compute-learned/<key>.json`` (beside the machine file), keyed by
+the remote URL and machine-local, so it serves every host and grant the machine holds. It holds two
+kinds of fact, both written by finished runs -- a box run (:mod:`lab_commons.dev.forgeproduce`) and a
+Slurm run (:mod:`lab_commons.hpc.run`) alike -- and never by hand:
+
+* PER TEST (:class:`Measured`) -- what prices a shard and a worker: seconds per node id, floors, per-file
+  overheads and per-file peak RSS. :meth:`Measured.pack` cuts a Slurm array from it;
+  :meth:`Measured.worker_gb` is the memory one worker needs -- a Slurm task's request and the input
+  :func:`lab_commons.dev.bounded.worker_width` divides a box's memory by.
+* PER JOB (:class:`Run`), keyed by ``(producer, need-set)`` -- the job's peak memory, cpu-seconds and wall
+  seconds, read back as a :class:`~lab_commons.compute.model.Demand` by :func:`demand`, with a declared
+  prior for a job never measured.
+
+WHY IT IS NOT A FLAG. Measured 2026-10-11: the submit flag naming a previous record was optional and no
+caller passed it, so every downstream run planned round 0 blind -- 4441 of 4441 files priced at ``[cost]``
+and 1 GB, 26 of 93 shards OUT_OF_MEMORY, two retry rounds that took 3.0 of the run's 4.2 hours.
+
+PER TEST, EACH FACT KEYED BY WHAT IT DESCRIBES. ``durations`` -- seconds per node id, the sum of its
 phases as pytest timed them; ``floors`` -- seconds an id that NEVER FINISHED is known to take at least,
 because it was still running when its item was killed; ``overheads`` -- seconds per test FILE that are
 not any test's (the interpreter, the imports, module fixtures: an item's wall time minus its tests',
@@ -26,13 +43,33 @@ task's cgroup also holds the item runner (Ada 2026-10-12: a 150 MB peak priced 2
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Any, Final
+import hashlib
+import json
+import math
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final
 
-from lab_commons.hpc.config import Cost, Policy
+from lab_commons.compute.model import Demand
+from lab_commons.config import config_path
 
-__all__ = ['OOM_GROWTH', 'Measured']
+if TYPE_CHECKING:
+    from lab_commons.hpc.config import Cost, Policy
+
+__all__ = [
+    'OOM_GROWTH',
+    'Measured',
+    'Run',
+    'demand',
+    'directory',
+    'learn',
+    'learn_peaks',
+    'learned',
+    'record_run',
+    'run_of',
+    'worker_gb',
+]
 
 #: MB per GB, as the plan's memory is written.
 _MB_PER_GB = 1024
@@ -168,10 +205,113 @@ class Measured:
         return items
 
     def mem_gb(self, items: Sequence[Sequence[str]], cost: Cost, policy: Policy) -> float:
-        """The worst measured peak of these items' files times ``policy.safety``, never under ``cost.mem_gb``.
+        """One Slurm task's memory: :meth:`worker_gb` over these items' files, floored at ``cost.mem_gb``."""
+        return self.worker_gb([n for ids in items for n in ids], prior_gb=cost.mem_gb, safety=policy.safety)
 
-        An unmeasured file is priced at ``cost.mem_gb`` alone, so it cannot mis-price the array.
+    def worker_gb(self, nodes: Iterable[str], *, prior_gb: float, safety: float) -> float:
+        """The worst measured peak of these nodes' files times *safety*, never under *prior_gb*.
+
+        ONE RULE FOR A SLURM TASK AND A BOX WORKER: each is one pytest process over some files. An
+        unmeasured file is priced at *prior_gb* alone, so it cannot mis-price the rest.
         """
-        files = {_file(n) for ids in items for n in ids}
-        worst = max((self.peaks_mb.get(f, 0.0) for f in files), default=0.0) * policy.safety / _MB_PER_GB
-        return max(worst, cost.mem_gb)
+        files = {_file(n) for n in nodes}
+        worst = max((self.peaks_mb.get(f, 0.0) for f in files), default=0.0) * safety / _MB_PER_GB
+        return max(worst, prior_gb)
+
+
+# --- per job: (producer, need-set) -> Run --------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Run:
+    """What one finished job measured: peak memory of its whole process tree, cpu-seconds, wall seconds."""
+
+    peak_mem_gb: float
+    cpu_s: float
+    wall_s: float
+
+    def __post_init__(self) -> None:
+        """Refuse a measurement no run could have produced."""
+        if self.peak_mem_gb < 0 or self.cpu_s < 0 or self.wall_s <= 0:
+            msg = f'a run measures a non-negative peak and cpu and a positive wall, got {self}'
+            raise ValueError(msg)
+
+    @property
+    def cpu_hours(self) -> float:
+        """Cpu-seconds in hours -- the cost :func:`lab_commons.compute.model.rank` divides value by."""
+        return self.cpu_s / 3600
+
+    def demand(self, needs: Iterable[str] = ()) -> Demand:
+        """The vector admission compares: the cores it kept busy, its peak memory, one of each named need."""
+        cores = max(1, math.ceil(self.cpu_s / self.wall_s - 1e-9))
+        return Demand({'cpu': cores, 'mem_gb': self.peak_mem_gb, **dict.fromkeys(needs, 1.0)})
+
+
+def _key(producer: str, needs: Iterable[str]) -> str:
+    return f'{producer}|{",".join(sorted(needs))}'
+
+
+def directory() -> Path:
+    """``compute-learned/`` beside the machine config (:func:`lab_commons.config.config_path`)."""
+    return config_path().parent / 'compute-learned'
+
+
+def _path(repo: str) -> Path:
+    return directory() / f'{hashlib.sha256(repo.encode("utf-8")).hexdigest()[:16]}.json'
+
+
+def learned(repo: str) -> dict[str, Any]:
+    """Everything learned for *repo* (the per-test keys of :class:`Measured`, and ``runs``); none yet is ``{}``."""
+    path = _path(repo)
+    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+
+
+def _write(repo: str, table: dict[str, Any]) -> Path:
+    target = _path(repo)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({**table, 'repo': repo}), encoding='utf-8')
+    return target
+
+
+def learn(record: dict[str, Any]) -> Path:
+    """Keep *record*'s per-test measurements as its repository's latest, keeping its per-job runs."""
+    return _write(record['repo'], {**learned(record['repo']), **Measured.of(record).record()})
+
+
+def learn_peaks(repo: str, peaks_mb: Mapping[str, float]) -> Path:
+    """Fold per-FILE peaks a box run measured into *repo*'s table; a newer peak replaces an older one."""
+    table = learned(repo)
+    return _write(repo, {**table, 'peaks_mb': {**table.get('peaks_mb', {}), **peaks_mb}})
+
+
+def record_run(repo: str, producer: str, needs: Iterable[str], run: Run, *, killed: bool = False) -> Path:
+    """Keep what one finished job of *repo* measured under ``(producer, needs)``.
+
+    A *killed* run's peak is the limit it died at, not its need: it is grown by :data:`OOM_GROWTH` and
+    never lowers a peak already known (the module docstring).
+    """
+    table = learned(repo)
+    runs = dict(table.get('runs', {}))
+    key = _key(producer, needs)
+    if killed:
+        known = float(runs.get(key, {}).get('peak_mem_gb', 0.0))
+        run = Run(max(known, run.peak_mem_gb * OOM_GROWTH), run.cpu_s, run.wall_s)
+    runs[key] = asdict(run)
+    return _write(repo, {**table, 'runs': runs})
+
+
+def run_of(repo: str, producer: str, needs: Iterable[str]) -> Run | None:
+    """The last run of ``(producer, needs)`` measured for *repo*, or ``None``."""
+    found = learned(repo).get('runs', {}).get(_key(producer, needs))
+    return None if found is None else Run(**found)
+
+
+def demand(repo: str, producer: str, needs: Iterable[str], *, prior: Run) -> Demand:
+    """The :class:`~lab_commons.compute.model.Demand` of ``(producer, needs)``: measured, else *prior*."""
+    named = frozenset(needs)
+    return (run_of(repo, producer, named) or prior).demand(named)
+
+
+def worker_gb(repo: str, files: Iterable[str], *, prior_gb: float, safety: float) -> float:
+    """GB one worker running *files* needs, from *repo*'s per-file peaks (:meth:`Measured.worker_gb`)."""
+    return Measured.of(learned(repo)).worker_gb(files, prior_gb=prior_gb, safety=safety)
