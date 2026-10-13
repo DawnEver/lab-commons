@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons.dev import sessionlease
-from lab_commons.dev.sessionlease import LeaseRefused, identity, read, release, take, write
+from lab_commons.dev.sessionlease import LeaseRefused, holds_integration_here, identity, read, release, take, write
 
 _GIT = shutil.which('git') or 'git'
 _DECL = (
@@ -137,3 +137,15 @@ def test_the_cli_takes_with_the_environments_identity_and_refuses_without_one(
     assert 'feat/s' in out
     assert 'carol' in out
     assert 'int/line' in out
+
+
+def test_the_integration_owner_is_wherever_its_live_lease_holder_last_renewed(repo: Path) -> None:
+    """Not a declared host: the box follows the session, and a lapsed lease owns nothing anywhere."""
+    assert not holds_integration_here(repo, {'G'}, now=NOW), 'no lease, no owner'
+    take(repo, 'int/line', who='alice', where='G', now=NOW)
+    assert holds_integration_here(repo, {'G', 'login'}, now=NOW)
+    assert not holds_integration_here(repo, {'H'}, now=NOW)
+    take(repo, 'int/line', who='alice', where='H', now=NOW + timedelta(hours=1))
+    assert holds_integration_here(repo, {'H'}, now=NOW + timedelta(hours=1))
+    assert not holds_integration_here(repo, {'G'}, now=NOW + timedelta(hours=1))
+    assert not holds_integration_here(repo, {'H'}, now=NOW + timedelta(hours=4))

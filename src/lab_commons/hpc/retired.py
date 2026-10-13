@@ -19,6 +19,16 @@ _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # A session branch is protected for what it IS, by its session's lease -- never by a directory or a host
+    # (user ruling 2026-10-13; lab_commons.dev.sessionbranch, lab_commons.dev.sessionlease).
+    'INTEGRATION-LIVES-IN-THE-MAIN-CHECKOUT': 'ONE-WRITER-PER-SESSION-BRANCH and INTEGRATION-IS-MERGES-ONLY',
+    'PUSH-FROM-ITS-OWN-BRANCH': 'PUBLISH-IS-THE-LOCAL-REF (lab_commons.dev.sessionbranch, at pre-push)',
+    'integrationhome': 'lab_commons.dev.sessionbranch (pre-push) and lab_commons.dev.integrate (no working tree)',
+    'integration-home': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',
+    'push-from-its-own-branch': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',
+    'integrator.host': 'the integration lease holder: python -m lab_commons.dev.sessionlease take <integration>',
+    'forge promote': 'python -m lab_commons.dev.integrate promote <sha>, then the lease holder pushes the trunk',
+    'forgepromote': 'lab_commons.dev.integrate',
     # A request is a job on the part path: admitted by its declared need-set and run (lab-commons 2026-10-13).
     'claims requests yet': 'lab_commons.dev.forgerequest (admitted by its declared need-set, claimed and run)',
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
