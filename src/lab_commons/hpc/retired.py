@@ -15,6 +15,8 @@ from typing import Final
 
 __all__ = ['RETIRED', 'refusal', 'refuse_retired_keys']
 
+_BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev/githooks/base.toml)'
+
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
@@ -101,7 +103,10 @@ RETIRED: Final[dict[str, str]] = {
     'githooks.bootstrap': 'lab_commons.dev.hook_install.shim (finds the checkout venv, execs the runner)',
     'branch-push-only': 'a hook row`s refs regex (pre-push: run only for matching pushed refs)',
     'lab_commons.dev.githooks bump-version': 'python -m lab_commons.dev.githooks script bump-version',
-    'lab_commons.dev.githooks branchset-push': 'python -m lab_commons.dev.githooks script branchset-push',
+    # The base pre-push row runs the check in the repo venv; a shell wrapper hunting an interpreter is baggage.
+    'lab_commons.dev.githooks branchset-push': _BRANCHSET_ROW,
+    'githooks script branchset-push': _BRANCHSET_ROW,
+    'branchset-push.sh': _BRANCHSET_ROW,
     'lab_commons.dev.githooks cz-push-range': 'python -m lab_commons.dev.githooks script cz-push-range',
     # Where a run is and what the cluster can take are read from the forge, from any machine; no verb asks over ssh.
     'lab_commons.hpc probe': (
