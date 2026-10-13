@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from lab_commons.compute.learned import Measured
 from lab_commons.hpc import pytest_item
-from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.pytest_item import read_stream
 from lab_commons.hpc.records import fold
 

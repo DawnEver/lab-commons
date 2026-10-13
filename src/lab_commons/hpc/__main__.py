@@ -20,7 +20,7 @@ TAKE, IS READ FROM THE FORGE: ``python -m lab_commons.dev.forge queue`` shows ea
 claim and each serving host's card (headroom, partitions, quota), so no verb reaches the cluster to ask.
 ``-c`` is optional for ``run`` and only its ``[cost]``/``[policy]`` are read. ``run submit`` plans from what
 the repository's last record measured
-(:mod:`lab_commons.hpc.learned`); a file never measured is priced at ``[cost]``. A retired verb is
+(:mod:`lab_commons.compute.learned`); a file never measured is priced at ``[cost]``. A retired verb is
 refused by name (:mod:`lab_commons.hpc.retired`). ``deploy [--dry-run|--remove]`` makes this account's
 login host a ``forge serve`` host in one run (:mod:`lab_commons.hpc.deploy`).
 """
@@ -36,7 +36,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc import deploy, learned
+from lab_commons.compute import learned
+from lab_commons.hpc import deploy
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import (
     TERMINAL_OK,

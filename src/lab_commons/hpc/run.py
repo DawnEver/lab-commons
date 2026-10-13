@@ -31,7 +31,7 @@ An item whose stream never closed is unfinished: its unreported ids are re-submi
 for up to :data:`RETRIES` more rounds -- a round after an ``OUT_OF_MEMORY`` asks for twice the memory,
 a round after a ``TIMEOUT`` for at least twice the minutes (held to the partition's ceiling, preferring
 one that holds them all), and the id a kill interrupted is priced at no less than the time it was given
-(:meth:`lab_commons.hpc.measured.Measured.killed`) -- and only what is still unfinished after that
+(:meth:`lab_commons.compute.learned.Measured.killed`) -- and only what is still unfinished after that
 is ``lost``. An item that closed without reporting an id
 recorded it ``missing``.
 
@@ -40,7 +40,7 @@ minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the
 back (``history``), so an item's time is its file's overhead plus its ids' durations, the array's
 memory is the worst measured peak times ``policy.safety``, and ``cost`` is the fallback only for a file
 never measured -- named in the plan as ``unmeasured``. EVERY FOLDED ROUND is learned
-(:mod:`lab_commons.hpc.learned`), not only the record: measured 2026-10-13 on Ada, nine downstream runs
+(:mod:`lab_commons.compute.learned`), not only the record: measured 2026-10-13 on Ada, nine downstream runs
 were each superseded before their record, so none was learned and every round 0 planned blind.
 """
 
@@ -54,15 +54,15 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc import learned
+from lab_commons.compute import learned
+from lab_commons.compute.learned import OOM_GROWTH, Measured
 from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
-from lab_commons.hpc.measured import OOM_GROWTH, Measured
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance
 from lab_commons.hpc.platforms import LINUX, assign, cannot_run, runnable
-from lab_commons.hpc.records import fold, read_streams
+from lab_commons.hpc.records import fold, job_measured, read_streams
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
     COLLECT_MODULE,
@@ -391,6 +391,7 @@ def gather_run(
         walls=walls,
     )
     planned['clock'] = round_clock(clocks, busy)
+    planned['walls_s'] = walls
     state['measured'] = measured.record()
     learned.learn({'repo': state['repo'], **state['measured']})
     timed_out = 'TIMEOUT' in states.values()
@@ -416,6 +417,9 @@ def gather_run(
     }
     state['record'] = record
     _save(home, state)
+    learned.record_run(
+        state['repo'], state['platform'], (), job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus)
+    )
     return record
 
 

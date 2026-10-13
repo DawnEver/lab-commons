@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
+from lab_commons.compute.learned import Measured, Run
 from lab_commons.hpc.cluster import Runner
-from lab_commons.hpc.measured import Measured
 from lab_commons.hpc.pytest_item import read_stream
 
-__all__ = ['fold', 'read_record', 'read_streams', 'record_name', 'summary', 'write_record']
+__all__ = ['fold', 'job_measured', 'read_record', 'read_streams', 'record_name', 'summary', 'write_record']
 
 
 def fold(
@@ -131,3 +131,17 @@ def write_record(record: dict[str, Any], directory: Path) -> Path:
 def read_record(path: Path) -> dict[str, Any]:
     """The record :func:`write_record` wrote."""
     return json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))
+
+
+def job_measured(rounds: Sequence[dict[str, Any]], outcomes: Iterable[str], measured: Measured, *, cpus: int) -> Run:
+    """What a whole Slurm run measured, as one :class:`~lab_commons.compute.learned.Run`.
+
+    Its peak is one TASK's (the worst file it ran, as :meth:`Measured.worker_gb` prices it, unpadded);
+    its cpu-seconds are every shard's elapsed times the *cpus* each held; its wall is the rounds' makespans.
+    """
+    walls = [r.get('walls_s') or [0.0] for r in rounds]
+    return Run(
+        peak_mem_gb=measured.worker_gb(outcomes, prior_gb=0.0, safety=1.0),
+        cpu_s=sum(sum(w) for w in walls) * cpus,
+        wall_s=max(1.0, sum(max(w) for w in walls)),
+    )
