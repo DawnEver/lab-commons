@@ -45,43 +45,43 @@ def test_a_lane_and_an_integration_push_need_no_part(destination: str) -> None:
     assert 'no part' in decided.message
 
 
-@pytest.mark.parametrize('order', ['linux first', 'windows first'])
-def test_a_linux_and_a_windows_part_compose_in_either_order(order: str) -> None:
-    statuses = [_status('linux', hands={'windows': 2}), _status('windows')]
-    decided = _trunk(statuses if order == 'linux first' else statuses[::-1])
+@pytest.mark.parametrize('order', ['base first', 'windows first'])
+def test_a_base_and_a_windows_part_compose_in_either_order(order: str) -> None:
+    statuses = [_status('base', hands={'windows': 2}), _status('windows')]
+    decided = _trunk(statuses if order == 'base first' else statuses[::-1])
     assert decided.allowed, decided.message
-    assert 'linux=PASS/full' in decided.message
+    assert 'base=PASS/full' in decided.message
     assert 'windows=PASS/full' in decided.message
 
 
 def test_a_missing_part_is_refused_naming_the_part_and_its_producer() -> None:
-    """PLANTED CONTROL: linux hands two ids to windows, and no windows part was posted."""
-    decided = _trunk([_status('linux', hands={'windows': 2})])
+    """PLANTED CONTROL: base hands two ids to windows, and no windows part was posted."""
+    decided = _trunk([_status('base', hands={'windows': 2})])
     assert not decided.allowed
-    assert 'missing the windows part (linux hands 2)' in decided.message
-    assert 'forge tick` serving windows' in decided.message
+    assert 'missing the windows part (base hands 2)' in decided.message
+    assert 'host having every resource it needs' in decided.message
 
 
 @pytest.mark.parametrize(
     ('statuses', 'why'),
     [
-        ([], 'no part is posted'),
-        ([_status('linux', 'FAIL')], 'linux is FAIL of scope full'),
-        ([_status('linux', scope='incremental')], 'linux is PASS of scope incremental'),
-        ([Status('tests/linux', 'pending', 'claim machine=G login=a until=x', '')], 'not a settled part'),
-        ([Status('tests/linux', 'success', 'free text', '')], 'not a settled part'),
-        ([Status('tests/linux', 'success', 'scope=full ran=3 hands=- nowhere=2', '')], 'no declared platform'),
+        ([], 'no tests/base part is posted'),
+        ([_status('jmag')], 'no tests/base part is posted'),
+        ([_status('base', 'FAIL')], 'base is FAIL of scope full'),
+        ([_status('base', scope='incremental')], 'base is PASS of scope incremental'),
+        ([Status('tests/base', 'pending', 'claim machine=G login=a until=x', '')], 'not a settled part'),
+        ([Status('tests/base', 'success', 'free text', '')], 'not a settled part'),
     ],
 )
 def test_the_trunk_refuses_anything_but_every_part_a_full_pass(statuses: list[Status], why: str) -> None:
-    """PLANTED CONTROLS: nothing, a FAIL, an incremental part, a claim, a foreign description, unrunnable ids."""
+    """PLANTED CONTROLS: nothing, a FAIL, an incremental part, a claim, a foreign description, no base."""
     decided = _trunk(statuses)
     assert not decided.allowed
     assert why in decided.message
 
 
 def test_other_contexts_are_not_parts() -> None:
-    assert _trunk([_status('linux'), Status('ci/foreign', 'failure', 'not a part', '')]).allowed
+    assert _trunk([_status('base'), Status('ci/foreign', 'failure', 'not a part', '')]).allowed
 
 
 @pytest.mark.parametrize('error', [NoCredential('no stored credential'), OSError('connection refused')])
@@ -117,12 +117,12 @@ def _forge(monkeypatch: pytest.MonkeyPatch, statuses: list[Status]) -> None:
 
 
 def test_the_cli_reads_the_forge_and_routes_each_destination(tmp_path: Path, monkeypatch) -> None:
-    _forge(monkeypatch, [_status('linux', 'FAIL')])
+    _forge(monkeypatch, [_status('base', 'FAIL')])
     base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
     assert admission.main([*base, '--remote-ref', 'refs/heads/feat/x']) == 0
     assert admission.main([*base, '--remote-ref', 'refs/heads/integrate/main']) == 0
     assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 1
-    _forge(monkeypatch, [_status('linux')])
+    _forge(monkeypatch, [_status('base')])
     assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 0
 
 
@@ -182,7 +182,7 @@ def test_a_push_publishing_many_unnamed_merges_does_no_audit_work(tmp_path: Path
     for name in ('audit', '_audit', 'unnamed', 'classify'):
         monkeypatch.setattr(mergeaudit, name, trap)
     monkeypatch.setattr(admission, 'unprompted_client', lambda _root: None)
-    monkeypatch.setattr(admission, 'status_list', lambda _client, _sha: [_status('linux')])
+    monkeypatch.setattr(admission, 'status_list', lambda _client, _sha: [_status('base')])
     base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
     for ref in ('refs/heads/feat/x', 'refs/heads/integrate/main', 'refs/heads/main'):
         assert admission.main([*base, '--remote-ref', ref]) == 0

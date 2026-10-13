@@ -40,8 +40,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.dev.platformparts import part_context, this_platform
-from lab_commons.dev.producer import producing
+from lab_commons.dev.producer import PRODUCING_VAR
 
 #: What the holder calls itself. Asserted verbatim in the refusal, so the refusal is checked to NAME
 #: rather than merely to refuse.
@@ -120,11 +119,15 @@ def _run_verify(root: Path, environment: dict[str, str]) -> subprocess.Completed
     ``--lock-wait-s 0`` is the production flag rather than a test hook: the queueing branch is not
     what this file is about, and a 30-minute default would make the refusal case a 30-minute test.
     The refusal it produces is the identical one the deadline produces.
+
+    The run is an INTERACTIVE targeted measure, never a producer: a run ``forge serve`` spawned takes no
+    box seat (:mod:`lab_commons.dev.boxwait`), so the producer marker is stripped even when this suite
+    itself runs inside one -- the seat being proved here is the interactive runs'.
     """
-    producer = producing(part_context(this_platform()), 'planted')  # a full suite runs only as the producer
-    env = dict(os.environ) | environment | producer | {'PYTHONPATH': str(root / 'src')}
+    inherited = {k: v for k, v in os.environ.items() if k != PRODUCING_VAR}
+    env = inherited | environment | {'PYTHONPATH': str(root / 'src')}
     return subprocess.run(
-        [sys.executable, '-m', 'lab_commons.dev.verify', '--lock-wait-s', '0'],
+        [sys.executable, '-m', 'lab_commons.dev.verify', '--lock-wait-s', '0', '--', 'tests'],
         cwd=root,
         capture_output=True,
         text=True,

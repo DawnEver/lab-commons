@@ -176,7 +176,7 @@ def test_the_parameter_pin_is_an_equality_not_a_superset(monkeypatch) -> None:
 
 def test_the_parameter_pin_is_the_live_signature() -> None:
     """FLOOR ON THE PIN. An empty set would make the equality above a statement about nothing."""
-    assert frozenset({'stack', 'what', 'wait_s', 'poll_s'}) == HOLD_RUN_SEATS_PARAMETERS
+    assert frozenset({'stack', 'what', 'wait_s', 'poll_s', 'memory_bytes'}) == HOLD_RUN_SEATS_PARAMETERS
 
 
 def test_the_box_pool_is_a_name_rather_than_a_measurement() -> None:

@@ -1,4 +1,4 @@
-"""A run's RESULTS: streams folded into outcomes, and the record ``run-<sha>-<platform>-<req>.json.gz``."""
+"""A run's RESULTS: streams folded into outcomes, and the record ``run-<sha>-<part>-<req>.json.gz``."""
 
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def summary(record: dict[str, Any]) -> str:
 
 
 def record_name(record: dict[str, Any]) -> str:
-    """``run-<sha>-<platform>-<req>.json.gz`` -- one run of one sha on one platform, one request."""
+    """``run-<sha>-<part>-<req>.json.gz`` -- one run of one sha on one platform, one request."""
     return f'run-{record["sha"]}-{record["platform"]}-{record["req"]}.json.gz'
 
 

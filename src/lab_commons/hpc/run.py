@@ -18,12 +18,11 @@ the grants on that cluster; submit the array and leave the run's state on the cl
 pending; a finished round is folded, its unfinished ids re-submitted as the next round, or the record
 returned. NOTHING RESIDENT RUNS ON THE CALLER'S BOX, and the caller's repository is only READ.
 
-NOT COVERED IS NOT PASSED. The commit's own ``[tool.lab_commons.platforms]`` table
-(:mod:`lab_commons.hpc.platforms`) says which markers each platform cannot run; an id the
-assignment rule (:func:`lab_commons.hpc.platforms.assign`) gives to another part is recorded as
-``not-covered`` and listed in the record's ``handed`` with the platforms that CAN run it (``[]`` when
-none can). Admission composes it with the other parts; no part reads it to choose its ids. Only
-``passed`` means passed.
+NOT COVERED IS NOT PASSED. A run produces ONE part, its spec's need-set (:mod:`lab_commons.hpc.needsets`):
+every collected id belonging to another part -- by the resource markers it carries against the commit's
+``[tool.lab_commons.tests] resources`` -- is recorded as ``not-covered`` and listed in the record's
+``handed`` with the part it belongs to. Admission composes it with the other parts; no part reads it to
+choose its ids. Only ``passed`` means passed.
 
 A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its outcomes as they happen
 (:mod:`lab_commons.hpc.pytest_item`); the run reads the streams, not the shards' end-of-run files.
@@ -59,9 +58,9 @@ from lab_commons.compute.learned import OOM_GROWTH, Measured
 from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
+from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance
-from lab_commons.hpc.platforms import LINUX, assign, cannot_run, runnable
 from lab_commons.hpc.records import fold, job_measured, read_streams
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
@@ -296,12 +295,8 @@ def submit_run(
         errored = [node for node in errored if any(n.split('::')[0] == node for n in spec.only)]
     if not ids:
         raise NotSubmitted(_nothing_collected(spec, collected))
-    cannot = {
-        platform: set(parse_ids(run(collect_command(spec, also=expr), None)))
-        for platform in spec.table.parts
-        if (expr := cannot_run(spec.table, platform))
-    }
-    handed = {node: can for node, can in sorted(runnable(ids, cannot).items()) if assign(can) != LINUX}
+    carrying = {name: set(parse_ids(run(collect_command(spec, also=name), None))) for name in spec.vocabulary.resources}
+    handed = {node: owner for node, owner in sorted(need_sets(ids, carrying).items()) if owner != spec.part}
     outcomes: dict[str, str] = dict.fromkeys(handed, 'not-covered')
     outcomes.update(dict.fromkeys(errored, 'error'))
     state: dict[str, Any] = {
@@ -310,7 +305,7 @@ def submit_run(
         'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
         'scope': spec.scope,
         'timeout_s': spec.timeout_s,
-        'platform': LINUX,
+        'platform': spec.part,
         'system': told.get('platform', ''),
         'env': told['env'],
         'cluster': host,
@@ -418,7 +413,10 @@ def gather_run(
     state['record'] = record
     _save(home, state)
     learned.record_run(
-        state['repo'], state['platform'], (), job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus)
+        state['repo'],
+        learned.SLURM,
+        needs_of(state['platform']),
+        job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus),
     )
     return record
 
