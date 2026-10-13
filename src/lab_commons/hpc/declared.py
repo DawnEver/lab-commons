@@ -43,6 +43,7 @@ KNOWN_TABLES: Final = frozenset(
         'areas',
         'artefacts',
         'branchset',
+        'carry',
         'ci',
         'dep',
         'doors',
