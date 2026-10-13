@@ -145,6 +145,8 @@ RETIRED: Final[dict[str, str]] = {
         'nothing: an account is divided by reservations its owner writes (python -m lab_commons.dev.forge reserve '
         '<cluster>/<account> cpu=N --for ... --until ...) -- delete the line'
     ),
+    # A box job's cpu was capped at the box's because its cpu was wall x cores; it is now measured (2026-10-13).
+    'model.fitted': 'nothing: a demand is what the job measured (lab_commons.proc.TreeCpu); forgetick.submitted',
     'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share; reservations divide the account)',
 }
 
