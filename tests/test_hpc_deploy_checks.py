@@ -41,7 +41,7 @@ def test_uv_is_always_needed_and_each_tool_is_installed_or_refused() -> None:
     assert deploy_checks.tool_plan(['cargo', 'cc'], found=lambda _t: True) == ([], [])
 
 
-SPEC: Final = Deployment('login02', 'src', '3.13', (), (Repo('lab-commons', URL, 'trunk'),), '', ('shortq', 'defq'))
+SPEC: Final = Deployment('login02', 'src', '3.13', (Repo('lab-commons', URL, 'trunk'),), '', ('shortq', 'defq'))
 
 
 def test_the_grant_comes_from_slurm_and_the_declaration() -> None:
@@ -59,8 +59,8 @@ def test_the_grant_comes_from_slurm_and_the_declaration() -> None:
     [
         ('a|cpu=1\nb|cpu=2\n', SPEC, '--slurm-account'),
         ('', SPEC, 'no Slurm association'),
-        ('a|cpu=1\n', Deployment('h', 'src', '3.13', (), (), '', ()), '--partition'),
-        ('a|cpu=1\n', Deployment('h', 'src', '3.13', (), (), 'zz', ('q',)), 'zz'),
+        ('a|cpu=1\n', Deployment('h', 'src', '3.13', (), '', ()), '--partition'),
+        ('a|cpu=1\n', Deployment('h', 'src', '3.13', (), 'zz', ('q',)), 'zz'),
     ],
 )
 def test_a_grant_that_cannot_be_derived_is_refused_naming_why(sacct: str, spec: Deployment, named: str) -> None:

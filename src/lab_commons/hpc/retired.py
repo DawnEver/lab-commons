@@ -177,6 +177,27 @@ RETIRED: Final[dict[str, str]] = {
     'served_parts': 'lab_commons.compute.model.admit (needs present on the host, demand within its supply)',
     'declared_parts': 'lab_commons.dev.platformparts.derived (base, and every part a posted part hands to)',
     'part_argv': 'lab_commons.dev.platformparts.producer_argv (the one declared producer, {part} filled)',
+    # Every host serves every candidate class from one queue (user ruling 2026-10-13, "fix all"): ORDER is
+    # rank(), FIT is admit(), exclusivity is a reservation. A serve mode chose refs per host; none survives.
+    '--mode': (
+        'nothing: forge serve / forge tick / workstation deploy|serve take no mode -- every host serves every class '
+        '(rank orders, admit fits); a host that takes no foreign work is reserved whole by its owner '
+        '(forge reserve <host> cpu=<all> --for login:<owner> --until ...)'
+    ),
+    'forgetick.MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
+    'forgetick import MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
+    'develop|quiet': 'nothing: one queue for every host; a host that serves nobody else is reserved whole by its owner',
+    '[deploy] serve': 'nothing: delete the [deploy] serve key from the machine file (forge serve takes no mode)',
+    'schedule] branches': (
+        '[tool.lab_commons.schedule] classes_by_ref = {"<fnmatch>" = "<class>", ...} (ordered, first match; '
+        'a ref no pattern matches is not served)'
+    ),
+    'lane_prefixes': (
+        '[tool.lab_commons.schedule] classes_by_ref (a child branch is a ref the rule classes; '
+        'lab_commons.compute.model.Schedule.class_of)'
+    ),
+    'forgealarm.REPEAT': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
+    'REPEAT: Final': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
 }
 
 
