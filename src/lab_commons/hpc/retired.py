@@ -145,6 +145,12 @@ RETIRED: Final[dict[str, str]] = {
         'nothing: an account is divided by reservations its owner writes (python -m lab_commons.dev.forge reserve '
         '<cluster>/<account> cpu=N --for ... --until ...) -- delete the line'
     ),
+    # A carry is derived from each test's footprint, never declared per repo (2026-10-13).
+    'inert_globs': 'lab_commons.dev.footprint.Footprints (the footprint of each test file, derived at the judged sha)',
+    'parts] inert': (
+        'nothing: what a change reaches is derived per test (lab_commons.dev.footprint); declare only what a '
+        'module reads by path, [tool.lab_commons.carry.reads] -- delete the key'
+    ),
     'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share; reservations divide the account)',
 }
 

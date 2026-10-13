@@ -38,6 +38,7 @@ KNOWN_TABLES: Final = frozenset(
         'artefacts',
         'branchset',
         'capabilities',
+        'carry',
         'ci',
         'dep',
         'doors',

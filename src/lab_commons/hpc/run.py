@@ -49,7 +49,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Final
@@ -62,6 +62,7 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance
 from lab_commons.hpc.platforms import LINUX, assign, cannot_run, runnable
+from lab_commons.hpc.pytest_item import read_stream
 from lab_commons.hpc.records import fold, job_measured, read_streams
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
@@ -88,8 +89,10 @@ __all__ = [
     'RETRIES',
     'NotSubmitted',
     'gather_run',
+    'held_outcomes',
     'item_seconds',
     'load_state',
+    'run_shas',
     'shares_home',
     'submit_run',
 ]
@@ -127,6 +130,7 @@ _CARRIED: Final = (
     'rounds',
     'outcomes',
     'handed',
+    'carried',
 )
 
 
@@ -277,11 +281,17 @@ def submit_run(
     policy: Policy,
     stamp: str | None = None,
     history: dict[str, Any] | None = None,
+    carry: Callable[[str], Mapping[str, tuple[str, str, str]]] | None = None,
 ) -> dict[str, Any]:
     """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns that state.
 
     The state is ``~/ci/runs/<sha>/state.json``; :func:`gather_run` reads it. *history* is a previous
     record, read for its measurements only. Nothing here waits for a job.
+
+    *carry*, given the env key the build reported, names the outcomes earlier runs of THAT env hold for
+    ids whose outcome cannot have changed (``{node: (outcome, origin sha, run sha)}``,
+    :func:`lab_commons.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
+    origin in ``carried`` and never submitted; when nothing is left the record is written at once.
     """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
@@ -304,6 +314,10 @@ def submit_run(
     handed = {node: can for node, can in sorted(runnable(ids, cannot).items()) if assign(can) != LINUX}
     outcomes: dict[str, str] = dict.fromkeys(handed, 'not-covered')
     outcomes.update(dict.fromkeys(errored, 'error'))
+    collected = set(ids)
+    offered = carry(told['env']) if carry else {}
+    taken = {node: held for node, held in offered.items() if node in collected and node not in outcomes}
+    outcomes.update({node: held[0] for node, held in taken.items()})
     state: dict[str, Any] = {
         'sha': spec.sha,
         'repo': spec.repo_url,
@@ -321,9 +335,15 @@ def submit_run(
         'measured': Measured.of(history or {}).record(),
         'rounds': [],
         'oom': 1,
+        'carried': {node: held[1] for node, held in taken.items()},
     }
-    files = group_items([node for node in ids if node not in handed])
+    files = group_items([node for node in ids if node not in handed and node not in taken])
     pending = Measured.of(state['measured']).pack(files, cost, item_seconds(policy))
+    if not pending:  # every id was carried or handed: the record needs no job
+        state['reasons'] = {}
+        state['record'] = _record(state, grant.slurm_account)
+        _save(run, state)
+        return state
     same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
     _submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
     _save(runners[state['current']['account']], state)
@@ -406,21 +426,57 @@ def gather_run(
         _save(home, state)
         return None
     state['outcomes'].update({node: 'lost' for group in pending for node in group})
-    record = {
-        **{key: state[key] for key in _CARRIED},
-        'req': state['stamp'],
-        'account': next(g.slurm_account for g in machine.grants if g.account == account),
-        'job_ids': [r['job_id'] for r in state['rounds']],
-        'plan': state['rounds'][0],
-        'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
-        **state['measured'],
-    }
+    record = _record(state, next(g.slurm_account for g in machine.grants if g.account == account))
     state['record'] = record
     _save(home, state)
     learned.record_run(
         state['repo'], state['platform'], (), job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus)
     )
     return record
+
+
+def _record(state: dict[str, Any], account: str) -> dict[str, Any]:
+    """The run record of a finished *state*; ``carried`` names each outcome another run's sha ran."""
+    return {
+        **{key: state.get(key, {}) for key in _CARRIED},
+        'req': state['stamp'],
+        'account': account,
+        'job_ids': [r['job_id'] for r in state['rounds']],
+        'plan': state['rounds'][0] if state['rounds'] else {},
+        'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
+        **state['measured'],
+    }
+
+
+def run_shas(machine: Machine, runners: dict[str, Runner]) -> list[str]:
+    """Every sha some grant holds a run state of (``~/ci/runs/<sha>/state.json``); an unreachable grant holds none."""
+    found: set[str] = set()
+    for grant in machine.grants:
+        try:
+            listing = runners[grant.account](f'ls {ROOT}/runs/*/state.json 2>/dev/null || true', None)
+        except Unreachable:
+            continue
+        found |= {line.rstrip('/').split('/')[-2] for line in listing.split() if line.endswith('/state.json')}
+    return sorted(found)
+
+
+def held_outcomes(state: dict[str, Any], run: Runner) -> dict[str, tuple[str, str]]:
+    """``{node: (outcome, origin sha)}`` a run's *state* holds, its superseded shards included.
+
+    Its record when it has one, else its folded rounds plus every id the streams of its round in flight
+    already reported -- the finished shards of a SUPERSEDED run.
+
+    An outcome carried into it keeps its origin; one it ran names its own sha.
+    """
+    record = state.get('record')
+    outcomes = dict((record or state)['outcomes'])
+    current = state.get('current')
+    if record is None and current:
+        streams = read_streams(run, f'{ROOT}/trees/{state["sha"]}/.lab-ci/{current["tag"]}')
+        for index, item in enumerate(current['items']):
+            outcomes.update(read_stream(streams.get(index, ''), item['ids'])['outcomes'])
+    origin = (record or state).get('carried', {})
+    return {node: (outcome, origin.get(node, state['sha'])) for node, outcome in outcomes.items() if '::' in node}
 
 
 def _plan_record(plan: Plan, grant: Grant, job_id: str, run_dir: str) -> dict[str, Any]:
