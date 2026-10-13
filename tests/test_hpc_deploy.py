@@ -81,6 +81,7 @@ class Box:
     calls: Path
     tools: Tools
     refused_api: dict[str, str]
+    alarms: list[tuple[str, ...]]
 
     def run(self, *argv: str, host: str = 'login02.int.cluster') -> int:
         return deploy.deploy(
@@ -89,6 +90,7 @@ class Box:
             hostname=host,
             tools=self.tools,
             api=lambda url, _home: next((why for name, why in self.refused_api.items() if f'/{name}.git' in url), ''),
+            alarm=lambda *raised: self.alarms.append(raised),
         )
 
     def logged(self) -> str:
@@ -121,7 +123,7 @@ def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Box:
         id=(sys.executable, answer, 'FAKE_ID', str(calls), 'id'),
         sacctmgr=(sys.executable, answer, 'FAKE_SACCT', str(calls), 'sacctmgr'),
     )
-    return Box(home, tmp_path / 'machine' / 'config.toml', crontab, calls, tools, {})
+    return Box(home, tmp_path / 'machine' / 'config.toml', crontab, calls, tools, {}, [])
 
 
 def test_twice_gives_one_marked_line_per_repo_and_keeps_the_users_own(box: Box) -> None:
@@ -136,10 +138,31 @@ def test_twice_gives_one_marked_line_per_repo_and_keeps_the_users_own(box: Box) 
     alpha = next(line for line in marked if line.endswith('alpha'))
     assert alpha.startswith('*/5 * * * * ')
     assert 'flock -n' in alpha
-    assert 'lab_commons.dev.forge serve --mode integrate' in alpha
+    assert alpha.split(' >> ')[0].endswith('lab_commons.dev.forge serve'), 'serve takes no mode'
     calls = box.logged()
     assert calls.count('git clone') == 3  # the second run updates, never re-clones
     assert 'fetch -q origin +refs/heads/trunk' in calls
+
+
+def test_a_repo_declaring_a_retired_table_is_refused_alone_and_the_others_are_served(
+    box: Box, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The 2026-10-13 incident: one repo's retired table stopped the whole deploy, so the host served none."""
+    assert box.run(*DECLARE) == 0
+    beta = box.home / 'src' / 'beta' / 'pyproject.toml'
+    _write(beta, '[tool.lab_commons.hpc]\ninstall = "uv sync"\n[tool.lab_commons.capabilities]\nx = 1\n')
+    capsys.readouterr()
+    assert box.run() == 2, 'a refused repo still fails the deploy -- after the others are served'
+    marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
+    served = {line.rsplit(deploy_spec.MARK, 1)[1] for line in marked}
+    assert served == {'lab-commons', 'alpha'}, 'the planted control keeps its line; the refused one loses its own'
+    err = capsys.readouterr().err
+    assert 'beta' in err
+    assert '[tool.lab_commons.capabilities] is retired' in err
+    assert [(repo, 'capabilities' in body) for repo, _subject, body in box.alarms] == [(f'{URL}/beta.git', True)]
+    calls = box.logged()
+    assert calls.count('lab-forge-beta.lock') == 1, 'the refused repo is not ticked on the second run'
+    assert calls.count('lab-forge-alpha.lock') == 2
 
 
 def test_the_declaration_is_stored_once_and_a_disagreeing_one_is_refused(
@@ -307,11 +330,16 @@ def test_two_slurm_accounts_are_refused_until_one_is_declared(
 
 
 def test_the_rendered_declaration_reads_back(tmp_path: Path) -> None:
-    spec = deploy_spec.Deployment(
-        'h', 'src', '3.13', ('--mode', 'integrate'), (deploy_spec.Repo('a', 'https://x/a"b', 'r'),), 'acct', ('q',)
-    )
+    spec = deploy_spec.Deployment('h', 'src', '3.13', (deploy_spec.Repo('a', 'https://x/a"b', 'r'),), 'acct', ('q',))
     path = _write(tmp_path / 'config.toml', deploy_spec.render(spec))
     assert deploy_spec.load(path) == spec
+
+
+def test_the_retired_serve_key_is_refused_by_name_with_its_remedy(tmp_path: Path) -> None:
+    spec = deploy_spec.Deployment('h', 'src', '3.13', (deploy_spec.Repo('a', 'https://x/a', 'r'),))
+    stale = deploy_spec.render(spec).replace('[deploy]', '[deploy]' + chr(10) + 'serve = []')
+    with pytest.raises(ValueError, match=r'delete the \[deploy\] serve key'):
+        deploy_spec.load(_write(tmp_path / 'config.toml', stale))
 
 
 def test_the_cron_path_carries_where_slurm_resolved_at_deploy_time(

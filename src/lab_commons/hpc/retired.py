@@ -15,6 +15,8 @@ from typing import Final
 
 __all__ = ['RETIRED', 'refusal', 'refuse_retired_keys']
 
+_BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev/githooks/base.toml)'
+
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
@@ -101,7 +103,10 @@ RETIRED: Final[dict[str, str]] = {
     'githooks.bootstrap': 'lab_commons.dev.hook_install.shim (finds the checkout venv, execs the runner)',
     'branch-push-only': 'a hook row`s refs regex (pre-push: run only for matching pushed refs)',
     'lab_commons.dev.githooks bump-version': 'python -m lab_commons.dev.githooks script bump-version',
-    'lab_commons.dev.githooks branchset-push': 'python -m lab_commons.dev.githooks script branchset-push',
+    # The base pre-push row runs the check in the repo venv; a shell wrapper hunting an interpreter is baggage.
+    'lab_commons.dev.githooks branchset-push': _BRANCHSET_ROW,
+    'githooks script branchset-push': _BRANCHSET_ROW,
+    'branchset-push.sh': _BRANCHSET_ROW,
     'lab_commons.dev.githooks cz-push-range': 'python -m lab_commons.dev.githooks script cz-push-range',
     # Where a run is and what the cluster can take are read from the forge, from any machine; no verb asks over ssh.
     'lab_commons.hpc probe': (
@@ -115,7 +120,7 @@ RETIRED: Final[dict[str, str]] = {
     ': Headroom': 'lab_commons.compute.model.Supply',
     ', Headroom': 'lab_commons.compute.model.Supply',
     'box_headroom': 'lab_commons.compute.probe.box (free cores, memory, OS and tools measured now)',
-    'no free core': "the admission's lacking resource: 'not admitted: lacking cpu' (lab_commons.compute.model.admit)",
+    'no free core': "the admission's lacking resource: 'not admitted: lacking cpu' (compute.admission.admit)",
     # A tick claims in rank order WHILE JOBS ADMIT, several per host (design: one admission, step 6, 2026-10-13).
     'OUTRANKED': (
         'nothing: a tick claims every job that admits, in rank order (lab_commons.dev.forgetick); one that does not '
@@ -124,7 +129,7 @@ RETIRED: Final[dict[str, str]] = {
     'outranked by': "'not admitted: lacking <resource>' (a higher-ranked claim is running demand, never a blocker)",
     'a run in flight here': 'nothing: a run in flight is running demand in the admission (lab_commons.dev.forgeserve)',
     'NO_HEADROOM': 'lab_commons.dev.forgeschedule.NOT_ADMITTED',
-    'no headroom:': "'not admitted: lacking <resource>' (lab_commons.compute.model.Admission.why)",
+    'no headroom:': "'not admitted: lacking <resource>' (lab_commons.compute.admission.Admission.why)",
     # The host card's measured vector is its supply, read by that key only.
     'card.headroom': 'HostCard.supply (what the tick admitted against)',
     '"headroom"': 'the host card key "supply"',
@@ -169,9 +174,34 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.hpc.platforms': 'lab_commons.hpc.needsets (a part is a need-set, tests/<part>)',
     'cannot_run(': 'lab_commons.hpc.needsets.selecting(vocabulary, part) (exactly one need-set)',
     'CAPABILITY_ROWS': 'nothing: every resource is equal (lab_commons.hpc.needsets)',
-    'served_parts': 'lab_commons.compute.model.admit (needs present on the host, demand within its supply)',
+    'served_parts': 'lab_commons.compute.admission.admit (needs present on the host, demand within its supply)',
     'declared_parts': 'lab_commons.dev.platformparts.derived (base, and every part a posted part hands to)',
     'part_argv': 'lab_commons.dev.platformparts.producer_argv (the one declared producer, {part} filled)',
+    # Every host serves every candidate class from one queue (user ruling 2026-10-13, "fix all"): ORDER is
+    # rank(), FIT is admit(), exclusivity is a reservation. A serve mode chose refs per host; none survives.
+    '--mode': (
+        'nothing: forge serve / forge tick / workstation deploy|serve take no mode -- every host serves every class '
+        '(rank orders, admit fits); a host that takes no foreign work is reserved whole by its owner '
+        '(forge reserve <host> --all --for login:<owner> --until ...)'
+    ),
+    'forgetick.MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
+    'forgetick import MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
+    'develop|quiet': 'nothing: one queue for every host; a host that serves nobody else is reserved whole by its owner',
+    '[deploy] serve': 'nothing: delete the [deploy] serve key from the machine file (forge serve takes no mode)',
+    'schedule] branches': (
+        '[tool.lab_commons.schedule] classes_by_ref = {"<fnmatch>" = "<class>", ...} (ordered, first match; '
+        'a ref no pattern matches is not served)'
+    ),
+    'lane_prefixes': (
+        '[tool.lab_commons.schedule] classes_by_ref (a child branch is a ref the rule classes; '
+        'lab_commons.compute.model.Schedule.class_of)'
+    ),
+    'forgealarm.REPEAT': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
+    'REPEAT: Final': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
+    # A reservation LENDS what its holders leave idle, and a holder preempts the loans (user ruling 2026-10-13).
+    'holds_against(': 'lab_commons.compute.admission.idle (a lease keeps only its idle part)',
+    'compute.model.admit': 'lab_commons.compute.admission.admit (the rule: fit, lending, preemption)',
+    'compute.model.Admission': 'lab_commons.compute.admission.Admission',
 }
 
 

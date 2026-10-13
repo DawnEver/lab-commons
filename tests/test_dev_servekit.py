@@ -36,7 +36,7 @@ class _Host:
         run_git(self.kit.parent, 'clone', '-q', '-b', REF, str(self.upstream), 'lab-commons')
         self.machine = tmp_path / 'config.toml'
         repos = (Repo('lab-commons', str(self.upstream), REF), Repo('r', 'https://f/o/r.git', REF))
-        self.machine.write_text(render(Deployment('login1', 'src', '3.13', ('--mode', 'integrate'), repos)), 'utf-8')
+        self.machine.write_text(render(Deployment('login1', 'src', '3.13', repos)), 'utf-8')
         self.calls: list[list[str]] = []
         self.alarms: list = []
         self.served: list[list[str]] = []
@@ -50,7 +50,7 @@ class _Host:
 
     def current(self, *, running: Path | None = None, environ: dict[str, str] | None = None, machine=None) -> int:
         return servekit.current(
-            ['--mode', 'integrate'],
+            ['--json'],
             lambda rest: self.served.append(rest) or 0,
             home=self.home,
             machine_file=self.machine if machine is None else machine,
@@ -65,7 +65,7 @@ class _Host:
 def test_an_unmoved_kit_serves_in_this_process(tmp_path: Path) -> None:
     host = _Host(tmp_path)
     assert host.current() == 0
-    assert (host.served, host.calls) == ([['--mode', 'integrate']], [])
+    assert (host.served, host.calls) == ([['--json']], [])
 
 
 def test_a_moved_kit_is_fast_forwarded_reinstalled_and_the_serve_re_executed(tmp_path: Path) -> None:
@@ -77,7 +77,7 @@ def test_a_moved_kit_is_fast_forwarded_reinstalled_and_the_serve_re_executed(tmp
     install, reexec = host.calls
     assert install[1:3] == ['pip', 'install']
     assert install[-1] == f'lab-commons @ {host.kit.as_uri()}'
-    assert reexec == [sys.executable, '-m', 'lab_commons.dev.forge', 'serve', '--mode', 'integrate']
+    assert reexec == [sys.executable, '-m', 'lab_commons.dev.forge', 'serve', '--json']
     assert host.served == [], 'this process ran the OLD code: only the re-executed serve may claim'
 
 
@@ -93,7 +93,7 @@ def test_the_re_executed_serve_does_not_update_again(tmp_path: Path) -> None:
     _commit(host.upstream, 'newer')
     assert host.current(environ={servekit.CURRENT_VAR: 'x'}) == 0
     assert git_out(host.kit, 'rev-parse', 'HEAD') == host.first
-    assert host.served == [['--mode', 'integrate']]
+    assert host.served == [['--json']]
 
 
 @pytest.mark.parametrize('spoil', ['dirty', 'branch', 'diverged'])
@@ -118,4 +118,4 @@ def test_a_host_with_no_deploy_declaration_is_never_moved(tmp_path: Path) -> Non
     _commit(host.upstream, 'newer')
     assert host.current(machine=tmp_path / 'absent.toml') == 0
     assert git_out(host.kit, 'rev-parse', 'HEAD') == host.first
-    assert host.served == [['--mode', 'integrate']]
+    assert host.served == [['--json']]

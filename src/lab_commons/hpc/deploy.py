@@ -7,7 +7,6 @@ a tracked file, since the forge, its repos and the login host are private to the
     host = "<login host>"          # the ONE host whose crontab serves this account (cron is per host)
     root = "src"                   # the served checkouts live in ~/<root>/<name>
     python = "3.13"                # a uv-managed CPython: manylinux wheels run on an old glibc
-    serve = ["--mode", "integrate"]
     slurm_account = "<account>"    # only when sacctmgr names several
     partitions = ["<partition>", ...]
     repos = [{ name = "lab-commons", url = "<https url>", ref = "<branch>" }, { name = "<repo>", ... }, ...]
@@ -28,6 +27,15 @@ artefact store this account's remote cannot reach (:func:`lab_commons.hpc.rclone
 are then not claimed here); replace this tool's marked crontab lines (one per repo, every 5 min, under
 ``flock -n``) and touch no other line; run one tick of each and print it. ``--dry-run`` reads but changes
 nothing; ``--remove`` deletes the marked lines only. No credential is ever printed.
+
+A REFUSAL BELONGS TO THE REPO THAT EARNED IT (incident 2026-10-13: one repo still declaring a retired
+``[tool.lab_commons.<table>]`` stopped the whole deploy at ``[tools]``, so the host served none of three).
+From ``[checkouts]`` on, every per-repo step handles each repo on its own: a repo whose step fails, whose
+need cannot be installed, or whose declaration is refused (``RetiredTable``, ``OutdatedKit`` of
+:mod:`lab_commons.hpc.declared`) is reported with its reason and skipped by every later step -- it gets no
+crontab line, and the line it had is removed, so a broken line never runs. The deploy finishes for the
+others, then exits 2 naming each refused repo and raising one forge ``run`` alarm per repo (through
+:mod:`lab_commons.dev.forgealarm` in a subprocess: :mod:`lab_commons.hpc` imports no dev code).
 """
 
 from __future__ import annotations
@@ -40,15 +48,16 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
 from lab_commons.config import config_path
+from lab_commons.hpc.declared import OutdatedKit, RetiredTable
 from lab_commons.hpc.deploy_checks import grant_of, store_problem, tool_plan
 from lab_commons.hpc.deploy_spec import (
     DEFAULT_PYTHON,
     DEFAULT_ROOT,
-    DEFAULT_SERVE,
     LAB_COMMONS,
     Deployment,
     Repo,
@@ -80,6 +89,12 @@ _which = shutil.which
 
 #: Reads the forge API a tick needs for one repo url; ``''`` when nothing is refused.
 ApiCheck = Callable[[str, Path], str]
+
+#: Raises one forge alarm: ``(repo url, subject, body)``.
+AlarmSink = Callable[[str, str, str], object]
+
+#: The served repos refused so far, by name, each with its reason; every later per-repo step skips them.
+Refused = dict[str, str]
 
 
 def _crontab(step: Step, lines: Sequence[str]) -> int:
@@ -122,9 +137,7 @@ def _declared(args: argparse.Namespace, path: Path) -> Deployment | str:
         )
     if not (args.host and args.repo):
         return 'a declaration needs both --host and at least one --repo'
-    given = Deployment(
-        args.host, args.root, args.python, DEFAULT_SERVE, tuple(args.repo), args.slurm_account, tuple(args.partition)
-    )
+    given = Deployment(args.host, args.root, args.python, tuple(args.repo), args.slurm_account, tuple(args.partition))
     if stored is not None and stored != given:
         return f'{path} already declares a different [deploy]; edit it there, or run without --host/--repo'
     return given
@@ -220,12 +233,27 @@ def _grant(step: Step, spec: Deployment, path: Path, hostname: str) -> int:
     return 0
 
 
-def _each(step: Step, spec: Deployment, home: Path, title: str, act: Callable[..., int]) -> int:
+def _each(step: Step, spec: Deployment, home: Path, title: str, act: Callable[..., int], *, refused: Refused) -> int:
+    """*act* on each repo not yet refused; a failing or refused one is recorded in *refused*, never stops the rest."""
     emit(title)
-    for repo in spec.repos:
-        if rc := act(step, spec, home, repo):
-            return rc
+    for repo in _healthy(spec, refused):
+        try:
+            rc = act(step, spec, home, repo)
+        except (RetiredTable, OutdatedKit) as why:
+            _refuse(refused, repo, str(why))
+            continue
+        if rc:
+            _refuse(refused, repo, f'{title.split("]", 1)[0].lstrip("[")} exited {rc}')
     return 0
+
+
+def _healthy(spec: Deployment, refused: Refused) -> list[Repo]:
+    return [repo for repo in spec.repos if repo.name not in refused]
+
+
+def _refuse(refused: Refused, repo: Repo, why: str) -> None:
+    emit(f'  {repo.name}: refused, skipped by every later step: {why}', err=True)
+    refused[repo.name] = why
 
 
 #: The Slurm commands a tick runs: it submits, then gathers and watches.
@@ -243,29 +271,40 @@ def _slurm_dirs() -> list[str] | str:
     return [str(Path(where).parent) for where in found.values() if where is not None]
 
 
-def _tools(step: Step, spec: Deployment, home: Path, slurm: Sequence[str]) -> int:
+def _tools(step: Step, spec: Deployment, home: Path, slurm: Sequence[str], refused: Refused) -> int:
+    """``uv`` and each repo's ``needs``; a repo whose declaration, or a need of which, is refused is refused alone."""
     emit("[tools] uv and every declared `needs`, on the tick's PATH")
-    needs = [] if step.dry else [need for r in spec.repos for need in declared(checkout_of(spec, home, r)).needs]
+    needs: dict[str, tuple[str, ...]] = {}
+    for repo in _healthy(spec, refused):
+        try:
+            needs[repo.name] = () if step.dry else declared(checkout_of(spec, home, repo)).needs
+        except (RetiredTable, OutdatedKit) as why:
+            _refuse(refused, repo, str(why))
     path = os.pathsep.join(tick_dirs(home, slurm))
-    installs, refused = tool_plan(needs, found=lambda tool: _which(tool, path=path) is not None)
-    if refused:
-        emit(
-            f'deploy refused: {", ".join(refused)} not on the tick PATH ({":".join(tick_dirs(home, slurm))}) and not '
-            'installable here; ask for it on the login node, or link it into ~/.local/bin, and re-run',
-            err=True,
-        )
-        return 2
+    wanted = [need for each in needs.values() for need in each]
+    installs, failed = tool_plan(wanted, found=lambda tool: _which(tool, path=path) is not None)
     for tool, script in installs:
-        if rc := step.change(f'install {tool}: {script}', [*step.tools.sh, script]):
-            return rc
+        if step.change(f'install {tool}: {script}', [*step.tools.sh, script]):
+            failed.append(tool)
+    remedy = (
+        f'not on the tick PATH ({":".join(tick_dirs(home, slurm))}) and not installable here; ask for it on the '
+        'login node, or link it into ~/.local/bin, and re-run'
+    )
+    if 'uv' in failed:  # every tick needs it: no repo can be served
+        emit(f'deploy refused: uv {remedy}', err=True)
+        return 2
+    for repo in _healthy(spec, refused):
+        if lacking := [need for need in needs.get(repo.name, ()) if need in failed]:
+            _refuse(refused, repo, f'{", ".join(lacking)} {remedy}')
     return 0
 
 
-def _cron(step: Step, spec: Deployment, home: Path, slurm: Sequence[str]) -> int:
+def _cron(step: Step, spec: Deployment, home: Path, slurm: Sequence[str], refused: Refused) -> int:
+    """One marked line per repo not refused; a refused repo's line is removed, so a broken line never runs."""
     emit('[cron] one marked line per served repo')
     if not step.dry:
         (home / '.cache').mkdir(parents=True, exist_ok=True)
-    lines = cron_lines(spec, home, slurm=slurm)
+    lines = cron_lines(replace(spec, repos=tuple(_healthy(spec, refused))), home, slurm=slurm)
     rc = _crontab(step, lines)
     for line in lines:
         emit(f'  {line}')
@@ -291,10 +330,34 @@ def _artefacts(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
     return 0  # a warning, never a refusal: most parts declare no large outputs
 
 
+def _sound(url: str, subject: str, body: str) -> object:
+    """One forge ``run`` alarm, raised by :mod:`lab_commons.dev.forgealarm` in a subprocess (hpc imports no dev)."""
+    argv = [sys.executable, '-m', 'lab_commons.dev.forgealarm', 'run', url, subject, body]
+    return subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
+
+
+def _report(spec: Deployment, refused: Refused, host: str, alarm: AlarmSink) -> int:
+    """0 when every repo is served; else name each refused repo, alarm its owner, and return 2."""
+    if not refused:
+        return 0
+    for repo in spec.repos:
+        if why := refused.get(repo.name):
+            alarm(repo.url, f'the deploy on {host} refused {repo.name}; it is not served there', why)
+            emit(f'deploy refused {repo.name} (not served, no crontab line): {why}', err=True)
+    emit(f'deploy finished for: {", ".join(r.name for r in _healthy(spec, refused)) or "no repo"}', err=True)
+    return 2
+
+
 def deploy(
-    argv: Sequence[str], *, home: Path, hostname: str, tools: Tools | None = None, api: ApiCheck | None = None
+    argv: Sequence[str],
+    *,
+    home: Path,
+    hostname: str,
+    tools: Tools | None = None,
+    api: ApiCheck | None = None,
+    alarm: AlarmSink = _sound,
 ) -> int:
-    """Run the deployment *argv* asks for; 0 done, 2 refused (the message names the remedy)."""
+    """Run the deployment *argv* asks for; 0 done, 2 refused (the message names the remedy and refused repos)."""
     args = _parser().parse_args(list(argv))
     path = args.config or config_path()
     spec = _resolve(args, path)
@@ -320,21 +383,23 @@ def deploy(
     if isinstance(slurm, str):
         emit(f'deploy refused: {slurm}', err=True)
         return 2
+    refused: Refused = {}
+    artefacts = '[artefacts] the rclone remote, where a repo declares one'
     phases = (
         lambda: _credentials(step, spec, home, check),
         lambda: _grant(step, spec, path, hostname),
         lambda: _declare(step, spec, path),
-        lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', update),
-        lambda: _tools(step, spec, home, slurm),
-        lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', build),
-        lambda: _each(step, spec, home, '[artefacts] the rclone remote, where a repo declares one', _artefacts),
-        lambda: _cron(step, spec, home, slurm),
-        lambda: _each(step, spec, home, '[tick] one now, per repo', lambda *a: _tick(*a, slurm)),
+        lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', update, refused=refused),
+        lambda: _tools(step, spec, home, slurm, refused),
+        lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', build, refused=refused),
+        lambda: _each(step, spec, home, artefacts, _artefacts, refused=refused),
+        lambda: _cron(step, spec, home, slurm, refused),
+        lambda: _each(step, spec, home, '[tick] one now, per repo', lambda *a: _tick(*a, slurm), refused=refused),
     )
     for phase in phases:
         if rc := phase():
             return rc
-    return 0
+    return _report(spec, refused, short, alarm)
 
 
 def main(argv: Sequence[str]) -> int:
