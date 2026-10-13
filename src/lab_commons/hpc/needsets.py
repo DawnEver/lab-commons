@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from lab_commons.hpc.declared import kit_tables, pyproject_at
+from lab_commons.hpc.declared import OutdatedKit, kit_tables, pyproject_at
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, Mapping
@@ -106,14 +106,21 @@ def vocabulary_at(repo: Path, sha: str) -> Vocabulary:
 
 
 def declared_at(repo: Path, sha: str) -> tuple[Vocabulary, str]:
-    """``(vocabulary, '')`` at *sha*, or ``(empty, why)`` when the kit refuses that sha's declaration.
+    """``(vocabulary, '')`` at *sha*, or ``(empty, why)`` when that sha's OWN declaration is refused.
 
-    A refusal (a malformed row, an unknown or retired table, unparsable TOML) belongs to the ONE sha
-    carrying it: a reader ranging over many shas blocks that candidate by name and serves the rest.
+    A refusal (a malformed row, a retired table, unparsable TOML) belongs to the ONE sha carrying it:
+    a reader ranging over many shas refuses that candidate by name and serves the rest.
+
+    Raises:
+        OutdatedKit: *sha* declares a table this kit does not know -- the READER is older, not the sha wrong.
+
     """
     try:
         return vocabulary_at(repo, sha), ''
-    except ValueError as why:  # OutdatedKit and TOMLDecodeError are ValueErrors
+    except OutdatedKit as why:
+        msg = f'declaration at {sha[:12]} refused: {why}'
+        raise OutdatedKit(msg) from why
+    except ValueError as why:  # RetiredTable and TOMLDecodeError are ValueErrors
         return Vocabulary(), f'declaration at {sha[:12]} refused: {why}'
 
 
