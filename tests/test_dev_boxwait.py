@@ -139,3 +139,39 @@ def test_an_unnamed_holder_still_produces_an_actionable_line() -> None:
         what='a run with no visible peer',
     )
     assert holders_line(nameless).strip(), 'a refusal with no readable holder still has to say something'
+
+
+#: A light run's declared footprint for these tests: small enough that any box running the suite has it free.
+_LIGHT_BYTES = 64 * 2**20
+
+
+def test_a_light_run_completes_while_a_planted_heavy_holder_holds_the_seat() -> None:
+    """ONE-BOX-ONE-LOCK binds only runs that SATURATE the box (user ruling 2026-10-13: light runs never queue).
+
+    PLANTED CONTROL: the same held seat refuses a saturating run (``wait_s=0``) in the same block, so
+    the light admission is not a seat that stopped excluding anybody.
+    """
+    with CpuSeat('part jmag --full (planted heavy holder)').held():
+        with contextlib.ExitStack() as light:
+            hold_run_seats(light, 'measure:two files', wait_s=0.0, poll_s=_POLL_S, memory_bytes=_LIGHT_BYTES)
+            assert [holder.what for holder in CpuSeat.holders()] == ['part jmag --full (planted heavy holder)'], (
+                'a light run takes no box seat, so a heavy run behind it is never refused by it'
+            )
+            assert {holder.what for holder in EnvironmentSeat.holders(sys.prefix)} == {'measure:two files'}
+        with contextlib.ExitStack() as heavy, pytest.raises(Exhausted):
+            hold_run_seats(heavy, 'a second heavy run', wait_s=0.0, poll_s=_POLL_S)
+
+
+def test_a_light_run_is_admitted_by_its_declared_memory_and_refused_past_it() -> None:
+    """The light class is a DECLARED memory demand, admitted against the box's free memory -- never free.
+
+    PLANTED CONTROL: a demand no box has free (1 EiB) is refused, so the admission reads the demand.
+    """
+    with contextlib.ExitStack() as stack, pytest.raises(Exhausted):
+        hold_run_seats(stack, 'a light run that lies', wait_s=0.0, poll_s=_POLL_S, memory_bytes=2**60)
+
+
+def test_a_non_saturating_seat_without_a_memory_demand_is_refused_at_construction() -> None:
+    """A light run that declares nothing would be admitted by nothing -- that is no admission at all."""
+    with pytest.raises(ValueError, match='memory'):
+        CpuSeat('a light run', saturating=False)
