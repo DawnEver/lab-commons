@@ -53,6 +53,7 @@ KNOWN_TABLES: Final = frozenset(
         'integrator',
         'parts',
         'placement',
+        'requests',
         'schedule',
         'stoprun',
         'tests',

@@ -19,6 +19,8 @@ _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # A request is a job on the part path: admitted by its declared need-set and run (lab-commons 2026-10-13).
+    'claims requests yet': 'lab_commons.dev.forgerequest (admitted by its declared need-set, claimed and run)',
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
     'ONE-RUN-AFTER-INTEGRATION': 'VERDICTS-FROM-THE-FORGE (the forge serve producer runs the full suite, once per sha)',
     'SUBAGENT-NO-HEAVY-NO-PUSH': 'SUBAGENT-NO-PUSH (a full tier refuses everyone outside the producer)',
