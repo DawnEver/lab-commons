@@ -37,7 +37,7 @@ def process_times(pid: int) -> tuple[int, float] | None:
     if os.name != 'nt':
         return None if sys.platform == 'darwin' else _process_times_procfs(pid)
     kernel32 = ctypes.WinDLL('kernel32')
-    handle = kernel32.OpenProcess(_QUERY_LIMITED, False, pid)  # noqa: FBT003 -- bInheritHandle, positional per the Win32 signature
+    handle = kernel32.OpenProcess(_QUERY_LIMITED, 0, pid)  # 0: bInheritHandle, the handle is not inherited
     if not handle:
         return None
     try:
