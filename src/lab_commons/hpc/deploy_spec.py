@@ -13,10 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
+from lab_commons.hpc.retired import RETIRED
+
 __all__ = [
     'DEFAULT_PYTHON',
     'DEFAULT_ROOT',
-    'DEFAULT_SERVE',
     'LAB_COMMONS',
     'MARK',
     'Deployment',
@@ -38,7 +39,6 @@ MARK: Final = '# lab-commons-deploy:'
 
 DEFAULT_ROOT: Final = 'src'
 DEFAULT_PYTHON: Final = '3.13'
-DEFAULT_SERVE: Final = ('--mode', 'integrate')
 
 #: The served repo every tick RUNS: its checkout is installed into every other served venv.
 LAB_COMMONS: Final = 'lab-commons'
@@ -63,7 +63,6 @@ class Deployment:
     host: str
     root: str
     python: str
-    serve: tuple[str, ...]
     repos: tuple[Repo, ...]
     slurm_account: str = ''  # needed only when sacctmgr names several
     partitions: tuple[str, ...] = ()
@@ -74,12 +73,16 @@ def load(path: Path) -> Deployment | None:
     raw = tomllib.loads(path.read_text(encoding='utf-8')).get('deploy') if path.is_file() else None
     if not raw:
         return None
+    if retired := [
+        f'[deploy] {key} is retired: {RETIRED[f"[deploy] {key}"]}' for key in raw if f'[deploy] {key}' in RETIRED
+    ]:
+        msg = f'{path}: ' + '; '.join(retired)
+        raise ValueError(msg)
     try:
         return Deployment(
             host=raw['host'],
             root=raw.get('root', DEFAULT_ROOT),
             python=raw.get('python', DEFAULT_PYTHON),
-            serve=tuple(raw.get('serve', DEFAULT_SERVE)),
             repos=tuple(Repo(r['name'], r['url'], r['ref']) for r in raw['repos']),
             slurm_account=raw.get('slurm_account', ''),
             partitions=tuple(raw.get('partitions', ())),
@@ -101,7 +104,7 @@ def render(spec: Deployment) -> str:
     account = f'slurm_account = {_toml(spec.slurm_account)}\n' if spec.slurm_account else ''
     return (
         f'\n[deploy]\nhost = {_toml(spec.host)}\nroot = {_toml(spec.root)}\npython = {_toml(spec.python)}\n'
-        f'serve = {_list(spec.serve)}\n{account}partitions = {_list(spec.partitions)}\nrepos = [\n{repos}]\n'
+        f'{account}partitions = {_list(spec.partitions)}\nrepos = [\n{repos}]\n'
     )
 
 
@@ -152,11 +155,10 @@ def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: 
     """The shell command of one tick of *repo*: cron PATH, its checkout, ``flock -n``, ``forge serve``."""
     path = ':'.join(tick_dirs(home, slurm))
     cache = home / '.cache'
-    serve = ' '.join(shlex.quote(a) for a in spec.serve)
     command = (
         f'PATH={path}; cd {shlex.quote(str(checkout_of(spec, home, repo)))} && '
         f'flock -n {shlex.quote(str(cache / f"lab-forge-{repo.name}.lock"))} '
-        f'{_VENV_PYTHON} -m lab_commons.dev.forge serve {serve}'
+        f'{_VENV_PYTHON} -m lab_commons.dev.forge serve'
     )
     return command + (f' >> {shlex.quote(str(cache / f"lab-forge-{repo.name}.log"))} 2>&1' if log else '')
 
