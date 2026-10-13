@@ -27,6 +27,7 @@ THE NUMBERS OF THE ORDER ARE DATA, declared once in ``[tool.lab_commons.schedule
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from typing import Any, Final
 
 __all__ = [
     'BRANCH',
+    'FEATURE',
     'INTEGRATION',
     'PR',
     'REQUEST',
@@ -251,6 +253,7 @@ def submitted(demand: Mapping[str, float], supply: Supply) -> Demand:
 #: The class of each candidate source the family knows; a repository may add classes of its own.
 INTEGRATION: Final = 'integration'
 PR: Final = 'pr'
+FEATURE: Final = 'feature'
 BRANCH: Final = 'branch'
 REQUEST: Final = 'request'
 
@@ -265,19 +268,23 @@ class Schedule:
     """``[tool.lab_commons.schedule]``: the family default; a repository overrides key by key."""
 
     classes: Mapping[str, float] = field(
-        default_factory=lambda: {INTEGRATION: 100.0, PR: 60.0, BRANCH: 30.0, REQUEST: 20.0}
+        default_factory=lambda: {INTEGRATION: 100.0, PR: 60.0, FEATURE: 45.0, BRANCH: 30.0, REQUEST: 20.0}
     )
     #: Value gained per hour a candidate waits -- the term that guarantees no class starves forever.
     aging_rate: float = 10.0
     starve_after_hours: Mapping[str, float] = field(
-        default_factory=lambda: {INTEGRATION: 6.0, PR: 12.0, BRANCH: 24.0, REQUEST: 48.0}
+        default_factory=lambda: {INTEGRATION: 6.0, PR: 12.0, FEATURE: 18.0, BRANCH: 24.0, REQUEST: 48.0}
     )
     #: Core-hours one ref of the class may use per 24 h; a class absent here is unbounded.
     daily_budget_core_h: Mapping[str, float] = field(default_factory=dict)
     #: Label -> value added; ``priority:<n>`` adds ``n`` without being declared.
     boosts: Mapping[str, float] = field(default_factory=lambda: {'priority:user': 1000.0})
-    #: Opted-in child branches (fnmatch patterns), served as class ``branch`` beside the integration branch.
-    branches: tuple[str, ...] = ()
+    #: THE ONE RULE naming a child branch's class: ordered ``fnmatch`` pattern -> class, first match wins.
+    #: A ref no pattern matches is not a child and is not served (a PR into integration still is, as ``pr``).
+    #: A declared table REPLACES this default whole: an ordered rule is not merged key by key.
+    classes_by_ref: Mapping[str, str] = field(
+        default_factory=lambda: {'feat/*': FEATURE, 'fix/*': FEATURE, 'lane/*': BRANCH}
+    )
     #: The label that makes an open issue a request.
     request_label: str = 'forge:request'
     #: The expected cost, in hours, of work nothing has measured yet.
@@ -289,6 +296,10 @@ class Schedule:
             msg = f'class {kind!r} is not in [tool.lab_commons.{SCHEDULE_TABLE}] classes {sorted(self.classes)}'
             raise ValueError(msg)
         return float(self.classes[kind])
+
+    def class_of(self, ref: str) -> str | None:
+        """The class :attr:`classes_by_ref` gives child branch *ref* (first match); ``None``: not a child."""
+        return next((kind for one, kind in self.classes_by_ref.items() if fnmatch.fnmatchcase(ref, one)), None)
 
 
 @dataclass(frozen=True)
