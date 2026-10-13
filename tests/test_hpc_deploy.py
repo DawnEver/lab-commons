@@ -17,6 +17,7 @@ import pytest
 from lab_commons.hpc import deploy, deploy_spec, deploy_steps
 from lab_commons.hpc.deploy_steps import Tools
 from lab_commons.hpc.grants import load_grants
+from lab_commons.hpc.retired import RETIRED
 
 URL: Final = 'https://forge.example/team'
 LAB: Final = ('--repo', f'lab-commons={URL}/lab-commons.git@trunk')
@@ -150,7 +151,8 @@ def test_a_repo_declaring_a_retired_table_is_refused_alone_and_the_others_are_se
     """The 2026-10-13 incident: one repo's retired table stopped the whole deploy, so the host served none."""
     assert box.run(*DECLARE) == 0
     beta = box.home / 'src' / 'beta' / 'pyproject.toml'
-    _write(beta, '[tool.lab_commons.hpc]\ninstall = "uv sync"\n[tool.lab_commons.capabilities]\nx = 1\n')
+    retired = min(key for key in RETIRED if key.startswith('[tool.lab_commons.'))  # its spelling lives in the registry
+    _write(beta, f'[tool.lab_commons.hpc]\ninstall = "uv sync"\n{retired}\nx = 1\n')
     capsys.readouterr()
     assert box.run() == 2, 'a refused repo still fails the deploy -- after the others are served'
     marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
@@ -158,8 +160,8 @@ def test_a_repo_declaring_a_retired_table_is_refused_alone_and_the_others_are_se
     assert served == {'lab-commons', 'alpha'}, 'the planted control keeps its line; the refused one loses its own'
     err = capsys.readouterr().err
     assert 'beta' in err
-    assert '[tool.lab_commons.capabilities] is retired' in err
-    assert [(repo, 'capabilities' in body) for repo, _subject, body in box.alarms] == [(f'{URL}/beta.git', True)]
+    assert f'{retired} is retired' in err
+    assert [(repo, retired in body) for repo, _subject, body in box.alarms] == [(f'{URL}/beta.git', True)]
     calls = box.logged()
     assert calls.count('lab-forge-beta.lock') == 1, 'the refused repo is not ticked on the second run'
     assert calls.count('lab-forge-alpha.lock') == 2
