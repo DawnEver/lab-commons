@@ -7,7 +7,6 @@ a tracked file, since the forge, its repos and the login host are private to the
     host = "<login host>"          # the ONE host whose crontab serves this account (cron is per host)
     root = "src"                   # the served checkouts live in ~/<root>/<name>
     python = "3.13"                # a uv-managed CPython: manylinux wheels run on an old glibc
-    serve = ["--mode", "integrate"]
     slurm_account = "<account>"    # only when sacctmgr names several
     partitions = ["<partition>", ...]
     repos = [{ name = "lab-commons", url = "<https url>", ref = "<branch>" }, { name = "<repo>", ... }, ...]
@@ -48,7 +47,6 @@ from lab_commons.hpc.deploy_checks import grant_of, store_problem, tool_plan
 from lab_commons.hpc.deploy_spec import (
     DEFAULT_PYTHON,
     DEFAULT_ROOT,
-    DEFAULT_SERVE,
     LAB_COMMONS,
     Deployment,
     Repo,
@@ -122,9 +120,7 @@ def _declared(args: argparse.Namespace, path: Path) -> Deployment | str:
         )
     if not (args.host and args.repo):
         return 'a declaration needs both --host and at least one --repo'
-    given = Deployment(
-        args.host, args.root, args.python, DEFAULT_SERVE, tuple(args.repo), args.slurm_account, tuple(args.partition)
-    )
+    given = Deployment(args.host, args.root, args.python, tuple(args.repo), args.slurm_account, tuple(args.partition))
     if stored is not None and stored != given:
         return f'{path} already declares a different [deploy]; edit it there, or run without --host/--repo'
     return given

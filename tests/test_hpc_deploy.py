@@ -136,7 +136,7 @@ def test_twice_gives_one_marked_line_per_repo_and_keeps_the_users_own(box: Box) 
     alpha = next(line for line in marked if line.endswith('alpha'))
     assert alpha.startswith('*/5 * * * * ')
     assert 'flock -n' in alpha
-    assert 'lab_commons.dev.forge serve --mode integrate' in alpha
+    assert alpha.split(' >> ')[0].endswith('lab_commons.dev.forge serve'), 'serve takes no mode'
     calls = box.logged()
     assert calls.count('git clone') == 3  # the second run updates, never re-clones
     assert 'fetch -q origin +refs/heads/trunk' in calls
@@ -307,11 +307,16 @@ def test_two_slurm_accounts_are_refused_until_one_is_declared(
 
 
 def test_the_rendered_declaration_reads_back(tmp_path: Path) -> None:
-    spec = deploy_spec.Deployment(
-        'h', 'src', '3.13', ('--mode', 'integrate'), (deploy_spec.Repo('a', 'https://x/a"b', 'r'),), 'acct', ('q',)
-    )
+    spec = deploy_spec.Deployment('h', 'src', '3.13', (deploy_spec.Repo('a', 'https://x/a"b', 'r'),), 'acct', ('q',))
     path = _write(tmp_path / 'config.toml', deploy_spec.render(spec))
     assert deploy_spec.load(path) == spec
+
+
+def test_the_retired_serve_key_is_refused_by_name_with_its_remedy(tmp_path: Path) -> None:
+    spec = deploy_spec.Deployment('h', 'src', '3.13', (deploy_spec.Repo('a', 'https://x/a', 'r'),))
+    stale = deploy_spec.render(spec).replace('[deploy]', '[deploy]' + chr(10) + 'serve = []')
+    with pytest.raises(ValueError, match=r'delete the \[deploy\] serve key'):
+        deploy_spec.load(_write(tmp_path / 'config.toml', stale))
 
 
 def test_the_cron_path_carries_where_slurm_resolved_at_deploy_time(
