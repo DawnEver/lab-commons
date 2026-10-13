@@ -201,3 +201,41 @@ def test_head_from_the_checkout_on_that_branch_and_a_lane_push_are_permitted(rep
     _git(repo, 'checkout', 'lane/x')
     _git(repo, 'commit', '--allow-empty', '-m', 'feat: lane')
     assert _commit(repo, 'push', 'origin', 'HEAD:lane/x').returncode == 0
+
+
+# THE TRUNK moves only by `forge promote`, which pushes the bare `<integration tip sha>:refs/heads/<trunk>`
+# (2026-10-13: the rule above refused exactly that form and blocked promotion).
+
+
+def test_promotes_exact_push_form_onto_the_trunk_passes(repo: Path) -> None:
+    _install_pre_push(repo)
+    _git(repo, 'checkout', 'int/line')
+    _git(repo, 'commit', '--allow-empty', '-m', 'chore(merge): lane')
+    tip = _git(repo, 'rev-parse', 'int/line')
+    _git(repo, 'checkout', 'lane/x')
+    done = _commit(repo, 'push', 'origin', f'{tip}:refs/heads/stable')
+    assert done.returncode == 0, done.stderr
+    assert _remote_sha(repo, 'stable') == tip
+
+
+def test_a_non_tip_sha_onto_the_trunk_is_refused(repo: Path) -> None:
+    _install_pre_push(repo)
+    _git(repo, 'checkout', 'int/line')
+    _git(repo, 'commit', '--allow-empty', '-m', 'chore(merge): one')
+    behind = _git(repo, 'rev-parse', 'HEAD')
+    _git(repo, 'commit', '--allow-empty', '-m', 'chore(merge): two')
+    done = _commit(repo, 'push', 'origin', f'{behind}:refs/heads/stable')
+    assert done.returncode != 0, done.stderr
+    assert 'PUSH-FROM-ITS-OWN-BRANCH' in done.stderr
+    assert 'forge promote' in done.stderr
+    assert _remote_sha(repo, 'stable') != behind
+
+
+def test_the_trunk_from_another_branch_is_refused_even_from_the_trunks_own_branch(repo: Path) -> None:
+    _install_pre_push(repo)
+    _git(repo, 'checkout', 'lane/x')
+    _git(repo, 'commit', '--allow-empty', '-m', 'feat: unreviewed')
+    assert _commit(repo, 'push', 'origin', 'lane/x:stable').returncode != 0
+    _git(repo, 'checkout', 'stable')
+    _git(repo, 'commit', '--allow-empty', '-m', 'fix: straight onto the trunk')
+    assert _commit(repo, 'push', 'origin', 'stable').returncode != 0
