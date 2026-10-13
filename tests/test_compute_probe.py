@@ -105,13 +105,13 @@ def _snapshot(*, cpus: float | None, mem_mb: float | None, submit: int | None, f
 def test_an_account_sums_cpu_and_memory_over_every_grant() -> None:
     first = _snapshot(cpus=100, mem_mb=4096, submit=5)
     second = _snapshot(cpus=None, mem_mb=None, submit=None, free_mem_mb=8192)
-    supply = account('slurm:me', [(32, first, 'normal'), (16, second, 'normal')], workstation='ws-01')
-    assert supply.resources['cpu'] == 48.0  # both shares, not the first grant's alone
+    supply = account('slurm:me', [(first, 'normal'), (second, 'normal')])
+    assert supply.resources['cpu'] == 164.0  # 100 quota + 64 free on the uncapped grant's nodes: not the first alone
     assert supply.resources['mem_gb'] == pytest.approx(12.0, abs=1e-12)  # GB: 4 quota + 8 free on nodes
     assert math.isinf(supply.resources['submits'])  # the second grant's QOS has no submit cap
 
 
 def test_an_account_whose_qos_is_full_has_no_submits() -> None:
-    supply = account('slurm:me', [(8, _snapshot(cpus=8, mem_mb=1024, submit=1), 'normal')], workstation=None)
+    supply = account('slurm:me', [(_snapshot(cpus=8, mem_mb=1024, submit=1), 'normal')])
     assert supply.resources['submits'] == 0.0
     assert 'submits' in supply.present

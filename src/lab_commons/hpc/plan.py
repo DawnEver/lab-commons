@@ -289,18 +289,19 @@ def make_plan(
     )
 
 
-def headroom(snapshot: Snapshot, share: int, workstation: str | None) -> int:
-    """CPUs this workstation may still claim on a grant: ``min(share, quota - others) - mine``.
+def headroom(snapshot: Snapshot) -> int:
+    """CPUs still free on the account: ``quota - held``, a missing quota leaving the schedulable nodes' free CPUs.
 
-    *others* is every CPU the caller's jobs on the account hold that is NOT tagged with *workstation* --
-    other boxes, and untagged jobs, which are someone's even if nobody said whose. A missing quota is no
-    constraint beyond the share.
+    *held* is every CPU the caller's jobs on the account hold, tagged or not. No box's share is carved out in
+    advance: an account is divided by the reservations its owner writes (:mod:`lab_commons.compute.ledger`),
+    which admission subtracts.
     """
-    mine = snapshot.usage.get(workstation, 0.0) if workstation else 0.0
-    others = sum(cpus for tag, cpus in snapshot.usage.items() if not workstation or tag != workstation)
     quota = snapshot.quota.cpus
-    cap = share if quota is None else min(share, quota - others)
-    return max(0, math.floor(cap - mine))
+    if quota is None:
+        cap = float(sum(node.cpus for node in snapshot.nodes if node.schedulable))
+    else:
+        cap = quota - sum(snapshot.usage.values())
+    return max(0, math.floor(cap))
 
 
 def allocate(
@@ -324,13 +325,13 @@ def allocate(
     options: list[tuple[float, int, int, int, Grant, Plan]] = []
     refusals = []
     for order, (grant, snapshot) in enumerate(candidates):
-        room = headroom(snapshot, grant.cpus, workstation)
+        room = headroom(snapshot)
         label = grant.name
         if room < cost.cpus:
             held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items()))
             refusals.append(
                 f'{label}: headroom {room} CPU < {cost.cpus} per item '
-                f'(share {grant.cpus}, quota {snapshot.quota.cpus}, held {held or "nothing"})'
+                f'(quota {snapshot.quota.cpus}, held {held or "nothing"})'
             )
             continue
         try:

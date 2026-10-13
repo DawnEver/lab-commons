@@ -50,7 +50,6 @@ def test_the_grant_comes_from_slurm_and_the_declaration() -> None:
         'user': 'alice',
         'hosts': ['h.x'],
         'slurm_account': 'acct-free',
-        'cpus': 96,
         'partitions': ['shortq', 'defq'],
     }
 
@@ -60,7 +59,6 @@ def test_the_grant_comes_from_slurm_and_the_declaration() -> None:
     [
         ('a|cpu=1\nb|cpu=2\n', SPEC, '--slurm-account'),
         ('', SPEC, 'no Slurm association'),
-        ('a|mem=1G\n', SPEC, 'cpu='),
         ('a|cpu=1\n', Deployment('h', 'src', '3.13', (), (), '', ()), '--partition'),
         ('a|cpu=1\n', Deployment('h', 'src', '3.13', (), (), 'zz', ('q',)), 'zz'),
     ],

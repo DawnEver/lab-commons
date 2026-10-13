@@ -199,18 +199,16 @@ def box(
 
 def account(
     scope: str,
-    snapshots: Sequence[tuple[int, Snapshot, str]],
-    *,
-    workstation: str | None,
+    snapshots: Sequence[tuple[Snapshot, str]],
 ) -> Supply:
-    """A Slurm account over EVERY grant: ``(share, snapshot, qos)`` each, summed; ``submits`` infinite if uncapped.
+    """A Slurm account over EVERY grant: ``(snapshot, qos)`` each, summed; ``submits`` infinite if uncapped.
 
-    ``cpu`` per grant is :func:`lab_commons.hpc.plan.headroom` (its share less what is held); ``mem_gb`` the
+    ``cpu`` per grant is :func:`lab_commons.hpc.plan.headroom` (quota less what is held); ``mem_gb`` the
     quota's remaining memory, else -- uncapped -- the free memory of the schedulable nodes.
     """
     cpu = mem = submits = 0.0
-    for share, snapshot, qos in snapshots:
-        cpu += headroom(snapshot, share, workstation)
+    for snapshot, qos in snapshots:
+        cpu += headroom(snapshot)
         left = snapshot.quota.remaining()['mem']
         mem += (left if left is not None else sum(n.mem_mb for n in snapshot.nodes if n.schedulable)) / 1024
         room = snapshot.quota.submit_room(qos)
