@@ -40,7 +40,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.dev.platformparts import part_context, this_platform
+from lab_commons.dev.platformparts import BASE, part_context
 from lab_commons.dev.producer import producing
 
 #: What the holder calls itself. Asserted verbatim in the refusal, so the refusal is checked to NAME
@@ -121,7 +121,7 @@ def _run_verify(root: Path, environment: dict[str, str]) -> subprocess.Completed
     what this file is about, and a 30-minute default would make the refusal case a 30-minute test.
     The refusal it produces is the identical one the deadline produces.
     """
-    producer = producing(part_context(this_platform()), 'planted')  # a full suite runs only as the producer
+    producer = producing(part_context(BASE), 'planted')  # a full suite runs only as the producer
     env = dict(os.environ) | environment | producer | {'PYTHONPATH': str(root / 'src')}
     return subprocess.run(
         [sys.executable, '-m', 'lab_commons.dev.verify', '--lock-wait-s', '0'],

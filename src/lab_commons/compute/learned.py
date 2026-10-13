@@ -59,7 +59,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     'CLUSTER_PRIOR',
+    'LOCAL',
     'OOM_GROWTH',
+    'SLURM',
     'Measured',
     'Run',
     'demand',
@@ -68,6 +70,7 @@ __all__ = [
     'learn_peaks',
     'learned',
     'learned_demand',
+    'producer_of',
     'record_run',
     'run_of',
     'worker_gb',
@@ -322,13 +325,25 @@ def worker_gb(repo: str, files: Iterable[str], *, prior_gb: float, safety: float
 #: What an unmeasured cluster run is taken to hold: one core (the run sizes its array to what is free).
 CLUSTER_PRIOR: Final = Run(peak_mem_gb=0.0, cpu_s=1.0, wall_s=1.0)
 
+#: The producer a box part runs: the repository's declared ``produce`` in a tree at the sha.
+LOCAL: Final = 'local'
 
-def learned_demand(repo_url: str, *, cluster: bool, cores: int) -> Callable[[str, frozenset[str]], Demand]:
-    """``(part, needs) -> Demand``: what the part's last run measured (:func:`run_of`).
+#: The producer a cluster part runs: a Slurm array (:mod:`lab_commons.hpc.run`).
+SLURM: Final = 'slurm'
 
-    Unmeasured, a cluster part is :data:`CLUSTER_PRIOR` and a box part the whole box (*cores*): an
-    unmeasured box run spreads over every core it is given. Runs are recorded under ``(part, no needs)``;
-    one of each need is added here.
+
+def producer_of(*, cluster: bool) -> str:
+    """The producer key a part's runs are learned under: :data:`SLURM` on a cluster, else :data:`LOCAL`."""
+    return SLURM if cluster else LOCAL
+
+
+def learned_demand(repo_url: str, *, cluster: bool, cores: int) -> Callable[[frozenset[str]], Demand]:
+    """``needs -> Demand``: what the last run of ``(this producer, that need-set)`` measured (:func:`run_of`).
+
+    A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key; the producer is
+    :func:`producer_of`. Unmeasured, a cluster part is :data:`CLUSTER_PRIOR` and a box part the whole box
+    (*cores*): an unmeasured box run spreads over every core it is given.
     """
+    producer = producer_of(cluster=cluster)
     prior = CLUSTER_PRIOR if cluster else Run(peak_mem_gb=0.0, cpu_s=float(cores), wall_s=1.0)
-    return lambda part, needs: (run_of(repo_url, part, ()) or prior).demand(needs)
+    return lambda needs: (run_of(repo_url, producer, needs) or prior).demand(needs)
