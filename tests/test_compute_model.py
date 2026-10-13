@@ -9,16 +9,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from lab_commons.compute.admission import Admission, Held, admit, claimable
 from lab_commons.compute.model import (
-    Admission,
     Demand,
     For,
     Job,
     Reservation,
     Resources,
     Supply,
-    admit,
-    claimable,
 )
 
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
@@ -99,12 +97,12 @@ def test_a_short_resource_is_named_never_a_bare_false() -> None:
 
 def test_running_work_is_subtracted() -> None:
     supply = _supply(cpu=8)
-    assert not admit(PLAIN_JOB, Demand(cpu=4), supply, running=(Resources(cpu=6),), now=NOW)
-    assert admit(PLAIN_JOB, Demand(cpu=4), supply, running=(Resources(cpu=4),), now=NOW)  # CONTROL
+    assert not admit(PLAIN_JOB, Demand(cpu=4), supply, running=(Held(Resources(cpu=6)),), now=NOW)
+    assert admit(PLAIN_JOB, Demand(cpu=4), supply, running=(Held(Resources(cpu=4)),), now=NOW)  # CONTROL
 
 
 @pytest.mark.parametrize(
-    ('matcher', 'blocks'),
+    ('matcher', 'lent'),
     [
         (For(login='carol'), True),  # reserved for somebody else
         (For(login='bob'), False),  # the job's own login
@@ -114,25 +112,22 @@ def test_running_work_is_subtracted() -> None:
         (For(needs=frozenset({'jmag'})), True),
     ],
 )
-def test_a_reservation_blocks_everyone_it_is_not_for(matcher: For, *, blocks: bool) -> None:
-    held = Reservation(HOST, Resources(cpu=6), matcher, until=LATER, by='ws-01-user')
+def test_a_job_a_reservation_is_not_for_is_admitted_only_on_loan_from_it(matcher: For, *, lent: bool) -> None:
+    held = Reservation(HOST, Resources(cpu=6), matcher, until=LATER, by='ws-01-user', id=7)
     got = admit(PLAIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), running=(), now=NOW)
-    assert bool(got) is not blocks
-    if blocks:
-        assert got.lacking == ('cpu',)
+    assert got == Admission(admitted=True, on_loan=7 if lent else 0)
 
 
-def test_an_expired_reservation_does_not_block() -> None:
-    held = Reservation(HOST, Resources(cpu=6), For(login='carol'), until=NOW, by='ws-01-user')
-    assert admit(PLAIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), running=(), now=NOW)
-    assert not admit(
-        PLAIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), running=(), now=NOW - timedelta(seconds=1)
-    )  # CONTROL
+def test_an_expired_reservation_does_not_lend() -> None:
+    held = Reservation(HOST, Resources(cpu=6), For(login='carol'), until=NOW, by='ws-01-user', id=3)
+    assert admit(PLAIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), now=NOW).on_loan == 0
+    live = admit(PLAIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), now=NOW - timedelta(seconds=1))
+    assert live.on_loan == held.id  # CONTROL: live, the same job only borrows
 
 
 def test_another_hosts_reservation_does_not_block() -> None:
-    held = Reservation('hpc:acct', Resources(cpu=6), For(login='carol'), until=LATER, by='carol')
-    assert admit(PLAIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), running=(), now=NOW)
+    held = Reservation('hpc:acct', Resources(cpu=6), For(login='carol'), until=LATER, by='carol', id=3)
+    assert admit(PLAIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), now=NOW) == Admission(admitted=True)
 
 
 def test_a_matcher_names_exactly_one_thing() -> None:
@@ -158,10 +153,43 @@ def test_claim_in_rank_order_skipping_a_non_fit() -> None:
         (_job('d'), Demand(cpu=2)),
     ]
     got = claimable(ranked, _supply(cpu=8), now=NOW)
-    assert [job.sha[:3] for job in got] == ['a00', 'c00']
+    assert [job.sha[:3] for job, _ in got] == ['a00', 'c00']
 
 
 def test_claim_counts_what_already_runs() -> None:
     ranked = [(_job('a'), Demand(cpu=4)), (_job('b'), Demand(cpu=4))]
     assert len(claimable(ranked, _supply(cpu=8), now=NOW)) == 2  # CONTROL
-    assert len(claimable(ranked, _supply(cpu=8), running=(Resources(cpu=1),), now=NOW)) == 1
+    assert len(claimable(ranked, _supply(cpu=8), running=(Held(Resources(cpu=1)),), now=NOW)) == 1
+
+
+# --- the origin: a host and a session hold a lease like a login ----------------------------------------
+
+ORIGIN_JOB = Job('o/kit', 'c' * 40, 'pytest', frozenset(), origin='bob', origin_host='G', session='lane/x')
+
+
+@pytest.mark.parametrize(
+    ('matcher', 'matches'),
+    [
+        (For(host='G'), True),
+        (For(host='H'), False),  # CONTROL: another host's lease
+        (For(session='lane/x'), True),
+        (For(session='lane/y'), False),  # CONTROL: another session's lease
+    ],
+)
+def test_a_host_or_session_lease_is_for_the_jobs_that_carry_that_origin(matcher: For, *, matches: bool) -> None:
+    held = Reservation(HOST, Resources(cpu=6), matcher, until=LATER, by='ws-01-user', id=7)
+    assert held.holds_for(ORIGIN_JOB, HOST, NOW) is matches
+    got = admit(ORIGIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), now=NOW)
+    assert got.on_loan == (0 if matches else 7)
+
+
+def test_a_lease_holds_for_a_job_only_live_and_on_its_own_scope() -> None:
+    held = Reservation(HOST, Resources(cpu=6), For(host='G'), until=LATER, by='ws-01-user')
+    assert held.holds_for(ORIGIN_JOB, HOST, NOW)
+    assert not held.holds_for(ORIGIN_JOB, 'other', NOW)
+    assert not held.holds_for(ORIGIN_JOB, HOST, LATER)
+
+
+def test_a_matcher_names_one_origin_too() -> None:
+    with pytest.raises(ValueError, match='exactly one'):
+        For(host='G', session='lane/x')

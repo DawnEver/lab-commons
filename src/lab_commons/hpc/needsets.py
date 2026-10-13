@@ -13,7 +13,7 @@ PARTS ARE DERIVED, NEVER DECLARED. A test's need-set is the declared resources w
 the suite is partitioned by need-set and each distinct need-set is ONE part, its status context
 ``tests/<part>`` named by :func:`part_name`: the resources sorted and joined by ``+`` (``femm+windows``),
 or :data:`BASE` for the empty set. A new tool is a new marker in ``resources`` and nothing else. Which
-host may produce a part is the admission's (:func:`lab_commons.compute.model.admit`: needs present),
+host may produce a part is the admission's (:func:`lab_commons.compute.admission.admit`: needs present),
 never a table here.
 
 A part's tests are selected by ONE marker expression (:func:`selecting`) -- exactly its need-set, every

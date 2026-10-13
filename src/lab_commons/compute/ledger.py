@@ -82,24 +82,26 @@ class Ask:
     resources: Resources
     for_: For
     until: datetime
+    whole: bool = False  # every resource of the scope, re-read at admission (``--all``)
 
-    def signed(self, by: str) -> Reservation:
-        """The reservation *by* writes."""
-        return Reservation(self.scope, self.resources, self.for_, self.until, by)
+    def signed(self, by: str, lease_id: int = 0) -> Reservation:
+        """The reservation *by* writes, ledger id *lease_id*."""
+        return Reservation(self.scope, self.resources, self.for_, self.until, by, lease_id, self.whole)
+
+
+#: The kinds a lease may be for that name one thing (a need-set is the other kind).
+_NAMED: Final = ('login', 'host', 'session', 'repo')
 
 
 def _for_raw(whom: For) -> dict[str, Any]:
-    if whom.login:
-        return {'login': whom.login}
-    if whom.repo:
-        return {'repo': whom.repo}
-    return {'needs': sorted(whom.needs or ())}
+    named = {'login': whom.login, 'host': whom.host, 'session': whom.session, 'repo': whom.repo}
+    return {kind: value for kind, value in named.items() if value} or {'needs': sorted(whom.needs or ())}
 
 
 def _for_of(raw: Mapping[str, Any]) -> For:
     if 'needs' in raw:
         return For(needs=frozenset(raw['needs']))
-    return For(login=raw.get('login', ''), repo=raw.get('repo', ''))
+    return For(**{kind: str(raw[kind]) for kind in _NAMED if kind in raw})
 
 
 @dataclass(frozen=True)
@@ -113,10 +115,11 @@ class Entry:
     def text(self) -> str:
         """The comment body: the marker, one line a human reads, then the lease as JSON (no writer)."""
         one = self.reservation
-        amounts = ','.join(f'{name}={one.resources[name]:g}' for name in sorted(one.resources))
+        amounts = 'all' if one.whole else ','.join(f'{name}={one.resources[name]:g}' for name in sorted(one.resources))
         raw = {
             'scope': one.scope,
             'resources': dict(one.resources),
+            'all': one.whole,
             'for': _for_raw(one.for_),
             'until': one.until.astimezone(UTC).isoformat(),
         }
@@ -129,7 +132,7 @@ class Entry:
         return {
             'id': self.id,
             'scope': one.scope,
-            'resources': dict(one.resources),
+            'resources': 'all' if one.whole else dict(one.resources),
             'for': _spelled(one.for_),
             'until': one.until.isoformat(),
             'by': one.by,
@@ -139,10 +142,9 @@ class Entry:
 
 def _spelled(whom: For) -> str:
     """The ``--for`` spelling of *whom*."""
-    if whom.login:
-        return f'login:{whom.login}'
-    if whom.repo:
-        return f'repo:{whom.repo}'
+    for kind, value in _for_raw(whom).items():
+        if kind != 'needs':
+            return f'{kind}:{value}'
     return 'needs:' + '+'.join(sorted(whom.needs or ()))
 
 
@@ -152,8 +154,9 @@ def _entry_of(comment: Comment) -> Entry | None:
     if found is None:
         return None
     raw = json.loads(found['json'])
-    ask = Ask(raw['scope'], Resources(raw['resources']), _for_of(raw['for']), datetime.fromisoformat(raw['until']))
-    return Entry(comment.id, ask.signed(comment.author))
+    until = datetime.fromisoformat(raw['until'])
+    ask = Ask(raw['scope'], Resources(raw['resources']), _for_of(raw['for']), until, bool(raw.get('all')))
+    return Entry(comment.id, ask.signed(comment.author, comment.id))
 
 
 # --- who may write ----------------------------------------------------------------------------------------
@@ -219,7 +222,7 @@ def reserve(client: Client, ask: Ask) -> Entry:
         raise ReserveRefused(why or f'{ask.scope} has published no host card')
     entry = Entry(0, ask.signed(writer))
     posted = client.call('POST', f'{client.repo}/issues/{seen.number}/comments', {'body': entry.text()})
-    return Entry(int(posted['id']), entry.reservation)
+    return Entry(int(posted['id']), ask.signed(writer, int(posted['id'])))
 
 
 def release(client: Client, lease_id: int) -> Entry:
@@ -256,13 +259,13 @@ def parse_resources(text: str) -> Resources:
 
 
 def parse_for(text: str) -> For:
-    """``login:X``, ``repo:Y`` or ``needs:a+b`` into whom a reservation is for."""
+    """``login:X``, ``host:H``, ``session:S``, ``repo:Y`` or ``needs:a+b`` into whom a reservation is for."""
     kind, _, value = text.partition(':')
     if kind == 'needs' and value:
         return For(needs=frozenset(value.split('+')))
-    if kind in {'login', 'repo'} and value:
+    if kind in _NAMED and value:
         return For(**{kind: value})
-    msg = f'--for is login:X, repo:Y or needs:a+b, got {text!r}'
+    msg = f'--for is login:X, host:H, session:S, repo:Y or needs:a+b, got {text!r}'
     raise ValueError(msg)
 
 
