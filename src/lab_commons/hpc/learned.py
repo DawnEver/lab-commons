@@ -1,8 +1,9 @@
 """What the last run of a repository MEASURED, carried to its next submit -- one file per repository.
 
 ``<config dir>/hpc-learned/<key>.json`` (beside the machine file), keyed by the
-remote URL: writing a run's record replaces it with the record's measurements
-(:class:`~lab_commons.hpc.measured.Measured`), and ``run submit`` plans from it. Machine-local, so it
+remote URL: every round a gather folds replaces it with the run's measurements so far
+(:class:`~lab_commons.hpc.measured.Measured`, seeded from this file at submit), and ``run submit``
+plans from it. A run superseded before its record has still taught what it ran. Machine-local, so it
 serves every grant the machine holds.
 
 WHY IT IS NOT A FLAG. Measured 2026-10-11: the submit flag naming a previous record was optional and no caller

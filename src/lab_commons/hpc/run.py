@@ -39,7 +39,9 @@ THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overhea
 minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next run reads them
 back (``history``), so an item's time is its file's overhead plus its ids' durations, the array's
 memory is the worst measured peak times ``policy.safety``, and ``cost`` is the fallback only for a file
-never measured -- named in the plan as ``unmeasured``.
+never measured -- named in the plan as ``unmeasured``. EVERY FOLDED ROUND is learned
+(:mod:`lab_commons.hpc.learned`), not only the record: measured 2026-10-13 on Ada, nine downstream runs
+were each superseded before their record, so none was learned and every round 0 planned blind.
 """
 
 from __future__ import annotations
@@ -52,10 +54,11 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.hpc import learned
 from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
-from lab_commons.hpc.measured import Measured
+from lab_commons.hpc.measured import OOM_GROWTH, Measured
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance
 from lab_commons.hpc.platforms import LINUX, assign, cannot_run, runnable
@@ -389,9 +392,10 @@ def gather_run(
     )
     planned['clock'] = round_clock(clocks, busy)
     state['measured'] = measured.record()
+    learned.learn({'repo': state['repo'], **state['measured']})
     timed_out = 'TIMEOUT' in states.values()
     if 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out):
-        state['oom'] *= 2
+        state['oom'] *= OOM_GROWTH
     if timed_out:
         state['min_minutes'] = 2 * planned['minutes']
     if pending and len(state['rounds']) <= RETRIES:

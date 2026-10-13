@@ -16,20 +16,29 @@ AN ID THAT DIES IS PRICED FROM ITS DEATH, NOT FROM ITS SURVIVORS. Measured 2026-
 run): a file whose expensive ids kept being killed was priced at the mean of the cheap ids that finished,
 so every retry was sized shorter than the wall the last one died at, and 325 ids were lost after three
 rounds.
+
+A PEAK READ AT A KILL IS THE LIMIT, NOT THE NEED. Measured 2026-10-13 (Ada): children OOM-killed at
+1 GB read ~1120 MB; kept as measured, the next run would ask 1.5x the limit and die again. A signalled
+item's peak is a FLOOR grown by :data:`OOM_GROWTH` -- what the retry asks -- and never lowers a peak
+already known. The declared ``cost.mem_gb`` is a floor too: the peak is the pytest child's, and the
+task's cgroup also holds the item runner (Ada 2026-10-12: a 150 MB peak priced 225M and 429M, OOM both).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from lab_commons.hpc.config import Cost, Policy
 
-__all__ = ['Measured']
+__all__ = ['OOM_GROWTH', 'Measured']
 
 #: MB per GB, as the plan's memory is written.
 _MB_PER_GB = 1024
+
+#: How much more memory a run asks after an OUT_OF_MEMORY -- the next round's request and a killed peak's floor.
+OOM_GROWTH: Final = 2
 
 
 def _file(node: str) -> str:
@@ -69,7 +78,8 @@ class Measured:
 
         An item may span several files and pays ONE wall; its overhead is SHARED equally among its files,
         so :meth:`estimate`, which sums the shares, gives the same item back what it measured. Its peak is
-        recorded for every file, an upper bound for the file alone.
+        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak is a floor
+        (the module docstring).
         """
         self.durations.update(folded['seconds'])
         for node in folded['seconds']:
@@ -80,10 +90,16 @@ class Measured:
         tests = sum(folded['seconds'].values())
         files = list(dict.fromkeys(_file(n) for n in ids))
         overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
+        peak = done.get('peak_mb')
+        signalled = int(done.get('done', 0)) < 0
         for name in files:
             self.overheads[name] = overhead
-            if done.get('peak_mb') is not None:
-                self.peaks_mb[name] = float(done['peak_mb'])
+            if peak is None:
+                continue
+            if signalled:
+                self.peaks_mb[name] = max(self.peaks_mb.get(name, 0.0), float(peak) * OOM_GROWTH)
+            else:
+                self.peaks_mb[name] = float(peak)
 
     def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float) -> None:
         """An item killed after *spent* seconds: its first unfinished id ran for what the rest does not explain.
@@ -152,8 +168,10 @@ class Measured:
         return items
 
     def mem_gb(self, items: Sequence[Sequence[str]], cost: Cost, policy: Policy) -> float:
-        """The worst measured peak of these items' files times ``policy.safety``; ``cost.mem_gb`` covers the rest."""
+        """The worst measured peak of these items' files times ``policy.safety``, never under ``cost.mem_gb``.
+
+        An unmeasured file is priced at ``cost.mem_gb`` alone, so it cannot mis-price the array.
+        """
         files = {_file(n) for ids in items for n in ids}
-        peaks = [self.peaks_mb[f] for f in files if f in self.peaks_mb]
-        worst = max(peaks, default=0.0) * policy.safety / _MB_PER_GB
-        return worst if len(peaks) == len(files) and worst > 0 else max(worst, cost.mem_gb)
+        worst = max((self.peaks_mb.get(f, 0.0) for f in files), default=0.0) * policy.safety / _MB_PER_GB
+        return max(worst, cost.mem_gb)

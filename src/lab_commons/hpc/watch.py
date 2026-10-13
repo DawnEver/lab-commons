@@ -11,7 +11,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
-from lab_commons.hpc import learned
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant, Machine
@@ -61,7 +60,6 @@ def settle(
                 red = True
                 continue
             path = write_record(record, output)
-            learned.learn(record)
             left.remove(sha)
             red = red or not RED.isdisjoint(record['outcomes'].values())
             emit(
