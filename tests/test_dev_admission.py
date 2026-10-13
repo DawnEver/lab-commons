@@ -147,6 +147,18 @@ def test_no_remote_ref_anywhere_is_a_refused_argv_and_never_an_admission(tmp_pat
     assert refused.value.code == 2
 
 
+def test_a_push_that_only_deletes_refs_admits_nothing_and_passes(tmp_path: Path, monkeypatch) -> None:
+    """``git push origin --delete <b>`` publishes no commit, so there is nothing to judge and nothing to refuse.
+
+    PLANTED CONTROL: the empty-stdin case above stays a refused argv; only git's deletion lines pass.
+    """
+    _forge(monkeypatch, [])
+    zero = '0' * 40
+    lines = f'(delete) {zero} refs/heads/lane/a {"b" * 40}\n(delete) {zero} refs/heads/lane/b {"c" * 40}\n'
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(lines))
+    assert admission.main(['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']) == 0
+
+
 def _git(root: Path, *args: str) -> None:
     command = [_GIT, '-C', str(root), '-c', 'user.email=t@t', '-c', 'user.name=t', *args]
     subprocess.run(command, check=True, capture_output=True, timeout=60)
