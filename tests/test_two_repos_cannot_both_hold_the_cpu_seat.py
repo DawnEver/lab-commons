@@ -10,18 +10,18 @@ at all, because a repo that refuses at least tells somebody.
 A SINGLE-PROCESS TEST CANNOT SEE ANY OF IT. Two ``CpuSeat`` objects in one interpreter agree about
 the record root because they read the same ``os.environ``; the exclusion has to travel through the
 FILESYSTEM or this test is asserting that a dataclass equals itself. So: a holder in a subprocess
-with its own cwd, a real ``python -m lab_commons.dev.verify`` in a differently-named checkout, and
-the verdict read off the second one's exit code and stdout.
+with its own cwd, a HEAVY run's real seat call (``hold_run_seats``, :func:`_run_contender` says why not
+``verify``) in a differently-named checkout, and the verdict read off the second one's exit code and stdout.
 
 THE THREE FLOORS, without which a green here is vacuous:
 
 1. **The pool-name floor.** The holder names a pool of its OWN -- never ``CPU_POOL`` -- and demands
-   only ``BOX_SEATS``. If a future edit makes that dimension pool-scoped, the two never meet, verify
-   is ADMITTED, and :func:`test_a_holder_under_its_own_pool_name_still_excludes_a_second_checkout`
+   only ``BOX_SEATS``. If a future edit makes that dimension pool-scoped, the two never meet, the
+   contender is ADMITTED, and :func:`test_a_holder_under_its_own_pool_name_still_excludes_a_second_checkout`
    reds. Without this the suite would pass against a mechanism that only excludes repos which
    happened to agree on a string.
-2. **The positive floor.** With the two checkouts pointed at DIFFERENT record roots, verify must be
-   ADMITTED and must PASS. A test that only ever sees a refusal cannot tell exclusion from a broken
+2. **The positive floor.** With the two checkouts pointed at DIFFERENT record roots, the contender must
+   be ADMITTED. A test that only ever sees a refusal cannot tell exclusion from a broken
    subprocess, a missing import or a checkout that never ran.
 3. **The named-holder floor.** The refusal must contain the holder's ``what``. "Inconclusive" with
    no name sends its reader to the process table to guess.
@@ -70,7 +70,7 @@ with broker.admit(pool, {BOX_SEATS.name: 1}, what=what):
         time.sleep(0.05)
 """
 
-#: A minimal but REAL checkout: verify runs ruff and pytest over it and must be able to pass.
+#: A minimal but REAL checkout, so the contender runs in a repository of its own.
 _PYPROJECT = """[project]
 name = '{name}'
 version = '0.0.1'
@@ -113,21 +113,37 @@ def _checkout(parent: Path, name: str, package: str) -> Path:
     return root
 
 
-def _run_verify(root: Path, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """``python -m lab_commons.dev.verify`` in *root*, with a ZERO wait so the test bounds itself.
+#: The contender: a HEAVY run's seats taken the way every adopter takes them, ``hold_run_seats`` with no
+#: memory declared, then the verdict ``verify`` publishes -- PASS when admitted, INCONCLUSIVE naming the
+#: holder when refused.
+_CONTENDER = """
+import contextlib, sys
+from lab_commons.dev.boxwait import hold_run_seats, holders_line
+from lab_commons.resources import Exhausted
 
-    ``--lock-wait-s 0`` is the production flag rather than a test hook: the queueing branch is not
-    what this file is about, and a 30-minute default would make the refusal case a 30-minute test.
-    The refusal it produces is the identical one the deadline produces.
+try:
+    with contextlib.ExitStack() as stack:
+        hold_run_seats(stack, 'the beta checkout gate', wait_s=0.0, poll_s=0.05)
+        print('admitted')
+except Exhausted as refused:
+    print('refused -- held by: ' + holders_line(refused))
+    sys.exit(3)
+"""
 
-    The run is an INTERACTIVE targeted measure, never a producer: a run ``forge serve`` spawned takes no
-    box seat (:mod:`lab_commons.dev.boxwait`), so the producer marker is stripped even when this suite
-    itself runs inside one -- the seat being proved here is the interactive runs'.
+
+def _run_contender(root: Path, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """A HEAVY run's seats taken in *root* by a second interpreter, with a ZERO wait so the test bounds itself.
+
+    NOT ``python -m lab_commons.dev.verify`` any more, and the reason is two user rulings meeting: a run
+    ``forge serve`` spawned takes no box seat, and a targeted (LIGHT) selection takes none either (user
+    ruling 2026-10-13: light runs never queue) -- while an interactive full suite is refused as a verdict
+    before it reaches a seat. Every verify an interactive caller can start is light, so verify can no
+    longer stand for "heavy excludes heavy"; the seat call every heavy adopter makes can. The producer
+    marker is stripped even when this suite itself runs inside one, or the contender would take no seat.
     """
     inherited = {k: v for k, v in os.environ.items() if k != PRODUCING_VAR}
-    env = inherited | environment | {'PYTHONPATH': str(root / 'src')}
     return subprocess.run(
-        [sys.executable, '-m', 'lab_commons.dev.verify', '--lock-wait-s', '0', '--', 'tests'],
+        [sys.executable, '-c', _CONTENDER],
         cwd=root,
         capture_output=True,
         text=True,
@@ -135,7 +151,7 @@ def _run_verify(root: Path, environment: dict[str, str]) -> subprocess.Completed
         errors='replace',
         timeout=600,
         check=False,
-        env=env,
+        env=inherited | environment,
     )
 
 
@@ -172,7 +188,7 @@ def test_a_holder_under_its_own_pool_name_still_excludes_a_second_checkout(
     )
     try:
         _await_sentinel(sentinel, holder)
-        refused = _run_verify(beta, {'LAB_COMMONS_RESOURCE_DIR': str(records)})
+        refused = _run_contender(beta, {'LAB_COMMONS_RESOURCE_DIR': str(records)})
     finally:
         stop.write_text('go', encoding='utf-8')
         holder.wait(timeout=60)
@@ -207,15 +223,15 @@ def test_two_record_roots_admit_both_checkouts(tmp_path: Path, checkouts: tuple[
     )
     try:
         _await_sentinel(sentinel, holder)
-        admitted = _run_verify(beta, {'LAB_COMMONS_RESOURCE_DIR': str(beta_records)})
+        admitted = _run_contender(beta, {'LAB_COMMONS_RESOURCE_DIR': str(beta_records)})
     finally:
         stop.write_text('go', encoding='utf-8')
         holder.wait(timeout=60)
 
     output = admitted.stdout + admitted.stderr
     assert admitted.returncode == PASS, (
-        f'the planted checkout must RUN and PASS when nothing excludes it -- exit '
+        f'the second checkout must be ADMITTED when nothing excludes it -- exit '
         f'{admitted.returncode}. A refusal-only test cannot tell exclusion from a broken '
         f'subprocess.\n{output}'
     )
-    assert 'result=pass' in output, f'the positive control must produce a real verdict line\n{output}'
+    assert 'admitted' in output, f'the positive control must reach the held block\n{output}'
