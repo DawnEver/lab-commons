@@ -6,13 +6,46 @@ import gzip
 import json
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from lab_commons.compute.learned import Measured, Run
-from lab_commons.hpc.cluster import Runner
+from lab_commons.hpc.cluster import Runner, Unreachable
+from lab_commons.hpc.grants import Machine
 from lab_commons.hpc.pytest_item import read_stream
+from lab_commons.hpc.shell import ROOT
 
-__all__ = ['fold', 'job_measured', 'read_record', 'read_streams', 'record_name', 'summary', 'write_record']
+__all__ = [
+    'fold',
+    'held_outcomes',
+    'job_measured',
+    'read_record',
+    'read_streams',
+    'record_name',
+    'record_of',
+    'run_shas',
+    'summary',
+    'write_record',
+]
+
+#: State keys the record carries as they are.
+_STATE_KEYS: Final = (
+    'sha',
+    'repo',
+    'scope',
+    'platform',
+    'system',
+    'env',
+    'cluster',
+    'python',
+    'prep',
+    'rounds',
+    'outcomes',
+    'handed',
+    'carried',
+)
+
+#: Outcomes that are not a run's own: never reported, or handed to another part.
+_NOT_RUN: Final = frozenset({'lost', 'missing', 'not-covered'})
 
 
 def fold(
@@ -145,3 +178,51 @@ def job_measured(rounds: Sequence[dict[str, Any]], outcomes: Iterable[str], meas
         cpu_s=sum(sum(w) for w in walls) * cpus,
         wall_s=max(1.0, sum(max(w) for w in walls)),
     )
+
+
+def run_shas(machine: Machine, runners: dict[str, Runner]) -> list[str]:
+    """Every sha some grant holds a run state of (``~/ci/runs/<sha>/state.json``); an unreachable grant holds none."""
+    found: set[str] = set()
+    for grant in machine.grants:
+        try:
+            listing = runners[grant.account](f'ls {ROOT}/runs/*/state.json 2>/dev/null || true', None)
+        except Unreachable:
+            continue
+        found |= {line.rstrip('/').split('/')[-2] for line in listing.split() if line.endswith('/state.json')}
+    return sorted(found)
+
+
+def held_outcomes(state: dict[str, Any], run: Runner) -> dict[str, tuple[str, str]]:
+    """``{node: (outcome, origin sha)}`` a run's *state* holds, its superseded shards included.
+
+    Its record when it has one, else its folded rounds plus every id the streams of its round in flight
+    already reported -- the finished shards of a SUPERSEDED run.
+
+    An outcome carried into it keeps its origin; one it ran names its own sha.
+    """
+    record = state.get('record')
+    outcomes = dict((record or state)['outcomes'])
+    current = state.get('current')
+    if record is None and current:
+        streams = read_streams(run, f'{ROOT}/trees/{state["sha"]}/.lab-ci/{current["tag"]}')
+        for index, item in enumerate(current['items']):
+            outcomes.update(read_stream(streams.get(index, ''), item['ids'])['outcomes'])
+    origin = (record or state).get('carried', {})
+    return {
+        node: (outcome, origin.get(node, state['sha']))
+        for node, outcome in outcomes.items()
+        if '::' in node and outcome not in _NOT_RUN
+    }
+
+
+def record_of(state: dict[str, Any], account: str) -> dict[str, Any]:
+    """The run record of a finished *state*; ``carried`` names each outcome another run's sha ran."""
+    return {
+        **{key: state.get(key, {}) for key in _STATE_KEYS},
+        'req': state['stamp'],
+        'account': account,
+        'job_ids': [r['job_id'] for r in state['rounds']],
+        'plan': state['rounds'][0] if state['rounds'] else {},
+        'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
+        **state['measured'],
+    }

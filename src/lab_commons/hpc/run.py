@@ -62,8 +62,7 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance
 from lab_commons.hpc.platforms import LINUX, assign, cannot_run, runnable
-from lab_commons.hpc.pytest_item import read_stream
-from lab_commons.hpc.records import fold, job_measured, read_streams
+from lab_commons.hpc.records import fold, job_measured, read_streams, record_of
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
     COLLECT_MODULE,
@@ -89,10 +88,8 @@ __all__ = [
     'RETRIES',
     'NotSubmitted',
     'gather_run',
-    'held_outcomes',
     'item_seconds',
     'load_state',
-    'run_shas',
     'shares_home',
     'submit_run',
 ]
@@ -115,23 +112,6 @@ ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COM
 
 #: Rounds after the first that re-run what a killed shard left unfinished.
 RETRIES: Final = 2
-
-#: State keys the record carries as they are.
-_CARRIED: Final = (
-    'sha',
-    'repo',
-    'scope',
-    'platform',
-    'system',
-    'env',
-    'cluster',
-    'python',
-    'prep',
-    'rounds',
-    'outcomes',
-    'handed',
-    'carried',
-)
 
 
 def shares_home(grant: Grant, builder: Grant) -> bool:
@@ -314,9 +294,9 @@ def submit_run(
     handed = {node: can for node, can in sorted(runnable(ids, cannot).items()) if assign(can) != LINUX}
     outcomes: dict[str, str] = dict.fromkeys(handed, 'not-covered')
     outcomes.update(dict.fromkeys(errored, 'error'))
-    collected = set(ids)
+    present = set(ids)
     offered = carry(told['env']) if carry else {}
-    taken = {node: held for node, held in offered.items() if node in collected and node not in outcomes}
+    taken = {node: held for node, held in offered.items() if node in present and node not in outcomes}
     outcomes.update({node: held[0] for node, held in taken.items()})
     state: dict[str, Any] = {
         'sha': spec.sha,
@@ -341,7 +321,7 @@ def submit_run(
     pending = Measured.of(state['measured']).pack(files, cost, item_seconds(policy))
     if not pending:  # every id was carried or handed: the record needs no job
         state['reasons'] = {}
-        state['record'] = _record(state, grant.slurm_account)
+        state['record'] = record_of(state, grant.slurm_account)
         _save(run, state)
         return state
     same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
@@ -426,57 +406,13 @@ def gather_run(
         _save(home, state)
         return None
     state['outcomes'].update({node: 'lost' for group in pending for node in group})
-    record = _record(state, next(g.slurm_account for g in machine.grants if g.account == account))
+    record = record_of(state, next(g.slurm_account for g in machine.grants if g.account == account))
     state['record'] = record
     _save(home, state)
     learned.record_run(
         state['repo'], state['platform'], (), job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus)
     )
     return record
-
-
-def _record(state: dict[str, Any], account: str) -> dict[str, Any]:
-    """The run record of a finished *state*; ``carried`` names each outcome another run's sha ran."""
-    return {
-        **{key: state.get(key, {}) for key in _CARRIED},
-        'req': state['stamp'],
-        'account': account,
-        'job_ids': [r['job_id'] for r in state['rounds']],
-        'plan': state['rounds'][0] if state['rounds'] else {},
-        'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
-        **state['measured'],
-    }
-
-
-def run_shas(machine: Machine, runners: dict[str, Runner]) -> list[str]:
-    """Every sha some grant holds a run state of (``~/ci/runs/<sha>/state.json``); an unreachable grant holds none."""
-    found: set[str] = set()
-    for grant in machine.grants:
-        try:
-            listing = runners[grant.account](f'ls {ROOT}/runs/*/state.json 2>/dev/null || true', None)
-        except Unreachable:
-            continue
-        found |= {line.rstrip('/').split('/')[-2] for line in listing.split() if line.endswith('/state.json')}
-    return sorted(found)
-
-
-def held_outcomes(state: dict[str, Any], run: Runner) -> dict[str, tuple[str, str]]:
-    """``{node: (outcome, origin sha)}`` a run's *state* holds, its superseded shards included.
-
-    Its record when it has one, else its folded rounds plus every id the streams of its round in flight
-    already reported -- the finished shards of a SUPERSEDED run.
-
-    An outcome carried into it keeps its origin; one it ran names its own sha.
-    """
-    record = state.get('record')
-    outcomes = dict((record or state)['outcomes'])
-    current = state.get('current')
-    if record is None and current:
-        streams = read_streams(run, f'{ROOT}/trees/{state["sha"]}/.lab-ci/{current["tag"]}')
-        for index, item in enumerate(current['items']):
-            outcomes.update(read_stream(streams.get(index, ''), item['ids'])['outcomes'])
-    origin = (record or state).get('carried', {})
-    return {node: (outcome, origin.get(node, state['sha'])) for node, outcome in outcomes.items() if '::' in node}
 
 
 def _plan_record(plan: Plan, grant: Grant, job_id: str, run_dir: str) -> dict[str, Any]:
