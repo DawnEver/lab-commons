@@ -8,12 +8,14 @@ nothing. The writer is also refused up front, so a refused reservation is never 
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from lab_commons.compute import ledger
-from lab_commons.compute.model import For, Job, Resources, Supply, admit
+from lab_commons.compute.admission import admit
+from lab_commons.compute.model import For, Job, Resources, Supply
 from lab_commons.dev import forgequeue
 from lab_commons.dev.forgehosts import HostCard, publish
 from tests._forge_state import StateForge
@@ -97,15 +99,27 @@ def test_release_removes_it_and_only_an_authorised_login_may() -> None:
         ledger.release(forge, made.id)
 
 
-def test_a_live_reservation_withholds_its_resources_at_admission() -> None:
+def test_a_live_reservation_lends_its_idle_part_under_its_ledger_id() -> None:
     forge = _forge_with()
-    ledger.reserve(forge, _ask(cpu=12))
+    made = ledger.reserve(forge, _ask(cpu=12))
     held = [one.reservation for one in ledger.read(forge).live(NOW)]
+    assert [one.id for one in held] == [made.id]
     supply = Supply('box-g', Resources(cpu=16))
     other = Job('o/x', 'a' * 40, 'pytest')
     mine = Job('o/r', 'a' * 40, 'pytest')
-    assert admit(other, Resources(cpu=8), supply, reservations=held, now=NOW).lacking == ('cpu',)
-    assert admit(mine, Resources(cpu=8), supply, reservations=held, now=NOW)
+    assert admit(other, Resources(cpu=8), supply, reservations=held, now=NOW).on_loan == made.id
+    assert admit(mine, Resources(cpu=8), supply, reservations=held, now=NOW).on_loan == 0
+
+
+def test_a_whole_scope_lease_round_trips_and_holds_the_supply_as_read_now() -> None:
+    forge = _forge_with()
+    ledger.reserve(forge, ledger.Ask('box-g', Resources(), For(repo='o/r'), LATER, whole=True))
+    (entry,) = ledger.read(forge).live(NOW)
+    assert entry.reservation.whole
+    assert entry.row()['resources'] == 'all'
+    assert entry.reservation.amount(Supply('box-g', Resources(cpu=32))) == Resources(cpu=32)
+    with pytest.raises(ValueError, match='either the whole scope or some resources'):
+        dataclasses.replace(entry.reservation, resources=Resources(cpu=1))
 
 
 # -- the CLI spelling -----------------------------------------------------------------------------------

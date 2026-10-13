@@ -5,15 +5,18 @@
 vector plus the names PRESENT on it (a tool installed with every seat in use is present at 0). A
 **Job** is ``(repo, sha, producer, needs)`` and its ORIGIN (login, host, session); its **Demand** is its
 size. A **Reservation** is a lease on one host or account (its ``scope``), ``for_`` one login, host,
-session, repo or need-set, until a moment. A job a live lease on a scope is for ranks FIRST there.
+session, repo or need-set, until a moment -- some resources, or the WHOLE scope (``--all``). A job a
+live lease on a scope is for ranks FIRST there.
 
-THE RULE, for every host alike::
+THE RULE, for every host alike (user ruling 2026-10-13: a reservation LENDS what its holders leave idle)::
 
     admit(job) = needs(job) <= present(host)
-             and demand(job) <= supply(host) - reservations not for job - running(host)
+             and demand(job) <= supply(host) - running(host) - idle part of live leases not for job
+         or, for a holder:  the same after PREEMPTING loans in its leases, newest first, only as needed
+         or, for any other: the same plus ONE lease's idle part, admitted ON LOAN from that lease
 
-:func:`rank` decides ORDER (value per cost, aging, boosts); :func:`admit` decides FIT;
-:func:`claimable` walks the order and claims what fits.
+:func:`rank` decides ORDER (value per cost, aging, boosts); :mod:`lab_commons.compute.admission` holds the
+RULE -- :func:`~lab_commons.compute.admission.admit` decides FIT, ``claimable`` walks the order and claims what fits.
 
 THE NUMBERS OF THE ORDER ARE DATA, declared once in ``[tool.lab_commons.schedule]`` and loaded by
 :func:`lab_commons.dev.forgeschedule.load_schedule` into a :class:`Schedule`::
@@ -35,7 +38,6 @@ __all__ = [
     'INTEGRATION',
     'PR',
     'REQUEST',
-    'Admission',
     'Candidate',
     'Demand',
     'For',
@@ -45,9 +47,7 @@ __all__ = [
     'Resources',
     'Schedule',
     'Supply',
-    'admit',
     'boost_of',
-    'claimable',
     'expected_cost',
     'fitted',
     'rank',
@@ -206,17 +206,29 @@ class For:
 
 @dataclass(frozen=True)
 class Reservation:
-    """A lease of *resources* on *scope* (a host or an account) for ``for_``, until *until*, written by *by*."""
+    """A lease on *scope* (a host or an account) for ``for_``, until *until*, written by *by*; *id* is its ledger id.
+
+    It holds *resources*, or with *whole* every resource of the scope's supply, RE-READ at each admission
+    (never a number frozen when it was written). What its holders do not use is LENT (:func:`admit`).
+    """
 
     scope: str
     resources: Resources
     for_: For
     until: datetime
     by: str
+    id: int = 0
+    whole: bool = False
 
-    def holds_against(self, job: Job, scope: str, now: datetime) -> bool:
-        """Whether this lease withholds its resources from *job* on *scope* at *now*."""
-        return self.live_on(scope, now) and not self.for_.matches(job)
+    def __post_init__(self) -> None:
+        """Refuse an inconsistent value at construction."""
+        if self.whole == bool(self.resources):
+            msg = f'a reservation holds either the whole scope or some resources, not {self!r}'
+            raise ValueError(msg)
+
+    def amount(self, supply: Supply) -> Resources:
+        """What this lease holds on *supply*: the whole supply now, or its resources."""
+        return supply.resources if self.whole else self.resources
 
     def holds_for(self, job: Job, scope: str, now: datetime) -> bool:
         """Whether this lease is live on *scope* at *now* and for *job*: the job ranks first there."""
@@ -225,71 +237,6 @@ class Reservation:
     def live_on(self, scope: str, now: datetime) -> bool:
         """Whether this lease is on *scope* and unexpired at *now*."""
         return self.scope == scope and now < self.until
-
-
-# --- the rule -------------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Admission:
-    """The verdict of :func:`admit`: admitted, or the resource name(s) lacking -- never a bare False."""
-
-    admitted: bool
-    lacking: tuple[str, ...] = ()
-
-    def __bool__(self) -> bool:
-        """Truthy exactly when admitted."""
-        return self.admitted
-
-    @property
-    def why(self) -> str:
-        """``''`` when admitted, else which resources are lacking."""
-        return '' if self.admitted else f'lacking {", ".join(self.lacking)}'
-
-
-def admit(
-    job: Job,
-    demand: Mapping[str, float],
-    supply: Supply,
-    *,
-    reservations: Iterable[Reservation] = (),
-    running: Iterable[Mapping[str, float]] = (),
-    now: datetime,
-) -> Admission:
-    """THE RULE: needs present, and demand within supply less others' unexpired leases and what runs.
-
-    A missing tool is named before any shortfall: no amount of free cpu makes FEMM installed.
-    """
-    missing = tuple(sorted(job.needs - supply.present))
-    if missing:
-        return Admission(admitted=False, lacking=missing)
-    withheld = total(one.resources for one in reservations if one.holds_against(job, supply.scope, now))
-    free = supply.resources - withheld - total(running)
-    short = Resources(demand).short_of(free)
-    return Admission(admitted=not short, lacking=short)
-
-
-def claimable(
-    ranked: Sequence[tuple[Job, Mapping[str, float]]],
-    supply: Supply,
-    *,
-    reservations: Sequence[Reservation] = (),
-    running: Sequence[Mapping[str, float]] = (),
-    now: datetime,
-) -> list[Job]:
-    """The jobs to claim, walking *ranked* in its order and adding each claim to what runs.
-
-    RANK ORDER IS AUTHORITATIVE, AND A NON-FIT DOES NOT STOP THE WALK: a job that does not fit is
-    skipped and lower-ranked jobs that do fit are still claimed, so a large job never idles a host
-    that has room for smaller ones. (Its starvation, if it lasts, is named by what it lacks.)
-    """
-    taken: list[Mapping[str, float]] = list(running)
-    claimed = []
-    for job, demand in ranked:
-        if admit(job, demand, supply, reservations=reservations, running=taken, now=now):
-            claimed.append(job)
-            taken.append(demand)
-    return claimed
 
 
 def fitted(demand: Mapping[str, float], supply: Supply, *, cluster: bool) -> Demand:

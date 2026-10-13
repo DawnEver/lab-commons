@@ -115,7 +115,7 @@ RETIRED: Final[dict[str, str]] = {
     ': Headroom': 'lab_commons.compute.model.Supply',
     ', Headroom': 'lab_commons.compute.model.Supply',
     'box_headroom': 'lab_commons.compute.probe.box (free cores, memory, OS and tools measured now)',
-    'no free core': "the admission's lacking resource: 'not admitted: lacking cpu' (lab_commons.compute.model.admit)",
+    'no free core': "the admission's lacking resource: 'not admitted: lacking cpu' (compute.admission.admit)",
     # A tick claims in rank order WHILE JOBS ADMIT, several per host (design: one admission, step 6, 2026-10-13).
     'OUTRANKED': (
         'nothing: a tick claims every job that admits, in rank order (lab_commons.dev.forgetick); one that does not '
@@ -124,7 +124,7 @@ RETIRED: Final[dict[str, str]] = {
     'outranked by': "'not admitted: lacking <resource>' (a higher-ranked claim is running demand, never a blocker)",
     'a run in flight here': 'nothing: a run in flight is running demand in the admission (lab_commons.dev.forgeserve)',
     'NO_HEADROOM': 'lab_commons.dev.forgeschedule.NOT_ADMITTED',
-    'no headroom:': "'not admitted: lacking <resource>' (lab_commons.compute.model.Admission.why)",
+    'no headroom:': "'not admitted: lacking <resource>' (lab_commons.compute.admission.Admission.why)",
     # The host card's measured vector is its supply, read by that key only.
     'card.headroom': 'HostCard.supply (what the tick admitted against)',
     '"headroom"': 'the host card key "supply"',
@@ -146,6 +146,10 @@ RETIRED: Final[dict[str, str]] = {
         '<cluster>/<account> cpu=N --for ... --until ...) -- delete the line'
     ),
     'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share; reservations divide the account)',
+    # A reservation LENDS what its holders leave idle, and a holder preempts the loans (user ruling 2026-10-13).
+    'holds_against(': 'lab_commons.compute.admission.idle (a lease keeps only its idle part)',
+    'compute.model.admit': 'lab_commons.compute.admission.admit (the rule: fit, lending, preemption)',
+    'compute.model.Admission': 'lab_commons.compute.admission.Admission',
 }
 
 

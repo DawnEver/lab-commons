@@ -82,10 +82,11 @@ class Ask:
     resources: Resources
     for_: For
     until: datetime
+    whole: bool = False  # every resource of the scope, re-read at admission (``--all``)
 
-    def signed(self, by: str) -> Reservation:
-        """The reservation *by* writes."""
-        return Reservation(self.scope, self.resources, self.for_, self.until, by)
+    def signed(self, by: str, lease_id: int = 0) -> Reservation:
+        """The reservation *by* writes, ledger id *lease_id*."""
+        return Reservation(self.scope, self.resources, self.for_, self.until, by, lease_id, self.whole)
 
 
 #: The kinds a lease may be for that name one thing (a need-set is the other kind).
@@ -114,10 +115,11 @@ class Entry:
     def text(self) -> str:
         """The comment body: the marker, one line a human reads, then the lease as JSON (no writer)."""
         one = self.reservation
-        amounts = ','.join(f'{name}={one.resources[name]:g}' for name in sorted(one.resources))
+        amounts = 'all' if one.whole else ','.join(f'{name}={one.resources[name]:g}' for name in sorted(one.resources))
         raw = {
             'scope': one.scope,
             'resources': dict(one.resources),
+            'all': one.whole,
             'for': _for_raw(one.for_),
             'until': one.until.astimezone(UTC).isoformat(),
         }
@@ -130,7 +132,7 @@ class Entry:
         return {
             'id': self.id,
             'scope': one.scope,
-            'resources': dict(one.resources),
+            'resources': 'all' if one.whole else dict(one.resources),
             'for': _spelled(one.for_),
             'until': one.until.isoformat(),
             'by': one.by,
@@ -152,8 +154,9 @@ def _entry_of(comment: Comment) -> Entry | None:
     if found is None:
         return None
     raw = json.loads(found['json'])
-    ask = Ask(raw['scope'], Resources(raw['resources']), _for_of(raw['for']), datetime.fromisoformat(raw['until']))
-    return Entry(comment.id, ask.signed(comment.author))
+    until = datetime.fromisoformat(raw['until'])
+    ask = Ask(raw['scope'], Resources(raw['resources']), _for_of(raw['for']), until, bool(raw.get('all')))
+    return Entry(comment.id, ask.signed(comment.author, comment.id))
 
 
 # --- who may write ----------------------------------------------------------------------------------------
@@ -219,7 +222,7 @@ def reserve(client: Client, ask: Ask) -> Entry:
         raise ReserveRefused(why or f'{ask.scope} has published no host card')
     entry = Entry(0, ask.signed(writer))
     posted = client.call('POST', f'{client.repo}/issues/{seen.number}/comments', {'body': entry.text()})
-    return Entry(int(posted['id']), entry.reservation)
+    return Entry(int(posted['id']), ask.signed(writer, int(posted['id'])))
 
 
 def release(client: Client, lease_id: int) -> Entry:
