@@ -12,7 +12,7 @@ takes none. ``run build --sha <sha> --repo-url <url>`` is ``run submit``'s fetch
 prints the ``workdir``/``setup`` a job file names to run ANY entry over its items in that commit's tree and
 env (``submit -c``), and collects, submits and records nothing. ``run gather --sha <sha> -o <dir>`` is
 one short call -- where the run is and exit :data:`PENDING`, or the record written to
-``<dir>/run-<sha>-<platform>-<req>.json.gz`` (exit 1 if any id is red, lost or missing); ``--wait``
+``<dir>/run-<sha>-<part>-<req>.json.gz`` (exit 1 if any id is red, lost or missing); ``--wait``
 blocks until the record. All three RUN ON THE CLUSTER LOGIN NODE with its own shell
 (:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused
 on a box without ``sbatch`` -- no workstation submits over ssh. WHERE A RUN IS, AND WHAT THE CLUSTER CAN
@@ -54,8 +54,8 @@ from lab_commons.hpc.cluster import (
 )
 from lab_commons.hpc.config import Config, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
+from lab_commons.hpc.needsets import BASE, vocabulary_at
 from lab_commons.hpc.plan import Plan, allocate
-from lab_commons.hpc.platforms import table_at
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import NotSubmitted, build_run, submit_run
 from lab_commons.hpc.shell import ENV, FULL, INCREMENTAL, ROOT, RunSpec
@@ -188,7 +188,8 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
         repo_url=args.repo_url,
         collect=args.collect,
         select=args.select,
-        table=table_at(args.repo, args.sha),
+        vocabulary=vocabulary_at(args.repo, args.sha),
+        part=args.part,
         python=args.python,
         pack_from=args.repo,
         builds=builds,
@@ -264,11 +265,12 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
     group.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
     group.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
+    group.add_argument('--part', default=BASE, help=f'run submit: the part (a need-set) to run; default {BASE}')
     group.add_argument(
         '--repo',
         type=Path,
         default=Path.cwd(),
-        help='local repository, READ only: its [tool.lab_commons.platforms] at --sha; a pack if the remote lacks it',
+        help='local repository, READ only: its declaration at --sha; a pack if the remote lacks it',
     )
     group.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
     return parser

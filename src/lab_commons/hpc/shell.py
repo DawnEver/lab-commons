@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Final
 
 from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds
-from lab_commons.hpc.platforms import Table
+from lab_commons.hpc.needsets import BASE, Vocabulary
 
 __all__ = [
     'BUILD_FAILED',
@@ -87,14 +87,16 @@ class RunSpec:
     """What to test and how to build it. Shell strings run on the cluster inside the tree.
 
     HOW TO BUILD is the commit's own declaration, read into :attr:`builds` (:func:`lab_commons.hpc.builds.builds_at`):
-    the install command, the login-node needs and the env key over every input that builds the env.
+    the install command, the login-node needs and the env key over every input that builds the env. WHAT TO
+    RUN is :attr:`part`, a need-set over the commit's :attr:`vocabulary` (:mod:`lab_commons.hpc.needsets`).
     """
 
     sha: str
     repo_url: str
     collect: str = ''
     select: str = ''
-    table: Table = field(default_factory=Table)
+    vocabulary: Vocabulary = field(default_factory=Vocabulary)
+    part: str = BASE
     python: str = ''
     pack_from: Path | None = None
     builds: Builds = field(default_factory=Builds)
