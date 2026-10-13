@@ -3,8 +3,9 @@
 **Resources** are named, countable, non-negative quantities, and ALL ARE EQUAL: ``cpu``, ``mem_gb``,
 ``jmag``, ``femm``, ``windows``... A name a vector omits is zero. A host's **Supply** is its measured
 vector plus the names PRESENT on it (a tool installed with every seat in use is present at 0). A
-**Job** is ``(repo, sha, producer, needs)``; its **Demand** is its size. A **Reservation** is a lease
-on one host or account (its ``scope``), ``for_`` one login, repo or need-set, until a moment.
+**Job** is ``(repo, sha, producer, needs)`` and its ORIGIN (login, host, session); its **Demand** is its
+size. A **Reservation** is a lease on one host or account (its ``scope``), ``for_`` one login, host,
+session, repo or need-set, until a moment. A job a live lease on a scope is for ranks FIRST there.
 
 THE RULE, for every host alike::
 
@@ -24,7 +25,7 @@ THE NUMBERS OF THE ORDER ARE DATA, declared once in ``[tool.lab_commons.schedule
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Final
@@ -156,7 +157,9 @@ class Supply:
 class Job:
     """One unit of work: *producer* run at *sha* of *repo*, needing the resource names *needs*.
 
-    *origin* is the forge login that asked for it ('' for a branch head) -- what a login reservation matches.
+    *origin* is the forge login that asked for it ('' for a branch head) -- what a login reservation matches;
+    *origin_host* the host card that created it, VOUCHED for by that login ('' when unknown); *session* the
+    ref it was pushed to (one lane is one agent session) -- what host and session reservations match.
     """
 
     repo: str
@@ -164,11 +167,13 @@ class Job:
     producer: str
     needs: frozenset[str] = frozenset()
     origin: str = ''
+    origin_host: str = ''
+    session: str = ''
 
 
 @dataclass(frozen=True)
 class For:
-    """Whom a reservation is for: exactly one of a login, a repo, or a need-set.
+    """Whom a reservation is for: exactly one of a login, a host, a session, a repo, or a need-set.
 
     A need-set matches every job whose needs CONTAIN it (a lease for ``{jmag}`` serves any JMAG job).
     """
@@ -176,18 +181,24 @@ class For:
     login: str = ''
     repo: str = ''
     needs: frozenset[str] | None = None
+    host: str = ''
+    session: str = ''
 
     def __post_init__(self) -> None:
         """Refuse an inconsistent value at construction."""
-        given = [bool(self.login), bool(self.repo), self.needs is not None]
+        given = [bool(self.login), bool(self.host), bool(self.session), bool(self.repo), self.needs is not None]
         if sum(given) != 1:
-            msg = f'a reservation is for exactly one login, repo or need-set, not {self!r}'
+            msg = f'a reservation is for exactly one login, host, session, repo or need-set, not {self!r}'
             raise ValueError(msg)
 
     def matches(self, job: Job) -> bool:
         """Whether *job* is one this reservation is for."""
         if self.login:
             return job.origin == self.login
+        if self.host:
+            return job.origin_host == self.host
+        if self.session:
+            return job.session == self.session
         if self.repo:
             return job.repo == self.repo
         return self.needs is not None and self.needs <= job.needs
@@ -205,7 +216,15 @@ class Reservation:
 
     def holds_against(self, job: Job, scope: str, now: datetime) -> bool:
         """Whether this lease withholds its resources from *job* on *scope* at *now*."""
-        return self.scope == scope and now < self.until and not self.for_.matches(job)
+        return self.live_on(scope, now) and not self.for_.matches(job)
+
+    def holds_for(self, job: Job, scope: str, now: datetime) -> bool:
+        """Whether this lease is live on *scope* at *now* and for *job*: the job ranks first there."""
+        return self.live_on(scope, now) and self.for_.matches(job)
+
+    def live_on(self, scope: str, now: datetime) -> bool:
+        """Whether this lease is on *scope* and unexpired at *now*."""
+        return self.scope == scope and now < self.until
 
 
 # --- the rule -------------------------------------------------------------------------------------------
@@ -346,6 +365,8 @@ class Candidate:
     labels: tuple[str, ...] = ()
     number: int = 0
     origin: str = ''  # the forge login whose PR or request it is; '' for a branch head
+    origin_host: str = ''  # the host card it says created it; kept only where its origin login vouches for it
+    session: str = ''  # the ref it was pushed to (one lane is one session); '' for a request
 
     @property
     def key(self) -> str:
@@ -363,6 +384,7 @@ class Ranked:
     score: float
     wait_h: float
     blocked: str = ''
+    reserved: bool = False  # a live lease on the ranking scope is for it: it ranks first there
 
 
 def boost_of(labels: Sequence[str], schedule: Schedule) -> float:
@@ -399,11 +421,13 @@ def rank(
     *,
     cost_h: Mapping[str, float],
     weights: Mapping[str, float] | None = None,
+    reserved: Callable[[Candidate], bool] = lambda _: False,
 ) -> tuple[Ranked, ...]:
-    """Every candidate scored and ordered, highest score first. PURE: the one ordering rule.
+    """Every candidate scored and ordered: those *reserved* first (a live lease here is for them), then by score.
 
-    *schedules* and *cost_h* are keyed by repo; *weights* by repo, 1 for a repo it omits. A host's own
-    user is served by its own reserve (:mod:`lab_commons.compute.ledger`), never by a lift in the order.
+    PURE: the one ordering rule. *schedules* and *cost_h* are keyed by repo; *weights* by repo, 1 for a
+    repo it omits. A reservation holder is never starved by higher-scored foreign work on the scope it
+    holds. A host's own user is served by its own reserve (:mod:`lab_commons.compute.ledger`), never by a lift.
     """
     weights = weights or {}
     ranked = []
@@ -412,8 +436,11 @@ def rank(
         worth = value(one, schedule, now)
         cost = max(cost_h.get(one.repo, schedule.prior_cost_h), 1e-6)
         wait_h = max(0.0, (now - one.since).total_seconds() / 3600)
-        ranked.append(Ranked(one, worth, cost, weights.get(one.repo, 1.0) * worth / cost, wait_h))
-    return tuple(sorted(ranked, key=lambda item: (-item.score, item.candidate.since, item.candidate.key)))
+        score = weights.get(one.repo, 1.0) * worth / cost
+        ranked.append(Ranked(one, worth, cost, score, wait_h, reserved=reserved(one)))
+    return tuple(
+        sorted(ranked, key=lambda item: (not item.reserved, -item.score, item.candidate.since, item.candidate.key))
+    )
 
 
 def starved(ranked: Sequence[Ranked], schedules: Mapping[str, Schedule]) -> tuple[Ranked, ...]:

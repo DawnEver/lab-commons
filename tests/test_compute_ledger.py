@@ -115,6 +115,8 @@ def test_the_cli_spelling_parses_amounts_whom_and_until() -> None:
     assert ledger.parse_resources('cpu=8,mem_gb=32.5,jmag=1') == Resources(cpu=8, mem_gb=32.5, jmag=1)
     assert ledger.parse_for('login:bob') == For(login='bob')
     assert ledger.parse_for('repo:o/r') == For(repo='o/r')
+    assert ledger.parse_for('host:G') == For(host='G')
+    assert ledger.parse_for('session:lane/x') == For(session='lane/x')
     assert ledger.parse_for('needs:jmag+windows') == For(needs=frozenset({'jmag', 'windows'}))
     assert ledger.parse_until('36h', NOW) == NOW + timedelta(hours=36)
     assert ledger.parse_until('2d', NOW) == NOW + timedelta(days=2)
@@ -158,3 +160,13 @@ def test_the_queue_lists_each_live_reservation_and_flags_a_refused_writer() -> N
     assert lines[at + 1].startswith(f'  {made.id}  box-g  cpu=8  for repo:o/r  until ')
     assert lines[at + 1].endswith('by alice')
     assert lines[at + 2].endswith('REFUSED: mallory may not reserve box-g')
+
+
+def test_a_host_and_a_session_lease_survive_the_ledger() -> None:
+    forge = _forge_with()
+    for whom in (For(host='box-g'), For(session='lane/x')):
+        ledger.reserve(forge, ledger.Ask('box-g', Resources(cpu=1), whom, LATER))
+    seen = [one.reservation.for_ for one in ledger.read(forge).live(NOW)]
+    assert For(host='box-g') in seen
+    assert For(session='lane/x') in seen
+    assert {one.row()['for'] for one in ledger.read(forge).entries} >= {'host:box-g', 'session:lane/x'}

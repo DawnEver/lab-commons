@@ -165,3 +165,35 @@ def test_claim_counts_what_already_runs() -> None:
     ranked = [(_job('a'), Demand(cpu=4)), (_job('b'), Demand(cpu=4))]
     assert len(claimable(ranked, _supply(cpu=8), now=NOW)) == 2  # CONTROL
     assert len(claimable(ranked, _supply(cpu=8), running=(Resources(cpu=1),), now=NOW)) == 1
+
+
+# --- the origin: a host and a session hold a lease like a login ----------------------------------------
+
+ORIGIN_JOB = Job('o/kit', 'c' * 40, 'pytest', frozenset(), origin='bob', origin_host='G', session='lane/x')
+
+
+@pytest.mark.parametrize(
+    ('matcher', 'matches'),
+    [
+        (For(host='G'), True),
+        (For(host='H'), False),  # CONTROL: another host's lease
+        (For(session='lane/x'), True),
+        (For(session='lane/y'), False),  # CONTROL: another session's lease
+    ],
+)
+def test_a_host_or_session_lease_is_for_the_jobs_that_carry_that_origin(matcher: For, *, matches: bool) -> None:
+    held = Reservation(HOST, Resources(cpu=6), matcher, until=LATER, by='ws-01-user')
+    assert held.holds_for(ORIGIN_JOB, HOST, NOW) is matches
+    assert bool(admit(ORIGIN_JOB, Demand(cpu=4), _supply(cpu=8), reservations=(held,), now=NOW)) is matches
+
+
+def test_a_lease_holds_for_a_job_only_live_and_on_its_own_scope() -> None:
+    held = Reservation(HOST, Resources(cpu=6), For(host='G'), until=LATER, by='ws-01-user')
+    assert held.holds_for(ORIGIN_JOB, HOST, NOW)
+    assert not held.holds_for(ORIGIN_JOB, 'other', NOW)
+    assert not held.holds_for(ORIGIN_JOB, HOST, LATER)
+
+
+def test_a_matcher_names_one_origin_too() -> None:
+    with pytest.raises(ValueError, match='exactly one'):
+        For(host='G', session='lane/x')
