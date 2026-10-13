@@ -108,6 +108,13 @@ RETIRED: Final[dict[str, str]] = {
     ),
     'lab_commons.hpc run status': 'python -m lab_commons.dev.forge queue (each run in flight shows its progress)',
     'lab_commons.hpc run watch': 'forge serve on the cluster login node (it gathers each run it owns, a step a tick)',
+    # What a host or account can take is its measured Supply (design: one admission, migration step 2, 2026-10-13).
+    # The type is matched by its uses, not the bare word, which the ratchet prose uses in its plain sense.
+    'Headroom(': 'lab_commons.compute.model.Supply (from lab_commons.compute.probe)',
+    ': Headroom': 'lab_commons.compute.model.Supply',
+    ', Headroom': 'lab_commons.compute.model.Supply',
+    'box_headroom': 'lab_commons.compute.probe.box (free cores, memory, OS and tools measured now)',
+    'no free core': "the admission's lacking resource: 'no headroom: lacking cpu' (lab_commons.compute.model.admit)",
     'lab_commons.hpc.outstanding': 'lab_commons.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
 }
 
