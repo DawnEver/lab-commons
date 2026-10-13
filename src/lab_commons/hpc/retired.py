@@ -105,7 +105,7 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.dev.githooks cz-push-range': 'python -m lab_commons.dev.githooks script cz-push-range',
     # Where a run is and what the cluster can take are read from the forge, from any machine; no verb asks over ssh.
     'lab_commons.hpc probe': (
-        'python -m lab_commons.dev.forge queue (each cluster host card carries its headroom, partitions and quota)'
+        'python -m lab_commons.dev.forge queue (each cluster host card carries its supply, partitions and quota)'
     ),
     'lab_commons.hpc run status': 'python -m lab_commons.dev.forge queue (each run in flight shows its progress)',
     'lab_commons.hpc run watch': 'forge serve on the cluster login node (it gathers each run it owns, a step a tick)',
@@ -115,7 +115,21 @@ RETIRED: Final[dict[str, str]] = {
     ': Headroom': 'lab_commons.compute.model.Supply',
     ', Headroom': 'lab_commons.compute.model.Supply',
     'box_headroom': 'lab_commons.compute.probe.box (free cores, memory, OS and tools measured now)',
-    'no free core': "the admission's lacking resource: 'no headroom: lacking cpu' (lab_commons.compute.model.admit)",
+    'no free core': "the admission's lacking resource: 'not admitted: lacking cpu' (lab_commons.compute.model.admit)",
+    # A tick claims in rank order WHILE JOBS ADMIT, several per host (design: one admission, step 6, 2026-10-13).
+    'OUTRANKED': (
+        'nothing: a tick claims every job that admits, in rank order (lab_commons.dev.forgetick); one that does not '
+        "fit waits 'not admitted: lacking <resource>'"
+    ),
+    'outranked by': "'not admitted: lacking <resource>' (a higher-ranked claim is running demand, never a blocker)",
+    'a run in flight here': 'nothing: a run in flight is running demand in the admission (lab_commons.dev.forgeserve)',
+    'NO_HEADROOM': 'lab_commons.dev.forgeschedule.NOT_ADMITTED',
+    'no headroom:': "'not admitted: lacking <resource>' (lab_commons.compute.model.Admission.why)",
+    # The host card's measured vector is its supply, read by that key only.
+    'card.headroom': 'HostCard.supply (what the tick admitted against)',
+    '"headroom"': 'the host card key "supply"',
+    'headroom=dict(': 'HostCard(supply=...)',
+    'carries its headroom': 'carries its supply',
     # One measured demand table for every host: per test and per (producer, need-set) job (compute step 4).
     'lab_commons.hpc.learned': 'lab_commons.compute.learned (the one measured demand table)',
     'lab_commons.hpc.measured': 'lab_commons.compute.learned.Measured',
