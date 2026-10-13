@@ -1,7 +1,7 @@
 """RETIRED SPELLINGS of the dev and test-run surface, each with its replacement -- the one place they may appear.
 
 The noun that named three things (forge plan P1, user ruling 2026-10-09) was split into a RUN (one
-execution of a test set on one platform at one sha; its record is ``run-<sha>-<platform>-<req>.json.gz``),
+execution of a test set on one platform at one sha; its record is ``run-<sha>-<part>-<req>.json.gz``),
 a PART (a platform's result for a sha, composed of runs) and an ADMISSION (computed, never stored).
 No alias survives: a command line still using a retired word is REFUSED BY NAME with the remedy
 (:func:`refusal`), and ``tests/test_hpc_retired.py`` reds on any retired spelling anywhere else in
@@ -28,7 +28,7 @@ RETIRED: Final[dict[str, str]] = {
     'VerdictSpec': 'lab_commons.hpc.shell.RunSpec',
     'record-linux': 'python -m lab_commons.dev.platformparts post <run-record> (platform and scope come from it)',
     'platformparts record': (
-        'python -m lab_commons.dev.platformparts post <run-record> (a part is a tests/<platform> status on the forge, '
+        'python -m lab_commons.dev.platformparts post <run-record> (a part is a tests/<part> status on the forge, '
         'not a ledger row)'
     ),
     'run_part': 'lab_commons.dev.platformparts.part_of (a record proves a Part, posted as a status)',
@@ -65,13 +65,13 @@ RETIRED: Final[dict[str, str]] = {
         'famtests.depdoor.assert_a_port_declaring_no_anchors_renders_the_gap'
     ),
     'BOTH_GAPS': 'famtests.depdoor.UNDECLARED_GAPS',
-    # One name for a platform result: a tests/<platform> part, read through platformparts.standing.
-    'lab/gate': 'tests/<platform> (a part, lab_commons.dev.platformparts)',
-    'lab/heavy': 'tests/<platform> parts of scope full (what the trunk admits)',
+    # One name for a platform result: a tests/<part> part, read through platformparts.standing.
+    'lab/gate': 'tests/<part> (a part, lab_commons.dev.platformparts)',
+    'lab/heavy': 'tests/<part> parts of scope full (what the trunk admits)',
     'GATE_CONTEXT': 'lab_commons.dev.platformparts.part_context(platform)',
     'HEAVY_CONTEXT': 'lab_commons.dev.platformparts.part_context(platform)',
-    'gate_context': 'nothing: the queue reads tests/<platform> parts, not a declared context',
-    'heavy_context': 'nothing: the queue reads tests/<platform> parts, not a declared context',
+    'gate_context': 'nothing: the queue reads tests/<part> parts, not a declared context',
+    'heavy_context': 'nothing: the queue reads tests/<part> parts, not a declared context',
     'gate_ready': 'lab_commons.dev.integrator.lane_ready',
     'HEAVY_NEEDED': 'lab_commons.dev.integrator.PARTS_NEEDED',
     'heavy-needed': 'parts-needed',
@@ -145,7 +145,33 @@ RETIRED: Final[dict[str, str]] = {
         'nothing: an account is divided by reservations its owner writes (python -m lab_commons.dev.forge reserve '
         '<cluster>/<account> cpu=N --for ... --until ...) -- delete the line'
     ),
+    # A box job's cpu was capped at the box's because its cpu was wall x cores; it is now measured (2026-10-13).
+    'model.fitted': 'nothing: a demand is what the job measured (lab_commons.proccpu.TreeCpu); compute.model.submitted',
+    # A carry is derived from each test's footprint, never declared per repo (2026-10-13).
+    'inert_globs': 'lab_commons.dev.footprint.Footprints (the footprint of each test file, derived at the judged sha)',
+    'parts] inert': (
+        'nothing: what a change reaches is derived per test (lab_commons.dev.footprint); declare only what a '
+        'module reads by path, [tool.lab_commons.carry.reads] -- delete the key'
+    ),
     'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share; reservations divide the account)',
+    # One need vocabulary: a test marks the resources it needs, and its part is its need-set (compute step 3).
+    '[tool.lab_commons.platforms]': (
+        '[tool.lab_commons.tests] resources = [<marker>, ...] -- an OS is a resource like any other, and a test '
+        'needing a tool marks the tool, never the OS the tool runs on (lab_commons.hpc.needsets)'
+    ),
+    '[tool.lab_commons.capabilities]': (
+        '[tool.lab_commons.tests] resources = [<marker>, ...] -- every resource is equal; which host has one is '
+        "its machine file's [capabilities.<name>] and the probes (lab_commons.compute.probe)"
+    ),
+    'engine = true': 'nothing: a resource marker is its own part only by being a need-set (tests/<part>)',
+    'lab_commons.parts.produce': '[tool.lab_commons.tests] produce = [..., "{part}"] (the ONE producer of every part)',
+    'produce.windows.full': '[tool.lab_commons.tests] produce = [..., "{part}"] (the ONE producer of every part)',
+    'lab_commons.hpc.platforms': 'lab_commons.hpc.needsets (a part is a need-set, tests/<part>)',
+    'cannot_run(': 'lab_commons.hpc.needsets.selecting(vocabulary, part) (exactly one need-set)',
+    'CAPABILITY_ROWS': 'nothing: every resource is equal (lab_commons.hpc.needsets)',
+    'served_parts': 'lab_commons.compute.model.admit (needs present on the host, demand within its supply)',
+    'declared_parts': 'lab_commons.dev.platformparts.derived (base, and every part a posted part hands to)',
+    'part_argv': 'lab_commons.dev.platformparts.producer_argv (the one declared producer, {part} filled)',
 }
 
 
