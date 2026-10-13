@@ -48,6 +48,7 @@ __all__ = [
     'boost_of',
     'claimable',
     'expected_cost',
+    'fitted',
     'rank',
     'starved',
     'total',
@@ -270,6 +271,20 @@ def claimable(
             claimed.append(job)
             taken.append(demand)
     return claimed
+
+
+def fitted(demand: Mapping[str, float], supply: Supply, *, cluster: bool) -> Demand:
+    """*demand* as *supply* admits it: a submission where those are counted; a box job's cpu capped at the box's.
+
+    A box job spreads over the cores it is given, so it never needs more than the box has. The cap is
+    never below one core, so a box with less than a core free admits nothing.
+    """
+    sized = dict(demand)
+    if 'submits' in supply.present:
+        sized['submits'] = max(1.0, sized.get('submits', 0.0))
+    if not cluster:
+        sized['cpu'] = min(sized.get('cpu', 0.0), max(1.0, supply.resources['cpu']))
+    return Demand(sized)
 
 
 # --- the order ------------------------------------------------------------------------------------------

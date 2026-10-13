@@ -46,7 +46,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from lab_commons.hpc.config import Cost, Policy
 
 __all__ = [
+    'CLUSTER_PRIOR',
     'OOM_GROWTH',
     'Measured',
     'Run',
@@ -66,6 +67,7 @@ __all__ = [
     'learn',
     'learn_peaks',
     'learned',
+    'learned_demand',
     'record_run',
     'run_of',
     'worker_gb',
@@ -315,3 +317,18 @@ def demand(repo: str, producer: str, needs: Iterable[str], *, prior: Run) -> Dem
 def worker_gb(repo: str, files: Iterable[str], *, prior_gb: float, safety: float) -> float:
     """GB one worker running *files* needs, from *repo*'s per-file peaks (:meth:`Measured.worker_gb`)."""
     return Measured.of(learned(repo)).worker_gb(files, prior_gb=prior_gb, safety=safety)
+
+
+#: What an unmeasured cluster run is taken to hold: one core (the run sizes its array to what is free).
+CLUSTER_PRIOR: Final = Run(peak_mem_gb=0.0, cpu_s=1.0, wall_s=1.0)
+
+
+def learned_demand(repo_url: str, *, cluster: bool, cores: int) -> Callable[[str, frozenset[str]], Demand]:
+    """``(part, needs) -> Demand``: what the part's last run measured (:func:`run_of`).
+
+    Unmeasured, a cluster part is :data:`CLUSTER_PRIOR` and a box part the whole box (*cores*): an
+    unmeasured box run spreads over every core it is given. Runs are recorded under ``(part, no needs)``;
+    one of each need is added here.
+    """
+    prior = CLUSTER_PRIOR if cluster else Run(peak_mem_gb=0.0, cpu_s=float(cores), wall_s=1.0)
+    return lambda part, needs: (run_of(repo_url, part, ()) or prior).demand(needs)

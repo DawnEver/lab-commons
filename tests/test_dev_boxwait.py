@@ -25,6 +25,7 @@ from lab_commons.dev import boxwait
 from lab_commons.dev.boxwait import PROGRESS_S, WAIT_S, hold_run_seats, holders_line
 from lab_commons.dev.cpuseat import CPU_POOL, CpuSeat
 from lab_commons.dev.envseat import EnvironmentSeat
+from lab_commons.dev.producer import PRODUCING_VAR
 from lab_commons.resources import Basis, Exhausted
 
 #: A wait short enough that the ceiling can be MEASURED inside a test, and long enough to contain
@@ -40,8 +41,25 @@ _SLACK_S = 5.0
 
 @pytest.fixture(autouse=True)
 def _own_record_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test here rations a PRIVATE box, so a real gate on this machine is neither seen nor held."""
+    """Every test here rations a PRIVATE box, so a real gate on this machine is neither seen nor held.
+
+    And as an INTERACTIVE run: the forge producer that runs this suite carries ``PRODUCING_VAR``, which
+    takes no box seat (the test below), so it is cleared for the tests of the seat itself.
+    """
     monkeypatch.setenv('LAB_COMMONS_RESOURCE_DIR', str(tmp_path))
+    monkeypatch.delenv(PRODUCING_VAR, raising=False)
+
+
+def test_a_producer_serve_admitted_takes_no_box_seat_and_still_its_environment_seat(monkeypatch) -> None:
+    """Serve decides what runs on the box by admission; the box seat only makes an INTERACTIVE run visible.
+
+    PLANTED CONTROL: the same held seat, as an interactive run, refuses (the queue tests below).
+    """
+    monkeypatch.setenv(PRODUCING_VAR, 'tests/windows@' + 'a' * 40)
+    with CpuSeat('a developer measure').held(), contextlib.ExitStack() as stack:
+        hold_run_seats(stack, 'verify:producer', wait_s=0.0, poll_s=_POLL_S)
+        assert [holder.what for holder in CpuSeat.holders()] == ['a developer measure']
+        assert {holder.what for holder in EnvironmentSeat.holders(sys.prefix)} == {'verify:producer'}
 
 
 def test_the_default_ceiling_is_the_gate_tier_bound() -> None:

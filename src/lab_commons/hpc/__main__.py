@@ -17,7 +17,7 @@ blocks until the record. All three RUN ON THE CLUSTER LOGIN NODE with its own sh
 (:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused
 on a box without ``sbatch`` -- no workstation submits over ssh. WHERE A RUN IS, AND WHAT THE CLUSTER CAN
 TAKE, IS READ FROM THE FORGE: ``python -m lab_commons.dev.forge queue`` shows each run's progress on its
-claim and each serving host's card (headroom, partitions, quota), so no verb reaches the cluster to ask.
+claim and each serving host's card (supply, partitions, quota), so no verb reaches the cluster to ask.
 ``-c`` is optional for ``run`` and only its ``[cost]``/``[policy]`` are read. ``run submit`` plans from what
 the repository's last record measured
 (:mod:`lab_commons.compute.learned`); a file never measured is priced at ``[cost]``. A retired verb is
