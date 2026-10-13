@@ -302,6 +302,7 @@ def submit_run(
         'platform': spec.part,
         'system': told.get('platform', ''),
         'env': told['env'],
+        'builds': {'env': spec.builds.env_key, 'native': spec.builds.native_key},  # ~/ci/envs, ~/ci/native keys
         'cluster': host,
         'python': told.get('python', ''),
         'prep': {**told['prep'], **parse_times(collected)},
