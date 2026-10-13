@@ -203,6 +203,7 @@ def account(
 ) -> Supply:
     """A Slurm account over EVERY grant: ``(snapshot, qos)`` each, summed; ``submits`` infinite if uncapped.
 
+    The account's OS, ``linux``, counts as many as ``cpu``.
     ``cpu`` per grant is :func:`lab_commons.hpc.plan.headroom` (quota less what is held); ``mem_gb`` the
     quota's remaining memory, else -- uncapped -- the free memory of the schedulable nodes.
     """
@@ -213,4 +214,6 @@ def account(
         mem += (left if left is not None else sum(n.mem_mb for n in snapshot.nodes if n.schedulable)) / 1024
         room = snapshot.quota.submit_room(qos)
         submits += math.inf if room is None else room
-    return Supply(scope, Resources(cpu=cpu, mem_gb=mem, submits=submits), frozenset({'cpu', 'mem_gb', 'submits'}))
+    linux = OS_NAMES['linux']  # a Slurm account runs on linux: the OS is a resource there like any other
+    measured = Resources({'cpu': cpu, 'mem_gb': mem, 'submits': submits, linux: cpu})
+    return Supply(scope, measured, frozenset({'cpu', 'mem_gb', 'submits', linux}))

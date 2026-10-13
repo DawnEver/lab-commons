@@ -20,7 +20,7 @@ from lab_commons.dev.familyheads import (
     refusal,
     sync_door,
 )
-from lab_commons.dev.platformparts import part_context, this_platform
+from lab_commons.dev.platformparts import BASE, part_context
 from lab_commons.dev.producer import PRODUCING_VAR
 
 _OLD, _NEW = 'a' * 40, 'b' * 40
@@ -108,7 +108,7 @@ def test_the_sync_door_is_the_repos_declaration_else_the_shared_one(tmp_path: Pa
 
 
 def test_verify_refuses_a_stale_environment_before_anything_runs(monkeypatch, tmp_path: Path, capsys) -> None:
-    monkeypatch.setenv(PRODUCING_VAR, f'{part_context(this_platform())}@planted')  # the full suite is the producer's
+    monkeypatch.setenv(PRODUCING_VAR, f'{part_context(BASE)}@planted')  # the full suite is the producer's
     monkeypatch.setattr(verify, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(verify, 'run_verify', lambda *_a, **_k: pytest.fail('a stale environment ran'))
     monkeypatch.setattr(familyheads, 'installed_family', lambda: (Installed('lab-commons', _URL, 'HEAD', _OLD),))

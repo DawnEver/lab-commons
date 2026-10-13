@@ -49,9 +49,9 @@ __all__ = [
     'Supply',
     'boost_of',
     'expected_cost',
-    'fitted',
     'rank',
     'starved',
+    'submitted',
     'total',
     'value',
 ]
@@ -239,18 +239,11 @@ class Reservation:
         return self.scope == scope and now < self.until
 
 
-def fitted(demand: Mapping[str, float], supply: Supply, *, cluster: bool) -> Demand:
-    """*demand* as *supply* admits it: a submission where those are counted; a box job's cpu capped at the box's.
-
-    A box job spreads over the cores it is given, so it never needs more than the box has. The cap is
-    never below one core, so a box with less than a core free admits nothing.
-    """
-    sized = dict(demand)
-    if 'submits' in supply.present:
-        sized['submits'] = max(1.0, sized.get('submits', 0.0))
-    if not cluster:
-        sized['cpu'] = min(sized.get('cpu', 0.0), max(1.0, supply.resources['cpu']))
-    return Demand(sized)
+def submitted(demand: Mapping[str, float], supply: Supply) -> Demand:
+    """*demand* taking one submission where *supply* counts them (a cluster account); else unchanged."""
+    if 'submits' not in supply.present:
+        return Demand(demand)
+    return Demand({**demand, 'submits': max(1.0, demand.get('submits', 0.0))})
 
 
 # --- the order ------------------------------------------------------------------------------------------

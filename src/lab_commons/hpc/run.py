@@ -18,12 +18,11 @@ the grants on that cluster; submit the array and leave the run's state on the cl
 pending; a finished round is folded, its unfinished ids re-submitted as the next round, or the record
 returned. NOTHING RESIDENT RUNS ON THE CALLER'S BOX, and the caller's repository is only READ.
 
-NOT COVERED IS NOT PASSED. The commit's own ``[tool.lab_commons.platforms]`` table
-(:mod:`lab_commons.hpc.platforms`) says which markers each platform cannot run; an id the
-assignment rule (:func:`lab_commons.hpc.platforms.assign`) gives to another part is recorded as
-``not-covered`` and listed in the record's ``handed`` with the platforms that CAN run it (``[]`` when
-none can). Admission composes it with the other parts; no part reads it to choose its ids. Only
-``passed`` means passed.
+NOT COVERED IS NOT PASSED. A run produces ONE part, its spec's need-set (:mod:`lab_commons.hpc.needsets`):
+every collected id belonging to another part -- by the resource markers it carries against the commit's
+``[tool.lab_commons.tests] resources`` -- is recorded as ``not-covered`` and listed in the record's
+``handed`` with the part it belongs to. Admission composes it with the other parts; no part reads it to
+choose its ids. Only ``passed`` means passed.
 
 A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its outcomes as they happen
 (:mod:`lab_commons.hpc.pytest_item`); the run reads the streams, not the shards' end-of-run files.
@@ -49,7 +48,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Final
@@ -59,10 +58,10 @@ from lab_commons.compute.learned import OOM_GROWTH, Measured
 from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
+from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance
-from lab_commons.hpc.platforms import LINUX, assign, cannot_run, runnable
-from lab_commons.hpc.records import fold, job_measured, read_streams
+from lab_commons.hpc.records import fold, job_measured, read_streams, record_of
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
     COLLECT_MODULE,
@@ -112,22 +111,6 @@ ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COM
 
 #: Rounds after the first that re-run what a killed shard left unfinished.
 RETRIES: Final = 2
-
-#: State keys the record carries as they are.
-_CARRIED: Final = (
-    'sha',
-    'repo',
-    'scope',
-    'platform',
-    'system',
-    'env',
-    'cluster',
-    'python',
-    'prep',
-    'rounds',
-    'outcomes',
-    'handed',
-)
 
 
 def shares_home(grant: Grant, builder: Grant) -> bool:
@@ -277,11 +260,17 @@ def submit_run(
     policy: Policy,
     stamp: str | None = None,
     history: dict[str, Any] | None = None,
+    carry: Callable[[str], Mapping[str, tuple[str, str, str]]] | None = None,
 ) -> dict[str, Any]:
     """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns that state.
 
     The state is ``~/ci/runs/<sha>/state.json``; :func:`gather_run` reads it. *history* is a previous
     record, read for its measurements only. Nothing here waits for a job.
+
+    *carry*, given the env key the build reported, names the outcomes earlier runs of THAT env hold for
+    ids whose outcome cannot have changed (``{node: (outcome, origin sha, run sha)}``,
+    :func:`lab_commons.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
+    origin in ``carried`` and never submitted; when nothing is left the record is written at once.
     """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
@@ -296,21 +285,21 @@ def submit_run(
         errored = [node for node in errored if any(n.split('::')[0] == node for n in spec.only)]
     if not ids:
         raise NotSubmitted(_nothing_collected(spec, collected))
-    cannot = {
-        platform: set(parse_ids(run(collect_command(spec, also=expr), None)))
-        for platform in spec.table.parts
-        if (expr := cannot_run(spec.table, platform))
-    }
-    handed = {node: can for node, can in sorted(runnable(ids, cannot).items()) if assign(can) != LINUX}
+    carrying = {name: set(parse_ids(run(collect_command(spec, also=name), None))) for name in spec.vocabulary.resources}
+    handed = {node: owner for node, owner in sorted(need_sets(ids, carrying).items()) if owner != spec.part}
     outcomes: dict[str, str] = dict.fromkeys(handed, 'not-covered')
     outcomes.update(dict.fromkeys(errored, 'error'))
+    present = set(ids)
+    offered = carry(told['env']) if carry else {}
+    taken = {node: held for node, held in offered.items() if node in present and node not in outcomes}
+    outcomes.update({node: held[0] for node, held in taken.items()})
     state: dict[str, Any] = {
         'sha': spec.sha,
         'repo': spec.repo_url,
         'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
         'scope': spec.scope,
         'timeout_s': spec.timeout_s,
-        'platform': LINUX,
+        'platform': spec.part,
         'system': told.get('platform', ''),
         'env': told['env'],
         'cluster': host,
@@ -321,9 +310,15 @@ def submit_run(
         'measured': Measured.of(history or {}).record(),
         'rounds': [],
         'oom': 1,
+        'carried': {node: held[1] for node, held in taken.items()},
     }
-    files = group_items([node for node in ids if node not in handed])
+    files = group_items([node for node in ids if node not in handed and node not in taken])
     pending = Measured.of(state['measured']).pack(files, cost, item_seconds(policy))
+    if not pending:  # every id was carried or handed: the record needs no job
+        state['reasons'] = {}
+        state['record'] = record_of(state, grant.slurm_account)
+        _save(run, state)
+        return state
     same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
     _submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
     _save(runners[state['current']['account']], state)
@@ -406,19 +401,14 @@ def gather_run(
         _save(home, state)
         return None
     state['outcomes'].update({node: 'lost' for group in pending for node in group})
-    record = {
-        **{key: state[key] for key in _CARRIED},
-        'req': state['stamp'],
-        'account': next(g.slurm_account for g in machine.grants if g.account == account),
-        'job_ids': [r['job_id'] for r in state['rounds']],
-        'plan': state['rounds'][0],
-        'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
-        **state['measured'],
-    }
+    record = record_of(state, next(g.slurm_account for g in machine.grants if g.account == account))
     state['record'] = record
     _save(home, state)
     learned.record_run(
-        state['repo'], state['platform'], (), job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus)
+        state['repo'],
+        learned.SLURM,
+        needs_of(state['platform']),
+        job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus),
     )
     return record
 

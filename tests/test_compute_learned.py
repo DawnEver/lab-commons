@@ -56,3 +56,16 @@ def test_one_worker_rule_prices_a_box_worker_and_a_slurm_task_alike() -> None:
     assert learned.worker_gb(REPO, ['tests/new.py'], prior_gb=0.5, safety=1.5) == 0.5, 'unmeasured is the prior'
     measured = Measured.of(learned.learned(REPO))
     assert measured.worker_gb(['tests/b.py'], prior_gb=1.0, safety=1.5) == 4.5
+
+
+def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
+    """A box part is learned under (local, its need-set) and read back under the same key -- not under its OS.
+
+    PLANTED CONTROL: the base part learned nothing, so it stays the whole-box prior; a cluster reads slurm runs.
+    """
+    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    box = learned.learned_demand(REPO, cluster=False, cores=8)
+    assert box(frozenset({'jmag'})) == Demand(cpu=2, mem_gb=6.0, jmag=1)
+    assert box(frozenset()) == Demand(cpu=8, mem_gb=0.0)
+    assert learned.learned_demand(REPO, cluster=True, cores=8)(frozenset({'jmag'})) == Demand(cpu=1, mem_gb=0.0, jmag=1)
+    assert learned.producer_of(cluster=True) == learned.SLURM
