@@ -68,10 +68,10 @@ def test_le_reads_every_name_of_the_left_side() -> None:
 
 
 def test_a_supply_counts_only_what_is_present() -> None:
-    supply = Supply(HOST, Resources(cpu=8), present=frozenset({'cpu', 'jmag'}))
+    supply = Supply(HOST, Resources(cpu=8), listed=frozenset({'cpu', 'jmag'}))
     assert supply.present == frozenset({'cpu', 'jmag'})  # jmag installed, every seat in use
     with pytest.raises(ValueError, match="'femm'"):
-        Supply(HOST, Resources(cpu=8, femm=1), present=frozenset({'cpu'}))
+        Supply(HOST, Resources(cpu=8, femm=1), listed=frozenset({'cpu'}))
 
 
 # --- admit ---------------------------------------------------------------------------------------------

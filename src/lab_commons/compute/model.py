@@ -133,12 +133,15 @@ class Supply:
 
     scope: str
     resources: Resources
-    present: frozenset[str] = frozenset()
+    listed: frozenset[str] = frozenset()
+
+    @property
+    def present(self) -> frozenset[str]:
+        """The names this host has: those *listed* (a tool can be present at 0), else the names it counts."""
+        return self.listed or self.resources.names
 
     def __post_init__(self) -> None:
         """Refuse an inconsistent value at construction."""
-        if not self.present:
-            object.__setattr__(self, 'present', self.resources.names)
         absent = sorted(self.resources.names - self.present)
         if absent:
             msg = f'{self.scope} counts {absent} it does not have present'
