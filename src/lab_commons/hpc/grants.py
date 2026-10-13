@@ -1,8 +1,9 @@
-"""Which cluster accounts THIS MACHINE may use, and how much of each -- the ``[hpc]`` table of the machine file.
+"""Which cluster accounts THIS MACHINE may use -- the ``[hpc]`` table of the machine file.
 
-A GRANT IS A SHARE OF AN ACCOUNT, HELD BY A BOX. One workstation may hold several grants (two clusters,
-two Slurm accounts); one login may be shared by several workstations, each holding its own share of it.
-The file says only what is agreed -- the share; what each box is USING is read from Slurm at plan time,
+A GRANT IS AN ACCOUNT THIS BOX MAY REACH, NEVER A SHARE OF IT. One workstation may hold several grants (two
+clusters, two Slurm accounts); one login may be reached from several workstations. How an account is divided
+is not this file's: it is the reservations its owner writes (:mod:`lab_commons.compute.ledger`). What each
+box is USING is read from Slurm at plan time,
 never stored, because every job a box submits carries ``--comment=lc:ws=<workstation>`` and ``squeue``
 reports it back (:mod:`lab_commons.hpc.slurm`). A stored usage figure would be a second copy of Slurm's
 own state, wrong the moment a job ends.
@@ -21,7 +22,6 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     user = "me"
     hosts = ["login1.cluster.example", "login2.cluster.example"]   # tried in order, >= 1
     slurm_account = "acct-free"
-    cpus = 64                                     # this box's share of the account's CPU quota
     priority = 0                                  # optional; breaks a tie between equally fast grants
     partitions = ["shortq", "defq"]               # optional cluster facts: candidates, in preference order
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
@@ -45,6 +45,7 @@ from typing import Any, Final
 
 from lab_commons.config import config_path, section
 from lab_commons.hpc.config import Cluster
+from lab_commons.hpc.retired import RETIRED
 
 __all__ = ['COMMENT_PREFIX', 'MACHINE_ENV', 'Grant', 'Machine', 'load_grants', 'workstation']
 
@@ -78,19 +79,15 @@ class Grant:
     user: str
     hosts: tuple[str, ...]
     slurm_account: str
-    cpus: int
     priority: int = 0
     partitions: tuple[str, ...] = ()
     qos: dict[str, str] = field(default_factory=dict)
     setup: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """A grant names who, where and which account; a share that cannot hold one CPU is not a share."""
+        """A grant names who, where and which account."""
         if not self.user or not self.slurm_account or not self.hosts or not all(self.hosts):
             msg = f'a grant names its user, at least one login host and its slurm_account, got {self}'
-            raise ValueError(msg)
-        if self.cpus < 1:
-            msg = f'grant {self.name}: a share must be positive, got cpus={self.cpus}'
             raise ValueError(msg)
 
     @property
@@ -134,6 +131,10 @@ _GRANT_KEYS: Final = frozenset(Grant.__dataclass_fields__)
 
 
 def _grant(raw: dict[str, Any], source: str) -> Grant:
+    for key in raw:
+        if (remedy := RETIRED.get(f'[[hpc.grant]] {key}')) is not None:
+            msg = f'{source}: [[hpc.grant]] {key} is retired: {remedy}'
+            raise ValueError(msg)
     unknown = set(raw) - _GRANT_KEYS
     if unknown:
         msg = f'{source}: [[hpc.grant]] has unknown keys {sorted(unknown)}; known: {sorted(_GRANT_KEYS)}'
@@ -142,7 +143,7 @@ def _grant(raw: dict[str, Any], source: str) -> Grant:
 
 
 def load_grants(table: dict[str, Any] | None = None) -> Machine:
-    """Read the ``[hpc]`` table (default: this machine's). No table, a duplicate account or a bad share is refused."""
+    """Read the ``[hpc]`` table (default: this machine's). No table or a duplicate account is refused."""
     source = f'{config_path()} [hpc]'
     raw = section('hpc') if table is None else table
     if not raw:
@@ -158,12 +159,12 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
         raise ValueError(msg)
     grants = tuple(_grant(g, source) for g in raw.get('grant', []))
     if not grants:
-        msg = f'{source}: no [[hpc.grant]] -- this machine holds no share of any account'
+        msg = f'{source}: no [[hpc.grant]] -- this machine reaches no account'
         raise ValueError(msg)
     seen: set[tuple[str, str]] = set()
     for grant in grants:
         if grant.account in seen:
-            msg = f'{source}: account {grant.account!r} is granted twice; one share per account'
+            msg = f'{source}: account {grant.account!r} is granted twice; one grant per account'
             raise ValueError(msg)
         seen.add(grant.account)
     return Machine(workstation=workstation(), grants=grants)

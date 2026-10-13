@@ -10,9 +10,10 @@ the tracked tree, prose included.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Final
 
-__all__ = ['RETIRED', 'refusal']
+__all__ = ['RETIRED', 'refusal', 'refuse_retired_keys']
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
@@ -109,6 +110,17 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.hpc run status': 'python -m lab_commons.dev.forge queue (each run in flight shows its progress)',
     'lab_commons.hpc run watch': 'forge serve on the cluster login node (it gathers each run it owns, a step a tick)',
     'lab_commons.hpc.outstanding': 'lab_commons.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
+    # A host's own user is served by its own reserve, and an account is divided by reservations (2026-10-13).
+    'own_weight': (
+        'nothing: the own reserve (lab_commons.compute.ledger.own_reserve) keeps what the user of this box uses plus '
+        'a margin, and [reserve] delegates names who else may reserve it -- delete the key'
+    ),
+    '--own-weight': 'workstation deploy --delegates <login,...> ([reserve] delegates)',
+    '[[hpc.grant]] cpus': (
+        'nothing: an account is divided by reservations its owner writes (python -m lab_commons.dev.forge reserve '
+        '<cluster>/<account> cpu=N --for ... --until ...) -- delete the line'
+    ),
+    'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share; reservations divide the account)',
 }
 
 
@@ -116,3 +128,11 @@ def refusal(prog: str, word: str) -> str | None:
     """The refusal for *word* used as a verb of *prog*, naming its replacement; ``None`` when it is not retired."""
     remedy = RETIRED.get(f'{prog} {word}') or RETIRED.get(word)
     return None if remedy is None else f'`{prog} {word}` is retired: use {remedy}'
+
+
+def refuse_retired_keys(table: str, keys: Iterable[str]) -> None:
+    """Refuse every key of machine-file ``[table]`` that is a retired spelling, naming each remedy."""
+    found = [f'[{table}] {key} is retired: {RETIRED[key]}' for key in keys if key in RETIRED]
+    if found:
+        msg = 'the machine file: ' + '; '.join(found)
+        raise ValueError(msg)

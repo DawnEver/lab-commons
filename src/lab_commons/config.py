@@ -24,7 +24,6 @@ Example::
     user = "me"
     hosts = ["login1.cluster", "login2.cluster"]
     slurm_account = "acct-free"
-    cpus = 64
 
     [user]
     text_editor_command = "start"

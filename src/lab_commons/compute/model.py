@@ -17,7 +17,7 @@ THE RULE, for every host alike::
 THE NUMBERS OF THE ORDER ARE DATA, declared once in ``[tool.lab_commons.schedule]`` and loaded by
 :func:`lab_commons.dev.forgeschedule.load_schedule` into a :class:`Schedule`::
 
-    value = (base[class] + boost + aging_rate * wait_hours) * own
+    value = base[class] + boost + aging_rate * wait_hours
     score = weight[repo] * value / expected_cost
 """
 
@@ -381,19 +381,17 @@ def rank(
     *,
     cost_h: Mapping[str, float],
     weights: Mapping[str, float] | None = None,
-    mine: str = '',
-    own_weight: float = 1.0,
 ) -> tuple[Ranked, ...]:
     """Every candidate scored and ordered, highest score first. PURE: the one ordering rule.
 
-    *schedules* and *cost_h* are keyed by repo; *weights* by repo, 1 for a repo it omits. A candidate
-    whose ``origin`` is *mine* (this host's login) has its value multiplied by *own_weight*.
+    *schedules* and *cost_h* are keyed by repo; *weights* by repo, 1 for a repo it omits. A host's own
+    user is served by its own reserve (:mod:`lab_commons.compute.ledger`), never by a lift in the order.
     """
     weights = weights or {}
     ranked = []
     for one in candidates:
         schedule = schedules[one.repo]
-        worth = value(one, schedule, now) * (own_weight if mine and one.origin == mine else 1.0)
+        worth = value(one, schedule, now)
         cost = max(cost_h.get(one.repo, schedule.prior_cost_h), 1e-6)
         wait_h = max(0.0, (now - one.since).total_seconds() / 3600)
         ranked.append(Ranked(one, worth, cost, weights.get(one.repo, 1.0) * worth / cost, wait_h))

@@ -216,7 +216,7 @@ def _grant(step: Step, spec: Deployment, path: Path, hostname: str) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as out:
         out.write(text)
-    emit(f'  wrote the grant of {user} ({grant["slurm_account"]}, {grant["cpus"]} cpus) to {path}')
+    emit(f'  wrote the grant of {user} ({grant["slurm_account"]}) to {path}')
     return 0
 
 

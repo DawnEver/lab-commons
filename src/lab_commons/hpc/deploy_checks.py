@@ -22,7 +22,6 @@ Measured 2026-10-12 deploying three accounts on one cluster: every one of these 
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Final
@@ -40,7 +39,6 @@ INSTALLERS: Final = {
 }
 
 _PRIVATE: Final = 0o077
-_CPU: Final = re.compile(r'(?:^|,)cpu=(\d+)')
 
 
 def store_problem(helper: str, store: Path, *, mode: int | None) -> str:
@@ -95,13 +93,9 @@ def grant_of(user: str, sacct: str, *, spec: Deployment, host: str) -> dict[str,
         return f'{user} has several Slurm accounts ({", ".join(limits)}): declare one with --slurm-account <account>'
     else:
         (account,) = limits
-    cpus = _CPU.search(limits[account])
-    if cpus is None:
-        return f'Slurm sets {account} no cpu= limit ({limits[account] or "no GrpTRES"}): write [[hpc.grant]] by hand'
     return {
         'user': user,
         'hosts': [host],
         'slurm_account': account,
-        'cpus': int(cpus.group(1)),
         'partitions': list(spec.partitions),
     }

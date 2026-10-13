@@ -284,7 +284,6 @@ def test_the_deploy_writes_this_accounts_own_grant_once(box: Box) -> None:
     assert box.run(*DECLARE) == 0
     (grant,) = load_grants(tomllib.loads(box.machine.read_text(encoding='utf-8'))['hpc']).grants
     assert grant.account == ('alice', 'acct-free')
-    assert grant.cpus == 96
     assert grant.hosts == ('login02.int.cluster',)
     assert grant.partitions == ('shortq', 'defq')
     before = box.machine.read_text(encoding='utf-8')
