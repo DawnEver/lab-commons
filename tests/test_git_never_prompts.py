@@ -21,3 +21,9 @@ def test_git_reads_credential_interactive_never() -> None:
         [git, 'config', 'credential.interactive'], capture_output=True, text=True, encoding='utf-8', check=False
     )
     assert done.stdout.strip() == 'never'
+
+
+def test_the_guarantee_leaves_the_numbered_config_set_to_the_test() -> None:
+    """``GIT_CONFIG_COUNT/KEY_n/VALUE_n`` belongs to a test that plants its own set (``git-env-repair``)."""
+    numbered = ('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')
+    assert [name for name in os.environ if name.startswith(numbered)] == []
