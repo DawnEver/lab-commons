@@ -513,6 +513,43 @@ class TestTheRecordDoesNotDependOnTheCallerRevision:
         assert planted.exists(), 'the unreadable seat was DELETED -- that is the theft, not a fix'
 
 
+class TestARecordWrittenBeforeBootIsDebris:
+    """A record whose file predates the box's last boot names a process that cannot be alive.
+
+    Measured on host G 2026-10-14: a hard crash mid-write left a seat as 254 NUL bytes, and after
+    the reboot it read as an unreadable HOLDER forever -- ~20 h of "G lacking cpu". The PLANTED
+    CONTROL is the same bytes stamped AFTER boot, which must still be held: that is the instant
+    between a seat appearing and its record being readable, the rule the module keeps.
+    """
+
+    BOOT = 1_800_000_000.0
+
+    def _planted(self, registry, tmp_path, *, mtime: float, boot: float | None) -> tuple[Broker, Path]:
+        broker = Broker(registry, read_memory=roomy(), resource_dir=tmp_path / 'slots', boot_time=lambda: boot)
+        registry.declare('tool', Capacity.measured(SEATS.name, 1, on=broker.hostname))
+        planted = broker.resource_dir() / seat('tool')
+        planted.write_bytes(b'\x00' * 254)
+        os.utime(planted, (mtime, mtime))
+        return broker, planted
+
+    def test_a_NUL_record_from_before_boot_is_no_holder(self, registry, tmp_path) -> None:
+        broker, _ = self._planted(registry, tmp_path, mtime=self.BOOT - 60, boot=self.BOOT)
+        assert broker.holders('tool') == []
+        with broker.admit('tool', {SEATS.name: 1}):
+            pass
+
+    def test_the_same_record_written_after_boot_is_still_held(self, registry, tmp_path) -> None:
+        broker, planted = self._planted(registry, tmp_path, mtime=self.BOOT + 60, boot=self.BOOT)
+        assert len(broker.holders('tool')) == 1
+        with pytest.raises(Exhausted), broker.admit('tool', {SEATS.name: 1}):
+            pass
+        assert planted.exists()
+
+    def test_an_unknown_boot_time_keeps_the_record_held(self, registry, tmp_path) -> None:
+        broker, _ = self._planted(registry, tmp_path, mtime=self.BOOT - 60, boot=None)
+        assert len(broker.holders('tool')) == 1
+
+
 class TestADimensionNobodyEnforcesSaysSo:
     """The arm a type checker pointed at, and the defect underneath it.
 
