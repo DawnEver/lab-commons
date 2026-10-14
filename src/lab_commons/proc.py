@@ -375,6 +375,20 @@ def _process_rows_procfs() -> dict[int, tuple[str, int]] | None:
     return rows or None
 
 
+#: ``starttime`` is field 22 of ``/proc/<pid>/stat``; counted after the ``)`` closing the name (field 2),
+#: whose next field is 3, it sits at index 19.
+_STARTTIME_AFTER_NAME = 22 - 3
+
+
+def _stat_start_time(text: str) -> int | None:
+    """``starttime`` from one ``/proc/<pid>/stat`` line, split after the LAST ``)`` since a name may hold one."""
+    _, paren, rest = text.rpartition(')')
+    fields = rest.split()
+    if not paren or len(fields) <= _STARTTIME_AFTER_NAME or not fields[_STARTTIME_AFTER_NAME].isdigit():
+        return None
+    return int(fields[_STARTTIME_AFTER_NAME])
+
+
 def _creation_time(pid: int) -> int | None:
     """The process's creation FILETIME, or ``None`` when it cannot be read.
 
@@ -384,7 +398,16 @@ def _creation_time(pid: int) -> int | None:
 
     ``None`` on any failure. The caller treats ``None`` as "cannot disprove the edge", which keeps
     this a REFUTATION step: it removes edges it can prove false and never invents one.
+
+    On Linux the stamp is ``starttime`` from ``/proc/<pid>/stat`` (clock ticks since boot): the
+    same ordering property -- a child never starts before its parent, a recycled pid starts later
+    than the process it replaced -- so a reused pid is refuted there too. macOS: ``None``.
     """
+    if sys.platform.startswith('linux'):
+        try:
+            return _stat_start_time(Path(f'/proc/{pid}/stat').read_text(encoding='utf-8'))
+        except OSError:
+            return None
     if os.name != 'nt':
         return None
     kernel32 = _kernel32()

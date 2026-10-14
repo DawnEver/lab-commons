@@ -12,12 +12,15 @@ injecting the table rather than mocking the function under test.
 """
 
 import os
+import sys
 
 import pytest
 
 from lab_commons._proc_darwin import parse_ps_rows, parse_vm_stat
+from lab_commons.liveness import creation_stamp
 from lab_commons.proc import (
     SystemMemory,
+    _stat_start_time,
     descendants,
     kill_pid,
     kill_process_tree,
@@ -163,3 +166,14 @@ class TestTheDarwinBackend:
     def test_ps_rows_are_pid_to_name_and_parent(self) -> None:
         text = '    1     0 /sbin/launchd\n  412     1 /usr/bin/some tool\n garbage\n'
         assert parse_ps_rows(text) == {1: ('/sbin/launchd', 0), 412: ('/usr/bin/some tool', 1)}
+
+
+def test_a_linux_stat_line_yields_its_start_time_even_with_a_paren_in_the_name() -> None:
+    fields = ' '.join(str(n) for n in range(3, 53))  # field 3 (state) onward; starttime is field 22
+    assert _stat_start_time(f'4242 (odd) name)) {fields}') == 22
+    assert _stat_start_time('garbage') is None
+
+
+def test_this_process_has_a_creation_stamp_wherever_the_kernel_offers_one() -> None:
+    stamp = creation_stamp(os.getpid())
+    assert (stamp is None) == (sys.platform == 'darwin'), 'Windows and Linux must refute a recycled pid'
