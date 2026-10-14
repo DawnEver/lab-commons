@@ -46,7 +46,7 @@ from lab_commons.width import fits
 #: Slurm reports memory in MiB; :data:`~lab_commons.resources.MEMORY` counts bytes.
 MIB: Final = 1024**2
 
-__all__ = ['MIB', 'Plan', 'allocate', 'balance', 'free_slots', 'headroom', 'make_plan', 'quota_slots']
+__all__ = ['MIB', 'Plan', 'allocate', 'balance', 'free_slots', 'grantable_gb', 'headroom', 'make_plan', 'quota_slots']
 
 
 @dataclass(frozen=True)
@@ -287,6 +287,19 @@ def make_plan(
         free_slots=free,
         makespan_minutes=math.ceil(len(shards) / running) * minutes,
     )
+
+
+def grantable_gb(snapshots: Sequence[tuple[Grant, Snapshot]]) -> float | None:
+    """The most memory ONE item may ask of any of these grants -- the largest quota ceiling; ``None`` is no ceiling.
+
+    An ask above it is refused by every grant (:func:`make_plan`), so a retry is held to it. Measured
+    2026-10-14 (Ada): an item OOM-killed at 62.7 GB was re-asked at 366.77 GB against a 360 GB ceiling,
+    and the run could never advance again.
+    """
+    ceilings = [snapshot.quota.mem_mb for _, snapshot in snapshots]
+    if not ceilings or None in ceilings:
+        return None
+    return max(c for c in ceilings if c is not None) / 1024
 
 
 def headroom(snapshot: Snapshot) -> int:
