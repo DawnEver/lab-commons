@@ -12,10 +12,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Final
 
 from lab_commons.compute.model import Job, Reservation, Resources, Supply, total
 
-__all__ = ['Admission', 'Held', 'admit', 'claimable', 'idle', 'preempt']
+#: Demands a supply meters only when it lists them present: a box, or a fixture, that states no ``files``
+#: refuses nothing on files, so the file prior never makes its parts unclaimable (2026-10-14).
+STATED_ONLY: Final = frozenset({'files'})
+
+__all__ = ['STATED_ONLY', 'Admission', 'Held', 'admit', 'claimable', 'idle', 'preempt']
 
 
 # --- the rule -------------------------------------------------------------------------------------------
@@ -124,7 +129,8 @@ def admit(
     mine = [one.id for one in live if one.for_.matches(job)]
     others = [one for one in live if not one.for_.matches(job)]
     free = supply.resources - total(one.demand for one in held) - total(idle(one, supply, held) for one in others)
-    want = Resources(demand)
+    # a quantity metered only where a supply STATES it: a supply that names no ``files`` refuses nothing on files
+    want = Resources({k: v for k, v in demand.items() if k not in STATED_ONLY or k in supply.present})
     if want <= free:
         return Admission(admitted=True)
     if mine:
