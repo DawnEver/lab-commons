@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from lab_commons.box.machine import RESOURCE_NAME
 from lab_commons.hpc.declared import OutdatedKit, kit_tables, pyproject_at
 
 if TYPE_CHECKING:
@@ -39,7 +40,6 @@ if TYPE_CHECKING:
 __all__ = [
     'BASE',
     'PART_NAME',
-    'RESOURCE_NAME',
     'Vocabulary',
     'declared_at',
     'need_sets',
@@ -53,8 +53,6 @@ __all__ = [
 #: The part of the tests that need no declared resource.
 BASE: Final = 'base'
 
-#: The spelling of one resource marker.
-RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
 
 #: The spelling of a part: :data:`BASE`, or resource names sorted and joined by ``+``.
 PART_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*(?:\+[a-z][a-z0-9_]*)*$')
