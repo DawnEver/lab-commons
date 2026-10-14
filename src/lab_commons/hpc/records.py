@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
@@ -57,6 +57,7 @@ def fold(
     *,
     shards: Sequence[Sequence[int]],
     walls: Sequence[float],
+    alone: Mapping[int, int] | None = None,
 ) -> tuple[list[list[str]], bool, float]:
     """Record one round's streams; return the unfinished ids, halved, whether an item was KILLED, and busy seconds.
 
@@ -70,6 +71,12 @@ def fold(
     An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
     they are retried, halved, like an item that never closed -- never stamped ``missing``.
 
+    AN OUT_OF_MEMORY ITEM IS BISECTED, AND A LONE HOG IS ITS OWN FAILURE. *alone* maps each item killed
+    OUT_OF_MEMORY at the most memory any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`) to that
+    limit in MB. Halving it again isolates the test that blows the memory; once one unfinished id is
+    left, no grant can give it more, so it is ``failed`` by id with its peak and the limit as its reason,
+    and every other id of the item got a real result on the way down.
+
     WHAT A KILL COST IS MEASURED TOO. A shard (*shards*: item ranges) runs its items back to back for
     the seconds Slurm says it ran (*walls*, one per shard), so the first item of a shard that never closed
     was killed after that minus what the items before it took; a signalled item says its own wall.
@@ -78,6 +85,7 @@ def fold(
     :meth:`Measured.killed`, so the id the kill interrupted is never re-priced below it.
     """
     pending: list[list[str]] = []
+    limits = alone or {}
     killed = False
     folds = [read_stream(streams.get(index, ''), item['ids']) for index, item in enumerate(items)]
     spent = _killed_after(folds, shards, walls)
@@ -100,6 +108,14 @@ def fold(
             pending += [after] if after else []
             continue
         measured.killed(group, folded, spent.get(index, 0.0))
+        if len(rest) == 1 and index in limits:
+            peak = (folded['done'] or {}).get('peak_mb')
+            outcomes[rest[0]] = 'failed'
+            reasons[rest[0]] = (
+                f'OUT_OF_MEMORY alone at {limits[index]} MB, the most any grant gives'
+                f' (peak {"unread" if peak is None else f"{float(peak):.0f} MB"})'
+            )
+            continue
         half = (len(rest) + 1) // 2
         pending += [part for part in (rest[:half], rest[half:]) if part]
     busy = sum(float(f['done']['wall']) for f in folds if f['done'] is not None)

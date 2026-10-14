@@ -27,12 +27,18 @@ choose its ids. Only ``passed`` means passed.
 A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its outcomes as they happen
 (:mod:`lab_commons.hpc.pytest_item`); the run reads the streams, not the shards' end-of-run files.
 An item whose stream never closed is unfinished: its unreported ids are re-submitted, split in halves,
-for up to :data:`RETRIES` more rounds -- a round after an ``OUT_OF_MEMORY`` asks for twice the memory,
-a round after a ``TIMEOUT`` for at least twice the minutes (held to the partition's ceiling, preferring
-one that holds them all), and the id a kill interrupted is priced at no less than the time it was given
-(:meth:`lab_commons.compute.learned.Measured.killed`) -- and only what is still unfinished after that
-is ``lost``. An item that closed without reporting an id
+for up to :data:`RETRIES` more rounds -- a round after a ``TIMEOUT`` asks for at least twice the minutes
+(held to the partition's ceiling, preferring one that holds them all), and the id a kill interrupted is
+priced at no less than the time it was given (:meth:`lab_commons.compute.learned.Measured.killed`) -- and
+only what is still unfinished after that is ``lost``. An item that closed without reporting an id
 recorded it ``missing``.
+
+AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory,
+HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
+counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
+halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
+(:func:`lab_commons.hpc.records.fold`). A round that NO GRANT CAN TAKE settles at once: its ids are
+``error`` with the refusal as their reason, and the record is written -- never a run that waits forever.
 
 THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
 minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next run reads them
@@ -60,7 +66,7 @@ from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.phases import round_clock
-from lab_commons.hpc.plan import Plan, allocate, balance
+from lab_commons.hpc.plan import Plan, allocate, balance, grantable_gb
 from lab_commons.hpc.records import fold, job_measured, read_streams, record_of
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
@@ -146,7 +152,9 @@ def _submit_round(
     tag = f'{state["stamp"]}-r{len(state["rounds"])}'
     measured = Measured.of(state['measured'])
     seconds, unmeasured = measured.estimate(pending, cost)
-    mem_gb = measured.mem_gb(pending, cost, policy) * state['oom']
+    wanted = measured.mem_gb(pending, cost, policy) * state['oom']
+    grantable = grantable_gb(snapshots)
+    mem_gb = wanted if grantable is None else min(wanted, grantable)
     grant, plan = allocate(
         len(pending),
         replace(cost, mem_gb=mem_gb),
@@ -172,6 +180,7 @@ def _submit_round(
         'items': items,
         'job_id': sub.job_id,
         'shards': sub.shards,
+        'at_ceiling': None if grantable is None else wanted >= grantable,  # None: no grant states a ceiling
     }
 
 
@@ -377,6 +386,7 @@ def gather_run(
     walls = [
         clocks[n].elapsed if n in clocks and clocks[n].elapsed > 0 else wall for n in range(len(planned['shards']))
     ]
+    oomed = [i for n, (a, b) in enumerate(planned['shards']) if states.get(n) == 'OUT_OF_MEMORY' for i in range(a, b)]
     pending, killed, busy = fold(
         current['items'],
         streams,
@@ -385,22 +395,32 @@ def gather_run(
         state.setdefault('reasons', {}),
         shards=planned['shards'],
         walls=walls,
+        alone=dict.fromkeys(oomed, planned['mem_mb']) if current.get('at_ceiling') else {},
     )
     planned['clock'] = round_clock(clocks, busy)
     planned['walls_s'] = walls
     state['measured'] = measured.record()
     learned.learn({'repo': state['repo'], **state['measured']})
     timed_out = 'TIMEOUT' in states.values()
-    if 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out):
+    oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
+    if oom:
         state['oom'] *= OOM_GROWTH
     if timed_out:
         state['min_minutes'] = 2 * planned['minutes']
-    if pending and len(state['rounds']) <= RETRIES:
+    if pending and (len(state['rounds']) <= RETRIES or (oom and current.get('at_ceiling') is not None)):
         grant = next(g for g in machine.grants if g.account == account)
         snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
-        _submit_round(state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy)
-        _save(home, state)
-        return None
+        try:
+            _submit_round(
+                state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy
+            )
+        except ValueError as refused:  # no grant can take it, now or ever: a definite red, never a hang
+            state['outcomes'].update({node: 'error' for group in pending for node in group})
+            state['reasons'].update({node: f'could not be placed: {refused}' for group in pending for node in group})
+            pending = []
+        else:
+            _save(home, state)
+            return None
     state['outcomes'].update({node: 'lost' for group in pending for node in group})
     record = record_of(state, next(g.slurm_account for g in machine.grants if g.account == account))
     state['record'] = record
