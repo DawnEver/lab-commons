@@ -41,7 +41,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from lab_commons.proc import _creation_time, pid_alive
+from lab_commons.proc import _creation_time, _kernel32, pid_alive
 
 __all__ = ['SLACK_S', 'CreationClock', 'boot_time', 'creation_stamp', 'predates_boot', 'still_the_same_process']
 
@@ -112,8 +112,11 @@ def boot_time() -> float | None:
 
 
 def _windows() -> float | None:
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return None
     try:
-        tick = ctypes.WinDLL('kernel32').GetTickCount64  # type: ignore[attr-defined]
+        tick = kernel32.GetTickCount64
         tick.restype = ctypes.c_ulonglong
         return time.time() - tick() / 1000.0
     except (AttributeError, OSError):
@@ -132,7 +135,12 @@ def _procfs() -> float | None:
 def _darwin() -> float | None:
     try:
         text = subprocess.run(
-            ['/usr/sbin/sysctl', '-n', 'kern.boottime'], capture_output=True, text=True, check=False, timeout=10
+            ['/usr/sbin/sysctl', '-n', 'kern.boottime'],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=False,
+            timeout=10,
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
