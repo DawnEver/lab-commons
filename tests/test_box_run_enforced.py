@@ -24,8 +24,9 @@ ENFORCES = sys.platform == 'win32' or (sys.platform.startswith('linux') and refu
 
 _CAP = Capacity(cpu=2.0, mem_bytes=4 * GB, seats={})
 _MB = 2**20
-#: 400 MB, touched page by page so a lazily-committing kernel (Linux) is made to account it.
-_HOG = 'b = bytearray(400 * 2**20); b[::4096] = b"x" * len(b[::4096])'
+#: 400 MB, touched page by page so a lazily-committing kernel (Linux) accounts it, then HELD: a watched
+#: (Slurm) run is sampled per tick, and a hog that held nothing would not be the case under test.
+_HOG = 'import time; b = bytearray(400 * 2**20); b[::4096] = b"x" * len(b[::4096]); time.sleep(30)'
 
 
 @pytest.fixture(autouse=True)
@@ -101,8 +102,8 @@ def test_a_grandchild_dies_with_its_claim(tmp_path: Path) -> None:
 
 @pytest.mark.xfail(
     sys.platform != 'win32',
-    reason='only a Job Object (KILL_ON_JOB_CLOSE) ties the tree to its launcher; a systemd scope outlives '
-    'it until RuntimeMaxSec, and an unenforcing machine refuses before any child exists',
+    reason='only a Job Object (KILL_ON_JOB_CLOSE) ties the tree to its launcher; a systemd scope or a watched Slurm '
+    'group outlives it (the launcher owns the wall), and an unenforcing machine refuses before any child exists',
     strict=True,
 )
 def test_killing_the_launcher_kills_the_tree(tmp_path: Path) -> None:

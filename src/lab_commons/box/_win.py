@@ -44,7 +44,7 @@ _MSG_JOB_MEMORY_LIMIT: Final = 10
 _THREAD_SUSPEND_RESUME: Final = 0x0002
 _SNAPTHREAD: Final = 0x00000004
 _KILLED: Final = 0xC0000017  # STATUS_NO_MEMORY / the exit code a terminated job reports
-_TICK_MS: Final = 50
+_TICK_S: Final = 0.05
 _PROCESS_SET_QUOTA: Final = 0x0100
 _PROCESS_TERMINATE: Final = 0x0001
 
@@ -188,13 +188,15 @@ def _assign(k32: ctypes.WinDLL, job: int, child: subprocess.Popen[bytes]) -> Non
             k32.CloseHandle(wintypes.HANDLE(handle))
 
 
-def _memory_message(k32: ctypes.WinDLL, port: int, wait_ms: int) -> bool:
-    """Drain the job's port (waiting up to *wait_ms* for the first message): did the memory limit fire?"""
+def _memory_message(k32: ctypes.WinDLL, port: int, wait_s: float) -> bool:
+    """Drain the job's port (waiting up to *wait_s* seconds for the first message): did the memory limit fire?"""
     code, key, overlapped = wintypes.DWORD(), ctypes.c_void_p(), ctypes.c_void_p()
     hit = False
-    while k32.GetQueuedCompletionStatus(port, ctypes.byref(code), ctypes.byref(key), ctypes.byref(overlapped), wait_ms):
+    while k32.GetQueuedCompletionStatus(
+        port, ctypes.byref(code), ctypes.byref(key), ctypes.byref(overlapped), int(wait_s * 1000)
+    ):
         hit = hit or code.value == _MSG_JOB_MEMORY_LIMIT
-        wait_ms = 0
+        wait_s = 0.0
     return hit
 
 
@@ -238,10 +240,10 @@ def _supervise(k32: ctypes.WinDLL, job: int, port: int, child: subprocess.Popen[
     ``memory`` ending too: the message is still on the port when it is gone.
     """
     while child.poll() is None:
-        left_ms = int((deadline - time.monotonic()) * 1000)
-        if left_ms <= 0:
+        left_s = deadline - time.monotonic()
+        if left_s <= 0:
             reason = 'wall'
-        elif _memory_message(k32, port, min(_TICK_MS, left_ms)):
+        elif _memory_message(k32, port, min(_TICK_S, left_s)):
             reason = 'memory'
         else:
             continue
