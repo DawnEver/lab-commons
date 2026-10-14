@@ -15,6 +15,7 @@ from lab_commons.hpc.pytest_item import read_stream
 from lab_commons.hpc.shell import ROOT
 
 __all__ = [
+    'files_made',
     'fold',
     'held_outcomes',
     'job_measured',
@@ -182,18 +183,35 @@ def read_record(path: Path) -> dict[str, Any]:
     return json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))
 
 
-def job_measured(rounds: Sequence[dict[str, Any]], outcomes: Iterable[str], measured: Measured, *, cpus: int) -> Run:
+def job_measured(
+    rounds: Sequence[dict[str, Any]], outcomes: Iterable[str], measured: Measured, *, cpus: int, files: float = 0.0
+) -> Run:
     """What a whole Slurm run measured, as one :class:`~lab_commons.compute.learned.Run`.
 
     Its peak is one TASK's (the worst file it ran, as :meth:`Measured.worker_gb` prices it, unpadded);
-    its cpu-seconds are every shard's elapsed times the *cpus* each held; its wall is the rounds' makespans.
+    its cpu-seconds are every shard's elapsed times the *cpus* each held; its wall is the rounds' makespans;
+    its *files* what :func:`files_made` counted.
     """
     walls = [r.get('walls_s') or [0.0] for r in rounds]
     return Run(
         peak_mem_gb=measured.worker_gb(outcomes, prior_gb=0.0, safety=1.0),
         cpu_s=sum(sum(w) for w in walls) * cpus,
         wall_s=max(1.0, sum(max(w) for w in walls)),
+        files=files,
     )
+
+
+def files_made(home: Runner, state: dict[str, Any]) -> float:
+    """The files a run leaves in the home -- its tree, run directory and env, one ``find | wc -l``; 0 unread.
+
+    The account's FILE quota is a supply admission compares (user ruling 2026-10-14), so a run's file cost
+    is learned like its memory. 0 is "not measured": the demand then falls back to the prior, never to free.
+    """
+    paths = [f'{ROOT}/trees/{state["sha"]}', f'{ROOT}/runs/{state["sha"]}']
+    if env := (state.get('builds') or {}).get('env'):
+        paths.append(f'{ROOT}/envs/{env}')
+    text = home(f'find {" ".join(paths)} -xdev 2>/dev/null | wc -l', None).strip()
+    return float(text) if text.isdigit() else 0.0
 
 
 def run_shas(machine: Machine, runners: dict[str, Runner]) -> list[str]:

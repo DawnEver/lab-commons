@@ -10,7 +10,9 @@ Three sources, one value (:mod:`lab_commons.compute.model`):
   declares, because no probe can read a licence. A tool is present when its probe (:data:`TOOL_PROBES`) finds
   it installed, or, without a probe, when it is declared. Its count is ``seats`` less the running jobs needing it.
 * **slurm account**: ``cpu`` AND ``mem_gb`` over EVERY grant of the account (:func:`account`), plus ``submits``
-  -- the job submissions its QOS still accepts (infinite when uncapped).
+  -- the job submissions its QOS still accepts (infinite when uncapped) -- and ``files``, what the home's
+  FILE quota still takes (user ruling 2026-10-14: an Ada home at its 2,020,000-file limit failed every
+  write while its supply read free cores; the caller reads it, :mod:`lab_commons.dev.diskusage`).
 
 The readers of the OS are module functions taken as defaults, so a test passes fakes; the arithmetic is pure.
 """
@@ -200,8 +202,13 @@ def box(
 def account(
     scope: str,
     snapshots: Sequence[tuple[Snapshot, str]],
+    *,
+    files: float = math.inf,
 ) -> Supply:
     """A Slurm account over EVERY grant: ``(snapshot, qos)`` each, summed; ``submits`` infinite if uncapped.
+
+    *files* is the home's file-quota headroom (limit less used): at the limit it is 0, and a run -- every
+    run creates files -- is refused naming ``files``. Infinite only where no file quota exists.
 
     The account's OS, ``linux``, counts as many as ``cpu``.
     ``cpu`` per grant is :func:`lab_commons.hpc.plan.headroom` (quota less what is held); ``mem_gb`` the
@@ -215,5 +222,5 @@ def account(
         room = snapshot.quota.submit_room(qos)
         submits += math.inf if room is None else room
     linux = OS_NAMES['linux']  # a Slurm account runs on linux: the OS is a resource there like any other
-    measured = Resources({'cpu': cpu, 'mem_gb': mem, 'submits': submits, linux: cpu})
-    return Supply(scope, measured, frozenset({'cpu', 'mem_gb', 'submits', linux}))
+    measured = Resources({'cpu': cpu, 'mem_gb': mem, 'submits': submits, 'files': files, linux: cpu})
+    return Supply(scope, measured, frozenset({'cpu', 'mem_gb', 'submits', 'files', linux}))

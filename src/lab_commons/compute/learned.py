@@ -235,10 +235,11 @@ class Run:
     peak_mem_gb: float
     cpu_s: float
     wall_s: float
+    files: float = 0.0  # what a cluster run left in the home (tree, run, env); 0 is unmeasured
 
     def __post_init__(self) -> None:
         """Refuse a measurement no run could have produced."""
-        if self.peak_mem_gb < 0 or self.cpu_s < 0 or self.wall_s <= 0:
+        if self.peak_mem_gb < 0 or self.cpu_s < 0 or self.wall_s <= 0 or self.files < 0:
             msg = f'a run measures a non-negative peak and cpu and a positive wall, got {self}'
             raise ValueError(msg)
 
@@ -301,7 +302,7 @@ def record_run(repo: str, producer: str, needs: Iterable[str], run: Run, *, kill
     key = _key(producer, needs)
     if killed:
         known = float(runs.get(key, {}).get('peak_mem_gb', 0.0))
-        run = Run(max(known, run.peak_mem_gb * OOM_GROWTH), run.cpu_s, run.wall_s)
+        run = Run(max(known, run.peak_mem_gb * OOM_GROWTH), run.cpu_s, run.wall_s, run.files)
     runs[key] = asdict(run)
     return _write(repo, {**table, 'runs': runs})
 
@@ -323,8 +324,10 @@ def worker_gb(repo: str, files: Iterable[str], *, prior_gb: float, safety: float
     return Measured.of(learned(repo)).worker_gb(files, prior_gb=prior_gb, safety=safety)
 
 
-#: What an unmeasured cluster run is taken to hold: one core (the run sizes its array to what is free).
-CLUSTER_PRIOR: Final = Run(peak_mem_gb=0.0, cpu_s=1.0, wall_s=1.0)
+#: What an unmeasured cluster run is taken to hold: one core (the run sizes its array to what is free), and
+#: the files it leaves in the home -- CONSERVATIVE: Ada 2026-10-14 held ~0.3 M files of forge trees, ~0.16 M
+#: of 48 envs and ~0.18 M of collect, so one run's tree, run and env are priced high until measured.
+CLUSTER_PRIOR: Final = Run(peak_mem_gb=0.0, cpu_s=1.0, wall_s=1.0, files=50_000.0)
 
 #: The producer a box part runs: the repository's declared ``produce`` in a tree at the sha.
 LOCAL: Final = 'local'
@@ -342,16 +345,20 @@ def learned_demand(repo_url: str, *, cluster: bool) -> Callable[[frozenset[str]]
     """``needs -> Demand`` a part ASKS to be admitted: what the last run of ``(producer, need-set)`` measured.
 
     A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key; the producer is
-    :func:`producer_of`. Unmeasured, it is :data:`CLUSTER_PRIOR`. A BOX part's cpu is ELASTIC -- its
-    producer sizes its workers to the cores it finds -- so it asks ONE core whatever it measured, and its
+    :func:`producer_of`. Unmeasured, it is :data:`CLUSTER_PRIOR`. A CLUSTER part also asks the ``files`` it
+    leaves in the home (measured, else the prior's), against the account's file headroom. A BOX part's cpu is
+    ELASTIC -- its producer sizes its workers to the cores it finds -- so it asks ONE core whatever it measured, and its
     measured memory, which is a real need. Measured on host G 2026-10-14: asking the whole box (32 cores)
     never fit cpu=30.24 and starved a part 11 h. What it holds once running is :func:`learned_hold`.
     """
     producer = producer_of(cluster=cluster)
 
     def ask(needs: frozenset[str]) -> Demand:
-        wanted = (run_of(repo_url, producer, needs) or CLUSTER_PRIOR).demand(needs)
-        return wanted if cluster else Demand({**wanted, 'cpu': 1})
+        run = run_of(repo_url, producer, needs) or CLUSTER_PRIOR
+        wanted = run.demand(needs)
+        if cluster:  # a cluster run leaves files in a home with a file quota: measured, else the prior's
+            return Demand({**wanted, 'files': run.files or CLUSTER_PRIOR.files})
+        return Demand({**wanted, 'cpu': 1})
 
     return ask
 

@@ -71,7 +71,7 @@ def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
     box = learned.learned_hold(REPO, cluster=False, cores=8)
     assert box(frozenset({'jmag'})) == Demand(cpu=2, mem_gb=6.0, jmag=1)
     assert box(frozenset()) == Demand(cpu=8, mem_gb=0.0)
-    assert learned.learned_demand(REPO, cluster=True)(frozenset({'jmag'})) == Demand(cpu=1, mem_gb=0.0, jmag=1)
+    assert learned.learned_demand(REPO, cluster=True)(frozenset({'jmag'})) == Demand(cpu=1, jmag=1, files=50_000)
     assert learned.producer_of(cluster=True) == learned.SLURM
 
 

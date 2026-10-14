@@ -10,7 +10,7 @@ naming the lease it borrows from; the serve loop stops and releases what :func:`
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from lab_commons.compute.model import Job, Reservation, Resources, Supply, total
@@ -53,6 +53,7 @@ class Admission:
     lacking: tuple[str, ...] = ()
     on_loan: int = 0
     preempt: tuple[Held, ...] = ()
+    numbers: tuple[tuple[str, float, float], ...] = field(default=(), compare=False)  # (name, asked, free)
 
     def __bool__(self) -> bool:
         """Truthy exactly when admitted."""
@@ -60,8 +61,11 @@ class Admission:
 
     @property
     def why(self) -> str:
-        """``''`` when admitted, else which resources are lacking."""
-        return '' if self.admitted else f'lacking {", ".join(self.lacking)}'
+        """``''`` when admitted, else which resources are lacking -- with asked and free for an amount."""
+        if self.admitted:
+            return ''
+        said = {name: f'{name} ({asked:g} asked, {free:g} free)' for name, asked, free in self.numbers}
+        return f'lacking {", ".join(said.get(name, name) for name in self.lacking)}'
 
 
 def idle(lease: Reservation, supply: Supply, running: Iterable[Held]) -> Resources:
@@ -130,7 +134,8 @@ def admit(
     for lease in others:
         if want <= free + idle(lease, supply, held):
             return Admission(admitted=True, on_loan=lease.id)
-    return Admission(admitted=False, lacking=want.short_of(free))
+    short = want.short_of(free)
+    return Admission(admitted=False, lacking=short, numbers=tuple((n, want[n], free[n]) for n in short))
 
 
 def claimable(
