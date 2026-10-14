@@ -14,6 +14,7 @@ from pathlib import Path
 
 #: What hpc may import from its own package: itself and the stdlib-only tier-1 modules -- never an opt-in tier.
 TIER_ONE = (
+    'lab_commons.box.machine',
     'lab_commons.compute',
     'lab_commons.config',
     'lab_commons.hpc',
