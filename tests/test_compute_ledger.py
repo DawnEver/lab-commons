@@ -144,26 +144,6 @@ def test_the_cli_spelling_parses_amounts_whom_and_until() -> None:
         ledger.parse_until('2026-10-01T00:00:00Z', NOW)
 
 
-# -- the own reserve --------------------------------------------------------------------------------------
-
-
-def test_the_own_reserve_is_what_the_user_uses_now_plus_a_margin_capped_at_the_box() -> None:
-    table = ledger.reserve_table({})
-    assert table.mem_margin == ledger.DEFAULT_MEM_MARGIN == 0.25
-    total = Resources(cpu=16, mem_gb=64)
-    own = ledger.own_reserve(total, Resources(cpu=3, mem_gb=10), table)
-    assert own == Resources(cpu=3 + ledger.DEFAULT_CPU_MARGIN, mem_gb=10 + 16)
-    assert ledger.own_reserve(total, Resources(cpu=16, mem_gb=60), table) == total, 'never more than the box'
-
-
-def test_the_reserve_table_declares_delegates_and_margins_and_refuses_the_rest() -> None:
-    table = ledger.reserve_table({'delegates': ['bob'], 'cpu_margin': 2, 'mem_margin': 0.5})
-    assert (table.delegates, table.cpu_margin, table.mem_margin) == (('bob',), 2.0, 0.5)
-    for bad in ({'delegate': ['bob']}, {'mem_margin': 1.5}, {'cpu_margin': -1}, {'delegates': 'bob'}):
-        with pytest.raises(ValueError, match=r'\[reserve\]'):
-            ledger.reserve_table(bad)
-
-
 def test_the_queue_lists_each_live_reservation_and_flags_a_refused_writer() -> None:
     forge = _forge_with()
     made = ledger.reserve(forge, _ask(cpu=8))

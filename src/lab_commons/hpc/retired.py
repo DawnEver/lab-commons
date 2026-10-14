@@ -154,7 +154,7 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.hpc.outstanding': 'lab_commons.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
     # A host's own user is served by its own reserve, and an account is divided by reservations (2026-10-13).
     'own_weight': (
-        'nothing: the own reserve (lab_commons.compute.ledger.own_reserve) keeps what the user of this box uses plus '
+        'nothing: the own reserve (lab_commons.box.machine.own_reserve) keeps what the user of this box uses plus '
         'a margin, and [reserve] delegates names who else may reserve it -- delete the key'
     ),
     '--own-weight': 'workstation deploy --delegates <login,...> ([reserve] delegates)',

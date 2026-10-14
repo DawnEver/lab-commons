@@ -19,7 +19,8 @@ might state is never read. :func:`reserve` and :func:`release` refuse the same w
 refused lease is never posted -- but it is every reader's check that makes the rule hold.
 
 THE OWN RESERVE is not a ledger record: it is what this box's user is using now plus a margin
-(:func:`own_reserve`), subtracted from the box's supply where it is measured, and lent to nobody.
+(:func:`lab_commons.box.machine.own_reserve`), subtracted from the box's supply where it is measured,
+and lent to nobody.
 A machine file says what a host HAS and who may reserve it, never how it is divided.
 """
 
@@ -38,28 +39,17 @@ from lab_commons.dev.forgepulls import comment_list, marker
 from lab_commons.dev.forgework import Client, Comment
 
 __all__ = [
-    'DEFAULT_CPU_MARGIN',
-    'DEFAULT_MEM_MARGIN',
     'Ask',
     'Entry',
     'Ledger',
     'ReserveRefused',
-    'ReserveTable',
-    'own_reserve',
     'parse_for',
     'parse_resources',
     'parse_until',
     'read',
     'release',
     'reserve',
-    'reserve_table',
 ]
-
-#: Cores kept free above what the box's own user is using now.
-DEFAULT_CPU_MARGIN: Final = 1.0
-
-#: The fraction of the box's memory kept free above what its own user is using now.
-DEFAULT_MEM_MARGIN: Final = 0.25
 
 _SUBJECT: Final = 'reserve:'
 _BLOCK: Final = re.compile(r'```json\n(?P<json>.*?)\n```', re.DOTALL)
@@ -283,39 +273,3 @@ def parse_until(text: str, now: datetime) -> datetime:
 
 
 # --- the machine file and the own reserve -----------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ReserveTable:
-    """The machine file's ``[reserve]``: who else may reserve this host, and the own reserve's margins."""
-
-    delegates: tuple[str, ...] = ()
-    cpu_margin: float = DEFAULT_CPU_MARGIN
-    mem_margin: float = DEFAULT_MEM_MARGIN
-
-
-def reserve_table(table: Mapping[str, Any]) -> ReserveTable:
-    """Read ``[reserve]``; an unknown key, a non-list ``delegates`` or a margin out of range is refused."""
-    unknown = sorted(set(table) - set(ReserveTable.__dataclass_fields__))
-    delegates = table.get('delegates', [])
-    cpu = table.get('cpu_margin', DEFAULT_CPU_MARGIN)
-    mem = table.get('mem_margin', DEFAULT_MEM_MARGIN)
-    bad = [
-        *(f'unknown key {key!r}' for key in unknown),
-        *(['delegates must be a list of logins'] if not isinstance(delegates, list) else []),
-        *(['cpu_margin must be >= 0 cores'] if not isinstance(cpu, int | float) or cpu < 0 else []),
-        *(['mem_margin must be a fraction in [0, 1]'] if not isinstance(mem, int | float) or not 0 <= mem <= 1 else []),
-    ]
-    if bad:
-        msg = f'the machine file [reserve]: {"; ".join(bad)}'
-        raise ValueError(msg)
-    return ReserveTable(tuple(str(one) for one in delegates), float(cpu), float(mem))
-
-
-def own_reserve(total: Mapping[str, float], in_use: Mapping[str, float], table: ReserveTable) -> Resources:
-    """What this box keeps for its own user: what the user uses now plus the margins, never more than the box."""
-    wanted = {
-        'cpu': in_use.get('cpu', 0.0) + table.cpu_margin,
-        'mem_gb': in_use.get('mem_gb', 0.0) + table.mem_margin * total.get('mem_gb', 0.0),
-    }
-    return Resources({name: min(amount, total.get(name, 0.0)) for name, amount in wanted.items()})

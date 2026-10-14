@@ -7,9 +7,9 @@ never claimed). The declaration is also the run's enforced limit (phase 2), so w
 is what the run can use and never more.
 
 The capacity is the MACHINE'S, not the moment's: total cores and memory from the OS minus the
-machine file's ``[reserve]`` margins, read through the SAME :func:`lab_commons.compute.ledger
-.reserve_table` / :func:`~lab_commons.compute.ledger.own_reserve` compute uses, plus the
-``[capabilities.<name>] seats`` read through :func:`lab_commons.dev.forgeprovides.provided`.
+machine file's ``[reserve]`` margins, read through :mod:`lab_commons.box.machine` -- the one home of
+:func:`~lab_commons.box.machine.reserve_table`, :func:`~lab_commons.box.machine.own_reserve` and
+:func:`~lab_commons.box.machine.provided` (``[capabilities.<name>] seats``), which the forge also reads.
 "Available memory" right now is deliberately NOT consulted: admission sums declared limits, so
 it cannot be fooled by a job that has not grown yet or blamed for one that never will.
 """
@@ -21,9 +21,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from lab_commons.compute.ledger import own_reserve, reserve_table
+from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
-from lab_commons.dev.forgeprovides import provided
 from lab_commons.proc import system_memory
 
 __all__ = ['GB', 'Capacity', 'Demand', 'Holding', 'Refused', 'fits']
