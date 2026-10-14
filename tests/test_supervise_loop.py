@@ -15,6 +15,7 @@ from lab_commons.supervise.component import ActionContext, CheckContext, Compone
 from lab_commons.supervise.loop import UNCONFIGURED, CycleResult, run_cycle
 from lab_commons.supervise.process import SystemdProcessManager
 from lab_commons.supervise.process.base import Ran
+from lab_commons.supervise.process.systemd import ceiling_gb
 from lab_commons.supervise.state import StateStore
 from lab_commons.supervise.verdict import Action, Anomaly, CheckResult, Condition, RemedyStep, Severity
 
@@ -334,9 +335,9 @@ def test_a_command_action_runs_under_a_ceiling(tmp_path: Path) -> None:
     result = _run(_registry(_Cmd()), tmp_path, manager=_manager(seen))
     assert result.attempts[0].ok is True
     argv = seen[0][0]
-    assert argv[:2] == ['systemd-run', '--scope']
-    assert '--property=MemoryMax=400M' in argv
-    assert argv[-3:] == ['sh', '-c', 'echo hi']
+    assert argv[1:4] == ['-m', 'lab_commons.box', 'run']
+    assert argv[argv.index('--mem-gb') + 1] == f'{ceiling_gb("400M"):g}'
+    assert argv[-4:] == ['--', 'sh', '-c', 'echo hi']
 
 
 def test_a_step_gated_off_is_recorded_as_skipped_not_failed(tmp_path: Path) -> None:

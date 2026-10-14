@@ -10,7 +10,7 @@ import pytest
 
 from lab_commons.box import BOX_ENV, Capacity, Demand, Refused, admit, command, run
 from lab_commons.box.__main__ import _parser, main
-from lab_commons.box._linux import scope_argv
+from lab_commons.box._linux import manager, scope_argv
 from lab_commons.box.run import _ENFORCERS
 
 
@@ -52,10 +52,21 @@ def test_an_empty_argv_is_refused() -> None:
 
 
 def test_the_scope_carries_exactly_the_claim() -> None:
-    argv = scope_argv('/usr/bin/systemd-run', ['solver', '-x'], Demand(cpu=2, mem_gb=0.5, wall_s=30, seats={}))
+    demand = Demand(cpu=2, mem_gb=0.5, wall_s=30, seats={})
+    argv = scope_argv('/usr/bin/systemd-run', manager(1000), ['solver', '-x'], demand)
     assert argv[:4] == ['/usr/bin/systemd-run', '--user', '--scope', '--quiet']
     assert {'MemoryMax=536870912', 'MemorySwapMax=0', 'CPUQuota=200%'} <= set(argv)
     assert argv[-3:] == ['--', 'solver', '-x']
+
+
+def test_root_scopes_in_the_system_manager_and_a_user_in_its_delegated_one() -> None:
+    root, user = manager(0), manager(1000)
+    assert root.flags == ()
+    assert root.controllers == Path('/sys/fs/cgroup/cgroup.controllers')
+    assert user.flags == ('--user',)
+    assert user.controllers == Path('/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers')
+    argv = scope_argv('/usr/bin/systemd-run', root, ['git', 'fetch'], Demand(cpu=1, mem_gb=0.25, wall_s=60, seats={}))
+    assert argv[:3] == ['/usr/bin/systemd-run', '--scope', '--quiet']
 
 
 def test_a_platform_without_an_enforcer_refuses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
