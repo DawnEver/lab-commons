@@ -67,7 +67,7 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance, grantable_gb
-from lab_commons.hpc.records import fold, job_measured, read_streams, record_of
+from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
     COLLECT_MODULE,
@@ -429,7 +429,7 @@ def gather_run(
         state['repo'],
         learned.SLURM,
         needs_of(state['platform']),
-        job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus),
+        job_measured(state['rounds'], state['outcomes'], measured, cpus=cost.cpus, files=files_made(home, state)),
     )
     return record
 

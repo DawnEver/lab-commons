@@ -60,7 +60,7 @@ class Priority:
 
     def row(self) -> dict[str, list[str]]:
         """As a host card carries it: each subject list, sorted."""
-        return {key: sorted(getattr(self, key)) for key in _KEYS}
+        return {'logins': sorted(self.logins), 'hosts': sorted(self.hosts), 'sessions': sorted(self.sessions)}
 
     def text(self) -> str:
         """How a human reads it: ``logins YongxuanWu; sessions lane/x`` -- ``none`` when nothing is declared."""
