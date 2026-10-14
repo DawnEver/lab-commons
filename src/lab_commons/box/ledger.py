@@ -59,7 +59,7 @@ _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     cpu INTEGER NOT NULL, mem_bytes INTEGER NOT NULL, seats TEXT NOT NULL,
-    deadline REAL NOT NULL, started REAL NOT NULL, what TEXT NOT NULL, key TEXT, fingerprint TEXT);
+    deadline REAL NOT NULL, started REAL NOT NULL, what TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT);
 CREATE TABLE IF NOT EXISTS tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     gives_up REAL NOT NULL, what TEXT NOT NULL);
@@ -91,10 +91,6 @@ def _connect() -> sqlite3.Connection:
     con = sqlite3.connect(path, timeout=_LOCK_S, isolation_level=None)
     con.execute('PRAGMA journal_mode=WAL')
     con.executescript(_SCHEMA)
-    present = {row[1] for row in con.execute('PRAGMA table_info(claims)')}
-    for added in ('ALTER TABLE claims ADD COLUMN key TEXT', 'ALTER TABLE claims ADD COLUMN fingerprint TEXT'):
-        if added.split()[-2] not in present:
-            con.execute(added)
     return con
 
 
@@ -143,7 +139,7 @@ def _try(
     demand: Demand,
     what: str,
     *,
-    tag: tuple[str | None, str | None],
+    tag: tuple[str, str | None],
 ) -> Claim | str:
     """Inside the write lock: the claim if this ticket heads the queue and fits, else why not."""
     now = time.time()
@@ -183,7 +179,7 @@ def admit(
     *,
     capacity: Capacity | None = None,
     poll_s: float = POLL_S,
-    key: str | None = None,
+    key: str,
     fingerprint: str | None = None,
 ) -> Iterator[Claim]:
     """Hold *demand* on this box for the ``with`` body; wait for room at most *queue_s* seconds.
@@ -240,7 +236,7 @@ def _wait(
     capacity: Capacity,
     demand: Demand,
     what: str,
-    tag: tuple[str | None, str | None],
+    tag: tuple[str, str | None],
     gives_up: float,
     poll_s: float,
 ) -> Claim:
