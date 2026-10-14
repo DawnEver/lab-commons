@@ -28,7 +28,7 @@ def _demand(cpu: int = 1, mem_gb: float = 1.0, wall_s: int = 60, seats: dict[str
 def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / 'box.sqlite'
     monkeypatch.setenv(BOX_ENV, str(path))
-    with admit(_demand(), 'schema', queue_s=1, capacity=_CAP):
+    with admit(_demand(), 'schema', queue_s=1, key='k', capacity=_CAP):
         pass
     return path
 
@@ -60,20 +60,23 @@ def test_fits_names_the_dimension_and_its_holders() -> None:
 @pytest.mark.usefixtures('box')
 def test_an_oversize_demand_is_refused_at_once() -> None:
     start = time.monotonic()
-    with pytest.raises(Refused, match='cpu'), admit(_demand(cpu=5), 'big', queue_s=30, capacity=_CAP):
+    with pytest.raises(Refused, match='cpu'), admit(_demand(cpu=5), 'big', queue_s=30, key='k', capacity=_CAP):
         pass
     assert time.monotonic() - start < 5
 
 
 @pytest.mark.usefixtures('box')
 def test_an_undeclared_seat_never_fits() -> None:
-    with pytest.raises(Refused, match='matlab'), admit(_demand(seats={'matlab': 1}), 'm', queue_s=30, capacity=_CAP):
+    with (
+        pytest.raises(Refused, match='matlab'),
+        admit(_demand(seats={'matlab': 1}), 'm', queue_s=30, key='k', capacity=_CAP),
+    ):
         pass
 
 
 @pytest.mark.usefixtures('box')
 def test_a_claim_is_a_row_while_held_and_gone_after() -> None:
-    with admit(_demand(cpu=2, wall_s=100), 'run', queue_s=1, capacity=_CAP) as claim:
+    with admit(_demand(cpu=2, wall_s=100), 'run', queue_s=1, key='k', capacity=_CAP) as claim:
         rows = holdings()
         assert [row.what for row in rows] == ['run']
         assert rows[0].pid == os.getpid()
@@ -84,9 +87,12 @@ def test_a_claim_is_a_row_while_held_and_gone_after() -> None:
 
 @pytest.mark.usefixtures('box')
 def test_a_wait_never_exceeds_queue_s_and_names_the_holder() -> None:
-    with admit(_demand(cpu=4), 'holder-run', queue_s=1, capacity=_CAP):
+    with admit(_demand(cpu=4), 'holder-run', queue_s=1, key='k', capacity=_CAP):
         start = time.monotonic()
-        with pytest.raises(Refused, match='holder-run'), admit(_demand(cpu=1), 'late', queue_s=1.0, capacity=_CAP):
+        with (
+            pytest.raises(Refused, match='holder-run'),
+            admit(_demand(cpu=1), 'late', queue_s=1.0, key='k', capacity=_CAP),
+        ):
             pass
         assert time.monotonic() - start < 1.0 + 1.0
 
@@ -101,9 +107,9 @@ def _ticket(path: Path, pid: int) -> None:
 def _row(path: Path, *, pid: int, created: int | None, deadline: float, cpu: int = 4) -> None:
     with sqlite3.connect(path) as con:
         con.execute(
-            'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what) '
-            'VALUES (?,?,?,?,?,?,?,?)',
-            (pid, created, cpu, 2**30, json.dumps({}), deadline, time.time(), 'ghost'),
+            'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key) '
+            'VALUES (?,?,?,?,?,?,?,?,?)',
+            (pid, created, cpu, 2**30, json.dumps({}), deadline, time.time(), 'ghost', 'ghost-key'),
         )
 
 
@@ -121,32 +127,32 @@ def test_a_ticket_holds_nothing(box: Path) -> None:
 
 def test_a_dead_waiters_ticket_does_not_block_the_queue(box: Path) -> None:
     _ticket(box, _dead_pid())
-    with admit(_demand(), 'behind', queue_s=1, capacity=_CAP):
+    with admit(_demand(), 'behind', queue_s=1, key='k', capacity=_CAP):
         assert [row.what for row in holdings()] == ['behind']
 
 
 def test_a_dead_launchers_row_is_reaped(box: Path) -> None:
     _row(box, pid=_dead_pid(), created=None, deadline=time.time() + 600)
     _row(box, pid=os.getpid(), created=-1, deadline=time.time() + 600)  # a recycled pid: the stamp differs
-    with admit(_demand(cpu=4), 'after', queue_s=1, capacity=_CAP):
+    with admit(_demand(cpu=4), 'after', queue_s=1, key='k', capacity=_CAP):
         assert [row.what for row in holdings()] == ['after']
 
 
 def test_an_expired_deadline_row_is_reaped(box: Path) -> None:
     _row(box, pid=os.getpid(), created=None, deadline=time.time() - GRACE_S - 1)
-    with admit(_demand(cpu=4), 'after', queue_s=1, capacity=_CAP):
+    with admit(_demand(cpu=4), 'after', queue_s=1, key='k', capacity=_CAP):
         assert [row.what for row in holdings()] == ['after']
 
 
 def test_a_deadline_within_grace_still_holds(box: Path) -> None:
     _row(box, pid=os.getpid(), created=None, deadline=time.time() - 1)
-    with pytest.raises(Refused, match='ghost'), admit(_demand(cpu=1), 'after', queue_s=0.5, capacity=_CAP):
+    with pytest.raises(Refused, match='ghost'), admit(_demand(cpu=1), 'after', queue_s=0.5, key='k', capacity=_CAP):
         pass
 
 
 def _race(path: str, peak: Queue[int]) -> None:
     os.environ[BOX_ENV] = path
-    with admit(_demand(cpu=1, mem_gb=1.0), f'racer-{os.getpid()}', queue_s=60, capacity=_CAP, poll_s=0.02):
+    with admit(_demand(cpu=1, mem_gb=1.0), f'racer-{os.getpid()}', queue_s=60, key='k', capacity=_CAP, poll_s=0.02):
         rows = holdings()
         peak.put(sum(row.cpu for row in rows))
         time.sleep(0.1)

@@ -59,7 +59,7 @@ _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     cpu INTEGER NOT NULL, mem_bytes INTEGER NOT NULL, seats TEXT NOT NULL,
-    deadline REAL NOT NULL, started REAL NOT NULL, what TEXT NOT NULL);
+    deadline REAL NOT NULL, started REAL NOT NULL, what TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT);
 CREATE TABLE IF NOT EXISTS tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     gives_up REAL NOT NULL, what TEXT NOT NULL);
@@ -132,7 +132,15 @@ def _reap(con: sqlite3.Connection, now: float) -> None:
                 con.execute(delete, (row_id,))
 
 
-def _try(con: sqlite3.Connection, ticket: int, capacity: Capacity, demand: Demand, what: str) -> Claim | str:
+def _try(
+    con: sqlite3.Connection,
+    ticket: int,
+    capacity: Capacity,
+    demand: Demand,
+    what: str,
+    *,
+    tag: tuple[str, str | None],
+) -> Claim | str:
     """Inside the write lock: the claim if this ticket heads the queue and fits, else why not."""
     now = time.time()
     _reap(con, now)
@@ -145,8 +153,19 @@ def _try(con: sqlite3.Connection, ticket: int, capacity: Capacity, demand: Deman
     deadline = now + demand.wall_s
     pid = os.getpid()
     cursor = con.execute(
-        'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what) VALUES (?,?,?,?,?,?,?,?)',
-        (pid, creation_stamp(pid), demand.cpu, demand.mem_bytes, json.dumps(dict(demand.seats)), deadline, now, what),
+        'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key, fingerprint) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+        (
+            pid,
+            creation_stamp(pid),
+            demand.cpu,
+            demand.mem_bytes,
+            json.dumps(dict(demand.seats)),
+            deadline,
+            now,
+            what,
+            *tag,
+        ),
     )
     con.execute('DELETE FROM tickets WHERE id = ?', (ticket,))
     return Claim(int(cursor.lastrowid or 0), deadline)
@@ -154,9 +173,19 @@ def _try(con: sqlite3.Connection, ticket: int, capacity: Capacity, demand: Deman
 
 @contextmanager
 def admit(
-    demand: Demand, what: str, queue_s: float, *, capacity: Capacity | None = None, poll_s: float = POLL_S
+    demand: Demand,
+    what: str,
+    queue_s: float,
+    *,
+    capacity: Capacity | None = None,
+    poll_s: float = POLL_S,
+    key: str,
+    fingerprint: str | None = None,
 ) -> Iterator[Claim]:
     """Hold *demand* on this box for the ``with`` body; wait for room at most *queue_s* seconds.
+
+    *key* (the caller's opaque identity of WHAT runs) and *fingerprint* (its hash of the code the
+    run depends on) are stored on the row unparsed, for the caller's learning.
 
     Raises:
         Refused: at once when *demand* exceeds the capacity (it can never fit), else when
@@ -180,7 +209,16 @@ def admit(
                 or 0
             )
         try:
-            claim = _wait(con, ticket, capacity=capacity, demand=demand, what=what, gives_up=gives_up, poll_s=poll_s)
+            claim = _wait(
+                con,
+                ticket,
+                capacity=capacity,
+                demand=demand,
+                what=what,
+                tag=(key, fingerprint),
+                gives_up=gives_up,
+                poll_s=poll_s,
+            )
         finally:
             with _immediate(con):
                 con.execute('DELETE FROM tickets WHERE id = ?', (ticket,))
@@ -198,12 +236,13 @@ def _wait(
     capacity: Capacity,
     demand: Demand,
     what: str,
+    tag: tuple[str, str | None],
     gives_up: float,
     poll_s: float,
 ) -> Claim:
     while True:
         with _immediate(con):
-            outcome = _try(con, ticket, capacity, demand, what)
+            outcome = _try(con, ticket, capacity, demand, what, tag=tag)
         if isinstance(outcome, Claim):
             return outcome
         left = gives_up - time.time()

@@ -25,7 +25,7 @@ from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
 from lab_commons.proc import system_memory
 
-__all__ = ['GB', 'Capacity', 'Demand', 'Holding', 'Refused', 'fits']
+__all__ = ['GB', 'Capacity', 'Demand', 'Holding', 'Outcome', 'Refused', 'fits']
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
 GB = 2**30
@@ -136,3 +136,24 @@ def fits(capacity: Capacity, running: Iterable[Holding], demand: Demand) -> str 
         named = ', '.join(f'{h.what} (pid {h.pid}) holds {amount:g} until {_when(h.deadline)}' for h, amount in holders)
         return f'{dimension}: wants {want:g} of {total:g}; ' + (named or 'no holder -- it can never fit')
     return None
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """How an enforced run ended and what it measured -- the caller's to learn from.
+
+    ``reason`` is ``exit`` (the child ended on its own), ``memory`` (the limit was hit and the tree
+    killed) or ``wall`` (the time limit killed it). There is no ``cpu`` reason: a CPU cap throttles,
+    it never kills. ``peak_mem_bytes`` is the tree's peak commit (Windows) or its largest process's
+    peak RSS (Linux); ``cpu_s`` is user plus kernel time; ``enforcer`` names what held the limits.
+    ``key`` and ``fingerprint`` are the caller's, returned unchanged (:func:`~lab_commons.box.run.run`).
+    """
+
+    returncode: int
+    reason: str
+    peak_mem_bytes: int
+    cpu_s: float
+    wall_s: float
+    enforcer: str
+    key: str
+    fingerprint: str | None
