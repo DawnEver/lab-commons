@@ -70,6 +70,7 @@ __all__ = [
     'learn_peaks',
     'learned',
     'learned_demand',
+    'learned_hold',
     'producer_of',
     'record_run',
     'run_of',
@@ -337,13 +338,31 @@ def producer_of(*, cluster: bool) -> str:
     return SLURM if cluster else LOCAL
 
 
-def learned_demand(repo_url: str, *, cluster: bool, cores: int) -> Callable[[frozenset[str]], Demand]:
-    """``needs -> Demand``: what the last run of ``(this producer, that need-set)`` measured (:func:`run_of`).
+def learned_demand(repo_url: str, *, cluster: bool) -> Callable[[frozenset[str]], Demand]:
+    """``needs -> Demand`` a part ASKS to be admitted: what the last run of ``(producer, need-set)`` measured.
 
     A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key; the producer is
-    :func:`producer_of`. Unmeasured, a cluster part is :data:`CLUSTER_PRIOR` and a box part the whole box
-    (*cores*): an unmeasured box run spreads over every core it is given.
+    :func:`producer_of`. Unmeasured, it is :data:`CLUSTER_PRIOR`. A BOX part's cpu is ELASTIC -- its
+    producer sizes its workers to the cores it finds -- so it asks ONE core whatever it measured, and its
+    measured memory, which is a real need. Measured on host G 2026-10-14: asking the whole box (32 cores)
+    never fit cpu=30.24 and starved a part 11 h. What it holds once running is :func:`learned_hold`.
     """
     producer = producer_of(cluster=cluster)
-    prior = CLUSTER_PRIOR if cluster else Run(peak_mem_gb=0.0, cpu_s=float(cores), wall_s=1.0)
-    return lambda needs: (run_of(repo_url, producer, needs) or prior).demand(needs)
+
+    def ask(needs: frozenset[str]) -> Demand:
+        wanted = (run_of(repo_url, producer, needs) or CLUSTER_PRIOR).demand(needs)
+        return wanted if cluster else Demand({**wanted, 'cpu': 1})
+
+    return ask
+
+
+def learned_hold(repo_url: str, *, cluster: bool, cores: int) -> Callable[[frozenset[str]], Demand]:
+    """``needs -> Demand`` a RUNNING part holds: the cores its last run kept busy, else -- a box part -- every one.
+
+    A box producer spreads over the *cores* it is given, so a running box part unmeasured holds them all,
+    and no second box part is admitted beside it to oversubscribe the box. A cluster part holds what it asks.
+    """
+    if cluster:
+        return learned_demand(repo_url, cluster=True)
+    whole = Run(peak_mem_gb=0.0, cpu_s=float(cores), wall_s=1.0)
+    return lambda needs: (run_of(repo_url, LOCAL, needs) or whole).demand(needs)
