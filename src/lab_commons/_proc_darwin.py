@@ -74,3 +74,9 @@ def process_rows() -> dict[int, tuple[str, int]] | None:
     """``{pid: (image, parent_pid)}`` from one ``ps`` snapshot, or ``None`` when unreadable."""
     text = _tool('ps', '-A', '-o', 'pid=,ppid=,comm=')
     return None if text is None else (parse_ps_rows(text) or None)
+
+
+def boot_time() -> float | None:
+    """``kern.boottime`` (``{ sec = N, usec = M } ...``) as epoch seconds, or ``None``."""
+    match = re.search(r'sec\s*=\s*(\d+)', _tool('sysctl', '-n', 'kern.boottime') or '')
+    return float(match.group(1)) if match else None

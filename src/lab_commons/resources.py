@@ -39,7 +39,9 @@ file IS the exclusion, so a peer reads it to learn who is there -- which means a
 and cannot be read yet is a HOLDER, never a free index. Measured 2026-09-15: with the record
 written after the exclusive create, the seat was empty for that instant, `_holder_of` read the
 empty file as absent, and a peer DELETED a live seat and took its index -- two holders on a lock
-that admits one.
+that admits one. The one exception is a record written BEFORE THE BOX LAST BOOTED: its writer
+cannot be alive, so it is debris and no holder (measured on host G 2026-10-14, a crash left a NUL
+seat that blocked the box for ~20 h). An unknown boot time keeps the record held.
 
 THE UNMEASURED BOX GETS A CONSERVATIVE DEFAULT PLUS FORCED VISIBILITY (user decision 2026-09-13),
 re-arguing the three positions the origin tree held at once -- one mechanism REFUSED, one defaulted
@@ -84,7 +86,7 @@ from lab_commons._records import record as _record
 from lab_commons._records import stage as _stage
 from lab_commons._records import unpublish as _unpublish
 from lab_commons.liveness import CreationClock, creation_stamp, still_the_same_process
-from lab_commons.proc import SystemMemory, kill_process_tree, pid_alive, system_memory, working_set_bytes
+from lab_commons.proc import SystemMemory, boot_time, kill_process_tree, pid_alive, system_memory, working_set_bytes
 
 __all__ = [
     'BOX_SEATS',
@@ -627,6 +629,10 @@ class Holder:
 #: would send its reader looking for a name that is not in the file; this one says where to look.
 _UNREADABLE_WHAT: Final = 'a record that exists and cannot be read'
 
+#: How far before the measured boot a record must be to count as debris. Windows derives boot as
+#: now minus uptime, so the instant jitters; the slack keeps that jitter on the HELD side.
+_BOOT_SLACK_S: Final = 5.0
+
 
 def _unreadable(path: Path) -> Holder:
     """A record that EXISTS and cannot be read, as a holder this broker can only say is there.
@@ -1060,6 +1066,7 @@ class Broker:
         liveness: Callable[[JobHandle], bool | None] | None = None,
         resource_dir: Path | None = None,
         creation_clock: CreationClock = creation_stamp,
+        boot_time: Callable[[], float | None] = boot_time,
     ) -> None:
         """Build a broker over *registry*.
 
@@ -1078,6 +1085,9 @@ class Broker:
             pid an IDENTITY rather than a number. Injected for the reason *read_memory* is: pid
             REUSE cannot be planted by asking this box to recycle a number to order, so the
             condition is planted through this hook and the REAL guard is called.
+        boot_time: when this box last booted (epoch seconds), ``None`` when unknown. A record
+            whose file predates it is DEBRIS (:meth:`_holder_of`). Injected so a crash survivor
+            can be planted without rebooting the box.
 
         """
         self.registry = registry if registry is not None else CapacityRegistry()
@@ -1086,6 +1096,7 @@ class Broker:
         self._liveness = liveness
         self._resource_dir = resource_dir
         self._creation_clock = creation_clock
+        self._boot_time = boot_time
 
     # -- where the records live -----------------------------------------------------------------
 
@@ -1150,7 +1161,29 @@ class Broker:
         A MISSING file is a different fact and keeps its old meaning. It is also what a peer that
         finished between the glob and the read leaves behind, so treating it as held would make a
         released seat un-takeable.
+
+        A RECORD WRITTEN BEFORE THIS BOX LAST BOOTED IS DEBRIS, readable or not. The unreadable
+        rule covers the instant between a seat appearing and its record being readable, and no
+        process that wrote a file before the boot can be alive. Measured on host G 2026-10-14: a
+        hard crash mid-write left a seat as 254 NUL bytes, and the reboot that followed read it as a
+        holder forever (~20 h with no box part admitted). It is read as NOBODY here and not deleted:
+        a reader stays read-only, and the allocator already reclaims a no-holder index the way it
+        reclaims a dead job's. An UNKNOWN boot time keeps the old rule -- unreadable is held.
         """
+        return None if self._predates_boot(path) else self._recorded_holder(path)
+
+    def _predates_boot(self, path: Path) -> bool:
+        """Whether *path* was last written before this box booted; ``False`` whenever unknown."""
+        booted = self._boot_time()
+        if booted is None:
+            return False
+        try:
+            return path.stat().st_mtime < booted - _BOOT_SLACK_S
+        except OSError:
+            return False
+
+    def _recorded_holder(self, path: Path) -> Holder | None:
+        """The holder *path* records, read under the rules :meth:`_holder_of` states."""
         try:
             text = path.read_text(encoding='utf-8')
         except FileNotFoundError:

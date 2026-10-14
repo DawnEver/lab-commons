@@ -35,6 +35,7 @@ import ctypes
 import os
 import signal
 import sys
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,6 +155,46 @@ def system_memory() -> SystemMemory | None:
         reading = _proc_darwin.memory()
         return None if reading is None else SystemMemory(total_bytes=reading[0], available_bytes=reading[1])
     return _system_memory_procfs()
+
+
+def boot_time() -> float | None:
+    """When this box last booted, as epoch seconds, or ``None`` when it cannot be read.
+
+    No process that wrote a file before this instant can still be running, which is the one fact
+    a caller wants from it. ``None`` is "unknown" and a caller must take its conservative side.
+    Windows: ``GetTickCount64`` (counts across sleep, so a resume is not a boot). Linux:
+    ``/proc/stat`` ``btime``. macOS: ``sysctl kern.boottime``.
+    """
+    if os.name == 'nt':
+        return _boot_time_windows()
+    if sys.platform == 'darwin':
+        return _proc_darwin.boot_time()
+    return _boot_time_procfs()
+
+
+def _boot_time_windows() -> float | None:
+    """Now minus ``GetTickCount64``; jitters by milliseconds, which a caller must allow for."""
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return None
+    try:
+        tick = kernel32.GetTickCount64
+        tick.restype = ctypes.c_ulonglong
+        return time.time() - tick() / 1000.0
+    except (AttributeError, OSError):
+        return None
+
+
+def _boot_time_procfs() -> float | None:
+    """``btime`` from ``/proc/stat``, or ``None``."""
+    try:
+        text = Path('/proc/stat').read_text(encoding='utf-8')
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith('btime '):
+            return float(line.split()[1])
+    return None
 
 
 def _system_memory_windows() -> SystemMemory | None:
