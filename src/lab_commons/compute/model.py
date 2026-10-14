@@ -159,7 +159,7 @@ class Supply:
 class Job:
     """One unit of work: *producer* run at *sha* of *repo*, needing the resource names *needs*.
 
-    *origin* is the forge login that asked for it ('' for a branch head) -- what a login reservation matches;
+    *origin* is the forge login that asked for it ('' when the forge resolves none) -- what a login matches;
     *origin_host* the host card that created it, VOUCHED for by that login ('' when unknown); *session* the
     ref it was pushed to (one lane is one agent session) -- what host and session reservations match.
     """
@@ -315,7 +315,7 @@ class Candidate:
     scope: str
     labels: tuple[str, ...] = ()
     number: int = 0
-    origin: str = ''  # the forge login whose PR or request it is; '' for a branch head
+    origin: str = ''  # the forge login of its PR, request or head commit; '' when unresolved
     origin_host: str = ''  # the host card it says created it; kept only where its origin login vouches for it
     session: str = ''  # the ref it was pushed to (one lane is one session); '' for a request
     producer: str = ''  # a request's declared producer name (lab_commons.dev.forgerequest); '' for a part
@@ -337,6 +337,7 @@ class Ranked:
     wait_h: float
     blocked: str = ''
     reserved: bool = False  # a live lease on the ranking scope is for it: it ranks first there
+    priority: bool = False  # the ranking host's [priority] names its subject: it precedes every other
 
 
 def boost_of(labels: Sequence[str], schedule: Schedule) -> float:
@@ -374,8 +375,12 @@ def rank(
     cost_h: Mapping[str, float],
     weights: Mapping[str, float] | None = None,
     reserved: Callable[[Candidate], bool] = lambda _: False,
+    priority: Callable[[Candidate], bool] = lambda _: False,
 ) -> tuple[Ranked, ...]:
-    """Every candidate scored and ordered: those *reserved* first (a live lease here is for them), then by score.
+    """Every candidate scored and ordered: *reserved* first, then *priority*, then by score within each.
+
+    *priority* is the ranking host's declared ordering (:mod:`lab_commons.compute.priority`): pure order,
+    never a claim on supply.
 
     PURE: the one ordering rule. *schedules* and *cost_h* are keyed by repo; *weights* by repo, 1 for a
     repo it omits. A reservation holder is never starved by higher-scored foreign work on the scope it
@@ -389,9 +394,18 @@ def rank(
         cost = max(cost_h.get(one.repo, schedule.prior_cost_h), 1e-6)
         wait_h = max(0.0, (now - one.since).total_seconds() / 3600)
         score = weights.get(one.repo, 1.0) * worth / cost
-        ranked.append(Ranked(one, worth, cost, score, wait_h, reserved=reserved(one)))
+        ranked.append(Ranked(one, worth, cost, score, wait_h, reserved=reserved(one), priority=priority(one)))
     return tuple(
-        sorted(ranked, key=lambda item: (not item.reserved, -item.score, item.candidate.since, item.candidate.key))
+        sorted(
+            ranked,
+            key=lambda item: (
+                not item.reserved,
+                not item.priority,
+                -item.score,
+                item.candidate.since,
+                item.candidate.key,
+            ),
+        )
     )
 
 
