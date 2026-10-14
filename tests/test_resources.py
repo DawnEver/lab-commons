@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from lab_commons import liveness
 from lab_commons.resources import (
     CONSERVATIVE_MEMORY_SHARE,
     CPU,
@@ -524,29 +525,30 @@ class TestARecordWrittenBeforeBootIsDebris:
 
     BOOT = 1_800_000_000.0
 
-    def _planted(self, registry, tmp_path, *, mtime: float, boot: float | None) -> tuple[Broker, Path]:
-        broker = Broker(registry, read_memory=roomy(), resource_dir=tmp_path / 'slots', boot_time=lambda: boot)
+    def _planted(self, registry, tmp_path, monkeypatch, *, mtime: float, boot: float | None) -> tuple[Broker, Path]:
+        monkeypatch.setattr(liveness, 'boot_time', lambda: boot)
+        broker = Broker(registry, read_memory=roomy(), resource_dir=tmp_path / 'slots')
         registry.declare('tool', Capacity.measured(SEATS.name, 1, on=broker.hostname))
         planted = broker.resource_dir() / seat('tool')
         planted.write_bytes(b'\x00' * 254)
         os.utime(planted, (mtime, mtime))
         return broker, planted
 
-    def test_a_NUL_record_from_before_boot_is_no_holder(self, registry, tmp_path) -> None:
-        broker, _ = self._planted(registry, tmp_path, mtime=self.BOOT - 60, boot=self.BOOT)
+    def test_a_NUL_record_from_before_boot_is_no_holder(self, registry, tmp_path, monkeypatch) -> None:
+        broker, _ = self._planted(registry, tmp_path, monkeypatch, mtime=self.BOOT - 60, boot=self.BOOT)
         assert broker.holders('tool') == []
         with broker.admit('tool', {SEATS.name: 1}):
             pass
 
-    def test_the_same_record_written_after_boot_is_still_held(self, registry, tmp_path) -> None:
-        broker, planted = self._planted(registry, tmp_path, mtime=self.BOOT + 60, boot=self.BOOT)
+    def test_the_same_record_written_after_boot_is_still_held(self, registry, tmp_path, monkeypatch) -> None:
+        broker, planted = self._planted(registry, tmp_path, monkeypatch, mtime=self.BOOT + 60, boot=self.BOOT)
         assert len(broker.holders('tool')) == 1
         with pytest.raises(Exhausted), broker.admit('tool', {SEATS.name: 1}):
             pass
         assert planted.exists()
 
-    def test_an_unknown_boot_time_keeps_the_record_held(self, registry, tmp_path) -> None:
-        broker, _ = self._planted(registry, tmp_path, mtime=self.BOOT - 60, boot=None)
+    def test_an_unknown_boot_time_keeps_the_record_held(self, registry, tmp_path, monkeypatch) -> None:
+        broker, _ = self._planted(registry, tmp_path, monkeypatch, mtime=self.BOOT - 60, boot=None)
         assert len(broker.holders('tool')) == 1
 
 

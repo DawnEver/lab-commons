@@ -32,11 +32,18 @@ a seat.
 
 from __future__ import annotations
 
+import ctypes
+import os
+import re
+import subprocess
+import sys
+import time
 from collections.abc import Callable
+from pathlib import Path
 
 from lab_commons.proc import _creation_time, pid_alive
 
-__all__ = ['CreationClock', 'creation_stamp', 'still_the_same_process']
+__all__ = ['SLACK_S', 'CreationClock', 'boot_time', 'creation_stamp', 'predates_boot', 'still_the_same_process']
 
 #: Reads a pid's creation stamp, or ``None`` when it cannot. Injected wherever the comparison is
 #: driven, so pid REUSE can be planted and the REAL guard called on a box that will not recycle a
@@ -89,3 +96,59 @@ def still_the_same_process(
         return True
     now = clock(pid)
     return now is None or now == created
+
+
+def boot_time() -> float | None:
+    """Epoch seconds of the last boot, or ``None`` when it cannot be read.
+
+    Windows: now minus ``GetTickCount64`` (counts across sleep, so a resume is not a boot; jitters by
+    milliseconds). Linux: ``/proc/stat`` ``btime``. macOS: ``sysctl kern.boottime``.
+    """
+    if os.name == 'nt':
+        return _windows()
+    if sys.platform == 'darwin':
+        return _darwin()
+    return _procfs()
+
+
+def _windows() -> float | None:
+    try:
+        tick = ctypes.WinDLL('kernel32').GetTickCount64  # type: ignore[attr-defined]
+        tick.restype = ctypes.c_ulonglong
+        return time.time() - tick() / 1000.0
+    except (AttributeError, OSError):
+        return None
+
+
+def _procfs() -> float | None:
+    try:
+        text = Path('/proc/stat').read_text(encoding='utf-8')
+    except OSError:
+        return None
+    found = re.search(r'^btime (\d+)$', text, re.MULTILINE)
+    return float(found.group(1)) if found else None
+
+
+def _darwin() -> float | None:
+    try:
+        text = subprocess.run(
+            ['/usr/sbin/sysctl', '-n', 'kern.boottime'], capture_output=True, text=True, check=False, timeout=10
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    found = re.search(r'sec\s*=\s*(\d+)', text)
+    return float(found.group(1)) if found else None
+
+
+#: How far before the measured boot a file must be to predate it: Windows derives boot as now minus
+#: uptime, so the instant jitters, and the slack keeps that jitter on the "not debris" side.
+SLACK_S = 5.0
+
+
+def predates_boot(path: Path) -> bool:
+    """Whether *path* was last written before this box booted, so its writer is dead; ``False`` when unknown."""
+    booted = boot_time()
+    try:
+        return booted is not None and path.stat().st_mtime < booted - SLACK_S
+    except OSError:
+        return False
