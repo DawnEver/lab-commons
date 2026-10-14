@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds
+from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds, cargo_target
 from lab_commons.hpc.needsets import BASE, Vocabulary
 
 __all__ = [
@@ -56,9 +56,8 @@ PREP_LOG: Final = '.lab-ci/prep.log'
 #: The prefix of a ``<step>=<seconds>s`` timing line -- printed AND appended to :data:`PREP_LOG`.
 TIME: Final = '@@@ time'
 
-#: Persistent caches shared by every key: uv's (concurrency-safe by its own lock) and cargo's target dir.
+#: uv's persistent cache, shared by every key (concurrency-safe by its own lock).
 _UV_CACHE: Final = f'{ROOT}/uv-cache'
-_CARGO_TARGET: Final = f'{ROOT}/cargo-target'
 
 #: Lines of the build log a refusal quotes.
 _LOG_TAIL: Final = 40
@@ -204,9 +203,10 @@ def build_script(spec: RunSpec) -> str:
     after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
     shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
 
-    Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`) and every native build ``CARGO_TARGET_DIR``
-    (:data:`_CARGO_TARGET`, under its own ``flock``), so a new key re-links cached wheels and a Rust edit
-    compiles only the crates it touched. Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).
+    Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`), so a new key re-links cached wheels. A native
+    build's ``CARGO_TARGET_DIR`` is its native key's own (:func:`lab_commons.hpc.builds.cargo_target`, under
+    its own ``flock``): a target shared across different native inputs reuses stale artifacts.
+    Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).
     """
     cache, tree, builds = f'{ROOT}/cache.git', f'{ROOT}/trees/{spec.sha}', spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
@@ -234,7 +234,7 @@ def build_script(spec: RunSpec) -> str:
     path = [f'{tree}/{root}' for root in builds.source_roots]
     if builds.native_key:
         native = f'{ROOT}/native/{builds.native_key}'
-        cargo = f'export CARGO_TARGET_DIR={_CARGO_TARGET}\nmkdir -p "$CARGO_TARGET_DIR"'
+        cargo = f'export CARGO_TARGET_DIR="$HOME"/{cargo_target(builds.native_key)}\nmkdir -p "$CARGO_TARGET_DIR"'
         cargo += '\nexec 8> "$CARGO_TARGET_DIR.lock"; flock 8'
         build = f'{activate}\nexport LAB_CI_NATIVE="$N"\n{cargo}\n{builds.native_build}'
         lines += [f'export N={native}', *_timed('native', _step('"$N"', f'{native}.log', build))]

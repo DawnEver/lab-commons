@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lab_commons.hpc.builds import Builds, key_of, read_builds
+from lab_commons.hpc.builds import Builds, cargo_target, key_of, read_builds
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of
 from lab_commons.log import emit
 
@@ -152,7 +152,7 @@ def overlay_argv(uv: Sequence[str], python: Path, lab: Path) -> list[str]:
 
 
 def _native(step: Step, home: Path, checkout: Path, builds: Builds, env: dict[str, str]) -> int:
-    """The repo's native build into ``<checkout>/.lab-native``, sharing the cluster runs' cargo target."""
+    """The repo's native build into ``<checkout>/.lab-native``, in its native key's own cargo target."""
     key = _key(step, checkout, builds.native_inputs, builds.native_build, env['UV_PYTHON'], env.pop('ENV_KEY'))
     out = checkout / '.lab-native'
     stamp = out / '.lab-deploy-native'
@@ -160,7 +160,7 @@ def _native(step: Step, home: Path, checkout: Path, builds: Builds, env: dict[st
         emit(f'  {checkout.name}: native build current (key {key[:12]})')
         return 0
     script = f'mkdir -p "$CARGO_TARGET_DIR" && exec 8> "$CARGO_TARGET_DIR.lock" && flock 8 && {builds.native_build}'
-    env |= {'LAB_CI_NATIVE': str(out), 'CARGO_TARGET_DIR': str(home / 'ci/cargo-target')}
+    env |= {'LAB_CI_NATIVE': str(out), 'CARGO_TARGET_DIR': str(home / cargo_target(key))}
     if rc := step.change(
         f'{checkout.name}: native {builds.native_build}', [*step.tools.sh, script], cwd=checkout, env=env
     ):
