@@ -107,6 +107,20 @@ def read_builds(text: str) -> Builds:
     return builds
 
 
+def cargo_target(native_key: str) -> str:
+    """Cargo's target dir for the native build keyed *native_key*, relative to ``$HOME``.
+
+    A target dir may be shared only by builds of IDENTICAL native inputs: cargo's freshness is mtime-based,
+    so one dir shared by every native build reused artifacts compiled from another tree's source.
+    Measured 2026-10-14 on Ada: the pybind crate compiled against a stale ``mesh_core`` and every motronics
+    deploy was refused. Used by the cluster runs (:mod:`lab_commons.hpc.shell`) and the deploy alike.
+    """
+    if not native_key:
+        msg = 'a cargo target dir needs a native key'
+        raise ValueError(msg)
+    return f'ci/cargo-target/{native_key}'
+
+
 def key_of(oids: dict[str, str], *recipe: str) -> str:
     """The key of a build whose inputs have git object ids *oids*, made by *recipe* (command, interpreter)."""
     text = '\n'.join([*recipe, *(f'{path} {oid}' for path, oid in sorted(oids.items()))])
