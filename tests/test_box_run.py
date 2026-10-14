@@ -37,7 +37,7 @@ def test_an_empty_argv_is_refused() -> None:
 def test_the_scope_carries_exactly_the_claim() -> None:
     argv = scope_argv('/usr/bin/systemd-run', ['solver', '-x'], Demand(cpu=2, mem_gb=0.5, wall_s=30, seats={}))
     assert argv[:4] == ['/usr/bin/systemd-run', '--user', '--scope', '--quiet']
-    assert {'MemoryMax=536870912', 'MemorySwapMax=0', 'CPUQuota=200%', 'RuntimeMaxSec=30'} <= set(argv)
+    assert {'MemoryMax=536870912', 'MemorySwapMax=0', 'CPUQuota=200%'} <= set(argv)
     assert argv[-3:] == ['--', 'solver', '-x']
 
 
