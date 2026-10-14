@@ -1,11 +1,13 @@
 """The process manager for a host that runs systemd -- which is every host this family deploys to.
 
-THE CEILING IS THE REASON THIS EXISTS. ``run_capped`` maps onto ``systemd-run --scope -p
-MemoryMax=``, which is how a one-off command gets a cgroup of its own. That matters because the
-alternative -- spawning a child from the supervisor -- puts it in the SUPERVISOR's cgroup, where the
-limit it lands under is the wrong one and where killing it is indistinguishable from killing the
-supervisor. A candidate build that forks is exactly the load that took this family's host down
-once already.
+THE CEILING IS THE REASON THIS EXISTS. ``run_capped`` runs a one-off command IN THE BOX
+(:func:`lab_commons.box.command`): admitted on the machine's one ledger at :data:`CAPPED_CPU` core, its
+memory ceiling and its timeout as the wall, and held there by the box's own scope -- a cgroup of its own.
+That matters because the alternative -- spawning a child from the supervisor -- puts it in the
+SUPERVISOR's cgroup, where the limit it lands under is the wrong one and where killing it is
+indistinguishable from killing the supervisor. A candidate build that forks is exactly the load that took
+this family's host down once already. Where the box cannot enforce, it refuses, and the command reports
+that refusal rather than running unbounded.
 
 The commands are built and then run through an injected runner, so what a manager WOULD execute is
 assertable without a systemd on the machine running the test.
@@ -20,10 +22,19 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final
 
+from lab_commons.box import Demand, command
 from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process.base import Ran
 
-__all__ = ['OUTPUT_CAP', 'Runner', 'SystemdProcessManager', 'subprocess_runner']
+__all__ = [
+    'CAPPED_CPU',
+    'CAPPED_QUEUE_S',
+    'OUTPUT_CAP',
+    'Runner',
+    'SystemdProcessManager',
+    'ceiling_gb',
+    'subprocess_runner',
+]
 
 #: Run an argv and report what it produced. Injected so a test can read the command rather than
 #: execute it.
@@ -33,9 +44,27 @@ Runner = Callable[[list[str], int, 'str | None'], Ran]
 #: that a runaway command cannot take the supervisor's own cgroup with it.
 OUTPUT_CAP: Final = 64 * 1024
 
-#: How long a subprocess is given beyond the ceiling the command itself carries. The ``timeout``
-#: inside the scope kills the command; this is the backstop for the scope machinery not coming up.
+#: How long a subprocess is given beyond the ceiling the command itself carries. The box's wall kills
+#: the command; this is the backstop for the box machinery not coming up.
 _GRACE: Final = 15
+
+#: The cores a one-off command declares to the box: a probe, a fetch or a build, never the box's width.
+CAPPED_CPU: Final = 1
+
+#: How long a one-off command waits for room in the box before it is refused, in seconds.
+CAPPED_QUEUE_S: Final = 120
+
+#: A memory ceiling's binary suffixes, in GB (``600M`` is 600 MiB).
+_SUFFIX_GB: Final = {'K': 2.0**-20, 'M': 2.0**-10, 'G': 1.0, 'T': 2.0**10}
+
+
+def ceiling_gb(memory_max: str) -> float:
+    """*memory_max* (``600M``, ``2G``) in GB; a ceiling with no binary suffix is refused by name."""
+    number, suffix = memory_max[:-1], memory_max[-1:].upper()
+    if suffix not in _SUFFIX_GB or not number.replace('.', '', 1).isdigit():
+        msg = f'a memory ceiling is a number with a K/M/G/T suffix (600M), got {memory_max!r}'
+        raise ValueError(msg)
+    return float(number) * _SUFFIX_GB[suffix]
 
 
 def subprocess_runner(argv: list[str], timeout: int, cwd: str | None) -> Ran:
@@ -224,11 +253,11 @@ class SystemdProcessManager:
         return self.runner([self.systemctl, 'stop', name], 120, None)
 
     def run_capped(self, argv: list[str], *, memory_max: str, timeout: int, cwd: str | None = None) -> Ran:
-        """Run *argv* in a transient scope carrying a memory ceiling.
+        """Run *argv* in the box under a memory ceiling (the module docstring).
 
-        ``timeout`` is applied INSIDE the scope, so the command is killed within its own cgroup:
-        a ``timeout`` applied outside would leave the scope's processes running after the wrapper
-        had gone.
+        ``timeout`` is the claim's WALL, so the box kills the command's whole tree within its own
+        cgroup: a ``timeout`` applied outside would leave the scope's processes running after the
+        wrapper had gone.
 
         Args:
             argv: the command and its arguments.
@@ -240,14 +269,7 @@ class SystemdProcessManager:
             What the command produced.
 
         """
-        command = [
-            self.systemd_run,
-            '--scope',
-            '--quiet',
-            f'--property=MemoryMax={memory_max}',
-            '--',
-            'timeout',
-            str(timeout),
-            *argv,
-        ]
-        return self.runner(command, timeout + _GRACE, cwd)
+        demand = Demand(cpu=CAPPED_CPU, mem_gb=ceiling_gb(memory_max), wall_s=timeout, seats={})
+        what = f'supervise: {" ".join(argv)}'[:120]
+        boxed = command(argv, demand, CAPPED_QUEUE_S, key=f'supervise:{argv[0]}', what=what)
+        return self.runner(boxed, timeout + CAPPED_QUEUE_S + _GRACE, cwd)

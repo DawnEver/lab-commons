@@ -10,7 +10,7 @@ import pytest
 from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process import MANAGERS, SystemdProcessManager, manager_for, subprocess_runner
 from lab_commons.supervise.process.base import Ran
-from lab_commons.supervise.process.systemd import OUTPUT_CAP, Runner
+from lab_commons.supervise.process.systemd import CAPPED_CPU, CAPPED_QUEUE_S, OUTPUT_CAP, Runner, ceiling_gb
 
 
 def _recorder(calls: list[tuple[list[str], int, str | None]], code: int = 0) -> Runner:
@@ -65,18 +65,28 @@ def test_lifecycle_verbs_are_one_command_each(verb: str) -> None:
     assert calls[0][0] == ['systemctl', verb, 'webapp']
 
 
-def test_a_capped_run_carries_its_ceiling_and_kills_inside_the_scope() -> None:
-    """The ceiling is the reason this method exists; the timeout goes INSIDE the scope."""
+def test_a_capped_run_is_a_box_claim_carrying_its_ceiling_and_its_wall() -> None:
+    """The ceiling is the reason this method exists; the box enforces it and the timeout as the wall."""
     calls: list[tuple[list[str], int, str | None]] = []
     manager = SystemdProcessManager(runner=_recorder(calls))
     manager.run_capped(['python', '-c', 'import x'], memory_max='600M', timeout=120)
     argv, allowed, _cwd = calls[0]
-    assert argv[:2] == ['systemd-run', '--scope']
-    assert '--property=MemoryMax=600M' in argv
-    marker = argv.index('--')
-    assert argv[marker + 1 : marker + 3] == ['timeout', '120']
-    assert argv[-3:] == ['python', '-c', 'import x']
-    assert allowed > 120, 'the wrapper must outlive the timeout it hands to the scope'
+    assert argv[1:4] == ['-m', 'lab_commons.box', 'run']
+    assert argv[argv.index('--mem-gb') + 1] == f'{600 / 1024:g}'
+    assert argv[argv.index('--wall') + 1] == '120'
+    assert argv[argv.index('--cpu') + 1] == str(CAPPED_CPU)
+    assert argv[argv.index('--') + 1 :] == ['python', '-c', 'import x']
+    assert allowed > 120 + CAPPED_QUEUE_S, 'the wrapper must outlive the wait and the wall it hands to the box'
+
+
+@pytest.mark.parametrize(('ceiling', 'gb'), [('600M', 600 / 1024), ('2G', 2.0), ('512k', 512 / 1024**2)])
+def test_a_ceiling_reads_in_binary_units(ceiling: str, gb: float) -> None:
+    assert ceiling_gb(ceiling) == pytest.approx(gb, rel=1e-12, abs=0.0)  # GB; an exact binary fraction
+
+
+def test_a_ceiling_without_a_unit_is_refused_by_name() -> None:
+    with pytest.raises(ValueError, match='K/M/G/T'):
+        ceiling_gb('600')
 
 
 def test_a_failing_command_is_a_ran_not_an_exception() -> None:

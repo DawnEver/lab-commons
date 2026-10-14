@@ -113,6 +113,6 @@ def test_verify_refuses_a_stale_environment_before_anything_runs(monkeypatch, tm
     monkeypatch.setattr(verify, 'run_verify', lambda *_a, **_k: pytest.fail('a stale environment ran'))
     monkeypatch.setattr(familyheads, 'installed_family', lambda: (Installed('lab-commons', _URL, 'HEAD', _OLD),))
     monkeypatch.setattr(familyheads, '_ls_remote', lambda _u, _r: _NEW)
-    monkeypatch.setattr(familyheads.CpuSeat, 'resource_dir', staticmethod(lambda **_k: tmp_path))
+    monkeypatch.setenv('LAB_COMMONS_RESOURCE_DIR', str(tmp_path))
     assert verify.main(['--no-status']) == verify.EXIT_CODES[verify.Outcome.INCONCLUSIVE]
     assert 'STALE' in capsys.readouterr().err
