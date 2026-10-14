@@ -22,12 +22,19 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from typing import Final
 
 from lab_commons.box import _linux, _win
 from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
 from lab_commons.box.ledger import admit
 
-__all__ = ['run']
+__all__ = ['KILLED', 'REFUSED', 'command', 'run']
+
+#: The CLI's exit code when the box refused the run (no room in time, or no enforcer): sysexits EX_UNAVAILABLE.
+REFUSED: Final = 69
+
+#: The CLI's exit code when the box killed the tree (memory or wall): 128 + SIGKILL, the code a shell expects.
+KILLED: Final = 137
 
 #: One backend per platform that has one: ``contain(argv, demand, cwd, env, (key, fingerprint)) -> Outcome``.
 Contain = Callable[[Sequence[str], Demand, str | None, Mapping[str, str] | None, tuple[str, str | None]], Outcome]
@@ -63,6 +70,24 @@ def run(
     contain = _enforcer()
     with admit(demand, what, queue_s, capacity=capacity, key=key, fingerprint=fingerprint):
         return contain(argv, demand, cwd, env, (key, fingerprint))
+
+
+def command(
+    argv: Sequence[str], demand: Demand, queue_s: float, *, key: str, what: str, fingerprint: str | None = None
+) -> list[str]:
+    """*argv* spelled as ``python -m lab_commons.box run ... -- argv``: the CLI that runs it enforced to *demand*.
+
+    For a caller that streams the child's output itself: stdout stays the child's, the
+    :class:`~lab_commons.box.demand.Outcome` is one JSON line on stderr, and the exit code is the child's,
+    :data:`KILLED` or :data:`REFUSED`.
+    """
+    seats = [f'--seat={name}={count}' for name, count in sorted(demand.seats.items()) if count]
+    marks = ['--fingerprint', fingerprint] if fingerprint else []
+    limits = ['--cpu', str(demand.cpu), '--mem-gb', f'{demand.mem_gb:g}', '--wall', str(demand.wall_s)]
+    return [
+        sys.executable, '-m', 'lab_commons.box', 'run', *limits, '--queue-s', f'{queue_s:g}', *seats,
+        '--key', key, *marks, '--what', what, '--', *argv,
+    ]  # fmt: skip
 
 
 def _enforcer() -> Contain:

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box import BOX_ENV, Capacity, Demand, Refused, admit, run
-from lab_commons.box.__main__ import main
+from lab_commons.box import BOX_ENV, Capacity, Demand, Refused, admit, command, run
+from lab_commons.box.__main__ import _parser, main
 from lab_commons.box._linux import scope_argv
 from lab_commons.box.run import _ENFORCERS
 
@@ -22,6 +22,23 @@ def test_the_cli_refuses_a_missing_limit(missing: str, capsys: pytest.CaptureFix
         main(['run', *args, '--', sys.executable, '-c', 'pass'])
     assert refused.value.code == 2
     assert missing in capsys.readouterr().err
+
+
+def test_command_spells_every_declared_limit_so_the_cli_reads_back_the_same_demand() -> None:
+    """The one spelling of a run through the box: parsed by the CLI, it is the demand and identity it was given."""
+    demand = Demand(cpu=3, mem_gb=1.5, wall_s=60, seats={'jmag': 1, 'femm': 0})
+    argv = command(['tool', '--flag'], demand, 7.0, key='k', what='w', fingerprint='f')
+    assert argv[:3] == [sys.executable, '-m', 'lab_commons.box']
+    ns = _parser().parse_args(argv[3:])
+    read = Demand(cpu=ns.cpu, mem_gb=ns.mem_gb, wall_s=ns.wall, seats=dict(ns.seat))
+    assert (read, ns.queue_s, ns.key, ns.what, ns.fingerprint) == (
+        Demand(3, 1.5, 60, {'jmag': 1}),
+        7.0,
+        'k',
+        'w',
+        'f',
+    ), 'a zero seat is not spelled'
+    assert ns.argv == ['--', 'tool', '--flag']
 
 
 def test_the_cli_refuses_a_missing_command() -> None:

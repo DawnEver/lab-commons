@@ -3,9 +3,9 @@
 A serving host's machine file (:mod:`lab_commons.config`) may name the subjects it favours::
 
     [priority]
-    logins = ["YongxuanWu"]   # the forge login a job came from (Job.origin)
-    hosts = []                # the host card that created it, vouched for by that login (Job.origin_host)
-    sessions = []             # the ref it was pushed to (Job.session)
+    logins = ["YongxuanWu"]   # the forge login a job came from (Candidate.origin)
+    hosts = []                # the host card that created it, vouched for by that login (Candidate.origin_host)
+    sessions = []             # the ref it was pushed to (Candidate.session)
 
 On THAT host, every candidate matching any subject is ordered before every candidate matching none, in
 its claim pass; within each class the score order stands (:func:`lab_commons.compute.model.rank`).

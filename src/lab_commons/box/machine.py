@@ -2,7 +2,7 @@
 
 ONE HOME for each reader. The box is the lowest layer of resource truth, so the facts every other
 layer reads about this machine's resources are parsed here and imported upward -- by the box's own
-:class:`~lab_commons.box.demand.Capacity`, by the forge's supply and by the compute ledger -- and
+:class:`~lab_commons.box.demand.Capacity` and through it the forge's box supply -- and
 nowhere else. Each reader validates its table and refuses a malformed row by name.
 """
 
@@ -37,29 +37,26 @@ _WHERE: Final = 'the machine file'
 
 @dataclass(frozen=True)
 class ReserveTable:
-    """The machine file's ``[reserve]``: who else may reserve this host, and the own reserve's margins."""
+    """The machine file's ``[reserve]``: the margins this box keeps for its own user."""
 
-    delegates: tuple[str, ...] = ()
     cpu_margin: float = DEFAULT_CPU_MARGIN
     mem_margin: float = DEFAULT_MEM_MARGIN
 
 
 def reserve_table(table: Mapping[str, Any]) -> ReserveTable:
-    """Read ``[reserve]``; an unknown key, a non-list ``delegates`` or a margin out of range is refused."""
+    """Read ``[reserve]``; an unknown key or a margin out of range is refused."""
     unknown = sorted(set(table) - set(ReserveTable.__dataclass_fields__))
-    delegates = table.get('delegates', [])
     cpu = table.get('cpu_margin', DEFAULT_CPU_MARGIN)
     mem = table.get('mem_margin', DEFAULT_MEM_MARGIN)
     bad = [
         *(f'unknown key {key!r}' for key in unknown),
-        *(['delegates must be a list of logins'] if not isinstance(delegates, list) else []),
         *(['cpu_margin must be >= 0 cores'] if not isinstance(cpu, int | float) or cpu < 0 else []),
         *(['mem_margin must be a fraction in [0, 1]'] if not isinstance(mem, int | float) or not 0 <= mem <= 1 else []),
     ]
     if bad:
         msg = f'{_WHERE} [reserve]: {"; ".join(bad)}'
         raise ValueError(msg)
-    return ReserveTable(tuple(str(one) for one in delegates), float(cpu), float(mem))
+    return ReserveTable(float(cpu), float(mem))
 
 
 def own_reserve(total: Mapping[str, float], in_use: Mapping[str, float], table: ReserveTable) -> dict[str, float]:

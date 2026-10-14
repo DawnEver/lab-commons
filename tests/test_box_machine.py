@@ -16,10 +16,10 @@ def test_the_own_reserve_is_what_the_user_uses_now_plus_a_margin_capped_at_the_b
     assert own_reserve(total, {'cpu': 16.0, 'mem_gb': 60.0}, table) == total, 'never more than the box'
 
 
-def test_the_reserve_table_declares_delegates_and_margins_and_refuses_the_rest() -> None:
-    table = reserve_table({'delegates': ['bob'], 'cpu_margin': 2, 'mem_margin': 0.5})
-    assert (table.delegates, table.cpu_margin, table.mem_margin) == (('bob',), 2.0, 0.5)
-    for bad in ({'delegate': ['bob']}, {'mem_margin': 1.5}, {'cpu_margin': -1}, {'delegates': 'bob'}):
+def test_the_reserve_table_declares_margins_and_refuses_the_rest() -> None:
+    table = reserve_table({'cpu_margin': 2, 'mem_margin': 0.5})
+    assert (table.cpu_margin, table.mem_margin) == (2.0, 0.5)
+    for bad in ({'delegates': ['bob']}, {'mem_margin': 1.5}, {'cpu_margin': -1}):
         with pytest.raises(ValueError, match=r'\[reserve\]'):
             reserve_table(bad)
 

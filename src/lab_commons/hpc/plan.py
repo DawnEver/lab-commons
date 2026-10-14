@@ -306,8 +306,7 @@ def headroom(snapshot: Snapshot) -> int:
     """CPUs still free on the account: ``quota - held``, a missing quota leaving the schedulable nodes' free CPUs.
 
     *held* is every CPU the caller's jobs on the account hold, tagged or not. No box's share is carved out in
-    advance: an account is divided by the reservations its owner writes (:mod:`lab_commons.compute.ledger`),
-    which admission subtracts.
+    advance: admission fits each job against what is free now.
     """
     quota = snapshot.quota.cpus
     if quota is None:
