@@ -59,13 +59,13 @@ RETIRED: Final[dict[str, str]] = {
     # A cluster part is pulled by the cluster and advanced one step per serve tick, never a blocking process.
     'platformparts cluster': 'forge serve on the cluster login node (lab_commons.dev.forgerun advances the run)',
     '<job>.run.json': '<job>.submission.json (the last submission of a job file)',
-    # The machine's CPU seat and an environment's mutation seat are two resources with two names.
-    'BoxLock': 'lab_commons.dev.cpuseat.CpuSeat (the machine CPU seat, contended by runs only)',
-    'boxlock': 'lab_commons.dev.cpuseat',
-    'BOX_POOL': 'lab_commons.dev.cpuseat.CPU_POOL',
+    # The machine's box ledger and an environment's mutation seat are two resources with two names.
+    'BoxLock': 'lab_commons.box.run (every run declares its claim on the one box ledger and is held to it)',
+    'boxlock': 'lab_commons.box',
+    'BOX_POOL': 'lab_commons.box (one ledger per machine, lab_commons.box.box_path)',
     'EnvLock': 'lab_commons.dev.envseat.EnvironmentSeat (keyed by one environment prefix)',
     'envlock': 'lab_commons.dev.envseat',
-    'hold_the_box': 'lab_commons.dev.boxwait.hold_run_seats (the CPU seat, then the environment seat)',
+    'hold_the_box': 'lab_commons.box.run (the claim), and lab_commons.dev.envseat.EnvironmentSeat (the env)',
     'refuse_if_locked': 'nothing: dep.mutate holds the TARGET environment seat and refuses naming its holder',
     'LOCK_UNDECLARED': 'nothing: who may block a change is the target environment seat, not a port answer',
     'lock_holders': 'lab_commons.dev.envseat.EnvironmentSeat.holders(prefix)',
@@ -154,14 +154,11 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.hpc.outstanding': 'lab_commons.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
     # A host's own user is served by its own reserve, and an account is divided by reservations (2026-10-13).
     'own_weight': (
-        'nothing: the own reserve (lab_commons.box.machine.own_reserve) keeps what the user of this box uses plus '
-        'a margin, and [reserve] delegates names who else may reserve it -- delete the key'
+        'nothing: the own reserve (lab_commons.box.machine.own_reserve) keeps the [reserve] margins for the user '
+        'of this box -- delete the key'
     ),
-    '--own-weight': 'workstation deploy --delegates <login,...> ([reserve] delegates)',
-    '[[hpc.grant]] cpus': (
-        'nothing: an account is divided by reservations its owner writes (python -m lab_commons.dev.forge reserve '
-        '<cluster>/<account> cpu=N --for ... --until ...) -- delete the line'
-    ),
+    '--own-weight': 'nothing: the box keeps its [reserve] margins for its own user; favour work with [priority]',
+    '[[hpc.grant]] cpus': ('nothing: admission fits each job against what the account has free now -- delete the line'),
     # A box job's cpu was capped at the box's because its cpu was wall x cores; it is now measured (2026-10-13).
     'model.fitted': 'nothing: a demand is what the job measured (lab_commons.proccpu.TreeCpu); compute.model.submitted',
     # A carry is derived from each test's footprint, never declared per repo (2026-10-13).
@@ -170,7 +167,7 @@ RETIRED: Final[dict[str, str]] = {
         'nothing: what a change reaches is derived per test (lab_commons.dev.footprint); declare only what a '
         'module reads by path, [tool.lab_commons.carry.reads] -- delete the key'
     ),
-    'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share; reservations divide the account)',
+    'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share)',
     # One need vocabulary: a test marks the resources it needs, and its part is its need-set (compute step 3).
     '[tool.lab_commons.platforms]': (
         '[tool.lab_commons.tests] resources = [<marker>, ...] -- an OS is a resource like any other, and a test '
@@ -193,12 +190,11 @@ RETIRED: Final[dict[str, str]] = {
     # rank(), FIT is admit(), exclusivity is a reservation. A serve mode chose refs per host; none survives.
     '--mode': (
         'nothing: forge serve / forge tick / workstation deploy|serve take no mode -- every host serves every class '
-        '(rank orders, admit fits); a host that takes no foreign work is reserved whole by its owner '
-        '(forge reserve <host> --all --for login:<owner> --until ...)'
+        '(rank orders, admit fits); a host that takes no foreign work does not run forge serve'
     ),
     'forgetick.MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
     'forgetick import MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
-    'develop|quiet': 'nothing: one queue for every host; a host that serves nobody else is reserved whole by its owner',
+    'develop|quiet': 'nothing: one queue for every host; a host that serves nobody else does not run forge serve',
     '[deploy] serve': 'nothing: delete the [deploy] serve key from the machine file (forge serve takes no mode)',
     'schedule] branches': (
         '[tool.lab_commons.schedule] classes_by_ref = {"<fnmatch>" = "<class>", ...} (ordered, first match; '
@@ -210,10 +206,41 @@ RETIRED: Final[dict[str, str]] = {
     ),
     'forgealarm.REPEAT': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
     'REPEAT: Final': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
-    # A reservation LENDS what its holders leave idle, and a holder preempts the loans (user ruling 2026-10-13).
-    'holds_against(': 'lab_commons.compute.admission.idle (a lease keeps only its idle part)',
-    'compute.model.admit': 'lab_commons.compute.admission.admit (the rule: fit, lending, preemption)',
+    'holds_against(': 'nothing: nothing is reserved (lab_commons.compute.admission.admit fits against what runs)',
+    'compute.model.admit': 'lab_commons.compute.admission.admit (needs present, demand within supply less what runs)',
     'compute.model.Admission': 'lab_commons.compute.admission.Admission',
+    # Reservations, leases, lending and preemption are DELETED (user ruling 2026-10-14, "A"): a box's supply is what
+    # its one ledger can still admit (lab_commons.box), and priority is ordering only (lab_commons.compute.priority).
+    'forgereserve': 'nothing: nothing is reserved; favour work with the machine file [priority] (ordering only)',
+    'forge reserve': 'nothing: nothing is reserved; favour work with the machine file [priority] (ordering only)',
+    'forge release': 'nothing: nothing is reserved, so there is no lease to release',
+    'compute.ledger': 'lab_commons.dev.forgehosts.read_cards (the cards; no lease is stored)',
+    'forgelend': 'nothing: nothing is lent; a box claim is enforced by the box (lab_commons.box.run)',
+    'preempt_runs': 'nothing: nothing is preempted (lab_commons.compute.priority orders, it never displaces)',
+    'PREEMPTED': 'lab_commons.dev.producer.RETRYABLE (the one release that leaves a part open)',
+    'on_loan': 'nothing: a claim borrows nothing',
+    'Reservation(': 'nothing: nothing is reserved (lab_commons.compute.admission.admit)',
+    '[reserve] delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
+    '--delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
+    'card.delegates': 'lab_commons.dev.forgehosts.card_owners (a card is vouched for by its forge-recorded author)',
+    # A box host's supply is its one ledger (lab_commons.box): what it admits is what the box enforces.
+    'learned_hold': 'lab_commons.compute.learned.box_demand (admitted at, and enforced at, one declared demand)',
+    'learned_demand': 'lab_commons.compute.learned.cluster_demand, or box_demand for a box part',
+    'box_reserve': 'lab_commons.box.Capacity.read (the box capacity after its [reserve] margins)',
+    'seat_running': 'lab_commons.box.holdings (every claim on the box ledger, already in the supply)',
+    'given_back': 'nothing: the supply is the box ledger, so no measured use is given back',
+    # The CPU seat and its bounded wait are DELETED: every run claims the one box ledger (lab_commons.box, P3).
+    'cpuseat': 'lab_commons.box (every run declares its claim on the one box ledger and is held to it)',
+    'CpuSeat': 'lab_commons.box.run, or python -m lab_commons.box run --cpu --mem-gb --wall --queue-s --key -- argv',
+    'CPU_POOL': 'lab_commons.box.box_path (the one ledger of this machine)',
+    'LIGHT_WIDTH': 'lab_commons.dev.verifybox.SELECTION_CPU (a selection declares its cores to the box)',
+    'LIGHT_MEMORY_BYTES': 'lab_commons.dev.verifybox.SELECTION_MEM_GB (a selection declares its memory)',
+    'boxwait': 'lab_commons.box (admission waits at most queue_s, then refuses naming every holder)',
+    'hold_run_seats': 'lab_commons.box.command (the run in the box) and lab_commons.dev.envseat.EnvironmentSeat',
+    'boxseat': 'nothing: the box ledger is machine-wide by construction (lab_commons.box.box_path)',
+    'PRODUCE_WALL_S': 'lab_commons.compute.learned.BOX_WALL_S (the wall the box enforces)',
+    'free_cores(': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a busy reading)',
+    'available_mem_gb': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a free reading)',
 }
 
 

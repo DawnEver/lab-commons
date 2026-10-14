@@ -11,13 +11,15 @@ from __future__ import annotations
 
 from lab_commons.box.demand import GB, Capacity, Demand, Holding, Outcome, Refused, fits
 from lab_commons.box.ledger import BOX_ENV, GRACE_S, POLL_S, Claim, admit, box_path, holdings
-from lab_commons.box.run import run
+from lab_commons.box.run import KILLED, REFUSED, command, run
 
 __all__ = [
     'BOX_ENV',
     'GB',
     'GRACE_S',
+    'KILLED',
     'POLL_S',
+    'REFUSED',
     'Capacity',
     'Claim',
     'Demand',
@@ -26,6 +28,7 @@ __all__ = [
     'Refused',
     'admit',
     'box_path',
+    'command',
     'fits',
     'holdings',
     'run',

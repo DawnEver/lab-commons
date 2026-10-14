@@ -2,13 +2,13 @@
 
 Three sources, one value (:mod:`lab_commons.compute.model`):
 
-* **box**: ``cpu`` = the cores free now, from the OS's busy time over a short window (load average where the
-  OS keeps no per-core times); ``mem_gb`` = the memory available now (:mod:`lab_commons.proc`); the OS
-  itself (``windows``, ``linux``, ``macos``) with count = ``cpu``.
-  Measured only: the host user's own reserve is a reservation, not a reading.
+* **box**: what the box ledger can still admit (:mod:`lab_commons.box`, the one source of a box's resources):
+  its :class:`~lab_commons.box.Capacity` (cores and memory after the ``[reserve]`` margins, the declared tool
+  seats) less every claim it holds now -- an interactive verify, a producer, anything run through
+  :func:`lab_commons.box.run` -- and the OS itself (``windows``, ``linux``, ``macos``) with count = ``cpu``.
 * **tools**: the machine file's ``[capabilities.<tool>]`` declares ``seats = N`` -- the one number a person
   declares, because no probe can read a licence. A tool is present when its probe (:data:`TOOL_PROBES`) finds
-  it installed, or, without a probe, when it is declared. Its count is ``seats`` less the running jobs needing it.
+  it installed, or, without a probe, when it is declared.
 * **slurm account**: ``cpu`` AND ``mem_gb`` over EVERY grant of the account (:func:`account`), plus ``submits``
   -- the job submissions its QOS still accepts (infinite when uncapped) -- and ``files``, what the home's
   FILE quota still takes (user ruling 2026-10-14: an Ada home at its 2,020,000-file limit failed every
@@ -19,20 +19,16 @@ The readers of the OS are module functions taken as defaults, so a test passes f
 
 from __future__ import annotations
 
-import ctypes
 import math
-import os
 import shutil
 import sys
-import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.box import GB, Capacity, Holding
 from lab_commons.compute.model import Resources, Supply
 from lab_commons.hpc.plan import headroom
 from lab_commons.hpc.slurm import Snapshot
-from lab_commons.proc import SystemMemory, system_memory
 
 if sys.platform == 'win32':
     import winreg
@@ -41,22 +37,13 @@ __all__ = [
     'OS_NAMES',
     'TOOL_PROBES',
     'account',
-    'available_mem_gb',
     'box',
-    'busy_fraction',
-    'free_cores',
     'os_name',
-    'parse_proc_stat',
     'tools',
 ]
 
 #: ``sys.platform`` -> the resource name of the OS.
 OS_NAMES: Final = {'win32': 'windows', 'linux': 'linux', 'darwin': 'macos'}
-
-#: How long the CPU is watched to call a core free.
-WINDOW_S: Final = 0.5
-
-_GB: Final = 1024**3
 
 
 def os_name(platform: str = sys.platform) -> str:
@@ -65,70 +52,6 @@ def os_name(platform: str = sys.platform) -> str:
         msg = f'no OS resource for sys.platform {platform!r}; known: {sorted(OS_NAMES)}'
         raise ValueError(msg)
     return OS_NAMES[platform]
-
-
-# --- cpu ----------------------------------------------------------------------------------------------
-
-
-def parse_proc_stat(text: str) -> tuple[float, float]:
-    """``/proc/stat``'s aggregate ``cpu`` line as ``(idle, total)`` jiffies; idle counts iowait."""
-    for line in text.splitlines():
-        fields = line.split()
-        if fields and fields[0] == 'cpu':
-            ticks = [float(one) for one in fields[1:9]]
-            return ticks[3] + ticks[4], sum(ticks)
-    msg = 'no aggregate cpu line in /proc/stat'
-    raise ValueError(msg)
-
-
-def busy_fraction(before: tuple[float, float], after: tuple[float, float]) -> float:
-    """The busy share of the CPU between two ``(idle, total)`` samples, in [0, 1]."""
-    total = after[1] - before[1]
-    if total <= 0:
-        return 0.0
-    return min(1.0, max(0.0, 1.0 - (after[0] - before[0]) / total))
-
-
-def _times_linux() -> tuple[float, float]:
-    return parse_proc_stat(Path('/proc/stat').read_text(encoding='ascii'))
-
-
-def _times_windows() -> tuple[float, float]:
-    idle, kernel, user = (ctypes.c_ulonglong() for _ in range(3))
-    if not ctypes.WinDLL('kernel32').GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
-        msg = 'GetSystemTimes failed'
-        raise OSError(msg)
-    return float(idle.value), float(kernel.value + user.value)  # kernel time includes idle time
-
-
-def _busy_cores(cores: int, window_s: float, sleep: Callable[[float], None]) -> float:
-    if sys.platform in {'linux', 'win32'}:
-        sample = _times_linux if sys.platform == 'linux' else _times_windows
-        before = sample()
-        sleep(window_s)
-        return cores * busy_fraction(before, sample())
-    return os.getloadavg()[0]  # no per-core times in the stdlib here: the 1-minute run queue
-
-
-def free_cores(
-    *,
-    cores: int | None = None,
-    busy: Callable[[int, float, Callable[[float], None]], float] = _busy_cores,
-    window_s: float = WINDOW_S,
-    sleep: Callable[[float], None] = time.sleep,
-) -> float:
-    """The cores free now: the core count less the cores busy over *window_s*, floored at zero."""
-    count = cores if cores is not None else os.cpu_count() or 1
-    return max(0.0, count - busy(count, window_s, sleep))
-
-
-# --- memory -------------------------------------------------------------------------------------------
-
-
-def available_mem_gb(read: Callable[[], SystemMemory | None] = system_memory) -> float:
-    """The memory available to a new process now, in GB (:func:`lab_commons.proc.system_memory`); unread is 0."""
-    memory = read()
-    return 0.0 if memory is None else memory.available_bytes / _GB
 
 
 # --- tools --------------------------------------------------------------------------------------------
@@ -184,18 +107,21 @@ def tools(
 def box(
     scope: str,
     *,
-    capabilities: Mapping[str, Mapping[str, Any]] | None = None,
-    running: Sequence[frozenset[str]] = (),
-    cores: Callable[[], float] = free_cores,
-    mem_gb: Callable[[], float] = available_mem_gb,
+    capacity: Capacity,
+    holdings: Sequence[Holding] = (),
     platform: str = sys.platform,
     probes: Mapping[str, Callable[[], bool]] = TOOL_PROBES,
 ) -> Supply:
-    """The box now: free cores, available memory, its OS (count = cores) and its declared tools."""
-    cpu = cores()
+    """The box now: its *capacity* less every claim in *holdings* (the box ledger), its OS and its tools."""
+    cpu = max(0.0, capacity.cpu - sum(one.cpu for one in holdings))
+    mem_gb = max(0, capacity.mem_bytes - sum(one.mem_bytes for one in holdings)) / GB
     system = os_name(platform)
-    counts, present = tools(capabilities or {}, running=running, probes=probes)
-    measured = Resources({'cpu': cpu, 'mem_gb': mem_gb(), system: cpu}) + counts
+    declared = {name: {'seats': seats} for name, seats in capacity.seats.items()}
+    _, present = tools(declared, probes=probes)
+    counts = Resources({
+        name: max(0, capacity.seats[name] - sum(one.seats.get(name, 0) for one in holdings)) for name in present
+    })  # fmt: skip
+    measured = Resources({'cpu': cpu, 'mem_gb': mem_gb, system: cpu}) + counts
     return Supply(scope, measured, present | measured.names | {system})
 
 

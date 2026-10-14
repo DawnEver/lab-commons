@@ -2,7 +2,7 @@
 
 A GRANT IS AN ACCOUNT THIS BOX MAY REACH, NEVER A SHARE OF IT. One workstation may hold several grants (two
 clusters, two Slurm accounts); one login may be reached from several workstations. How an account is divided
-is not this file's: it is the reservations its owner writes (:mod:`lab_commons.compute.ledger`). What each
+is not this file's: admission fits each job against what the account has free now. What each
 box is USING is read from Slurm at plan time,
 never stored, because every job a box submits carries ``--comment=lc:ws=<workstation>`` and ``squeue``
 reports it back (:mod:`lab_commons.hpc.slurm`). A stored usage figure would be a second copy of Slurm's

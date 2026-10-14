@@ -58,20 +58,21 @@ if TYPE_CHECKING:
     from lab_commons.hpc.config import Cost, Policy
 
 __all__ = [
+    'BOX_HEADROOM',
+    'BOX_WALL_S',
     'CLUSTER_PRIOR',
     'LOCAL',
     'OOM_GROWTH',
     'SLURM',
     'Measured',
     'Run',
+    'box_demand',
+    'cluster_demand',
     'demand',
     'directory',
     'learn',
     'learn_peaks',
     'learned',
-    'learned_demand',
-    'learned_hold',
-    'producer_of',
     'record_run',
     'run_of',
     'worker_gb',
@@ -335,41 +336,35 @@ LOCAL: Final = 'local'
 #: The producer a cluster part runs: a Slurm array (:mod:`lab_commons.hpc.run`).
 SLURM: Final = 'slurm'
 
+#: How far a box part's declared memory sits above the peak it measured: the box kills the tree AT the declaration.
+BOX_HEADROOM: Final = 1.5
 
-def producer_of(*, cluster: bool) -> str:
-    """The producer key a part's runs are learned under: :data:`SLURM` on a cluster, else :data:`LOCAL`."""
-    return SLURM if cluster else LOCAL
+#: The wall a box part declares, in seconds: past it the box kills the tree (one day, as a hung run).
+BOX_WALL_S: Final = 24 * 3600
 
 
-def learned_demand(repo_url: str, *, cluster: bool) -> Callable[[frozenset[str]], Demand]:
-    """``needs -> Demand`` a part ASKS to be admitted: what the last run of ``(producer, need-set)`` measured.
+def cluster_demand(repo_url: str) -> Callable[[frozenset[str]], Demand]:
+    """``needs -> Demand`` a cluster part asks: what the last ``(slurm, need-set)`` run measured, else the prior.
 
-    A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key; the producer is
-    :func:`producer_of`. Unmeasured, it is :data:`CLUSTER_PRIOR`. A CLUSTER part also asks the ``files`` it
-    leaves in the home (measured, else the prior's), against the account's file headroom. A BOX part's cpu is
-    ELASTIC -- its producer sizes its workers to the cores it finds -- so it asks ONE core whatever it measured, and its
-    measured memory, which is a real need. Measured on host G 2026-10-14: asking the whole box (32 cores)
-    never fit cpu=30.24 and starved a part 11 h. What it holds once running is :func:`learned_hold`.
+    A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key. It also asks the
+    ``files`` it leaves in the home (measured, else :data:`CLUSTER_PRIOR`'s), against the account's file headroom.
     """
-    producer = producer_of(cluster=cluster)
 
     def ask(needs: frozenset[str]) -> Demand:
-        run = run_of(repo_url, producer, needs) or CLUSTER_PRIOR
-        wanted = run.demand(needs)
-        if cluster:  # a cluster run leaves files in a home with a file quota: measured, else the prior's
-            return Demand({**wanted, 'files': run.files or CLUSTER_PRIOR.files})
-        return Demand({**wanted, 'cpu': 1})
+        run = run_of(repo_url, SLURM, needs) or CLUSTER_PRIOR
+        return Demand({**run.demand(needs), 'files': run.files or CLUSTER_PRIOR.files})
 
     return ask
 
 
-def learned_hold(repo_url: str, *, cluster: bool, cores: int) -> Callable[[frozenset[str]], Demand]:
-    """``needs -> Demand`` a RUNNING part holds: the cores its last run kept busy, else -- a box part -- every one.
+def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:
+    """What a box part DECLARES to the box -- admitted at it, and killed past it (:func:`lab_commons.box.run`).
 
-    A box producer spreads over the *cores* it is given, so a running box part unmeasured holds them all,
-    and no second box part is admitted beside it to oversubscribe the box. A cluster part holds what it asks.
+    The cores its last ``(local, need-set)`` run kept busy and its peak memory times :data:`BOX_HEADROOM`,
+    each capped at the box's *cpu* and *mem_gb*; unmeasured, the whole box. One seat of each need.
     """
-    if cluster:
-        return learned_demand(repo_url, cluster=True)
-    whole = Run(peak_mem_gb=0.0, cpu_s=float(cores), wall_s=1.0)
-    return lambda needs: (run_of(repo_url, LOCAL, needs) or whole).demand(needs)
+    run = run_of(repo_url, LOCAL, needs)
+    measured = run.demand(needs) if run is not None else Demand({'cpu': cpu, 'mem_gb': mem_gb})
+    cores = max(1, min(math.floor(cpu), int(measured['cpu'])))
+    memory = min(mem_gb, measured['mem_gb'] * BOX_HEADROOM) if run is not None else mem_gb
+    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(memory, 1.0)})

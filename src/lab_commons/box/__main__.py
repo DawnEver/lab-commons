@@ -15,14 +15,8 @@ from collections.abc import Sequence
 from dataclasses import asdict
 
 from lab_commons.box.demand import Demand, Refused
-from lab_commons.box.run import run
+from lab_commons.box.run import KILLED, REFUSED, run
 from lab_commons.log import emit
-
-#: Exit code when the box refused the run (no room in time, or no enforcer): sysexits EX_UNAVAILABLE.
-REFUSED = 69
-
-#: Exit code when the box killed the tree (memory or wall): 128 + SIGKILL, the code a shell expects.
-KILLED = 137
 
 
 def _seat(text: str) -> tuple[str, int]:

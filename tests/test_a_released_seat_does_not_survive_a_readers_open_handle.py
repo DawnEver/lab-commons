@@ -1,7 +1,7 @@
 """A release must REMOVE its seat, even while a peer holds the file open to read it.
 
 WHAT WAS MEASURED, 2026-09-16. consumer-a's `scripts/gate/lock.py` became an adapter over
-`CpuSeat`, and the first thing its own suite did was drive take-and-release in a loop beside a
+`EnvironmentSeat`, and the first thing its own suite did was drive take-and-release in a loop beside a
 concurrent poll storm -- the shape two agents polling `--who cpu` produce on a real box. Within
 seconds the loop was refused by a holder named `a real run [client:37504]`: its OWN pid, from an
 iteration it had already left. A reader had the seat file open when the release tried to unlink it,
@@ -33,8 +33,11 @@ from typing import Never
 import pytest
 
 from lab_commons._records import unpublish
-from lab_commons.dev.cpuseat import CpuSeat
+from lab_commons.dev.envseat import EnvironmentSeat
 from lab_commons.resources import Broker, CapacityRegistry, Exhausted
+
+#: The environment whose one seat is taken and released (any prefix: the seat is keyed by it).
+PREFIX = Path('a-checkout') / '.venv'
 
 
 def test_a_release_that_meets_a_transient_refusal_still_removes_the_record(tmp_path: Path, monkeypatch) -> None:
@@ -80,7 +83,7 @@ def test_a_MISSING_record_is_a_successful_release(tmp_path: Path) -> None:
 
 
 def test_the_box_is_TAKEABLE_AGAIN_after_a_release_that_met_a_refusal(tmp_path: Path, monkeypatch) -> None:
-    """THE PROPERTY THE MEASUREMENT WAS ABOUT, driven through the REAL `CpuSeat`.
+    """THE PROPERTY THE MEASUREMENT WAS ABOUT, driven through the REAL `EnvironmentSeat`.
 
     The arms above are about one function. This one is about the box: take it, release it while the
     filesystem refuses the first unlinks, and take it AGAIN. Before the fix the second take was
@@ -97,15 +100,15 @@ def test_the_box_is_TAKEABLE_AGAIN_after_a_release_that_met_a_refusal(tmp_path: 
             raise PermissionError(msg)
         return real_unlink(self, *args, **kwargs)
 
-    with CpuSeat('the first run', broker=broker).held():
+    with EnvironmentSeat(PREFIX, 'the first run', broker=broker).held():
         pass
     monkeypatch.setattr(Path, 'unlink', flaky)
-    with CpuSeat('the run whose release is refused', broker=broker).held():
+    with EnvironmentSeat(PREFIX, 'the run whose release is refused', broker=broker).held():
         pass
     assert refusals['left'] == 0, 'FLOOR: the planted refusals never fired, so nothing was tested'
 
-    assert CpuSeat.holders(broker=broker) == (), 'a released seat survived and names this live process'
-    with CpuSeat('the run that must not be refused by a ghost', broker=broker).held():
+    assert EnvironmentSeat.holders(PREFIX, broker=broker) == (), 'a released seat survived and names this live process'
+    with EnvironmentSeat(PREFIX, 'the run that must not be refused by a ghost', broker=broker).held():
         pass
 
 
@@ -113,8 +116,8 @@ def test_a_LIVE_holder_still_excludes_so_the_fix_did_not_delete_the_mechanism(tm
     """RATCHET, second side. Insisting harder on a release must not loosen the take."""
     broker = Broker(CapacityRegistry(), resource_dir=tmp_path)
     with (
-        CpuSeat('a run that is really going', broker=broker).held(),
+        EnvironmentSeat(PREFIX, 'a run that is really going', broker=broker).held(),
         pytest.raises(Exhausted),
-        CpuSeat('the impatient one', broker=broker).held(),
+        EnvironmentSeat(PREFIX, 'the impatient one', broker=broker).held(),
     ):
         pytest.fail('two holders of a one-seat box')

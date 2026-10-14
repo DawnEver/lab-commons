@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 
 from lab_commons.compute import learned
-from lab_commons.compute.admission import Held, admit
+from lab_commons.compute.admission import admit
 from lab_commons.compute.learned import OOM_GROWTH, Measured, Run
 from lab_commons.compute.model import Demand, Job, Resources, Supply
 
 REPO = 'https://g/r.git'
-NOW = datetime(2026, 10, 14, tzinfo=UTC)
 
 
 def test_an_unmeasured_job_is_its_prior_and_a_measured_one_its_last_run() -> None:
@@ -65,31 +62,26 @@ def test_one_worker_rule_prices_a_box_worker_and_a_slurm_task_alike() -> None:
 def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
     """A box part is learned under (local, its need-set) and read back under the same key -- not under its OS.
 
-    PLANTED CONTROL: the base part learned nothing, so it holds the whole box; a cluster reads slurm runs.
+    PLANTED CONTROL: the base part learned nothing, so it declares the whole box; a cluster reads slurm runs.
     """
     learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=2 * 3600.0, wall_s=3600.0))
-    box = learned.learned_hold(REPO, cluster=False, cores=8)
-    assert box(frozenset({'jmag'})) == Demand(cpu=2, mem_gb=6.0, jmag=1)
-    assert box(frozenset()) == Demand(cpu=8, mem_gb=0.0)
-    assert learned.learned_demand(REPO, cluster=True)(frozenset({'jmag'})) == Demand(cpu=1, jmag=1, files=50_000)
-    assert learned.producer_of(cluster=True) == learned.SLURM
+    jmag = learned.box_demand(REPO, frozenset({'jmag'}), cpu=8, mem_gb=64)
+    assert jmag == Demand(cpu=2, mem_gb=6.0 * learned.BOX_HEADROOM, jmag=1)
+    assert learned.box_demand(REPO, frozenset(), cpu=8, mem_gb=64) == Demand(cpu=8, mem_gb=64)
+    assert learned.cluster_demand(REPO)(frozenset({'jmag'})) == Demand(cpu=1, jmag=1, files=50_000)
 
 
-def test_a_box_part_asks_one_core_and_holds_what_it_kept_busy() -> None:
-    """Host G 2026-10-14: 32 cores, cpu=30.24 free, and a whole-box ask starved a part for 11 h.
+def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
+    """The demand a box part is ADMITTED at is the claim the box then ENFORCES, so it never exceeds the box.
 
-    A box producer sizes its workers to the box, so its cpu is ELASTIC: it ASKS one core and its measured
-    memory, and once running HOLDS the cores it kept busy -- every core when unmeasured. PLANTED CONTROL:
-    a box already running a part, held so, admits no second one: two would oversubscribe it.
+    PLANTED CONTROL: a box already running a part declared at the whole box admits no second one.
     """
-    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=32 * 3600.0, wall_s=3600.0))
-    ask = learned.learned_demand(REPO, cluster=False)
-    hold = learned.learned_hold(REPO, cluster=False, cores=32)
+    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0))
     plain, jmag = Job('', 'a' * 40, 'windows'), Job('', 'b' * 40, 'windows', frozenset({'jmag'}))
-    box = Supply('G', Resources(cpu=30.24, mem_gb=64.0, jmag=1))
-    assert ask(frozenset({'jmag'})) == Demand(cpu=1, mem_gb=6.0, jmag=1), 'memory is a real need and stays'
-    assert admit(plain, ask(frozenset()), box, now=NOW), 'unmeasured'
-    assert admit(jmag, ask(frozenset({'jmag'})), box, now=NOW), 'measured at 32 cores'
-    assert hold(frozenset({'jmag'})) == Demand(cpu=32, mem_gb=6.0, jmag=1)
-    running = (Held(Resources(hold(frozenset({'jmag'}))), jmag),)
-    assert admit(plain, ask(frozenset()), box, running=running, now=NOW).lacking == ('cpu',)
+    box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1))
+    measured = learned.box_demand(REPO, frozenset({'jmag'}), cpu=30, mem_gb=64)
+    assert measured == Demand(cpu=30, mem_gb=64.0, jmag=1), 'cores and memory capped at the box'
+    assert admit(jmag, measured, box)
+    whole = learned.box_demand(REPO, frozenset(), cpu=30, mem_gb=64)
+    assert admit(plain, whole, box)
+    assert admit(plain, whole, box, running=(Resources(whole),)).lacking == ('cpu', 'mem_gb')
