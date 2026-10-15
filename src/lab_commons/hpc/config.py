@@ -121,6 +121,16 @@ class JobSpec:
     entry: str = ''
     items: str = ''
     python: str = 'python'
+    #: A commit to run at: each grant's home gets ``~/ci/trees/<sha>`` and its env (``run build``) -- the workdir.
+    sha: str = ''
+    #: Where that commit is fetched from (read-only HTTPS); required with ``sha``.
+    repo_url: str = ''
+
+    def __post_init__(self) -> None:
+        """A commit names its remote."""
+        if bool(self.sha) != bool(self.repo_url):
+            msg = f'[job] sha and repo_url come together, got sha={self.sha!r} repo_url={self.repo_url!r}'
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)

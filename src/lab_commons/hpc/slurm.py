@@ -30,6 +30,7 @@ __all__ = [
     'Partition',
     'Quota',
     'Snapshot',
+    'parse_inodes',
     'parse_minutes',
     'parse_records',
     'parse_snapshot',
@@ -47,7 +48,8 @@ PROBE_COMMAND: Final = (
     'echo "@@@ qos"; sacctmgr -nP show qos format=name,priority,maxwall,maxtrespu,maxjobspu,maxsubmitpu,grptres; '
     'echo "@@@ account"; sacctmgr -nP show user $USER format=defaultaccount; '
     'echo "@@@ running"; squeue -h --me -t RUNNING -o "%a|%C|%D|%m|%b"; '
-    'echo "@@@ queued"; squeue -h --me -r -o "%q"'
+    'echo "@@@ queued"; squeue -h --me -r -o "%q"; '
+    'echo "@@@ files"; df -iP "$HOME" | tail -n 1'
 )
 
 #: The comment tag every job of a workstation carries -- :data:`lab_commons.hpc.grants.COMMENT_PREFIX`.
@@ -208,6 +210,14 @@ class Snapshot:
     quota: Quota
     #: CPUs the caller's jobs on the account hold, per workstation tag (``''`` = untagged); see :func:`parse_usage`.
     usage: dict[str, float] = field(default_factory=dict)
+    #: Free inodes of the home's filesystem (``df -i``) -- the file-count quota a run writes against; ``None`` unread.
+    inodes_free: int | None = None
+
+
+def parse_inodes(text: str) -> int | None:
+    """``df -iP`` 's last line into its ``IFree`` column; anything else (no line, ``-``) is ``None``, never a zero."""
+    free = text.split()[3:4]
+    return int(free[0]) if free and free[0].isdigit() else None
 
 
 def _node(record: dict[str, str]) -> Node:
@@ -318,4 +328,5 @@ def parse_snapshot(text: str, account: str = '') -> Snapshot:
         partitions=partitions,
         quota=_quota(sections, account),
         usage=parse_usage(sections.get('shared', '')),
+        inodes_free=parse_inodes(sections.get('files', '')),
     )

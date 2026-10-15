@@ -19,8 +19,9 @@ reached through a :data:`~lab_commons.hpc.cluster.Runner` -- a local shell on a 
 workstation -- so nothing above ``run`` knows which.
 
 WHERE a run may go is the MACHINE's, not the job's: :mod:`lab_commons.hpc.grants` reads this box's
-shares of shared accounts, and :func:`lab_commons.hpc.plan.allocate` picks one from what Slurm reports
-each box holding. :mod:`lab_commons.hpc.run` runs one commit's test suite through the same layers.
+shares of shared accounts, and :func:`lab_commons.hpc.span.span` spreads a batch over every grant that
+speeds it up (:func:`lab_commons.hpc.plan.allocate` when one is fastest), from what Slurm reports each holding.
+:mod:`lab_commons.hpc.run` runs one commit's test suite through the same layers.
 
 STDLIB ONLY, so no extra gates it: ``tomllib`` reads the config and ``json`` carries the manifest. Like
 ``lab_commons.dev`` and ``lab_commons.viz`` it is an opt-in IMPORT -- ``import lab_commons`` does not
