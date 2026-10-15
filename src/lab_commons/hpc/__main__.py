@@ -5,6 +5,8 @@ WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hp
 submission of a job file is recorded next to it as ``<job>.submission.json`` -- one placement per grant
 the batch spans (:mod:`lab_commons.hpc.jobs`: its ssh targets, items, run directory, job ids, shards), so
 ``status``/``gather``/``retry`` need nothing more -- through whichever of those login hosts answers.
+``gather -c <job> -o <out> --wait`` polls as ``status`` does every ``[policy] poll_seconds``, prints each
+change once (``pending: <why>`` while no login host answers), and gathers once no shard is queued or running.
 
 ``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
 returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
@@ -37,10 +39,22 @@ from typing import Any, Final
 from lab_commons.compute import learned
 from lab_commons.hpc import deploy
 from lab_commons.hpc.builds import builds_at
-from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, runner_for, submitter
+from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
 from lab_commons.hpc.config import Config, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
-from lab_commons.hpc.jobs import Ensure, Reach, built_config, gather_job, plan_job, retry_job, status_job, submit_job
+from lab_commons.hpc.jobs import (
+    Ensure,
+    Reach,
+    built_config,
+    gather_job,
+    plan_job,
+    retry_job,
+    settled,
+    shard_counts,
+    status_job,
+    status_lines,
+    submit_job,
+)
 from lab_commons.hpc.needsets import BASE, vocabulary_at
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import NotSubmitted, build_run, submit_run
@@ -116,7 +130,29 @@ def _gather(record: dict[str, Any], machine: Machine, reach: Reach, output: Path
     return 0
 
 
-def _jobs(verb: str, config: Config, machine: Machine, reach: Reach, *, repo: Path, output: Path | None) -> int:
+def _gather_when_settled(
+    config: Config, record: dict[str, Any], machine: Machine, reach: Reach, output: Path | None
+) -> int:
+    """``gather --wait``: poll as ``status`` does, print each change once, gather once no shard is active."""
+    last = None
+    while True:
+        try:
+            found = shard_counts(record, machine, reach)
+        except Unreachable as silent:
+            found = [('cluster', silent)]
+        silent = [f'{g}: {c}' for g, c in found if isinstance(c, Unreachable)]
+        summary = f'pending: {"; ".join(silent)}' if silent else '; '.join(status_lines(found))
+        if summary != last:
+            _out(summary)
+            last = summary
+        if settled(found):
+            return _gather(record, machine, reach, output)
+        _sleep(config.policy.poll_seconds)
+
+
+def _jobs(
+    verb: str, config: Config, machine: Machine, reach: Reach, *, repo: Path, output: Path | None, wait: bool = False
+) -> int:
     """The job-file verbs: plan, submit, status, gather, retry -- every grant the batch spans."""
     config = built_config(config)
     if verb == 'plan':
@@ -139,6 +175,8 @@ def _jobs(verb: str, config: Config, machine: Machine, reach: Reach, *, repo: Pa
             _out(line)
         return 0
     if verb == 'gather':
+        if wait:
+            return _gather_when_settled(config, record, machine, reach, output)
         return _gather(record, machine, reach, output)
     for line in retry_job(config, _items(config), record, machine, reach, ensure=_ensure(config, repo)):
         _out(line)
@@ -233,7 +271,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '-o', '--output', type=Path, help='gather: merged item results (JSON); run gather: the record directory'
     )
-    parser.add_argument('--wait', action='store_true', help='run gather: block until the run has its record')
+    parser.add_argument(
+        '--wait',
+        action='store_true',
+        help='gather -c: poll status, print each change, gather once no shard is queued or running; '
+        'run gather: block until the run has its record',
+    )
     group = parser.add_argument_group('run')
     group.add_argument('--scope', choices=[FULL, INCREMENTAL], help='run submit: every id, or only --only')
     group.add_argument('--sha', help='the full commit id to test')
@@ -257,7 +300,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.step is None:
         parser.error('run needs a step: submit, then gather')
     if args.wait and args.step != 'gather':
-        parser.error('--wait belongs to run gather')
+        parser.error('--wait belongs to gather (-c) and run gather')
     values = {
         '--sha': args.sha,
         '--repo-url': args.repo_url,
@@ -309,8 +352,10 @@ def main(argv: list[str] | None = None) -> int:
     machine = load_grants()
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
+    if args.wait and args.verb != 'gather':
+        parser.error('--wait belongs to gather (-c) and run gather')
     config = _job_config(parser, args)
-    return _jobs(args.verb, config, machine, runner_for, repo=args.repo, output=args.output)
+    return _jobs(args.verb, config, machine, runner_for, repo=args.repo, output=args.output, wait=args.wait)
 
 
 if __name__ == '__main__':

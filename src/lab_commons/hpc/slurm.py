@@ -26,6 +26,7 @@ from typing import Final
 
 __all__ = [
     'PROBE_COMMAND',
+    'WORKDIRS_COMMAND',
     'Node',
     'Partition',
     'Quota',
@@ -36,6 +37,7 @@ __all__ = [
     'parse_snapshot',
     'parse_tres',
     'parse_usage',
+    'parse_workdirs',
     'probe_command',
 ]
 
@@ -54,6 +56,15 @@ PROBE_COMMAND: Final = (
 
 #: The comment tag every job of a workstation carries -- :data:`lab_commons.hpc.grants.COMMENT_PREFIX`.
 _WS_TAG: Final = re.compile(r'(?:^|[\s,;])lc:ws=([^\s,;]+)')
+
+
+#: The working directory of every job of the caller's still queued or running (``%Z``, one per line).
+WORKDIRS_COMMAND: Final = ('squeue', '--me', '-h', '-t', 'PENDING,RUNNING', '-o', '%Z')
+
+
+def parse_workdirs(text: str) -> list[str]:
+    """:data:`WORKDIRS_COMMAND`'s output as paths; an array job prints one line per pending or running task."""
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def probe_command(slurm_account: str = '') -> str:

@@ -33,7 +33,19 @@ from lab_commons.hpc.run import ACTIVE
 from lab_commons.hpc.shell import ENV
 from lab_commons.hpc.span import Placement, span
 
-__all__ = ['Ensure', 'Reach', 'built_config', 'gather_job', 'plan_job', 'retry_job', 'status_job', 'submit_job']
+__all__ = [
+    'Ensure',
+    'Reach',
+    'built_config',
+    'gather_job',
+    'plan_job',
+    'retry_job',
+    'settled',
+    'shard_counts',
+    'status_job',
+    'status_lines',
+    'submit_job',
+]
 
 #: A runner for one grant -- ``ssh`` to its login hosts in a CLI, a fake in a test.
 type Reach = Callable[[Grant], Runner]
@@ -149,21 +161,43 @@ def _grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
     return Grant(user=account[0], hosts=hosts, slurm_account=account[1])
 
 
-def status_job(record: dict[str, Any], machine: Machine, reach: Reach) -> list[str]:
-    """One line per placement: its shards by Slurm state, or that its grant did not answer."""
-    lines = []
+def shard_counts(
+    record: dict[str, Any], machine: Machine, reach: Reach
+) -> list[tuple[str, dict[str, int] | Unreachable]]:
+    """Each placement's grant with its shards counted by Slurm state, or why its grant did not answer."""
+    found: list[tuple[str, dict[str, int] | Unreachable]] = []
     for placement in record['placements']:
         try:
             states = shard_states(reach(_grant_of(placement, machine)), placement['job_ids'])
-        except Unreachable:
-            lines.append(f'{placement["grant"]}: did not answer')
+        except Unreachable as silent:
+            found.append((placement['grant'], silent))
             continue
         counts: dict[str, int] = {}
         for shard in range(placement['shards']):
             state = states.get(shard, 'UNKNOWN')
             counts[state] = counts.get(state, 0) + 1
-        lines.append(f'{placement["grant"]}: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
-    return lines
+        found.append((placement['grant'], counts))
+    return found
+
+
+def status_lines(found: list[tuple[str, dict[str, int] | Unreachable]]) -> list[str]:
+    """One line per placement of :func:`shard_counts`: its shards by state, or that its grant did not answer."""
+    return [
+        f'{grant}: did not answer'
+        if isinstance(counts, Unreachable)
+        else f'{grant}: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items()))
+        for grant, counts in found
+    ]
+
+
+def settled(found: list[tuple[str, dict[str, int] | Unreachable]]) -> bool:
+    """Every grant answered and none of its shards is still :data:`ACTIVE` (queued or running)."""
+    return all(not isinstance(c, Unreachable) and not ACTIVE.intersection(c) for _g, c in found)
+
+
+def status_job(record: dict[str, Any], machine: Machine, reach: Reach) -> list[str]:
+    """One line per placement: its shards by Slurm state, or that its grant did not answer."""
+    return status_lines(shard_counts(record, machine, reach))
 
 
 def gather_job(record: dict[str, Any], machine: Machine, reach: Reach) -> tuple[list[dict[str, Any]], int, list[str]]:
