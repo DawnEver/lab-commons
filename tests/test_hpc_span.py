@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons.hpc import __main__ as cli
+from lab_commons.hpc import jobs
 from lab_commons.hpc.cluster import Unreachable
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
@@ -185,3 +186,87 @@ def test_a_one_grant_record_is_refused_by_its_retired_name(tmp_path: Path) -> No
     (tmp_path / 'job.submission.json').write_text(json.dumps({'grant': 'g', 'job_ids': ['1']}), encoding='utf-8')
     with pytest.raises(ValueError, match='placements'):
         cli._record(config)
+
+
+# -- gather -c --wait: poll the shards' status, print each change once, gather when none is left active ----
+
+
+RECORD = {
+    'placements': [
+        {
+            'grant': NEAR.name,
+            'account': list(NEAR.account),
+            'targets': ['me@near'],
+            'job_ids': ['1'],
+            'shards': 2,
+            'items': [0, 2],
+            'run_dir': '~/r',
+        }
+    ]
+}
+
+
+def _wait_cli(monkeypatch: pytest.MonkeyPatch, polls: list[object]) -> tuple[list[str], list[float], list[int]]:
+    """``main`` over scripted polls: each a ``{shard: state}`` answer or an :class:`Unreachable` to raise."""
+    out: list[str] = []
+    slept: list[float] = []
+    gathered: list[int] = []
+    script = iter(polls)
+
+    def states(_run: object, _ids: object) -> dict[int, str]:
+        answer = next(script)
+        if isinstance(answer, Unreachable):
+            raise answer
+        return answer
+
+    def gather(*_a: object) -> tuple[list[dict], int, list[str]]:
+        gathered.append(1)
+        return [], 2, []
+
+    monkeypatch.setattr(cli, 'load_grants', lambda: Machine(workstation='ws-a', grants=(NEAR,)))
+    monkeypatch.setattr(cli, 'runner_for', lambda _g, *_a: None)
+    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: Config(policy=Policy(poll_seconds=7)))
+    monkeypatch.setattr(cli, '_record', lambda _c: RECORD)
+    monkeypatch.setattr(cli, '_out', out.append)
+    monkeypatch.setattr(cli, '_sleep', slept.append)
+    monkeypatch.setattr(cli, 'gather_job', gather)
+    monkeypatch.setattr(jobs, 'shard_states', states)
+    return out, slept, gathered
+
+
+def test_gather_wait_prints_each_status_change_once_and_gathers_once_nothing_is_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    running = {0: 'RUNNING', 1: 'PENDING'}
+    polls = [
+        Unreachable('no login host answered'),
+        Unreachable('no login host answered'),
+        running,
+        running,
+        {0: 'COMPLETED', 1: 'RUNNING'},
+        {0: 'COMPLETED', 1: 'FAILED'},
+    ]
+    out, slept, gathered = _wait_cli(monkeypatch, polls)
+    assert cli.main(['gather', '-c', 'j.toml', '-o', str(tmp_path / 'o.json'), '--wait']) == 0
+    assert out[:4] == [
+        f'pending: {NEAR.name}: no login host answered',
+        f'{NEAR.name}: PENDING=1, RUNNING=1',
+        f'{NEAR.name}: COMPLETED=1, RUNNING=1',
+        f'{NEAR.name}: COMPLETED=1, FAILED=1',
+    ]
+    assert out[4].startswith('2/2 shards returned')
+    assert gathered == [1], 'one gather, after the last shard left RUNNING'
+    assert slept == [7] * 5
+
+
+def test_gather_without_wait_gathers_at_once_and_wait_belongs_to_gather(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, slept, gathered = _wait_cli(monkeypatch, [])
+    assert cli.main(['gather', '-c', 'j.toml', '-o', str(tmp_path / 'o.json')]) == 0
+    assert (gathered, slept) == ([1], [])
+    assert out[0].startswith('2/2 shards returned'), 'no status poll without --wait'
+    for verb in ['plan', 'submit', 'status', 'retry']:
+        with pytest.raises(SystemExit):
+            cli.main([verb, '-c', 'j.toml', '--wait'])
+        assert '--wait belongs to gather' in capsys.readouterr().err
