@@ -203,7 +203,9 @@ def build_script(spec: RunSpec) -> str:
     after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
     shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
 
-    Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`), so a new key re-links cached wheels. A native
+    Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`) and HARDLINKS from it (``UV_LINK_MODE``, declared
+    rather than left to uv's platform default): one inode per installed file across every env key, which is what
+    the account's FILE quota counts (:mod:`lab_commons.dev.retentionplan`). A native
     build's ``CARGO_TARGET_DIR`` is its native key's own (:func:`lab_commons.hpc.builds.cargo_target`, under
     its own ``flock``): a target shared across different native inputs reuses stale artifacts.
     Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).
@@ -224,7 +226,7 @@ def build_script(spec: RunSpec) -> str:
         # that read a submodule's data fail as if the code were broken (1240 ids, measured 2026-10-10)
         '[ ! -f .gitmodules ] || git submodule update -q --init --recursive',
         'mkdir -p .lab-ci',
-        f'export E={env} UV_CACHE_DIR={_UV_CACHE}',
+        f'export E={env} UV_CACHE_DIR={_UV_CACHE} UV_LINK_MODE=hardlink',
         *_timed(
             'env',
             _step('"$E"', env_log, '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, builds.install])),
