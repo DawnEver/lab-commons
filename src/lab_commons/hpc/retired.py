@@ -231,7 +231,7 @@ RETIRED: Final[dict[str, str]] = {
     'given_back': 'nothing: the supply is the box ledger, so no measured use is given back',
     # The CPU seat and its bounded wait are DELETED: every run claims the one box ledger (lab_commons.box, P3).
     'cpuseat': 'lab_commons.box (every run declares its claim on the one box ledger and is held to it)',
-    'CpuSeat': 'lab_commons.box.run, or python -m lab_commons.box run --cpu --mem-gb --wall --queue-s --key -- argv',
+    'CpuSeat': 'lab_commons.box.run, or python -m lab_commons.box run --cpu --mem-gb --wall --queue-s --key --outcome',
     'CPU_POOL': 'lab_commons.box.box_path (the one ledger of this machine)',
     'LIGHT_WIDTH': 'lab_commons.dev.verifybox.SELECTION_CPU (a selection declares its cores to the box)',
     'LIGHT_MEMORY_BYTES': 'lab_commons.dev.verifybox.SELECTION_MEM_GB (a selection declares its memory)',
@@ -239,6 +239,9 @@ RETIRED: Final[dict[str, str]] = {
     'hold_run_seats': 'lab_commons.box.command (the run in the box) and lab_commons.dev.envseat.EnvironmentSeat',
     'boxseat': 'nothing: the box ledger is machine-wide by construction (lab_commons.box.box_path)',
     'PRODUCE_WALL_S': 'lab_commons.compute.learned.BOX_WALL_S (the wall the box enforces)',
+    # The box's decision is a RECORD, never a sentinel exit code a child could also choose (SR-20261015-002).
+    'lab_commons.box.REFUSED': 'lab_commons.box.read_ended (the --outcome record: a Refused when nothing ran)',
+    'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: an Outcome whose killed is true)',
     'free_cores(': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a busy reading)',
     'available_mem_gb': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a free reading)',
 }

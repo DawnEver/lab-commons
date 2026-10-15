@@ -7,7 +7,9 @@ That matters because the alternative -- spawning a child from the supervisor -- 
 SUPERVISOR's cgroup, where the limit it lands under is the wrong one and where killing it is
 indistinguishable from killing the supervisor. A candidate build that forks is exactly the load that took
 this family's host down once already. Where the box cannot enforce, it refuses, and the command reports
-that refusal rather than running unbounded.
+that refusal rather than running unbounded. The box's decision is read from its RECORD (``--outcome``, a
+temporary file removed once read), never from the exit code, which is the command's own: a refused, killed
+or crashed box is reported as ``-1`` naming why (:func:`judged`).
 
 The commands are built and then run through an injected runner, so what a manager WOULD execute is
 assertable without a systemd on the machine running the test.
@@ -20,9 +22,10 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Final
 
-from lab_commons.box import Demand, command
+from lab_commons.box import Demand, Refused, command, read_ended
 from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process.base import Ran
 
@@ -33,6 +36,7 @@ __all__ = [
     'Runner',
     'SystemdProcessManager',
     'ceiling_gb',
+    'judged',
     'subprocess_runner',
 ]
 
@@ -271,5 +275,24 @@ class SystemdProcessManager:
         """
         demand = Demand(cpu=CAPPED_CPU, mem_gb=ceiling_gb(memory_max), wall_s=timeout, seats={})
         what = f'supervise: {" ".join(argv)}'[:120]
-        boxed = command(argv, demand, CAPPED_QUEUE_S, key=f'supervise:{argv[0]}', what=what)
-        return self.runner(boxed, timeout + CAPPED_QUEUE_S + _GRACE, cwd)
+        with tempfile.TemporaryDirectory(prefix='lab-supervise-box-') as scratch:
+            record = Path(scratch) / 'outcome.json'
+            boxed = command(argv, demand, CAPPED_QUEUE_S, key=f'supervise:{argv[0]}', what=what, outcome=record)
+            return judged(self.runner(boxed, timeout + CAPPED_QUEUE_S + _GRACE, cwd), record)
+
+
+def judged(ran: Ran, record: Path) -> Ran:
+    """*ran* as the box recorded it at *record*: the command's own result, or ``-1`` naming a refusal, kill or crash.
+
+    A runner that could not run the box at all (``-1``) is already a failure naming itself.
+    """
+    if ran.code == -1:
+        return ran
+    ended = read_ended(record)
+    if isinstance(ended, Refused):
+        return Ran(code=-1, out=ran.out, err=f'box refused: {ended}')
+    if ended is None:
+        return Ran(code=-1, out=ran.out, err=f'box crashed: no record of how it ended; {ran.err}'.strip())
+    if ended.killed:
+        return Ran(code=-1, out=ran.out, err=f'box killed it past its declared {ended.reason}; {ran.err}'.strip())
+    return ran

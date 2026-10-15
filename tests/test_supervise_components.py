@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from _box_fake import boxed_as_run
 
 from lab_commons.supervise.alert import Transport
 from lab_commons.supervise.component import CheckContext
@@ -81,8 +82,8 @@ def _ctx(
 ) -> CheckContext:
     """Build a check context over a recording manager."""
 
-    def run(_argv: list[str], _timeout: int, _cwd: str | None) -> Ran:
-        return ran if ran is not None else Ran(code=0, out='')
+    def run(argv: list[str], _timeout: int, _cwd: str | None) -> Ran:
+        return boxed_as_run(argv, ran if ran is not None else Ran(code=0, out=''))
 
     return CheckContext(
         config=config or {},

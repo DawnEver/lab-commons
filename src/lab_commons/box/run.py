@@ -23,22 +23,17 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Final
 
 from lab_commons.box import _linux, _win
 from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
 from lab_commons.box.ledger import admit
 
-__all__ = ['INSIDE_ENV', 'KILLED', 'REFUSED', 'command', 'run']
+__all__ = ['INSIDE_ENV', 'command', 'run']
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
 INSIDE_ENV: Final = 'LAB_COMMONS_BOXED'
-
-#: The CLI's exit code when the box refused the run (no room in time, or no enforcer): sysexits EX_UNAVAILABLE.
-REFUSED: Final = 69
-
-#: The CLI's exit code when the box killed the tree (memory or wall): 128 + SIGKILL, the code a shell expects.
-KILLED: Final = 137
 
 #: One backend per platform that has one: ``contain(argv, demand, cwd, env, (key, fingerprint)) -> Outcome``.
 Contain = Callable[[Sequence[str], Demand, str | None, Mapping[str, str] | None, tuple[str, str | None]], Outcome]
@@ -78,20 +73,27 @@ def run(
 
 
 def command(
-    argv: Sequence[str], demand: Demand, queue_s: float, *, key: str, what: str, fingerprint: str | None = None
+    argv: Sequence[str],
+    demand: Demand,
+    queue_s: float,
+    *,
+    key: str,
+    what: str,
+    outcome: Path,
+    fingerprint: str | None = None,
 ) -> list[str]:
     """*argv* spelled as ``python -m lab_commons.box run ... -- argv``: the CLI that runs it enforced to *demand*.
 
-    For a caller that streams the child's output itself: stdout stays the child's, the
-    :class:`~lab_commons.box.demand.Outcome` is one JSON line on stderr, and the exit code is the child's,
-    :data:`KILLED` or :data:`REFUSED`.
+    For a caller that streams the child's output itself: both streams stay the child's and so does the
+    exit code. How the BOX ended it is the record at *outcome*, read back with
+    :func:`~lab_commons.box.demand.read_ended` -- never the exit code, which the child may set to anything.
     """
     seats = [f'--seat={name}={count}' for name, count in sorted(demand.seats.items()) if count]
     marks = ['--fingerprint', fingerprint] if fingerprint else []
     limits = ['--cpu', str(demand.cpu), '--mem-gb', f'{demand.mem_gb:g}', '--wall', str(demand.wall_s)]
     return [
         sys.executable, '-m', 'lab_commons.box', 'run', *limits, '--queue-s', f'{queue_s:g}', *seats,
-        '--key', key, *marks, '--what', what, '--', *argv,
+        '--key', key, *marks, '--what', what, '--outcome', str(outcome), '--', *argv,
     ]  # fmt: skip
 
 

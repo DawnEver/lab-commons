@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from _box_fake import boxed_as_run
 
 from lab_commons.resources import Broker, Exhausted
 from lab_commons.supervise.alert import Notifier
@@ -139,7 +140,7 @@ class _Transport:
 def _manager(seen: list[tuple[list[str], int, str | None]]) -> SystemdProcessManager:
     def run(argv: list[str], timeout: int, cwd: str | None) -> Ran:
         seen.append((argv, timeout, cwd))
-        return Ran(code=0, out='done')
+        return boxed_as_run(argv, Ran(code=0, out='done'))
 
     return SystemdProcessManager(runner=run)
 

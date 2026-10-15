@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box import BOX_ENV, Capacity, Demand, Refused, admit, command, run
+from lab_commons.box import BOX_ENV, Capacity, Demand, Outcome, Refused, admit, command, read_ended, run, write_ended
 from lab_commons.box.__main__ import _parser, main
 from lab_commons.box._linux import in_slurm_job, manager, scope_argv
 from lab_commons.box.run import _ENFORCERS
 
 
-@pytest.mark.parametrize('missing', ['--cpu', '--mem-gb', '--wall', '--queue-s', '--key'])
+@pytest.mark.parametrize('missing', ['--cpu', '--mem-gb', '--wall', '--queue-s', '--key', '--outcome'])
 def test_the_cli_refuses_a_missing_limit(missing: str, capsys: pytest.CaptureFixture[str]) -> None:
-    given = {'--cpu': '1', '--mem-gb': '0.5', '--wall': '5', '--queue-s': '1', '--key': 'k'}
+    given = {'--cpu': '1', '--mem-gb': '0.5', '--wall': '5', '--queue-s': '1', '--key': 'k', '--outcome': 'o.json'}
     args = [token for flag, value in given.items() if flag != missing for token in (flag, value)]
     with pytest.raises(SystemExit) as refused:
         main(['run', *args, '--', sys.executable, '-c', 'pass'])
@@ -27,9 +27,10 @@ def test_the_cli_refuses_a_missing_limit(missing: str, capsys: pytest.CaptureFix
 def test_command_spells_every_declared_limit_so_the_cli_reads_back_the_same_demand() -> None:
     """The one spelling of a run through the box: parsed by the CLI, it is the demand and identity it was given."""
     demand = Demand(cpu=3, mem_gb=1.5, wall_s=60, seats={'jmag': 1, 'femm': 0})
-    argv = command(['tool', '--flag'], demand, 7.0, key='k', what='w', fingerprint='f')
+    argv = command(['tool', '--flag'], demand, 7.0, key='k', what='w', outcome=Path('o.json'), fingerprint='f')
     assert argv[:3] == [sys.executable, '-m', 'lab_commons.box']
     ns = _parser().parse_args(argv[3:])
+    assert ns.outcome == Path('o.json')
     read = Demand(cpu=ns.cpu, mem_gb=ns.mem_gb, wall_s=ns.wall, seats=dict(ns.seat))
     assert (read, ns.queue_s, ns.key, ns.what, ns.fingerprint) == (
         Demand(3, 1.5, 60, {'jmag': 1}),
@@ -43,7 +44,31 @@ def test_command_spells_every_declared_limit_so_the_cli_reads_back_the_same_dema
 
 def test_the_cli_refuses_a_missing_command() -> None:
     with pytest.raises(SystemExit):
-        main(['run', '--cpu', '1', '--mem-gb', '0.5', '--wall', '5', '--queue-s', '1', '--key', 'k', '--'])
+        main(['run', '--cpu', '1', '--mem-gb', '0.5', '--wall', '5', '--queue-s', '1', '--key', 'k', '--outcome', 'o'])
+
+
+def test_the_record_reads_back_an_outcome_a_refusal_or_nothing(tmp_path: Path) -> None:
+    """One reader: the Outcome as written, a Refused naming why, and ``None`` for a box that left no record."""
+    path = tmp_path / 'outcome.json'
+    assert read_ended(path) is None, 'no record: the box crashed'
+    killed = Outcome(-9, 'memory', 7, 1.5, 2.0, 'job-object', 'k', 'f')
+    write_ended(path, killed)
+    assert read_ended(path) == killed
+    assert killed.killed
+    write_ended(path, Refused('cpu: wants 4 of 3'))
+    refused = read_ended(path)
+    assert isinstance(refused, Refused)
+    assert str(refused) == 'cpu: wants 4 of 3'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['outcome.json'], 'written atomically, no staging left'
+
+
+def test_the_cli_records_a_refusal_and_its_code_means_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(_ENFORCERS, sys.platform, None)  # no enforcer here: the box refuses before any child
+    path = tmp_path / 'outcome.json'
+    args = ['run', '--cpu', '1', '--mem-gb', '0.5', '--wall', '5', '--queue-s', '1', '--key', 'k']
+    code = main([*args, '--outcome', str(path), '--', sys.executable, '-c', 'pass'])
+    assert code != 0
+    assert isinstance(read_ended(path), Refused)
 
 
 def test_an_empty_argv_is_refused() -> None:

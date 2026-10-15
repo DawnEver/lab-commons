@@ -6,7 +6,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from _box_fake import ended, record
 
+from lab_commons.box import Refused
 from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process import MANAGERS, SystemdProcessManager, manager_for, subprocess_runner
 from lab_commons.supervise.process.base import Ran
@@ -77,6 +79,33 @@ def test_a_capped_run_is_a_box_claim_carrying_its_ceiling_and_its_wall() -> None
     assert argv[argv.index('--cpu') + 1] == str(CAPPED_CPU)
     assert argv[argv.index('--') + 1 :] == ['python', '-c', 'import x']
     assert allowed > 120 + CAPPED_QUEUE_S, 'the wrapper must outlive the wait and the wall it hands to the box'
+
+
+def _boxing(what: object, ran: Ran) -> SystemdProcessManager:
+    """A manager whose box records *what* (``None``: the box crashed) and whose runner answers *ran*."""
+
+    def run(argv: list[str], _timeout: int, _cwd: str | None) -> Ran:
+        record(argv, what)
+        return ran
+
+    return SystemdProcessManager(runner=run)
+
+
+@pytest.mark.parametrize(
+    ('what', 'said'),
+    [(Refused('cpu: wants 1 of 0'), 'box refused'), (ended(-9, 'memory'), 'box killed'), (None, 'box crashed')],
+)
+def test_a_capped_run_the_box_ended_is_a_failure_naming_why(what: object, said: str) -> None:
+    ran = _boxing(what, Ran(code=0, out='x')).run_capped(['true'], memory_max='600M', timeout=5)
+    assert ran.code == -1
+    assert said in ran.err
+
+
+@pytest.mark.parametrize('own', [69, 137])
+def test_a_capped_command_exiting_a_former_box_sentinel_keeps_its_own_code(own: int) -> None:
+    """PLANTED (SR-20261015-002): the box recorded the command's own exit, so its code is the command's."""
+    ran = _boxing(ended(own), Ran(code=own, out='x')).run_capped(['true'], memory_max='600M', timeout=5)
+    assert (ran.code, ran.out) == (own, 'x')
 
 
 @pytest.mark.parametrize(('ceiling', 'gb'), [('600M', 600 / 1024), ('2G', 2.0), ('512k', 512 / 1024**2)])
