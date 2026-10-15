@@ -1,21 +1,22 @@
-"""``python -m lab_commons.box run --cpu N --mem-gb G --wall S --queue-s Q --key K [--fingerprint F] -- argv``.
+"""``python -m lab_commons.box run --cpu N --mem-gb G --wall S --queue-s Q --key K --outcome P [...] -- argv``.
 
 Every limit is REQUIRED, exactly as :class:`~lab_commons.box.Demand` has no defaults: a missing one
-is an argparse refusal, never a number nobody chose. The exit code is the child's own, :data:`KILLED`
-when the box killed it or :data:`REFUSED` when it never ran; the
-:class:`~lab_commons.box.Outcome` is one JSON line on stderr, so stdout stays the child's.
+is an argparse refusal, never a number nobody chose. So is ``--outcome``: the box's decision is the
+record written there (:func:`~lab_commons.box.write_ended`) -- the :class:`~lab_commons.box.Outcome`, or the
+refusal when nothing ran -- and NEVER the exit code. The exit code is the child's own, and a child may
+exit with any number, so a sentinel code would misread a child that happened to choose it. On a refusal
+the code is nonzero and means nothing: read the record. Both streams stay the child's.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections.abc import Sequence
-from dataclasses import asdict
+from pathlib import Path
 
-from lab_commons.box.demand import Demand, Refused
-from lab_commons.box.run import KILLED, REFUSED, run
+from lab_commons.box.demand import Demand, Refused, write_ended
+from lab_commons.box.run import run
 from lab_commons.log import emit
 
 
@@ -37,6 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     verb.add_argument('--queue-s', type=float, required=True, help='seconds to wait for room, then refuse')
     verb.add_argument('--seat', type=_seat, action='append', default=[], help='a tool seat, name=count')
     verb.add_argument('--key', required=True, help="the caller's opaque identity of what runs")
+    verb.add_argument('--outcome', type=Path, required=True, help='where the record of how the box ended it goes')
     verb.add_argument('--fingerprint', default=None, help='hash of the code the run depends on (optional)')
     verb.add_argument('--what', default=None, help='the ledger label (default: the command)')
     verb.add_argument('argv', nargs=argparse.REMAINDER, help='-- then the command')
@@ -44,7 +46,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(args: Sequence[str] | None = None) -> int:
-    """Parse, run, report the Outcome on stderr; return the exit code the module docstring names."""
+    """Parse, run, write the record to ``--outcome``; return the child's exit code (the module docstring)."""
     parser = _parser()
     ns = parser.parse_args(args)
     argv = ns.argv[1:] if ns.argv[:1] == ['--'] else ns.argv
@@ -54,10 +56,11 @@ def main(args: Sequence[str] | None = None) -> int:
     try:
         outcome = run(argv, demand, ns.what or ' '.join(argv), ns.queue_s, key=ns.key, fingerprint=ns.fingerprint)
     except Refused as refused:
+        write_ended(ns.outcome, refused)
         emit(f'box: refused -- {refused}', err=True)
-        return REFUSED
-    emit(json.dumps(asdict(outcome)), err=True)
-    return outcome.returncode if outcome.reason == 'exit' else KILLED
+        return 1
+    write_ended(ns.outcome, outcome)
+    return outcome.returncode
 
 
 if __name__ == '__main__':

@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box import BOX_ENV, GB, Capacity, Demand, Outcome, Refused, holdings, run
-from lab_commons.box.__main__ import KILLED, REFUSED, main
+from lab_commons.box import BOX_ENV, GB, Capacity, Demand, Outcome, Refused, holdings, read_ended, run
+from lab_commons.box.__main__ import main
 from lab_commons.box._linux import refusal
 from lab_commons.proc import pid_alive
 
@@ -124,8 +124,33 @@ def test_killing_the_launcher_kills_the_tree(tmp_path: Path) -> None:
     assert _gone(pid)
 
 
-def test_the_cli_exits_killed_for_a_walled_child_and_refused_where_nothing_enforces() -> None:
-    argv = ['run', '--cpu', '1', '--mem-gb', '0.2', '--wall', '2', '--queue-s', '5', '--key', 'cli', '--']
-    code = main([*argv, sys.executable, '-c', 'import time; time.sleep(60)'])
-    assert code == (KILLED if ENFORCES else REFUSED)
+def _cli(record: Path, child: str) -> tuple[int, Outcome | Refused | None]:
+    argv = ['run', '--cpu', '1', '--mem-gb', '0.2', '--wall', '2', '--queue-s', '5', '--key', 'cli']
+    code = main([*argv, '--outcome', str(record), '--', sys.executable, '-c', child])
     assert holdings() == []
+    return code, read_ended(record)
+
+
+def test_the_cli_records_a_walled_child_killed_and_a_refusal_where_nothing_enforces(tmp_path: Path) -> None:
+    _code, ended = _cli(tmp_path / 'outcome.json', 'import time; time.sleep(60)')
+    if ENFORCES:
+        assert isinstance(ended, Outcome)
+        assert (ended.reason, ended.killed) == ('wall', True)
+    else:
+        assert isinstance(ended, Refused)
+        assert 'unenforced' in str(ended)
+
+
+@pytest.mark.parametrize('own', [69, 137])
+def test_a_child_exiting_a_former_box_sentinel_is_recorded_as_its_own_exit(tmp_path: Path, own: int) -> None:
+    """PLANTED (SR-20261015-002): 69 read as "refused" and 137 as "killed" when the child chose them itself.
+
+    The exit code is the child's and the record says it ended on its own: nothing reads the number as the box's.
+    """
+    code, ended = _cli(tmp_path / 'outcome.json', f'import sys; sys.exit({own})')
+    if ENFORCES:
+        assert code == own
+        assert isinstance(ended, Outcome)
+        assert (ended.returncode, ended.reason, ended.killed) == (own, 'exit', False)
+    else:
+        assert isinstance(ended, Refused), 'where nothing enforces, the record says refused whatever the code'

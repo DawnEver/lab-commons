@@ -16,16 +16,18 @@ it cannot be fooled by a job that has not grown yet or blamed for one that never
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
 from lab_commons.proc import system_memory
 
-__all__ = ['GB', 'Capacity', 'Demand', 'Holding', 'Outcome', 'Refused', 'fits']
+__all__ = ['GB', 'Capacity', 'Demand', 'Holding', 'Outcome', 'Refused', 'fits', 'read_ended', 'write_ended']
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
 GB = 2**30
@@ -157,3 +159,33 @@ class Outcome:
     enforcer: str
     key: str
     fingerprint: str | None
+
+    @property
+    def killed(self) -> bool:
+        """The box ended the tree (``memory`` or ``wall``); ``exit`` is the child's own ending."""
+        return self.reason != 'exit'
+
+
+def write_ended(path: Path, ended: Outcome | Refused) -> None:
+    """Record how a box run ended at *path*, atomically: ``{"outcome": {...}}`` or ``{"refused": "<why>"}``.
+
+    THE RECORD, NEVER THE EXIT CODE, carries the box's decision: the CLI exits with the child's own code,
+    and a child may exit with any number, so no code can mean "the box refused" or "the box killed it".
+    """
+    record = {'refused': str(ended)} if isinstance(ended, Refused) else {'outcome': asdict(ended)}
+    staged = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+    staged.write_text(json.dumps(record), encoding='utf-8')
+    staged.replace(path)
+
+
+def read_ended(path: Path) -> Outcome | Refused | None:
+    """How the box run recorded at *path* ended: an :class:`Outcome`, a :class:`Refused`, or ``None``.
+
+    A :class:`Refused` never ran. ``None`` is NO RECORD: the box itself died before it could write one
+    (it crashed), which is neither a refusal nor anything the child did.
+    """
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return None
+    return Refused(record['refused']) if 'refused' in record else Outcome(**record['outcome'])
