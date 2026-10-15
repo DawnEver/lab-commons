@@ -46,7 +46,21 @@ from lab_commons.width import fits
 #: Slurm reports memory in MiB; :data:`~lab_commons.resources.MEMORY` counts bytes.
 MIB: Final = 1024**2
 
-__all__ = ['MIB', 'Plan', 'allocate', 'balance', 'free_slots', 'grantable_gb', 'headroom', 'make_plan', 'quota_slots']
+__all__ = [
+    'FILES_PER_RUN',
+    'FILES_PER_SHARD',
+    'MIB',
+    'Plan',
+    'allocate',
+    'balance',
+    'files_needed',
+    'free_slots',
+    'grantable_gb',
+    'headroom',
+    'make_plan',
+    'plan_on',
+    'quota_slots',
+]
 
 
 @dataclass(frozen=True)
@@ -316,6 +330,62 @@ def headroom(snapshot: Snapshot) -> int:
     return max(0, math.floor(cap))
 
 
+#: The files a submitted array adds to the home: its run directory, ``logs/``, ``results/``, manifest, script.
+FILES_PER_RUN: Final = 5
+
+#: And each array task: its log and its results file.
+FILES_PER_SHARD: Final = 2
+
+
+def files_needed(plan: Plan) -> int:
+    """The inodes *plan* adds to the home when submitted -- the file-count quota is a resource like the CPUs."""
+    return FILES_PER_RUN + FILES_PER_SHARD * len(plan.shards)
+
+
+def plan_on(
+    grant: Grant,
+    snapshot: Snapshot,
+    n_items: int,
+    cost: Cost,
+    *,
+    workstation: str | None,
+    policy: Policy,
+    seconds: Sequence[float] | None = None,
+    min_minutes: float = 0.0,
+) -> Plan:
+    """*grant*'s plan for *n_items* on its headroom, stamped with the workstation tag and the grant's set-up.
+
+    Refused (``ValueError``, naming the account and why) when the account has no CPU headroom for one item, no
+    partition can hold the work, or the home has fewer free inodes than the array writes (:func:`files_needed`).
+    """
+    room = headroom(snapshot)
+    if room < cost.cpus:
+        held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items()))
+        msg = (
+            f'{grant.name}: headroom {room} CPU < {cost.cpus} per item '
+            f'(quota {snapshot.quota.cpus}, held {held or "nothing"})'
+        )
+        raise ValueError(msg)
+    try:
+        plan = make_plan(
+            n_items,
+            cost,
+            snapshot,
+            cluster=grant.cluster(),
+            policy=policy,
+            limits=Limits(cpus=room),
+            seconds=seconds,
+            min_minutes=min_minutes,
+        )
+    except ValueError as refused:
+        msg = f'{grant.name}: {refused}'
+        raise ValueError(msg) from refused
+    if snapshot.inodes_free is not None and files_needed(plan) > snapshot.inodes_free:
+        msg = f'{grant.name}: the home has {snapshot.inodes_free} free inodes, the array writes {files_needed(plan)}'
+        raise ValueError(msg)
+    return replace(plan, comment=COMMENT_PREFIX + workstation if workstation else '', setup=grant.setup)
+
+
 def allocate(
     n_items: int,
     cost: Cost,
@@ -326,43 +396,34 @@ def allocate(
     seconds: Sequence[float] | None = None,
     min_minutes: float = 0.0,
 ) -> tuple[Grant, Plan]:
-    """The grant whose plan finishes EARLIEST, planned on that grant's headroom. Pure.
+    """The ONE grant whose plan finishes EARLIEST (:func:`plan_on`). Pure.
 
     A tie goes to the grant with MORE headroom -- measured now, pending jobs included (:func:`headroom`) --
     then to the higher ``priority``, then to the earlier grant in the file. Two grants on one cluster plan
     the same makespan for a small batch, so without the headroom key the first in the file took every run
-    however loaded it was. No grant with room
-    raises, naming each account and why -- an empty answer is never a silent queue.
+    however loaded it was. No grant with room raises, naming each account and why -- an empty answer is
+    never a silent queue. Spreading one batch over SEVERAL grants is :func:`lab_commons.hpc.span.span`.
     """
     options: list[tuple[float, int, int, int, Grant, Plan]] = []
     refusals = []
     for order, (grant, snapshot) in enumerate(candidates):
-        room = headroom(snapshot)
-        label = grant.name
-        if room < cost.cpus:
-            held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items()))
-            refusals.append(
-                f'{label}: headroom {room} CPU < {cost.cpus} per item '
-                f'(quota {snapshot.quota.cpus}, held {held or "nothing"})'
-            )
-            continue
         try:
-            plan = make_plan(
+            plan = plan_on(
+                grant,
+                snapshot,
                 n_items,
                 cost,
-                snapshot,
-                cluster=grant.cluster(),
+                workstation=workstation,
                 policy=policy,
-                limits=Limits(cpus=room),
                 seconds=seconds,
                 min_minutes=min_minutes,
             )
         except ValueError as refused:
-            refusals.append(f'{label}: {refused}')
+            refusals.append(str(refused))
             continue
-        options.append((plan.makespan_minutes, -room, -grant.priority, order, grant, plan))
+        options.append((plan.makespan_minutes, -headroom(snapshot), -grant.priority, order, grant, plan))
     if not options:
         msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])
         raise ValueError(msg)
     *_, grant, plan = min(options, key=lambda o: o[:4])
-    return grant, replace(plan, comment=COMMENT_PREFIX + workstation if workstation else '', setup=grant.setup)
+    return grant, plan

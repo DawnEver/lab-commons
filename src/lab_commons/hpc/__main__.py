@@ -2,9 +2,9 @@
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
-submission of a job file is recorded next to it as ``<job>.submission.json`` (the grant it went to and its
-ssh targets, run directory, every job id it took, shard count), so ``status``/``gather``/``retry`` need
-nothing more -- through whichever of those login hosts answers.
+submission of a job file is recorded next to it as ``<job>.submission.json`` -- one placement per grant
+the batch spans (:mod:`lab_commons.hpc.jobs`: its ssh targets, items, run directory, job ids, shards), so
+``status``/``gather``/``retry`` need nothing more -- through whichever of those login hosts answers.
 
 ``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
 returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
@@ -31,41 +31,24 @@ import argparse
 import json
 import sys
 import time
-from collections.abc import Callable
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.hpc import deploy
 from lab_commons.hpc.builds import builds_at
-from lab_commons.hpc.cluster import (
-    TERMINAL_OK,
-    NotOnCluster,
-    Runner,
-    failover_runner,
-    gather,
-    probe,
-    runner_for,
-    shard_states,
-    ssh_runner,
-    submit,
-    submitter,
-)
+from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, runner_for, submitter
 from lab_commons.hpc.config import Config, load_config
 from lab_commons.hpc.grants import Grant, Machine, load_grants
+from lab_commons.hpc.jobs import Ensure, Reach, built_config, gather_job, plan_job, retry_job, status_job, submit_job
 from lab_commons.hpc.needsets import BASE, vocabulary_at
-from lab_commons.hpc.plan import Plan, allocate
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import NotSubmitted, build_run, submit_run
 from lab_commons.hpc.shell import ENV, FULL, INCREMENTAL, ROOT, RunSpec
-from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.watch import settle
 from lab_commons.log import emit
 
 __all__ = ['main']
-
-type Connect = Callable[[Grant], Runner]
 
 #: The producer contract's INCONCLUSIVE (``lab_commons.dev.producer.ProducerExit``, which hpc may not import):
 #: ``run submit`` exits with it when nothing was submitted, so a failed build is never read as a red run.
@@ -87,86 +70,79 @@ def _items(config: Config) -> list[Any]:
     return items
 
 
-def _snapshots(machine: Machine, connect: Connect) -> list[tuple[Grant, Snapshot]]:
-    return [(g, probe(connect(g), g.slurm_account)) for g in machine.grants]
-
-
 def _out(text: str) -> None:
     emit(text)
 
 
-def _allocate(config: Config, machine: Machine, connect: Connect) -> tuple[Grant, Plan]:
-    return allocate(
-        len(_items(config)),
-        config.cost,
-        _snapshots(machine, connect),
-        workstation=machine.workstation,
-        policy=config.policy,
-    )
-
-
-def _plan(config: Config, machine: Machine, connect: Connect) -> int:
-    grant, plan = _allocate(config, machine, connect)
-    _out(f'{grant.name}: {plan.describe()}')
-    return 0
-
-
-def _submit(config: Config, machine: Machine, connect: Connect) -> int:
-    grant, plan = _allocate(config, machine, connect)
-    _out(f'{grant.name}: {plan.describe()}')
-    stamp = time.strftime('%Y%m%d-%H%M%S')
-    sub = submit(connect(grant), plan, config, _items(config), stamp=stamp)
-    record = {
-        'grant': grant.name,
-        'targets': list(grant.targets),
-        'run_dir': sub.run_dir,
-        'stamp': stamp,
-        'job_ids': [sub.job_id],
-        'shards': sub.shards,
-        'plan': asdict(plan),
-    }
-    _state_path(config).write_text(json.dumps(record, indent=2), encoding='utf-8')
-    _out(f'submitted job {sub.job_id} to {grant.name}; run directory {sub.run_dir}')
-    return 0
-
-
 def _record(config: Config) -> dict[str, Any]:
-    return json.loads(_state_path(config).read_text(encoding='utf-8'))
+    record = json.loads(_state_path(config).read_text(encoding='utf-8'))
+    if 'placements' not in record:
+        msg = (
+            f'{_state_path(config)} records one grant and no placements -- written before a batch spanned '
+            'every grant (lab_commons.hpc.jobs); submit again'
+        )
+        raise ValueError(msg)
+    return record
 
 
-def _status(run: Runner, record: dict[str, Any]) -> int:
-    states = shard_states(run, record['job_ids'])
-    counts: dict[str, int] = {}
-    for shard in range(record['shards']):
-        state = states.get(shard, 'UNKNOWN')
-        counts[state] = counts.get(state, 0) + 1
-    _out(f'{record["run_dir"]}: ' + ', '.join(f'{k}={v}' for k, v in sorted(counts.items())))
-    return 0
-
-
-def _gather(run: Runner, record: dict[str, Any], target: Path | None) -> int:
-    results = gather(run, record['run_dir'])
-    flat = sorted((r for shard in results.values() for r in shard), key=lambda r: r['index'])
-    failed = sum(not r['ok'] for r in flat)
-    _out(f'{len(results)}/{record["shards"]} shards returned, {len(flat)} items, {failed} item errors')
-    if target is not None:
-        target.write_text(json.dumps(flat), encoding='utf-8')
-        _out(f'written {target}')
-    return 0
-
-
-def _retry(config: Config, run: Runner, record: dict[str, Any]) -> int:
-    states = shard_states(run, record['job_ids'])
-    returned = gather(run, record['run_dir'])
-    redo = [s for s in range(record['shards']) if s not in returned and states.get(s) not in {'PENDING', 'RUNNING'}]
-    if not redo:
-        _out('nothing to retry')
-        return 0
-    plan = Plan(**{**record['plan'], 'shards': tuple(map(tuple, record['plan']['shards']))})
-    sub = submit(run, plan, config, [], stamp=record['stamp'], only=redo)
-    record['job_ids'].append(sub.job_id)
+def _save_record(config: Config, record: dict[str, Any]) -> None:
     _state_path(config).write_text(json.dumps(record, indent=2), encoding='utf-8')
-    _out(f'resubmitted {len(redo)} shards as job {sub.job_id} (not {TERMINAL_OK} and no results file)')
+
+
+def _ensure(config: Config, repo: Path) -> Ensure | None:
+    """``[job] sha``: each chosen grant gets the commit's tree and env, as ``run build`` makes them."""
+    job = config.job
+    if not job.sha:
+        return None
+    spec = RunSpec(sha=job.sha, repo_url=job.repo_url, pack_from=repo, builds=builds_at(repo, job.sha, python=''))
+
+    def ensure(grant: Grant) -> None:
+        build_run(spec, runner_for(grant, BUILD_TIMEOUT), grant.name)
+
+    return ensure
+
+
+def _gather(record: dict[str, Any], machine: Machine, reach: Reach, output: Path | None) -> int:
+    """Every placement's results merged in batch order; a silent grant named, never read as empty."""
+    flat, returned, silent = gather_job(record, machine, reach)
+    shards = sum(p['shards'] for p in record['placements'])
+    failed = sum(not r['ok'] for r in flat)
+    _out(f'{returned}/{shards} shards returned, {len(flat)} items, {failed} item errors')
+    for name in silent:
+        _out(f'{name}: did not answer; its shards are not in this result (retry re-places them)')
+    if output is not None:
+        output.write_text(json.dumps(flat), encoding='utf-8')
+        _out(f'written {output}')
+    return 0
+
+
+def _jobs(verb: str, config: Config, machine: Machine, reach: Reach, *, repo: Path, output: Path | None) -> int:
+    """The job-file verbs: plan, submit, status, gather, retry -- every grant the batch spans."""
+    config = built_config(config)
+    if verb == 'plan':
+        for placement in plan_job(config, len(_items(config)), machine, reach):
+            start, stop = placement.items
+            _out(f'{placement.grant.name}: items {start}-{stop}: {placement.plan.describe()}')
+        return 0
+    if verb == 'submit':
+        record = submit_job(
+            config, _items(config), machine, reach, stamp=time.strftime('%Y%m%d-%H%M%S'), ensure=_ensure(config, repo)
+        )
+        _save_record(config, record)
+        for p in record['placements']:
+            start, stop = p['items']
+            _out(f'submitted job {p["job_ids"][0]} to {p["grant"]} (items {start}-{stop}); {p["run_dir"]}')
+        return 0
+    record = _record(config)
+    if verb == 'status':
+        for line in status_job(record, machine, reach):
+            _out(line)
+        return 0
+    if verb == 'gather':
+        return _gather(record, machine, reach, output)
+    for line in retry_job(config, _items(config), record, machine, reach, ensure=_ensure(config, repo)):
+        _out(line)
+    _save_record(config, record)
     return 0
 
 
@@ -334,19 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
     config = _job_config(parser, args)
-    connect = runner_for
-    if args.verb == 'plan':
-        return _plan(config, machine, connect)
-    if args.verb == 'submit':
-        return _submit(config, machine, connect)
-    record = _record(config)
-    run = failover_runner([(t, ssh_runner(t)) for t in record['targets']])
-    tracked = {
-        'status': lambda: _status(run, record),
-        'gather': lambda: _gather(run, record, args.output),
-        'retry': lambda: _retry(config, run, record),
-    }
-    return tracked[args.verb]()
+    return _jobs(args.verb, config, machine, runner_for, repo=args.repo, output=args.output)
 
 
 if __name__ == '__main__':
