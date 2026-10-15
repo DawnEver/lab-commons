@@ -112,7 +112,7 @@ def cargo_target(native_key: str) -> str:
 
     A target dir may be shared only by builds of IDENTICAL native inputs: cargo's freshness is mtime-based,
     so one dir shared by every native build reused artifacts compiled from another tree's source.
-    Measured 2026-10-14 on Ada: the pybind crate compiled against a stale ``mesh_core`` and every motronics
+    Measured 2026-10-14 on Ada: the pybind crate compiled against a stale ``mesh_core`` and every downstream
     deploy was refused. Used by the cluster runs (:mod:`lab_commons.hpc.shell`) and the deploy alike.
     """
     if not native_key:
