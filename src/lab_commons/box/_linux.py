@@ -8,8 +8,8 @@ launcher's (systemd 239 refuses ``RuntimeMaxSec`` on a scope). The MANAGER follo
 process; a manager that cannot bind the limits REFUSES the run -- an unenforced run would make the
 ledger a list of hopes.
 
-A SLURM COMPUTE NODE (``SLURM_JOB_ID``, no user scope) is enforced by the LAUNCHER, per run: the
-allocation's cgroup bounds the whole job, not this run, so the launcher watches the run's process
+A SLURM COMPUTE NODE (this process in the cgroup of job ``SLURM_JOB_ID``, no scope) is enforced by the
+LAUNCHER, per run: the allocation's cgroup bounds the whole job, not this run, so the launcher watches the run's process
 group itself -- every 50 ms it sums the group's resident memory and kills the group past the claim
 (reason ``memory``), and kills it at the wall. WHAT STAYS UNENFORCED there, stated: a spike faster
 than one tick (bounded only by the allocation), a process that leaves the group with ``setsid``, and
@@ -41,7 +41,7 @@ from lab_commons.proc import working_set_bytes
 if sys.platform != 'win32':
     import resource
 
-__all__ = ['Manager', 'contain', 'manager', 'refusal', 'scope_argv']
+__all__ = ['Manager', 'contain', 'in_slurm_job', 'manager', 'refusal', 'scope_argv']
 
 _PROBE_S: Final = 10.0
 _KIB: Final = 1024
@@ -126,9 +126,26 @@ def _delegated() -> bool:
     return {'memory', 'cpu'} <= controllers
 
 
+def in_slurm_job(job: str | None, cgroups: str) -> bool:
+    """Whether *cgroups* (``/proc/self/cgroup``) places this process inside Slurm job *job*.
+
+    The variable alone is not evidence: it is inherited by anything a job's shell starts and can be
+    exported by hand, and a run taken onto the watched path on its word alone has no cgroup at all.
+    """
+    return bool(job) and f'/job_{job}/' in cgroups
+
+
+def _slurm_job() -> bool:
+    try:
+        cgroups = Path('/proc/self/cgroup').read_text(encoding='utf-8')
+    except OSError:
+        return False
+    return in_slurm_job(os.environ.get('SLURM_JOB_ID'), cgroups)
+
+
 def refusal() -> str | None:
     """Why this machine cannot enforce a claim, or ``None`` when it can."""
-    if os.environ.get('SLURM_JOB_ID') or _systemd_run():
+    if _slurm_job() or _systemd_run():
         return None
     return (
         'box: no cgroup v2 memory+cpu for a `systemd-run --scope` here, and not a Slurm job; refusing to run unenforced'
