@@ -138,10 +138,11 @@ def run_output_dir(app_name: str, name: str | None = None, *, root: Path | None 
     escape the run root.
 
     The date is a nested ``<yy>/<mm>/<dd>`` tree (memoized :func:`run_date`) and a per-run
-    ``HH-MM-SS`` subfolder (memoized :func:`run_stamp`) is appended so two runs of the SAME
-    case no longer CLOBBER each other. Both are computed once per process and reused, so
-    EVERY artifact of a single invocation lands in the SAME folder — this memoization is
-    why no caller needs changing.
+    ``HH-MM-SS`` subfolder (memoized :func:`run_stamp`) is CLAIMED atomically by the first
+    call per ``(root, name)`` in a process: a stamp another process already owns (two runs
+    started in the same second) advances to ``<HH-MM-SS>-2``, ``-3``, ... The CLAIM is
+    memoized per parent, so every artifact of one invocation lands in the SAME folder and
+    no two processes ever share one.
 
     ``root`` overrides the resolved :func:`output_root` (a consumer with its own,
     already-resolved output root — e.g. consumer-a honoring a deprecated env var — passes it
@@ -149,9 +150,35 @@ def run_output_dir(app_name: str, name: str | None = None, *, root: Path | None 
     """
     base = root if root is not None else output_root(app_name)
     safe = (name or '').replace('\\', '/').replace('/', '_').strip() or 'run'
-    path = base.joinpath('logs', *run_date(), safe, run_stamp())
-    path.mkdir(parents=True, exist_ok=True)
+    parent = base.joinpath('logs', *run_date(), safe)
+    path = _claimed.get(parent)
+    if path is None:
+        path = _claimed[parent] = _claim(parent, run_stamp())
     return path
+
+
+# The run dir each ``logs/<yy>/<mm>/<dd>/<name>`` parent CLAIMED in this process. Memoizing the
+# claim (not just the stamp) keeps one invocation in one dir after a collision suffix.
+_claimed: dict[Path, Path] = {}
+
+
+def _claim(parent: Path, base: str) -> Path:
+    """Atomically create and return ``parent/<base>``, else the first free ``<base>-2``, ``-3``, ...
+
+    The ONE claim loop: each candidate is taken with ``mkdir(exist_ok=False)``, so two concurrent
+    creators never resolve to the same directory -- the loser sees ``FileExistsError`` and
+    advances to the next counter.
+    """
+    parent.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        candidate = parent / (base if n == 1 else f'{base}-{n}')
+        try:
+            candidate.mkdir(exist_ok=False)
+        except FileExistsError:
+            n += 1
+        else:
+            return candidate
 
 
 def _run_scoped_stem(stem: str) -> str:
@@ -174,19 +201,6 @@ def unique_run_dir(parent: Path, stem: str) -> Path:
     ``<stem>-<HH-MM-SS>`` from the memoized :func:`run_stamp`, with a short monotonic counter
     suffix (``-2``, ``-3``, ...) appended ONLY on collision.
 
-    Collision safety is race-free across processes: each candidate is claimed with an atomic
-    ``mkdir(exist_ok=False)``, so two concurrent creators (the serial FEMM lane, separate
-    worktrees sharing one ``parent``) never resolve to the same directory — the loser sees
-    ``FileExistsError`` and advances to the next counter.
+    Collision safety is race-free across processes through the shared :func:`_claim` loop.
     """
-    parent.mkdir(parents=True, exist_ok=True)
-    base = _run_scoped_stem(stem)
-    n = 1
-    while True:
-        candidate = parent / (base if n == 1 else f'{base}-{n}')
-        try:
-            candidate.mkdir(exist_ok=False)
-        except FileExistsError:
-            n += 1
-        else:
-            return candidate
+    return _claim(parent, _run_scoped_stem(stem))
