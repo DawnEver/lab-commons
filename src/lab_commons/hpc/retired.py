@@ -223,6 +223,11 @@ RETIRED: Final[dict[str, str]] = {
     '[reserve] delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
     '--delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
     'card.delegates': 'lab_commons.dev.forgehosts.card_owners (a card is vouched for by its forge-recorded author)',
+    # Issues never rot (user ruling 2026-10-15): every tidy rule is on, forge serve runs it, a kind is a Marker.
+    'forgetidy.SUBJECT': 'lab_commons.dev.forgepulls.Marker.TIDY (every marker kind is a Marker member)',
+    'forgeintegration.SUBJECT': 'lab_commons.dev.forgepulls.Marker.INTEGRATION (every marker kind is a Marker member)',
+    'hygiene.any': 'nothing: every forge tidy rule is on; a repo only tunes [tool.lab_commons.forge.issue_hygiene]',
+    'run by `forge integration`': 'forge serve runs forge tidy on every host every tick (lab_commons.dev.forgeserve)',
     # A box host's supply is its one ledger (lab_commons.box): what it admits is what the box enforces.
     'learned_hold': 'lab_commons.compute.learned.box_demand (admitted at, and enforced at, one declared demand)',
     'learned_demand': 'lab_commons.compute.learned.cluster_demand, or box_demand for a box part',
