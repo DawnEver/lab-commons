@@ -15,6 +15,7 @@ from lab_commons.hpc.pytest_item import read_stream
 from lab_commons.hpc.shell import ROOT
 
 __all__ = [
+    'KEPT_STREAMS',
     'files_made',
     'fold',
     'held_outcomes',
@@ -24,6 +25,7 @@ __all__ = [
     'record_name',
     'record_of',
     'run_shas',
+    'stream_dirs',
     'summary',
     'write_record',
 ]
@@ -141,10 +143,25 @@ def _killed_after(
     return spent
 
 
-def read_streams(run: Runner, directory: str) -> dict[int, str]:
-    """Every item stream under *directory* (``<index>.jsonl``), keyed by item index -- one remote command."""
+#: Where an unfinished run's streams are KEPT once retention removes its tree: ``runs/<sha>/<KEPT>/<tag>``.
+KEPT_STREAMS: Final = 'streams'
+
+
+def stream_dirs(sha: str, tag: str) -> tuple[str, str]:
+    """The streams of *sha*'s round *tag*: in its tree, else where retention kept them (``runs/<sha>``).
+
+    A superseded run's finished shards are carried (:func:`held_outcomes`) long after its tree is garbage, so
+    retention moves ``.lab-ci/<tag>`` beside the run state before the tree goes
+    (:mod:`lab_commons.dev.retentionplan`).
+    """
+    return f'{ROOT}/trees/{sha}/.lab-ci/{tag}', f'{ROOT}/runs/{sha}/{KEPT_STREAMS}/{tag}'
+
+
+def read_streams(run: Runner, *directories: str) -> dict[int, str]:
+    """Every item stream (``<index>.jsonl``) in the first of *directories* that exists -- one remote command."""
     listing = 'for f in *.jsonl; do [ -e "$f" ] && echo "@@@ $f" && cat "$f"; done'
-    out = run(f'cd {directory} 2>/dev/null && {listing}; true', None)
+    enter = ' || '.join(f'cd {directory} 2>/dev/null' for directory in directories)
+    out = run(f'{{ {enter}; }} && {listing}; true', None)
     streams: dict[int, list[str]] = {}
     current: list[str] = []
     for line in out.splitlines():
@@ -238,7 +255,7 @@ def held_outcomes(state: dict[str, Any], run: Runner) -> dict[str, tuple[str, st
     outcomes = dict((record or state)['outcomes'])
     current = state.get('current')
     if record is None and current:
-        streams = read_streams(run, f'{ROOT}/trees/{state["sha"]}/.lab-ci/{current["tag"]}')
+        streams = read_streams(run, *stream_dirs(state['sha'], current['tag']))
         for index, item in enumerate(current['items']):
             outcomes.update(read_stream(streams.get(index, ''), item['ids'])['outcomes'])
     origin = (record or state).get('carried', {})
