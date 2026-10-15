@@ -8,7 +8,8 @@ Three sources, one value (:mod:`lab_commons.compute.model`):
   :func:`lab_commons.box.run` -- and the OS itself (``windows``, ``linux``, ``macos``) with count = ``cpu``.
 * **tools**: the machine file's ``[capabilities.<tool>]`` declares ``seats = N`` -- the one number a person
   declares, because no probe can read a licence. A tool is present when its probe (:data:`TOOL_PROBES`) finds
-  it installed, or, without a probe, when it is declared.
+  it installed, or, without a probe, when it is declared. Box and Slurm account alike take their tools through
+  the one path, :func:`declared` -- a declaration is verified where a probe exists, never trusted.
 * **slurm account**: ``cpu`` AND ``mem_gb`` over EVERY grant of the account (:func:`account`), plus ``submits``
   -- the job submissions its QOS still accepts (infinite when uncapped) -- and ``files``, what the home's
   FILE quota still takes (user ruling 2026-10-14: an Ada home at its 2,020,000-file limit failed every
@@ -20,9 +21,11 @@ The readers of the OS are module functions taken as defaults, so a test passes f
 from __future__ import annotations
 
 import math
+import os
 import shutil
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.box import GB, Capacity, Holding
@@ -38,6 +41,8 @@ __all__ = [
     'TOOL_PROBES',
     'account',
     'box',
+    'declared',
+    'femm_found',
     'os_name',
     'tools',
 ]
@@ -75,12 +80,47 @@ def _on_path(program: str) -> Callable[[], bool]:
     return lambda: shutil.which(program) is not None
 
 
+#: The FEMM 5 headless engine per OS: its binary and the install directory used when ``FEMM_DIR`` is unset.
+FEMM_HEADLESS: Final = {
+    'linux': ('femm_headless', '~/.local/opt/femm-qt/bin'),
+    'windows': ('femm_headlessw.exe', 'C:/femm-qt/bin'),
+}
+
+
+def femm_found(*, platform: str = sys.platform, environ: Mapping[str, str] = os.environ) -> bool:
+    """Whether the FEMM 5 headless engine is here: its binary in ``FEMM_DIR`` (or its ``bin``), else the default."""
+    system = OS_NAMES.get(platform)
+    if system not in FEMM_HEADLESS:
+        return False
+    binary, default = FEMM_HEADLESS[system]
+    root = environ.get('FEMM_DIR')
+    places = [Path(root), Path(root) / 'bin'] if root else [Path(default).expanduser()]
+    return any((place / binary).is_file() for place in places)
+
+
 #: Tool -> whether it is installed here. A tool without a probe is present when declared.
 TOOL_PROBES: Final[Mapping[str, Callable[[], bool]]] = {
+    'femm': femm_found,
     'jmag': _com_registered('designer.Application', 'scheduler.JobApplication'),
     'matlab': _on_path('matlab'),
     'node': _on_path('node'),
 }
+
+
+def declared(
+    seats: Mapping[str, int],
+    *,
+    held: Iterable[Mapping[str, int]] = (),
+    probes: Mapping[str, Callable[[], bool]] = TOOL_PROBES,
+) -> tuple[Resources, frozenset[str]]:
+    """THE ONE PATH from declared tool *seats* to supply: ``(counts, present)``, each its seats less *held*.
+
+    A declared tool its probe does not find is ABSENT, whatever its seats say; one without a probe is present.
+    """
+    claims = list(held)
+    present = frozenset(name for name in seats if name not in probes or probes[name]())
+    counts = {name: max(0, seats[name] - sum(one.get(name, 0) for one in claims)) for name in present}
+    return Resources(counts), present
 
 
 def tools(
@@ -89,16 +129,9 @@ def tools(
     running: Iterable[frozenset[str]] = (),
     probes: Mapping[str, Callable[[], bool]] = TOOL_PROBES,
 ) -> tuple[Resources, frozenset[str]]:
-    """``(counts, present)`` of the declared tools: ``seats`` (default 1) less the *running* need-sets using each.
-
-    A declared tool its probe does not find is ABSENT, whatever its seats say.
-    """
-    held = list(running)
-    present = frozenset(name for name in capabilities if name not in probes or probes[name]())
-    counts = {
-        name: max(0, int(capabilities[name].get('seats', 1)) - sum(name in needs for needs in held)) for name in present
-    }
-    return Resources(counts), present
+    """:func:`declared` over ``[capabilities]`` rows (``seats`` default 1), one seat per *running* need-set."""
+    seats = {name: int(facts.get('seats', 1)) for name, facts in capabilities.items()}
+    return declared(seats, held=[dict.fromkeys(needs, 1) for needs in running], probes=probes)
 
 
 # --- the two kinds of supply ------------------------------------------------------------------------------
@@ -116,11 +149,7 @@ def box(
     cpu = max(0.0, capacity.cpu - sum(one.cpu for one in holdings))
     mem_gb = max(0, capacity.mem_bytes - sum(one.mem_bytes for one in holdings)) / GB
     system = os_name(platform)
-    declared = {name: {'seats': seats} for name, seats in capacity.seats.items()}
-    _, present = tools(declared, probes=probes)
-    counts = Resources({
-        name: max(0, capacity.seats[name] - sum(one.seats.get(name, 0) for one in holdings)) for name in present
-    })  # fmt: skip
+    counts, present = declared(capacity.seats, held=[one.seats for one in holdings], probes=probes)
     measured = Resources({'cpu': cpu, 'mem_gb': mem_gb, system: cpu}) + counts
     return Supply(scope, measured, present | measured.names | {system})
 
@@ -129,9 +158,14 @@ def account(
     scope: str,
     snapshots: Sequence[tuple[Snapshot, str]],
     *,
+    seats: Mapping[str, int],
     files: float = math.inf,
+    probes: Mapping[str, Callable[[], bool]] = TOOL_PROBES,
 ) -> Supply:
     """A Slurm account over EVERY grant: ``(snapshot, qos)`` each, summed; ``submits`` infinite if uncapped.
+
+    Its tools are the machine file's declared *seats* through :func:`declared`, as a box's are: the probes run
+    where this runs, on the account's own linux login node, so a declared tool not installed there is absent.
 
     *files* is the home's file-quota headroom (limit less used): at the limit it is 0, and a run -- every
     run creates files -- is refused naming ``files``. Infinite only where no file quota exists.
@@ -148,5 +182,6 @@ def account(
         room = snapshot.quota.submit_room(qos)
         submits += math.inf if room is None else room
     linux = OS_NAMES['linux']  # a Slurm account runs on linux: the OS is a resource there like any other
-    measured = Resources({'cpu': cpu, 'mem_gb': mem, 'submits': submits, 'files': files, linux: cpu})
-    return Supply(scope, measured, frozenset({'cpu', 'mem_gb', 'submits', 'files', linux}))
+    counts, present = declared(seats, probes=probes)
+    measured = Resources({'cpu': cpu, 'mem_gb': mem, 'submits': submits, 'files': files, linux: cpu}) + counts
+    return Supply(scope, measured, present | {'cpu', 'mem_gb', 'submits', 'files', linux})

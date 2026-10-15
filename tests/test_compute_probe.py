@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
 from lab_commons.box import GB, Capacity, Holding
-from lab_commons.compute.probe import account, box, os_name, tools
+from lab_commons.compute.probe import TOOL_PROBES, account, box, femm_found, os_name, tools
 from lab_commons.hpc.slurm import Node, Quota, Snapshot
 
 
@@ -74,13 +75,51 @@ def _snapshot(*, cpus: float | None, mem_mb: float | None, submit: int | None, f
 def test_an_account_sums_cpu_and_memory_over_every_grant() -> None:
     first = _snapshot(cpus=100, mem_mb=4096, submit=5)
     second = _snapshot(cpus=None, mem_mb=None, submit=None, free_mem_mb=8192)
-    supply = account('slurm:me', [(first, 'normal'), (second, 'normal')])
+    supply = account('slurm:me', [(first, 'normal'), (second, 'normal')], seats={})
     assert supply.resources['cpu'] == 164.0  # 100 quota + 64 free on the uncapped grant's nodes: not the first alone
     assert supply.resources['mem_gb'] == pytest.approx(12.0, abs=1e-12)  # GB: 4 quota + 8 free on nodes
     assert math.isinf(supply.resources['submits'])  # the second grant's QOS has no submit cap
 
 
 def test_an_account_whose_qos_is_full_has_no_submits() -> None:
-    supply = account('slurm:me', [(_snapshot(cpus=8, mem_mb=1024, submit=1), 'normal')])
+    supply = account('slurm:me', [(_snapshot(cpus=8, mem_mb=1024, submit=1), 'normal')], seats={})
     assert supply.resources['submits'] == 0.0
     assert 'submits' in supply.present
+
+
+def test_an_account_supplies_its_declared_tools_through_the_same_probe_as_a_box() -> None:
+    """A Slurm account claims femm-marked work only when its machine file declares femm AND the probe finds it."""
+    grant = [(_snapshot(cpus=8, mem_mb=1024, submit=None), 'normal')]
+    supply = account('slurm:me', grant, seats={'femm': 1, 'dev_checkout': 1}, probes={'femm': lambda: True})
+    assert supply.resources['femm'] == 1.0
+    assert {'femm', 'dev_checkout', 'linux'} <= supply.present
+    missing = account('slurm:me', grant, seats={'femm': 1}, probes={'femm': lambda: False})
+    assert 'femm' not in missing.present, 'a declared tool its probe does not find is absent on an account too'
+    assert 'femm' not in account('slurm:me', grant, seats={}).present, 'PLANTED CONTROL: undeclared is absent'
+
+
+def test_femm_is_probed_never_trusted() -> None:
+    assert TOOL_PROBES['femm'] is femm_found
+
+
+@pytest.mark.parametrize(('platform', 'binary'), [('linux', 'femm_headless'), ('win32', 'femm_headlessw.exe')])
+def test_femm_is_found_by_its_headless_binary_under_femm_dir(tmp_path: Path, platform: str, binary: str) -> None:
+    env = {'FEMM_DIR': str(tmp_path)}
+    assert not femm_found(platform=platform, environ=env)
+    (tmp_path / 'bin').mkdir()
+    (tmp_path / 'bin' / binary).write_bytes(b'')
+    assert femm_found(platform=platform, environ=env)
+    other = 'femm_headlessw.exe' if binary == 'femm_headless' else 'femm_headless'
+    (tmp_path / 'bin' / binary).rename(tmp_path / 'bin' / other)
+    assert not femm_found(platform=platform, environ=env), 'the other OS binary does not count'
+
+
+def test_femm_without_femm_dir_reads_the_default_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))
+    assert not femm_found(platform='linux', environ={})
+    home_bin = tmp_path / '.local' / 'opt' / 'femm-qt' / 'bin'
+    home_bin.mkdir(parents=True)
+    (home_bin / 'femm_headless').write_bytes(b'')
+    assert femm_found(platform='linux', environ={})
+    assert not femm_found(platform='darwin', environ={'FEMM_DIR': str(home_bin)}), 'no FEMM 5 build is known there'
