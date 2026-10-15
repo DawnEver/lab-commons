@@ -8,8 +8,8 @@ claim is never idle-but-held and a held claim is never exceeded.
 ENFORCERS, per platform (:attr:`Outcome.enforcer` names which one held the run):
 
 * Windows -- a Job Object (:mod:`lab_commons.box._win`).
-* Linux -- a transient systemd ``--user`` scope (:mod:`lab_commons.box._linux`); on a Slurm compute
-  node the allocation's own cgroup already enforces, and the run says so. Anything else REFUSES:
+* Linux -- a transient systemd scope (:mod:`lab_commons.box._linux`); inside a Slurm job's cgroup
+  the launcher watches the run's group itself, and the run says so. Anything else REFUSES:
   an unenforced run would make the ledger a list of hopes.
 * macOS -- refused.
 
@@ -20,6 +20,7 @@ LEARNING IS THE CALLER'S. The box knows nothing of repos or producers and must n
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final
@@ -28,7 +29,10 @@ from lab_commons.box import _linux, _win
 from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
 from lab_commons.box.ledger import admit
 
-__all__ = ['KILLED', 'REFUSED', 'command', 'run']
+__all__ = ['INSIDE_ENV', 'KILLED', 'REFUSED', 'command', 'run']
+
+#: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
+INSIDE_ENV: Final = 'LAB_COMMONS_BOXED'
 
 #: The CLI's exit code when the box refused the run (no room in time, or no enforcer): sysexits EX_UNAVAILABLE.
 REFUSED: Final = 69
@@ -68,8 +72,9 @@ def run(
         msg = f'{what}: an empty argv names nothing to run'
         raise ValueError(msg)
     contain = _enforcer()
+    inside = {**(os.environ if env is None else env), INSIDE_ENV: key}
     with admit(demand, what, queue_s, capacity=capacity, key=key, fingerprint=fingerprint):
-        return contain(argv, demand, cwd, env, (key, fingerprint))
+        return contain(argv, demand, cwd, inside, (key, fingerprint))
 
 
 def command(

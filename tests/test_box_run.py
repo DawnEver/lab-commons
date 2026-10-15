@@ -10,7 +10,7 @@ import pytest
 
 from lab_commons.box import BOX_ENV, Capacity, Demand, Refused, admit, command, run
 from lab_commons.box.__main__ import _parser, main
-from lab_commons.box._linux import manager, scope_argv
+from lab_commons.box._linux import in_slurm_job, manager, scope_argv
 from lab_commons.box.run import _ENFORCERS
 
 
@@ -60,13 +60,24 @@ def test_the_scope_carries_exactly_the_claim() -> None:
 
 
 def test_root_scopes_in_the_system_manager_and_a_user_in_its_delegated_one() -> None:
-    root, user = manager(0), manager(1000)
+    uid = 1000
+    root, user = manager(0), manager(uid)
     assert root.flags == ()
     assert root.controllers == Path('/sys/fs/cgroup/cgroup.controllers')
     assert user.flags == ('--user',)
-    assert user.controllers == Path('/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers')
+    slice_ = f'/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service'
+    assert user.controllers == Path(f'{slice_}/cgroup.controllers')
     argv = scope_argv('/usr/bin/systemd-run', root, ['git', 'fetch'], Demand(cpu=1, mem_gb=0.25, wall_s=60, seats={}))
     assert argv[:3] == ['/usr/bin/systemd-run', '--scope', '--quiet']
+
+
+def test_only_the_jobs_own_cgroup_makes_a_slurm_run() -> None:
+    """Measured on an Ada compute node (cgroup v1): ``freezer:/slurm/uid_<n>/job_<id>/step_0``."""
+    inside = '10:freezer:/slurm/uid_80178097/job_7695270/step_0\n11:cpu,cpuacct:/user.slice\n'
+    assert in_slurm_job('7695270', inside)
+    assert not in_slurm_job('7695270', '11:cpu,cpuacct:/user.slice\n'), 'an inherited id on a login node'
+    assert not in_slurm_job('769527', inside), 'another job id is not a prefix match'
+    assert not in_slurm_job(None, inside), 'PLANTED CONTROL: no id, no job'
 
 
 def test_a_platform_without_an_enforcer_refuses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
