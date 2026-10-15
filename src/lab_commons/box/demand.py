@@ -27,7 +27,9 @@ from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
 from lab_commons.proc import system_memory
 
-__all__ = ['GB', 'Capacity', 'Demand', 'Holding', 'Outcome', 'Refused', 'fits', 'read_ended', 'write_ended']
+__all__ = [
+    'GB', 'Capacity', 'Demand', 'Holding', 'Outcome', 'Refused', 'declared_seats', 'fits', 'read_ended', 'write_ended',
+]  # fmt: skip
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
 GB = 2**30
@@ -72,6 +74,11 @@ def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def declared_seats() -> dict[str, int]:
+    """The machine file's ``[capabilities]`` as ``{tool: seats}`` (default 1): what a box AND an account lend."""
+    return {name: int(facts.get('seats', 1)) for name, facts in provided(section('capabilities')).items()}
+
+
 @dataclass(frozen=True)
 class Capacity:
     """What this machine lends to admitted runs: cores and bytes after the reserve, and tool seats."""
@@ -90,11 +97,10 @@ class Capacity:
         cores = float(os.cpu_count() or 1)
         total = {'cpu': cores, 'mem_gb': memory.total_bytes / GB}
         kept = own_reserve(total, {}, reserve_table(section('reserve')))
-        seats = {name: int(facts.get('seats', 1)) for name, facts in provided(section('capabilities')).items()}
         return cls(
             cpu=cores - kept['cpu'],
             mem_bytes=int(memory.total_bytes - kept['mem_gb'] * GB),
-            seats=seats,
+            seats=declared_seats(),
         )
 
 

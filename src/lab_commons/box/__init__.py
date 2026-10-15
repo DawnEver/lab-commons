@@ -9,7 +9,18 @@ and a waiter that cannot fit holds nothing and gives up at its own limit. See
 
 from __future__ import annotations
 
-from lab_commons.box.demand import GB, Capacity, Demand, Holding, Outcome, Refused, fits, read_ended, write_ended
+from lab_commons.box.demand import (
+    GB,
+    Capacity,
+    Demand,
+    Holding,
+    Outcome,
+    Refused,
+    declared_seats,
+    fits,
+    read_ended,
+    write_ended,
+)
 from lab_commons.box.ledger import BOX_ENV, GRACE_S, POLL_S, Claim, admit, box_path, holdings
 from lab_commons.box.run import command, run
 
@@ -27,6 +38,7 @@ __all__ = [
     'admit',
     'box_path',
     'command',
+    'declared_seats',
     'fits',
     'holdings',
     'read_ended',
