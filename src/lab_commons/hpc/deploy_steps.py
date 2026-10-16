@@ -144,8 +144,8 @@ def overlay_argv(uv: Sequence[str], python: Path, lab: Path) -> list[str]:
     """Install the lab-commons checkout *lab* into the venv of *python*, over whatever sha it pins.
 
     Run OUTSIDE the project (``--no-config``): inside it, uv's sources would put the pin back. The deploy
-    runs it once per served repo, and a serve tick whose kit moved runs it for its own venv
-    (:mod:`lab_commons.dev.servekit`).
+    runs it once per served repo, and every cron tick does where the kit moved
+    (:func:`lab_commons.hpc.tick.tick`).
     """
     return [*uv, 'pip', 'install', '--no-config', '--python', str(python), '--reinstall-package', LAB_COMMONS,
             f'{LAB_COMMONS} @ {lab.as_uri()}']  # fmt: skip
