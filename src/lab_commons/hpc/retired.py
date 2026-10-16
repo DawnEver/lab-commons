@@ -258,6 +258,10 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: an Outcome whose killed is true)',
     'free_cores(': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a busy reading)',
     'available_mem_gb': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a free reading)',
+    # A lock-consuming door is judged against the COMMITTED lock (D8): the old name described the untracked era.
+    'REVERTS': 'UNLOCKED (lab_commons.dev.installdoor.Delivery.UNLOCKED)',
+    'RevertingDoorsError': 'lab_commons.dev.installdoor.UnlockedDoorsError',
+    'reverting(': 'lab_commons.dev.installdoor.unlocked(',
 }
 
 
