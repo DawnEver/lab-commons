@@ -252,15 +252,24 @@ def simba_version(_path: Path) -> tuple[str, str] | None:
     return None
 
 
-#: One import, the licence answering, and a one-step transient job -- in this interpreter.
+#: One import, the licence answering, and a tiny transient job -- in this interpreter. SIMBA refuses an
+#: EMPTY design ("The design is empty", status ``Error``), so the job is a source across a resistor.
 SIMBA_SMOKE: Final = (
     'import aesim.simba as simba\n'
     'assert simba.License.NumberOfAvailableParallelSimulationLicense() > 0, "no licence"\n'
     'design = simba.Design()\n'
+    'circuit = design.Circuit\n'
+    'v = circuit.AddDevice("DC Voltage Source", 0, 0)\n'
+    'r = circuit.AddDevice("Resistor", 10, 0)\n'
+    'g = circuit.AddDevice("Ground", 0, 10)\n'
+    'circuit.AddConnection(v.P, r.P)\n'
+    'circuit.AddConnection(r.N, v.N)\n'
+    'circuit.AddConnection(v.N, g.Pin)\n'
     'design.TransientAnalysis.TimeStep = 1e-6\n'
-    'design.TransientAnalysis.EndTime = 1e-6\n'
-    'status = design.TransientAnalysis.NewJob().Run()\n'
-    'assert str(status) == "OK", status\n'
+    'design.TransientAnalysis.EndTime = 1e-5\n'
+    'job = design.TransientAnalysis.NewJob()\n'
+    'status = job.Run()\n'
+    'assert str(status) == "OK", job.Summary()\n'
 )
 
 
