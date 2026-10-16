@@ -112,7 +112,7 @@ class NotSubmitted(RuntimeError):
 class NoRoom(NotSubmitted):
     """The HOST had no room for the part (no headroom at first submit, or held on an account/QOS limit).
 
-    A fact about the host, never a result about the sha: the forge releases it RETRYABLE, so the part
+    A fact about the host, never a result about the sha: it is released RETRYABLE, so the part
     stays open to every host, and the learned ask keeps this one from re-admitting it at the same size.
     """
 
