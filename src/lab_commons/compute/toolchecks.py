@@ -7,6 +7,7 @@ is a module function, so a test passes fakes.
 from __future__ import annotations
 
 import contextlib
+import importlib.machinery
 import importlib.metadata
 import importlib.util
 import os
@@ -18,7 +19,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 if sys.platform == 'win32':
     import ctypes
@@ -181,7 +182,9 @@ def matlab_version(path: Path) -> tuple[str, str] | None:
     return ('install path', release) if release else None
 
 
-def simba_find(*, find: Callable[[str], Any] = importlib.util.find_spec) -> tuple[str, Path] | None:
+def simba_find(
+    *, find: Callable[[str], importlib.machinery.ModuleSpec | None] = importlib.util.find_spec
+) -> tuple[str, Path] | None:
     """SIMBA's Python API, ``aesim.simba``, as THIS interpreter -- the serving repo's own venv -- imports it."""
     try:
         spec = find('aesim.simba')
