@@ -1,4 +1,9 @@
-"""The ONE ledger of running claims on this machine, and the bounded admission into it.
+"""The ONE ledger of running claims on this machine, and the bounded wait to hold one.
+
+THE DECISION IS THE ONE RULE ON THE MEASURED ROOM. A claim is written when
+:func:`lab_commons.compute.admission.admit` admits its demand against :func:`lab_commons.box.supply.room` --
+what the OS has free now, less what the claims already held have not taken yet, less the ``[reserve]``
+margin (D2, D3 2026-10-16). There is no second fit rule here.
 
 A CLAIM EXISTS ONLY FOR A RUNNING PROCESS. It is written when the launcher is admitted, deleted
 when it leaves, and equals the run's declared :class:`~lab_commons.box.demand.Demand` -- which
@@ -9,7 +14,7 @@ pid) or whose deadline passed by more than :data:`GRACE_S` is reaped by the next
 no crash leaves memory booked.
 
 A WAITER HOLDS NOTHING. It takes a FIFO ticket that orders it in the queue and counts for
-nothing in :func:`~lab_commons.box.demand.fits`. Queueing is STRICT FIFO: only the oldest live
+nothing in the room. Queueing is STRICT FIFO: only the oldest live
 ticket may be admitted, so a large demand is never starved by a stream of small ones. The price
 is head-of-line blocking, and it is bounded on both sides, which is why EVERY WAIT ENDS: the head
 waits at most until the holders' deadlines (each claim ends by then), and every waiter gives up
@@ -31,16 +36,23 @@ import json
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-from lab_commons.box.demand import Capacity, Demand, Holding, Refused, fits
+from lab_commons.box.demand import GB, Capacity, Demand, Holding, Refused
+from lab_commons.box.supply import Reading, room
+from lab_commons.compute.admission import admit
+from lab_commons.compute.model import Job, Resources, Supply
 from lab_commons.liveness import creation_stamp, still_the_same_process
 
-__all__ = ['BOX_ENV', 'GRACE_S', 'POLL_S', 'Claim', 'admit', 'box_path', 'holdings']
+#: The OS reader a decision measures with: the claim pids in, a :class:`~lab_commons.box.supply.Reading` out.
+Read = Callable[[Iterable[int]], Reading]
+
+__all__ = ['BOX_ENV', 'GRACE_S', 'POLL_S', 'Claim', 'box_path', 'hold', 'holdings']
 
 #: Environment override of the ledger file (tests; a second box on one machine).
 BOX_ENV: Final = 'LAB_COMMONS_BOX'
@@ -132,6 +144,33 @@ def _reap(con: sqlite3.Connection, now: float) -> None:
                 con.execute(delete, (row_id,))
 
 
+def _vector(demand: Demand) -> Resources:
+    return Resources({'cpu': demand.cpu, 'mem_gb': demand.mem_bytes / GB, **demand.seats})
+
+
+def _when(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, UTC).isoformat(timespec='seconds')
+
+
+def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand, what: str) -> str | None:
+    """``None`` when THE RULE admits *demand* on the measured room, else why not -- naming each lacking holder."""
+    free = room(capacity, held, reading, seats=demand.seats)
+    verdict = admit(Job(repo='', sha='', producer=what), _vector(demand), Supply('box', free, free.names | {'cpu'}))
+    if verdict:
+        return None
+    holders = [
+        f'{h.what} (pid {h.pid}) holds {amount:g} until {_when(h.deadline)}'
+        for name in verdict.lacking
+        for h in held
+        if (amount := _vector_of(h)[name])
+    ]
+    return f'{verdict.why}; ' + (', '.join(holders) or 'held by nobody on the ledger -- the rest is in use outside it')
+
+
+def _vector_of(held: Holding) -> Resources:
+    return Resources({'cpu': held.cpu, 'mem_gb': held.mem_bytes / GB, **held.seats})
+
+
 def _try(
     con: sqlite3.Connection,
     ticket: int,
@@ -139,13 +178,19 @@ def _try(
     demand: Demand,
     what: str,
     *,
+    reading: Reading,
     tag: tuple[str, str | None],
 ) -> Claim | str:
-    """Inside the write lock: the claim if this ticket heads the queue and fits, else why not."""
+    """Inside the write lock: the claim if this ticket heads the queue and the measured room admits it, else why not.
+
+    *reading* was taken BEFORE the lock (a sample takes a moment, the lock is held for milliseconds); a claim
+    that arrived since is in the ledger read here with no usage in it, so it counts in full: a stale reading
+    only ever lends less.
+    """
     now = time.time()
     _reap(con, now)
     head = con.execute('SELECT id, what FROM tickets ORDER BY id LIMIT 1').fetchone()
-    refusal = fits(capacity, _read(con), demand)
+    refusal = _decide(capacity, _read(con), reading, demand, what)
     if refusal is not None:
         return refusal
     if head is not None and head[0] != ticket:
@@ -172,30 +217,35 @@ def _try(
 
 
 @contextmanager
-def admit(
+def hold(
     demand: Demand,
     what: str,
     queue_s: float,
     *,
     capacity: Capacity | None = None,
+    read: Read = Reading.now,
     poll_s: float = POLL_S,
     key: str,
     fingerprint: str | None = None,
 ) -> Iterator[Claim]:
     """Hold *demand* on this box for the ``with`` body; wait for room at most *queue_s* seconds.
 
-    *key* (the caller's opaque identity of WHAT runs) and *fingerprint* (its hash of the code the
-    run depends on) are stored on the row unparsed, for the caller's learning.
+    *capacity* is the box's size (default: :meth:`Capacity.read`), *read* the OS reader the room is measured
+    with (default: :meth:`Reading.now`). *key* (the caller's opaque identity of WHAT runs) and *fingerprint*
+    (its hash of the code the run depends on) are stored on the row unparsed, for the caller's learning.
 
     Raises:
-        Refused: at once when *demand* exceeds the capacity (it can never fit), else when
-            *queue_s* ran out -- naming the short dimension, its holders and their deadlines.
+        Refused: at once when *demand* exceeds the box's size (it can never fit), else when
+            *queue_s* ran out -- naming what is lacking, its holders and their deadlines.
 
     """
     capacity = Capacity.read() if capacity is None else capacity
-    never = fits(capacity, (), demand)
-    if never is not None:
-        msg = f'{what}: larger than this box, refused at once -- {never}'
+    size = Resources(
+        {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: capacity.seats.get(n, 1) for n in demand.seats}}
+    )
+    never = admit(Job(repo='', sha='', producer=what), _vector(demand), Supply('box', size, size.names | {'cpu'}))
+    if not never:
+        msg = f'{what}: larger than this box, refused at once -- {never.why}'
         raise Refused(msg)
     with closing(_connect()) as con:
         gives_up = time.time() + queue_s
@@ -215,6 +265,7 @@ def admit(
                 capacity=capacity,
                 demand=demand,
                 what=what,
+                read=read,
                 tag=(key, fingerprint),
                 gives_up=gives_up,
                 poll_s=poll_s,
@@ -236,13 +287,15 @@ def _wait(
     capacity: Capacity,
     demand: Demand,
     what: str,
+    read: Read,
     tag: tuple[str, str | None],
     gives_up: float,
     poll_s: float,
 ) -> Claim:
     while True:
+        reading = read([h.pid for h in _read(con)])
         with _immediate(con):
-            outcome = _try(con, ticket, capacity, demand, what, tag=tag)
+            outcome = _try(con, ticket, capacity, demand, what, reading=reading, tag=tag)
         if isinstance(outcome, Claim):
             return outcome
         left = gives_up - time.time()

@@ -3,9 +3,10 @@
 Three sources, one value (:mod:`lab_commons.compute.model`):
 
 * **box**: what the box ledger can still admit (:mod:`lab_commons.box`, the one source of a box's resources):
-  its :class:`~lab_commons.box.Capacity` (cores and memory after the ``[reserve]`` margins, the declared tool
-  seats) less every claim it holds now -- an interactive verify, a producer, anything run through
-  :func:`lab_commons.box.run` -- and the OS itself (``windows``, ``linux``, ``macos``) with count = ``cpu``.
+  its MEASURED room (:func:`lab_commons.box.supply.room`: free now, less what every claim it holds -- an
+  interactive verify, a producer, anything run through :func:`lab_commons.box.run` -- has not taken yet,
+  less the ``[reserve]`` margins, within its :class:`~lab_commons.box.Capacity`), its tool seats, and the
+  OS itself (``windows``, ``linux``, ``macos``) with count = ``cpu``.
 * **tools**: PRESENCE IS PROBED, NOT DECLARED. A tool with a check is present exactly when
   :mod:`lab_commons.compute.presence` says so -- found, at the family's declared version, its smoke passed,
   no real unit failed on it since -- declared or not, and a declaration never makes it present. The machine
@@ -27,7 +28,9 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final
 
-from lab_commons.box import GB, Capacity, Holding
+from lab_commons.box import Capacity, Holding
+from lab_commons.box.ledger import Read
+from lab_commons.box.supply import Reading, room
 from lab_commons.compute.model import Resources, Supply
 from lab_commons.compute.presence import Evidence, Presence, cached
 from lab_commons.compute.toolchecks import CHECKS
@@ -103,12 +106,17 @@ def box(
     *,
     capacity: Capacity,
     holdings: Sequence[Holding] = (),
+    read: Read = Reading.now,
     platform: str = sys.platform,
     presence: Mapping[str, Presence] | None = None,
 ) -> Supply:
-    """The box now: its *capacity* less every claim in *holdings* (the box ledger), its OS and its tools."""
-    cpu = max(0.0, capacity.cpu - sum(one.cpu for one in holdings))
-    mem_gb = max(0, capacity.mem_bytes - sum(one.mem_bytes for one in holdings)) / GB
+    """The box now: its measured room beside the claims in *holdings* (the box ledger), its OS and its tools.
+
+    *read* is the OS reader (default: :meth:`~lab_commons.box.supply.Reading.now`); the room is
+    :func:`~lab_commons.box.supply.room`, the formula the ledger itself admits by.
+    """
+    free = room(capacity, holdings, read([one.pid for one in holdings]))
+    cpu, mem_gb = free['cpu'], free['mem_gb']
     system = os_name(platform)
     counts, present = seated(capacity.seats, held=[one.seats for one in holdings], presence=presence)
     measured = Resources({'cpu': cpu, 'mem_gb': mem_gb, system: cpu}) + counts

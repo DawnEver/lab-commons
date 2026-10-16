@@ -259,8 +259,12 @@ RETIRED: Final[dict[str, str]] = {
     # The box's decision is a RECORD, never a sentinel exit code a child could also choose (SR-20261015-002).
     'lab_commons.box.REFUSED': 'lab_commons.box.read_ended (the --outcome record: a Refused when nothing ran)',
     'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: an Outcome whose killed is true)',
-    'free_cores(': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a busy reading)',
-    'available_mem_gb': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a free reading)',
+    'free_cores(': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
+    'available_mem_gb': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
+    # ONE fit rule (compute.admission.admit) decides on the MEASURED room; the ledger HOLDS a claim (D2, D3).
+    'lab_commons.box.admit': 'lab_commons.box.hold (books a claim the one rule admits on the measured room)',
+    'lab_commons.box.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
+    'demand.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
 }
 
 

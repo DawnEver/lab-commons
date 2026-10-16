@@ -28,7 +28,8 @@ from typing import Final
 
 from lab_commons.box import _linux, _win
 from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
-from lab_commons.box.ledger import admit
+from lab_commons.box.ledger import Read, hold
+from lab_commons.box.supply import Reading
 
 __all__ = ['INSIDE_ENV', 'command', 'run']
 
@@ -51,6 +52,7 @@ def run(
     cwd: str | None = None,
     env: Mapping[str, str] | None = None,
     capacity: Capacity | None = None,
+    read: Read = Reading.now,
 ) -> Outcome:
     """Admit *demand* (waiting at most *queue_s*), run *argv* enforced to it, release, report.
 
@@ -68,7 +70,7 @@ def run(
         raise ValueError(msg)
     contain = _enforcer()
     inside = {**(os.environ if env is None else env), INSIDE_ENV: key}
-    with admit(demand, what, queue_s, capacity=capacity, key=key, fingerprint=fingerprint):
+    with hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint):
         return contain(argv, demand, cwd, inside, (key, fingerprint))
 
 

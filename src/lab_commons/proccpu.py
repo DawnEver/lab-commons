@@ -15,7 +15,7 @@ from pathlib import Path
 
 from lab_commons.proc import process_tree
 
-__all__ = ['TreeCpu', 'cpu_seconds', 'process_times']
+__all__ = ['TreeCpu', 'cpu_seconds', 'process_times', 'system_cpu_seconds']
 
 #: ``OpenProcess`` access enough to read a process's times.
 _QUERY_LIMITED = 0x1000
@@ -71,6 +71,34 @@ def _process_times_procfs(pid: int) -> tuple[int, float] | None:
         return int(fields[_STAT_START]), (int(fields[_STAT_UTIME]) + int(fields[_STAT_STIME])) / ticks
     except (OSError, ValueError, IndexError):
         return None
+
+
+def system_cpu_seconds() -> tuple[float, float] | None:
+    """``(busy, idle)`` cpu-seconds of the WHOLE machine since boot, summed over its cores; ``None`` unread.
+
+    Two readings a moment apart give the cores busy now: their busy delta over the wall between them.
+    ``GetSystemTimes`` on Windows, whose kernel time INCLUDES idle; the ``cpu`` line of ``/proc/stat``
+    elsewhere, where idle is ``idle + iowait``. No darwin backend: ``None`` there, never ``0``.
+    """
+    if os.name == 'nt':
+        idle, kernel_t, user_t = (ctypes.c_ulonglong() for _ in range(3))
+        ok = ctypes.WinDLL('kernel32').GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel_t), ctypes.byref(user_t))
+        if not ok:
+            return None
+        return (kernel_t.value + user_t.value - idle.value) / _FILETIME_PER_S, idle.value / _FILETIME_PER_S
+    if sys.platform == 'darwin':
+        return None
+    try:
+        fields = [int(f) for f in Path('/proc/stat').read_text(encoding='utf-8').splitlines()[0].split()[1:9]]
+        ticks = os.sysconf('SC_CLK_TCK')
+    except (OSError, ValueError, IndexError):
+        return None
+    idle = fields[_STAT_IDLE] + fields[_STAT_IOWAIT]
+    return (sum(fields) - idle) / ticks, idle / ticks
+
+
+#: In the ``cpu`` line of ``/proc/stat`` after its label: idle and iowait (0-based), of user..steal.
+_STAT_IDLE, _STAT_IOWAIT = 3, 4
 
 
 def cpu_seconds(pid: int) -> float | None:

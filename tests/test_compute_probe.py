@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import pytest
+from _box_fake import quiet
 
 from lab_commons.box import GB, Capacity, Holding
 from lab_commons.compute.presence import Presence
@@ -48,21 +49,30 @@ def test_a_tool_with_every_seat_in_use_is_present_at_zero() -> None:
 
 
 CAPACITY = Capacity(cpu=8.0, mem_bytes=16 * GB, seats={'jmag': 2})
+_QUIET = quiet(CAPACITY)
 
 
-def test_a_box_is_its_capacity_less_its_ledger_claims_with_its_os_and_tools() -> None:
-    """The box ledger is the one source: what is claimed on it is not free, whoever claimed it."""
+def test_a_box_is_its_measured_room_beside_its_ledger_claims_with_its_os_and_tools() -> None:
+    """The box ledger is the one source: what is claimed on it is not free, whoever claimed it.
+
+    On a quiet box (nobody but the claims) the measured room is the capacity less the claims; the measured
+    arithmetic itself is pinned in ``test_box_supply.py``.
+    """
     held = [Holding('verify:r', 1, cpu=2, mem_bytes=4 * GB, seats={'jmag': 1}, deadline=0.0)]
-    supply = box('ws-01', capacity=CAPACITY, holdings=held, platform='win32', presence=_have(jmag=True))
+    supply = box(
+        'ws-01', capacity=CAPACITY, read=quiet(CAPACITY), holdings=held, platform='win32', presence=_have(jmag=True)
+    )
     assert dict(supply.resources) == {'cpu': 6.0, 'mem_gb': 12.0, 'windows': 6.0, 'jmag': 1.0}
     assert supply.present == {'cpu', 'mem_gb', 'windows', 'jmag'}
-    idle = box('ws-01', capacity=CAPACITY, platform='win32', presence=_have(jmag=True))
+    idle = box('ws-01', capacity=CAPACITY, read=_QUIET, platform='win32', presence=_have(jmag=True))
     assert dict(idle.resources) == {'cpu': 8.0, 'mem_gb': 16.0, 'windows': 8.0, 'jmag': 2.0}, 'PLANTED CONTROL'
 
 
 def test_a_full_box_still_has_its_os_present_and_a_tool_its_probe_misses_is_absent() -> None:
     held = [Holding('producer', 1, cpu=8, mem_bytes=16 * GB, seats={}, deadline=0.0)]
-    supply = box('ws-01', capacity=CAPACITY, holdings=held, platform='linux', presence=_have(jmag=False))
+    supply = box(
+        'ws-01', capacity=CAPACITY, read=quiet(CAPACITY), holdings=held, platform='linux', presence=_have(jmag=False)
+    )
     assert 'linux' in supply.present
     assert 'jmag' not in supply.present
     assert supply.resources['cpu'] == 0.0
