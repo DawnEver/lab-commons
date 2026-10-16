@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 
 from lab_commons.dev.lockcheck import TRAILER, upgraded_on
-from lab_commons.dev.lockupgrade import PRODUCER, due, main, moved_sources, schedule
+from lab_commons.dev.lockupgrade import PRODUCER, due, main, moved_sources, schedule, serve_tick
 
 _GIT = shutil.which('git') or 'git'
 _PIN = 'a' * 40
@@ -40,7 +40,7 @@ def _git(root: Path, *argv: str, when: str = '2026-10-15T12:00:00Z') -> str:
     env = {**os.environ, 'GIT_COMMITTER_DATE': when, 'GIT_AUTHOR_DATE': when}
     done = subprocess.run(
         [_GIT, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', *argv],
-        cwd=root, env=env, check=True, capture_output=True, text=True, timeout=60,
+        cwd=root, env=env, check=True, capture_output=True, text=True, encoding='utf-8', timeout=60,
     )  # fmt: skip
     return done.stdout.strip()
 
@@ -123,3 +123,18 @@ def test_the_producer_commits_an_upgrade_on_the_update_branch_and_pushes_it(tmp_
     assert _git(root, 'merge-base', '--is-ancestor', first, second) == '', 'the branch only grows'
     assert 'b' * 40 in _git(root, 'show', f'{second}:uv.lock')
     assert main([], cwd=root, today=date(2026, 10, 17), relock=lambda _r: 1) == 1, 'PLANTED: uv failing fails'
+
+
+def test_a_serve_tick_says_what_it_opened_and_says_a_failure_rather_than_raising(tmp_path: Path, monkeypatch) -> None:
+    root, _ = _planted(tmp_path)
+    said: list[str] = []
+    monkeypatch.setattr('lab_commons.dev.lockupgrade.schedule', lambda *_a, **_k: '#3 opened')
+    serve_tick(root, _Forge(), today=date(2026, 10, 16), say=said.append)
+
+    def broken(*_a: object, **_k: object) -> str:
+        msg = 'origin unreachable'
+        raise OSError(msg)
+
+    monkeypatch.setattr('lab_commons.dev.lockupgrade.schedule', broken)
+    serve_tick(root, _Forge(), today=date(2026, 10, 16), say=said.append)
+    assert said == ['[serve] lock upgrade: #3 opened', '[serve] the lock upgrade was not scheduled: origin unreachable']
