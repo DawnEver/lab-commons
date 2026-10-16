@@ -92,6 +92,7 @@ from lab_commons.hpc.slurm import Snapshot
 __all__ = [
     'ACTIVE',
     'RETRIES',
+    'NoRoom',
     'NotSubmitted',
     'gather_run',
     'item_seconds',
@@ -105,6 +106,14 @@ class NotSubmitted(RuntimeError):
     """:func:`submit_run` stopped before any job was queued; no test ran, so it is not a red run.
 
     A missing need, an unfetchable commit, a failed build or an empty collection: the CLI exits INCONCLUSIVE.
+    """
+
+
+class NoRoom(NotSubmitted):
+    """The HOST had no room for the part (no headroom at first submit, or held on an account/QOS limit).
+
+    A fact about the host, never a result about the sha: the forge releases it RETRYABLE, so the part
+    stays open to every host, and the learned ask keeps this one from re-admitting it at the same size.
     """
 
 
@@ -171,7 +180,7 @@ def _submit_round(
             f'{grant.name} has no headroom now for one task of {cost.cpus} CPU and {mem_gb:.1f} GB beside what '
             "the account's own jobs hold; nothing was submitted, so a host with room takes it"
         )
-        raise NotSubmitted(msg)
+        raise NoRoom(msg)
     order, shards = balance(seconds, plan.shards)
     pending = [pending[i] for i in order]
     plan = _rewalled(plan, shards, [seconds[i] for i in order], policy, state.get('min_minutes', 0.0))
