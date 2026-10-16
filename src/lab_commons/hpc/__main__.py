@@ -24,7 +24,8 @@ claim and each serving host's card (supply, partitions, quota), so no verb reach
 the repository's last record measured
 (:mod:`lab_commons.compute.learned`); a file never measured is priced at ``[cost]``. A retired verb is
 refused by name (:mod:`lab_commons.hpc.retired`). ``deploy [--dry-run|--remove]`` makes this account's
-login host a ``forge serve`` host in one run (:mod:`lab_commons.hpc.deploy`).
+login host a ``forge serve`` host in one run (:mod:`lab_commons.hpc.deploy`); ``tick <repo>`` is one
+cron tick of it: the host refreshes the kit and the repo, then the repo's ``forge serve`` runs.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
-from lab_commons.hpc import deploy
+from lab_commons.hpc import deploy, tick
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
 from lab_commons.hpc.config import Config, load_config
@@ -339,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ['deploy']:
         return deploy.main(argv[1:])
+    if argv[:1] == ['tick'] and argv[1:]:
+        return max(tick.tick(name, home=Path.home()) for name in argv[1:])
     if argv and (refused := refusal('lab_commons.hpc', argv[0])):
         parser.error(refused)
     if argv[:1] == ['run'] and len(argv) > 1 and (refused := refusal('lab_commons.hpc run', argv[1])):

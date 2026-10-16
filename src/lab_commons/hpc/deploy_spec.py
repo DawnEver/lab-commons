@@ -152,13 +152,18 @@ def merge_crontab(current: str, lines: Sequence[str]) -> str:
 
 
 def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: Sequence[str] = ()) -> str:
-    """The shell command of one tick of *repo*: cron PATH, its checkout, ``flock -n``, ``forge serve``."""
+    """The shell command of one tick of *repo*: cron PATH, ``flock -n``, the HOST's ``hpc tick <repo>``.
+
+    It runs from the lab-commons checkout's venv, never the repo's: the host refreshes the repo (and
+    itself) before the repo's own ``forge serve`` runs, so a stale repo venv cannot block its own update.
+    """
     path = ':'.join(tick_dirs(home, slurm))
     cache = home / '.cache'
+    lab = next(one for one in spec.repos if one.name == LAB_COMMONS)
     command = (
-        f'PATH={path}; cd {shlex.quote(str(checkout_of(spec, home, repo)))} && '
+        f'PATH={path}; cd {shlex.quote(str(checkout_of(spec, home, lab)))} && '
         f'flock -n {shlex.quote(str(cache / f"lab-forge-{repo.name}.lock"))} '
-        f'{_VENV_PYTHON} -m lab_commons.dev.forge serve'
+        f'{_VENV_PYTHON} -m lab_commons.hpc tick {shlex.quote(repo.name)}'
     )
     return command + (f' >> {shlex.quote(str(cache / f"lab-forge-{repo.name}.log"))} 2>&1' if log else '')
 
