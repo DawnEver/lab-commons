@@ -78,6 +78,7 @@ __all__ = [
     'learned',
     'record_ask',
     'record_run',
+    'request_demand',
     'run_of',
     'task_gb',
     'worker_gb',
@@ -404,3 +405,15 @@ def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: floa
     cores = max(1, min(math.floor(cpu), int(measured['cpu'])))
     memory = min(mem_gb, measured['mem_gb'] * BOX_HEADROOM) if run is not None else mem_gb
     return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(memory, 1.0)})
+
+
+def request_demand(repo_url: str, producer: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:
+    """What a REQUEST declares to the box: its last run of ``(producer, needs)``, else the *cpu*/*mem_gb* its row sizes.
+
+    Keyed by the producer's NAME, so a request never shares a test part's record of the same need-set; measured,
+    the cores it kept busy and its peak times :data:`BOX_HEADROOM`. One seat of each need.
+    """
+    run = run_of(repo_url, producer, needs)
+    if run is not None:
+        cpu, mem_gb = max(1, int(run.demand(needs)['cpu'])), max(1.0, run.peak_mem_gb * BOX_HEADROOM)
+    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cpu, 'mem_gb': mem_gb})
