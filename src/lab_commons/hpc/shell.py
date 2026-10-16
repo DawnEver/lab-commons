@@ -9,12 +9,12 @@ from __future__ import annotations
 import base64
 import shlex
 import shutil
-import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
 from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds, cargo_target
 from lab_commons.hpc.needsets import BASE, Vocabulary
 
@@ -317,7 +317,7 @@ def pack(repo: Path, sha: str) -> str:
     cache and names the ref there (:func:`fetch_script`).
     """
     git = [_GIT, '-C', str(repo)]
-    remotes = subprocess.run(
+    remotes = _door.run(
         [*git, 'for-each-ref', '--format=%(objectname)', 'refs/remotes'],
         capture_output=True,
         text=True,
@@ -325,7 +325,7 @@ def pack(repo: Path, sha: str) -> str:
         check=True,
     ).stdout.split()
     revs = '\n'.join([sha, *(f'^{oid}' for oid in remotes)]) + '\n'
-    done = subprocess.run(
+    done = _door.run(
         [*git, 'pack-objects', '--revs', '--stdout', '-q'], input=revs.encode('ascii'), capture_output=True, check=True
     )
     return base64.b64encode(done.stdout).decode('ascii')

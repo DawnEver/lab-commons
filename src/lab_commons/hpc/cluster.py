@@ -20,12 +20,12 @@ import json
 import re
 import shlex
 import shutil
-import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
+import lab_commons.launch as _door
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.phases import Clock
@@ -83,7 +83,7 @@ def _completed(argv: Sequence[str], stdin: str | None, timeout: float = _TIMEOUT
     ``sbatch: error: Batch script contains DOS line breaks``. What the caller wrote is what the cluster
     gets.
     """
-    done = subprocess.run(
+    done = _door.run(
         argv,
         input=None if stdin is None else stdin.encode('utf-8'),
         capture_output=True,

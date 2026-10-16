@@ -22,9 +22,10 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path, PurePosixPath
+
+import lab_commons.launch as _door
 
 __all__ = ['main']
 
@@ -33,7 +34,7 @@ _GLOBAL = ('pyproject.toml',)
 
 def _tracked() -> dict[str, str]:
     git = shutil.which('git') or 'git'
-    out = subprocess.run([git, 'ls-files', '-s', '-z'], capture_output=True, check=True).stdout.decode('utf-8')
+    out = _door.run([git, 'ls-files', '-s', '-z'], capture_output=True, check=True).stdout.decode('utf-8')
     files: dict[str, str] = {}
     for entry in filter(None, out.split('\0')):
         meta, _, path = entry.partition('\t')
@@ -64,7 +65,7 @@ def _collect(stale: list[str], marker: list[str]) -> tuple[dict[str, list[str]],
     argv = [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-p', 'no:cacheprovider', '--color=no']
     argv += ['-rE', '--continue-on-collection-errors', *marker, *stale]
     env = {k: v for k, v in os.environ.items() if k != 'PYTEST_ADDOPTS'}  # the ERROR summary is the protocol
-    done = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', check=False, env=env)
+    done = _door.run(argv, capture_output=True, text=True, encoding='utf-8', check=False, env=env)
     if done.returncode in _RUN_FAILED:
         tail = (done.stderr or done.stdout or '').strip().splitlines()
         msg = f'pytest exit {done.returncode}: {tail[-1] if tail else "no output"}'

@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import lab_commons.launch as _door
 from lab_commons.hpc.builds import Builds, cargo_target, key_of, read_builds
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of
 from lab_commons.log import emit
@@ -40,7 +41,7 @@ class Step:
 
     def read(self, argv: Sequence[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         """Run a READ-ONLY *argv*, also under ``--dry-run``."""
-        return subprocess.run(argv, input=stdin, capture_output=True, text=True, encoding='utf-8', check=False)
+        return _door.run(argv, input=stdin, capture_output=True, text=True, encoding='utf-8', check=False)
 
     def change(
         self,
@@ -56,7 +57,7 @@ class Step:
             emit(f'  [dry-run] {what}')
             return 0
         emit(f'  {what}')
-        done = subprocess.run(
+        done = _door.run(
             argv,
             input=stdin,
             capture_output=True,

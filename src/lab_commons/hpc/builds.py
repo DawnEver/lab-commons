@@ -32,7 +32,6 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
-import subprocess
 import tomllib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
@@ -40,6 +39,7 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlsplit
 
+import lab_commons.launch as _door
 from lab_commons.hpc.declared import kit_tables
 
 __all__ = [
@@ -130,7 +130,7 @@ def key_of(oids: dict[str, str], *recipe: str) -> str:
 def _oids(repo: Path, sha: str, paths: tuple[str, ...]) -> dict[str, str]:
     out: dict[str, str] = {}
     for path in paths:
-        done = subprocess.run(
+        done = _door.run(
             [_GIT, '-C', str(repo), 'rev-parse', '--verify', '-q', f'{sha}:{path.rstrip("/")}'],
             capture_output=True,
             text=True,
@@ -172,7 +172,7 @@ def floating_git(text: str) -> tuple[tuple[str, str], ...]:
 
 def remote_tip(url: str, ref: str) -> str:
     """The commit *ref* of the remote at *url* names now -- ``git ls-remote``, which writes nothing."""
-    done = subprocess.run(
+    done = _door.run(
         [_GIT, 'ls-remote', url, ref], capture_output=True, text=True, encoding='utf-8', check=False, timeout=60
     )
     words = done.stdout.split()
@@ -189,7 +189,7 @@ def builds_at(repo: Path, sha: str, *, python: str, tip: Callable[[str, str], st
         ValueError: the commit declares no ``[tool.lab_commons.hpc] install`` -- a venv with no build command.
 
     """
-    text = subprocess.run(
+    text = _door.run(
         [_GIT, '-C', str(repo), 'show', f'{sha}:pyproject.toml'],
         capture_output=True,
         text=True,

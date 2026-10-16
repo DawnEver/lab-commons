@@ -34,12 +34,10 @@ from __future__ import annotations
 import ctypes
 import os
 import signal
-import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from lab_commons import _proc_darwin
 
@@ -49,9 +47,7 @@ __all__ = [
     'kill_pid',
     'kill_process_tree',
     'pid_alive',
-    'popen',
     'process_tree',
-    'run',
     'system_memory',
     'working_set_bytes',
 ]
@@ -71,30 +67,6 @@ _KB_LINE_TOKENS = 2
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _TH32CS_SNAPPROCESS = 0x00000002
-
-
-def _windowless(kwargs: dict[str, Any]) -> dict[str, Any]:
-    if sys.platform == 'win32':
-        kwargs['creationflags'] = int(kwargs.get('creationflags') or 0) | subprocess.CREATE_NO_WINDOW
-    return kwargs
-
-
-def run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:  # noqa: ANN401 -- subprocess.run's own signature
-    """THE door for a waited child: :func:`subprocess.run`, plus ``CREATE_NO_WINDOW`` on Windows.
-
-    INCIDENT 2026-10-16: the serve Task's ``pythonw`` has no console, so every console child it started
-    (git, uv, python) allocated one of its own -- a window on the user's desktop every five minutes.
-    ``CREATE_NO_WINDOW`` gives the child a console WITHOUT a window, and every descendant started plainly
-    inherits it (MEASURED in ``tests/test_proc_door.py``: child and grandchild report no window). The
-    caller's own flags are kept. ``tests/test_arch_one_door_launches_every_process.py`` refuses any
-    other spawner in ``src``. Resolved at call time, so a test patching ``subprocess.run`` still sees it.
-    """
-    return subprocess.run(*args, **_windowless(kwargs))  # noqa: PLW1510 -- the caller decides check and argv
-
-
-def popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:  # noqa: ANN401 -- Popen's own signature
-    """THE door for a child the caller manages: :class:`subprocess.Popen`, with :func:`run`'s windowless flag."""
-    return subprocess.Popen(*args, **_windowless(kwargs))
 
 
 def _kernel32() -> object | None:

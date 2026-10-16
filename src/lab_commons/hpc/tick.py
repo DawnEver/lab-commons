@@ -10,11 +10,11 @@ unchanged tick only fetches.
 
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import lab_commons.launch as _door
 from lab_commons.config import config_path
 from lab_commons.hpc.declared import OutdatedKit, RetiredTable
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of, load
@@ -41,7 +41,7 @@ def tick(
     home: Path,
     config: Path | None = None,
     tools: Tools | None = None,
-    run: Callable[..., Any] = subprocess.run,
+    run: Callable[..., Any] = _door.run,
 ) -> int:
     """One cron tick of served repo *name*: THE HOST refreshes, then the repo's own ``forge serve`` runs.
 
