@@ -27,7 +27,7 @@ __all__ = [
 DEFAULT_CPU_MARGIN: Final = 1.0
 
 #: The fraction of the box's memory kept free above what its own user is using now.
-DEFAULT_MEM_MARGIN: Final = 0.25
+DEFAULT_MEM_MARGIN: Final = 0.10
 
 #: The spelling of one resource name: a ``[capabilities.<name>]`` table, a need-set marker.
 RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')

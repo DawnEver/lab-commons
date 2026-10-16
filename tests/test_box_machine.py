@@ -10,9 +10,9 @@ from lab_commons.box.machine import DEFAULT_CPU_MARGIN, DEFAULT_MEM_MARGIN, own_
 def test_the_own_reserve_is_the_declared_margin_capped_at_the_box() -> None:
     """What the user USES is measured (lab_commons.box.supply); the reserve is only the margin above it."""
     table = reserve_table({})
-    assert table.mem_margin == DEFAULT_MEM_MARGIN == 0.25
+    assert table.mem_margin == DEFAULT_MEM_MARGIN == 0.10
     total = {'cpu': 16.0, 'mem_gb': 64.0}
-    assert own_reserve(total, table) == {'cpu': DEFAULT_CPU_MARGIN, 'mem_gb': 16.0}
+    assert own_reserve(total, table) == {'cpu': DEFAULT_CPU_MARGIN, 'mem_gb': 6.4}
     assert own_reserve({'cpu': 0.5, 'mem_gb': 64.0}, table)['cpu'] == 0.5, 'never more than the box'
 
 
