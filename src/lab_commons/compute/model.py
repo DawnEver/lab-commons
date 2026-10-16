@@ -205,6 +205,8 @@ class Schedule:
     )
     #: The label that makes an open issue a request.
     request_label: str = 'forge:request'
+    #: Hours a request may wait unclaimed before its issue is told, ONCE, why the host that saw it did not admit it.
+    request_unadmitted_hours: float = 6.0
     #: The expected cost, in hours, of work nothing has measured yet.
     prior_cost_h: float = 4.0
 
