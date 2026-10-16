@@ -34,10 +34,15 @@ run): a file whose expensive ids kept being killed was priced at the mean of the
 so every retry was sized shorter than the wall the last one died at, and 325 ids were lost after three
 rounds.
 
-A PEAK READ AT A KILL IS THE LIMIT, NOT THE NEED. Measured 2026-10-13 (Ada): children OOM-killed at
-1 GB read ~1120 MB; kept as measured, the next run would ask 1.5x the limit and die again. A signalled
-item's peak is a FLOOR grown by :data:`OOM_GROWTH` -- what the retry asks -- and never lowers a peak
-already known. The declared ``cost.mem_gb`` is a floor too: the peak is the pytest child's, and the
+A PEAK READ AT A KILL IS THE LIMIT, NOT THE NEED, AND IT IS NO FILE'S PEAK. Measured 2026-10-13 (Ada):
+children OOM-killed at 1 GB read ~1120 MB. A signalled ONE-FILE item keeps that read as its file's FLOOR,
+ungrown -- the next run asks it times the safety, more than the limit it died at -- and never lowers a peak
+already known. The retry's growth is the run's own ``oom`` multiplier, applied ONCE. Measured 2026-10-16
+(Ada): the read was also grown by :data:`OOM_GROWTH` and the retry grew it again, so a 20 GB kill was
+re-asked at 120 GB, killed, and taught 240 GB to each of 56 files of ONE multi-file item; every later run
+of the part asked 352 GB a task. A signalled MULTI-file item teaches no peak at all: which file held the
+memory is unknown, and its retry is bisected (:mod:`lab_commons.hpc.run`) until one file says.
+The declared ``cost.mem_gb`` is a floor too: the peak is the pytest child's, and the
 task's cgroup also holds the item runner (Ada 2026-10-12: a 150 MB peak priced 225M and 429M, OOM both).
 """
 
@@ -122,8 +127,8 @@ class Measured:
 
         An item may span several files and pays ONE wall; its overhead is SHARED equally among its files,
         so :meth:`estimate`, which sums the shares, gives the same item back what it measured. Its peak is
-        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak is a floor
-        (the module docstring).
+        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak is a floor of
+        its file when it holds ONE, and nobody's when it holds several (the module docstring).
         """
         self.durations.update(folded['seconds'])
         for node in folded['seconds']:
@@ -138,12 +143,11 @@ class Measured:
         signalled = int(done.get('done', 0)) < 0
         for name in files:
             self.overheads[name] = overhead
-            if peak is None:
-                continue
-            if signalled:
-                self.peaks_mb[name] = max(self.peaks_mb.get(name, 0.0), float(peak) * OOM_GROWTH)
-            else:
-                self.peaks_mb[name] = float(peak)
+        if peak is None or (signalled and len(files) > 1):
+            return
+        for name in files:
+            floor = self.peaks_mb.get(name, 0.0) if signalled else 0.0
+            self.peaks_mb[name] = max(floor, float(peak))
 
     def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float) -> None:
         """An item killed after *spent* seconds: its first unfinished id ran for what the rest does not explain.
