@@ -39,9 +39,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from lab_commons.config import config_path
+
+if TYPE_CHECKING:
+    from importlib.machinery import ModuleSpec
 
 if sys.platform == 'win32':
     import ctypes
@@ -234,7 +237,7 @@ def matlab_version(path: Path) -> tuple[str, str] | None:
     return ('install path', release) if release else None
 
 
-def simba_find(*, find: Callable[[str], Any] = importlib.util.find_spec) -> tuple[str, Path] | None:
+def simba_find(*, find: Callable[[str], ModuleSpec | None] = importlib.util.find_spec) -> tuple[str, Path] | None:
     """SIMBA's Python API, ``aesim.simba``, as THIS interpreter -- the serving repo's own venv -- imports it."""
     try:
         spec = find('aesim.simba')
@@ -242,7 +245,7 @@ def simba_find(*, find: Callable[[str], Any] = importlib.util.find_spec) -> tupl
         return None
     if spec is None:
         return None
-    return 'import', Path(getattr(spec, 'origin', None) or sys.executable)
+    return 'import', Path(spec.origin or sys.executable)
 
 
 def simba_version(_path: Path) -> tuple[str, str] | None:

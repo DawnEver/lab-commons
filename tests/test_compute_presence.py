@@ -5,7 +5,9 @@ Every OS reading is a fake :class:`Check`; the cache lives in the test's own mac
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 
 import pytest
@@ -164,10 +166,10 @@ def test_matlab_is_found_in_its_install_and_its_release_is_its_version(
 
 
 def test_simba_is_found_where_its_python_api_imports() -> None:
-    class Spec:
-        origin = '/venv/aesim/simba/__init__.py'
-
-    assert simba_find(find=lambda name: Spec() if name == 'aesim.simba' else None) == ('import', Path(Spec.origin))
+    spec = ModuleSpec('aesim.simba', None, origin='/venv/aesim/simba/__init__.py')
+    assert simba_find(find=lambda name: spec if name == 'aesim.simba' else None) == ('import', Path(spec.origin))
+    namespace = ModuleSpec('aesim.simba', None)  # PLANTED: a namespace package has no origin file
+    assert simba_find(find=lambda _name: namespace) == ('import', Path(sys.executable))
     assert simba_find(find=lambda _name: None) is None
 
     def missing_parent(_name: str) -> object:
