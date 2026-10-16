@@ -7,8 +7,8 @@ Slurm run (:mod:`lab_commons.hpc.run`) alike -- and never by hand:
 
 * PER TEST (:class:`Measured`) -- what prices a shard and a worker: seconds per node id, floors, per-file
   overheads and per-file peak RSS. :meth:`Measured.pack` cuts a Slurm array from it;
-  :meth:`Measured.worker_gb` is the memory one worker needs -- a Slurm task's request and the input
-  :func:`lab_commons.dev.bounded.worker_width` divides a box's memory by.
+  :meth:`Measured.worker_gb` is the memory one worker needs -- a Slurm task's request and a box
+  selection's claim (:func:`lab_commons.dev.verifybox.selection_mem_gb`).
 * PER JOB (:class:`Run`), keyed by ``(producer, need-set)`` -- the job's peak memory, cpu-seconds and wall
   seconds, read back as a :class:`~lab_commons.compute.model.Demand` by :func:`demand`, with a declared
   prior for a job never measured.

@@ -260,6 +260,7 @@ RETIRED: Final[dict[str, str]] = {
     'RESOURCE_DIR_ENV': 'lab_commons.box.BOX_ENV (the one ledger file)',
     'resource_dir()': 'lab_commons.box.box_path().parent (the ledger directory, outside every repo)',
     'environment_pool': 'lab_commons.dev.envseat.environment_seat (a seat on the box ledger)',
+    'bounded.worker_width': 'lab_commons.box.hold on the measured room; a selection declares selection_mem_gb',
     'SELECTION_MEM_GB': 'lab_commons.dev.verifybox.selection_mem_gb (its files measured peaks, D4/D5)',
     'boxwait': 'lab_commons.box (admission waits at most queue_s, then refuses naming every holder)',
     'hold_run_seats': 'lab_commons.box.command (the run in the box) and lab_commons.dev.envseat.EnvironmentSeat',
