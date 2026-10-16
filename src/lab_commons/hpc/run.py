@@ -81,6 +81,7 @@ from lab_commons.hpc.shell import (
     fetch_script,
     group_items,
     needs_script,
+    nothing_collected,
     pack,
     parse_collection_errors,
     parse_ids,
@@ -164,6 +165,13 @@ def _submit_round(
         seconds=seconds,
         min_minutes=state.get('min_minutes', 0.0),
     )
+    if not state['rounds'] and plan.room == 0:
+        learned.record_ask(state['repo'], learned.SLURM, needs_of(state['platform']), mem_gb, safety=policy.safety)
+        msg = (
+            f'{grant.name} has no headroom now for one task of {cost.cpus} CPU and {mem_gb:.1f} GB beside what '
+            "the account's own jobs hold; nothing was submitted, so a host with room takes it"
+        )
+        raise NotSubmitted(msg)
     order, shards = balance(seconds, plan.shards)
     pending = [pending[i] for i in order]
     plan = _rewalled(plan, shards, [seconds[i] for i in order], policy, state.get('min_minutes', 0.0))
@@ -195,27 +203,6 @@ def _rewalled(
     minutes = min(plan.minutes, max(1, math.ceil(slowest / 60), math.ceil(min_minutes)))
     waves = plan.makespan_minutes // plan.minutes
     return replace(plan, shards=shards, minutes=minutes, makespan_minutes=waves * minutes)
-
-
-#: How many lines of the collector's own output an empty-collection refusal quotes.
-_COLLECT_TAIL: Final = 25
-
-
-def _nothing_collected(spec: RunSpec, collected: str) -> str:
-    """The refusal for a collection that yielded no id, CARRYING the collector's own last lines.
-
-    An empty collection is almost always a failed one -- an import error in a conftest or a package the
-    install did not provide -- and a refusal that only says "nothing collected" hides the one line that
-    names the cause.
-    """
-    said = [line for line in collected.splitlines() if line.strip()][-_COLLECT_TAIL:]
-    quoted = '\n'.join(f'  | {line}' for line in said) or '  | (the collector printed nothing)'
-    return (
-        f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass. '
-        f'The collector said:\n{quoted}\n'
-        f"Remedy: fix the error above; an ImportError usually means the commit's "
-        f'[tool.lab_commons.hpc] install does not install what the tests import.'
-    )
 
 
 def build_run(spec: RunSpec, run: Runner, where: str) -> dict[str, Any]:
@@ -293,7 +280,7 @@ def submit_run(
         ids = [node for node in ids if node in spec.only]
         errored = [node for node in errored if any(n.split('::')[0] == node for n in spec.only)]
     if not ids:
-        raise NotSubmitted(_nothing_collected(spec, collected))
+        raise NotSubmitted(nothing_collected(spec, collected))
     carrying = {name: set(parse_ids(run(collect_command(spec, also=name), None))) for name in spec.vocabulary.resources}
     handed = {node: owner for node, owner in sorted(need_sets(ids, carrying).items()) if owner != spec.part}
     outcomes: dict[str, str] = dict.fromkeys(handed, 'not-covered')

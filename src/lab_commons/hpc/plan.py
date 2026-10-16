@@ -23,10 +23,12 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
    Slurm starts each task wherever it fits first. Measured 2026-10-10: array 7660516 named ``shortq``
    alone and pended for hours while ``defq``, declared beside it, had idle nodes. One ``sbatch`` carries
    one ``--qos``, so a candidate needing another QOS is never merged in.
-3. **Throttle** -- concurrent tasks = what the quota CEILING allows, so Slurm never holds tasks the caller
-   could not run anyway. What the caller's running jobs hold, and the free slots, only inform the makespan
-   estimate: both change by the minute, Slurm pends a task over the limit rather than refusing it, and
-   the array is submitted once.
+3. **Throttle** -- concurrent tasks = the account's HEADROOM now (its ceiling less what every job of the
+   caller's on it holds, whatever submitted it) divided by one task's cost, at least one. Measured
+   2026-10-16: a 52-task array asked 352 GB a task of a 360 GB ceiling, came out ``%1`` from the ceiling,
+   and pended an hour on ``AssocGrpMemLimit`` behind 232 GB held by the account's other jobs. The plan
+   records that headroom as ``room``; a FIRST round with ``room`` 0 is not submitted
+   (:mod:`lab_commons.hpc.run`), so the part goes to a host that has it.
 """
 
 from __future__ import annotations
@@ -83,6 +85,8 @@ class Plan:
     comment: str = ''
     #: The grant's compute-node set-up (``module load ...``), run before the job's own; :func:`allocate` stamps it.
     setup: tuple[str, ...] = ()
+    #: Tasks of this cost the account's headroom holds NOW (:func:`quota_slots` of what is left); ``None`` unread.
+    room: int | None = None
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""
@@ -285,9 +289,10 @@ def make_plan(
     partitions = tuple(o[0] for o in options if o[1] == qos and (o[4] is None or o[4] >= minutes))
     shards = tuple(chosen)
     max_jobs = snapshot.quota.qos_max_jobs.get(qos)
-    throttle = min(len(shards), allowed, max_jobs or len(shards))
+    now = quota_slots(snapshot, cost, limits, remaining=True)
+    throttle = min(len(shards), max(1, now), max_jobs or len(shards))
     free = free_slots(snapshot, partitions, cost)
-    running = max(1, min(throttle, free, quota_slots(snapshot, cost, limits, remaining=True)))
+    running = max(1, min(throttle, free))
     return Plan(
         partitions=partitions,
         qos=qos,
@@ -300,6 +305,7 @@ def make_plan(
         throttle=throttle,
         free_slots=free,
         makespan_minutes=math.ceil(len(shards) / running) * minutes,
+        room=now,
     )
 
 

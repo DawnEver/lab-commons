@@ -68,7 +68,23 @@ def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
     jmag = learned.box_demand(REPO, frozenset({'jmag'}), cpu=8, mem_gb=64)
     assert jmag == Demand(cpu=2, mem_gb=6.0 * learned.BOX_HEADROOM, jmag=1)
     assert learned.box_demand(REPO, frozenset(), cpu=8, mem_gb=64) == Demand(cpu=8, mem_gb=64)
-    assert learned.cluster_demand(REPO)(frozenset({'jmag'})) == Demand(cpu=1, jmag=1, files=50_000)
+    assert learned.cluster_demand(REPO)(frozenset({'jmag'})) == Demand(cpu=1, mem_gb=1.0, jmag=1, files=50_000)
+
+
+def test_a_cluster_part_demands_the_memory_one_task_of_its_plan_asks() -> None:
+    """Measured 2026-10-16: admitted at a 13 GB run peak, the part was SUBMITTED at 352 GB a task.
+
+    The demand is :func:`learned.task_gb` of the peak -- the plan's own formula -- and a known larger ask
+    (:func:`learned.record_ask`) raises it. PLANTED CONTROL: a smaller ask never lowers it.
+    """
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=13.0, cpu_s=89875.0, wall_s=8616.0))
+    ask = learned.cluster_demand(REPO)
+    assert ask(frozenset()) == Demand(cpu=11, mem_gb=13.0 * 1.5, files=50_000)
+    learned.record_ask(REPO, learned.SLURM, (), 352.2, safety=1.5)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(352.2, rel=1e-12, abs=0.0)
+    learned.record_ask(REPO, learned.SLURM, (), 8.0, safety=1.5)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(352.2, rel=1e-12, abs=0.0)
+    assert ask(frozenset())['cpu'] == 11, 'the ask moves memory only'
 
 
 def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:

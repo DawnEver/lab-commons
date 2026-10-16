@@ -49,13 +49,11 @@ import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 from lab_commons.compute.model import Demand
 from lab_commons.config import config_path
-
-if TYPE_CHECKING:
-    from lab_commons.hpc.config import Cost, Policy
+from lab_commons.hpc.config import Cost, Policy
 
 __all__ = [
     'BOX_HEADROOM',
@@ -73,8 +71,10 @@ __all__ = [
     'learn',
     'learn_peaks',
     'learned',
+    'record_ask',
     'record_run',
     'run_of',
+    'task_gb',
     'worker_gb',
 ]
 
@@ -222,8 +222,18 @@ class Measured:
         unmeasured file is priced at *prior_gb* alone, so it cannot mis-price the rest.
         """
         files = {_file(n) for n in nodes}
-        worst = max((self.peaks_mb.get(f, 0.0) for f in files), default=0.0) * safety / _MB_PER_GB
-        return max(worst, prior_gb)
+        worst = max((self.peaks_mb.get(f, 0.0) for f in files), default=0.0) / _MB_PER_GB
+        return task_gb(worst, prior_gb=prior_gb, safety=safety)
+
+
+def task_gb(peak_gb: float, *, prior_gb: float, safety: float) -> float:
+    """What ONE Slurm task asks for a worker that peaked at *peak_gb*: the peak times *safety*, never under *prior_gb*.
+
+    The one formula the plan's ``--mem`` and the claim's ``mem_gb`` demand both read, so a host never admits a
+    part at one size and submits it at another (Ada 2026-10-16: admitted at a 13 GB run peak, submitted at
+    352 GB a task against a 360 GB account ceiling with 232 GB of it held -- pending for an hour).
+    """
+    return max(peak_gb * safety, prior_gb)
 
 
 # --- per job: (producer, need-set) -> Run --------------------------------------------------------------
@@ -308,6 +318,20 @@ def record_run(repo: str, producer: str, needs: Iterable[str], run: Run, *, kill
     return _write(repo, {**table, 'runs': runs})
 
 
+def record_ask(repo: str, producer: str, needs: Iterable[str], ask_gb: float, *, safety: float) -> Path:
+    """Raise ``(producer, needs)``'s known peak so its next demand asks at least *ask_gb* a task (:func:`task_gb`).
+
+    A plan that could not be placed, or a job Slurm held for a resource limit, KNOWS the ask the measured run
+    peak understated; kept, this host stops admitting the part at the old size. Never lowers a known peak.
+    """
+    table = learned(repo)
+    runs = dict(table.get('runs', {}))
+    key = _key(producer, needs)
+    known = Run(**runs[key]) if key in runs else CLUSTER_PRIOR
+    runs[key] = asdict(Run(max(known.peak_mem_gb, ask_gb / safety), known.cpu_s, known.wall_s, known.files))
+    return _write(repo, {**table, 'runs': runs})
+
+
 def run_of(repo: str, producer: str, needs: Iterable[str]) -> Run | None:
     """The last run of ``(producer, needs)`` measured for *repo*, or ``None``."""
     found = learned(repo).get('runs', {}).get(_key(producer, needs))
@@ -343,16 +367,24 @@ BOX_HEADROOM: Final = 1.5
 BOX_WALL_S: Final = 24 * 3600
 
 
-def cluster_demand(repo_url: str) -> Callable[[frozenset[str]], Demand]:
+def cluster_demand(
+    repo_url: str, *, cost: Cost | None = None, policy: Policy | None = None
+) -> Callable[[frozenset[str]], Demand]:
     """``needs -> Demand`` a cluster part asks: what the last ``(slurm, need-set)`` run measured, else the prior.
+
+    Its ``mem_gb`` is ONE TASK's ask -- :func:`task_gb` of the run's peak under *cost* and *policy* (the forge's
+    defaults when omitted), the size the plan submits -- so an account whose headroom cannot hold one task of the
+    part never claims it.
 
     A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key. It also asks the
     ``files`` it leaves in the home (measured, else :data:`CLUSTER_PRIOR`'s), against the account's file headroom.
     """
+    item, cut = cost or Cost(), policy or Policy()
 
     def ask(needs: frozenset[str]) -> Demand:
         run = run_of(repo_url, SLURM, needs) or CLUSTER_PRIOR
-        return Demand({**run.demand(needs), 'files': run.files or CLUSTER_PRIOR.files})
+        memory = task_gb(run.peak_mem_gb, prior_gb=item.mem_gb, safety=cut.safety)
+        return Demand({**run.demand(needs), 'mem_gb': memory, 'files': run.files or CLUSTER_PRIOR.files})
 
     return ask
 
