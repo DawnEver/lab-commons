@@ -67,11 +67,12 @@ class Reading:
         time.sleep(sample_s)
         second, wall = system_cpu_seconds(), max(time.monotonic() - started, 1e-6)
         memory = system_memory()
-        if first is None or second is None or memory is None:
-            msg = 'the box cannot read this machine cpu and memory, so it has no supply to admit against'
+        if memory is None:
+            msg = 'the box cannot read this machine memory, so it has no supply to admit against'
             raise RuntimeError(msg)
         cores = float(os.cpu_count() or 1)
-        idle = min(cores, max(0.0, (second[1] - first[1]) / wall))
+        # no cpu backend (darwin): idle reads as every core, so the declared room alone decides cores
+        idle = cores if first is None or second is None else min(cores, max(0.0, (second[1] - first[1]) / wall))
         usage = {
             pid: Usage(
                 sum(working_set_bytes(member) or 0 for member in tree),

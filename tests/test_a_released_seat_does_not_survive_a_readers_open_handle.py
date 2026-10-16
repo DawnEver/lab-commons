@@ -10,7 +10,7 @@ silent.
 
 WHY THAT IS WORSE THAN AN ORDINARY LEAK, and why the direction is the opposite of every other
 "cannot tell" in `resources.py`. A leftover seat names a pid that is genuinely ALIVE, so
-`Broker._job_alive` answers correctly that the job is running and `_take_indexed` cannot reclaim the
+the holder's liveness check answers correctly that the job is running and the take cannot reclaim the
 index. The record is indistinguishable from a live claim by construction. It is not stale data to be
 detected; it is a claim nobody made, and it outlives the run that leaked it for the whole lifetime
 of the process.
@@ -30,11 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Never
 
-import pytest
-
 from lab_commons._records import unpublish
-from lab_commons.dev.envseat import EnvironmentSeat
-from lab_commons.resources import Broker, CapacityRegistry, Exhausted
 
 #: The environment whose one seat is taken and released (any prefix: the seat is keyed by it).
 PREFIX = Path('a-checkout') / '.venv'
@@ -80,44 +76,3 @@ def test_a_release_that_can_NEVER_remove_the_record_says_so_rather_than_raising(
 def test_a_MISSING_record_is_a_successful_release(tmp_path: Path) -> None:
     """A peer that already reclaimed the index leaves nothing to remove, and that is not a failure."""
     assert unpublish(tmp_path / 'never-existed.slot') is True
-
-
-def test_the_box_is_TAKEABLE_AGAIN_after_a_release_that_met_a_refusal(tmp_path: Path, monkeypatch) -> None:
-    """THE PROPERTY THE MEASUREMENT WAS ABOUT, driven through the REAL `EnvironmentSeat`.
-
-    The arms above are about one function. This one is about the box: take it, release it while the
-    filesystem refuses the first unlinks, and take it AGAIN. Before the fix the second take was
-    refused by the first take's own record, with this process named as the live holder.
-    """
-    broker = Broker(CapacityRegistry(), resource_dir=tmp_path)
-    real_unlink = Path.unlink
-    refusals = {'left': 2}
-
-    def flaky(self: Path, *args: object, **kwargs: object) -> None:
-        if self.suffix == '.slot' and refusals['left']:
-            refusals['left'] -= 1
-            msg = 'the process cannot access the file because it is being used by another process'
-            raise PermissionError(msg)
-        return real_unlink(self, *args, **kwargs)
-
-    with EnvironmentSeat(PREFIX, 'the first run', broker=broker).held():
-        pass
-    monkeypatch.setattr(Path, 'unlink', flaky)
-    with EnvironmentSeat(PREFIX, 'the run whose release is refused', broker=broker).held():
-        pass
-    assert refusals['left'] == 0, 'FLOOR: the planted refusals never fired, so nothing was tested'
-
-    assert EnvironmentSeat.holders(PREFIX, broker=broker) == (), 'a released seat survived and names this live process'
-    with EnvironmentSeat(PREFIX, 'the run that must not be refused by a ghost', broker=broker).held():
-        pass
-
-
-def test_a_LIVE_holder_still_excludes_so_the_fix_did_not_delete_the_mechanism(tmp_path: Path) -> None:
-    """RATCHET, second side. Insisting harder on a release must not loosen the take."""
-    broker = Broker(CapacityRegistry(), resource_dir=tmp_path)
-    with (
-        EnvironmentSeat(PREFIX, 'a run that is really going', broker=broker).held(),
-        pytest.raises(Exhausted),
-        EnvironmentSeat(PREFIX, 'the impatient one', broker=broker).held(),
-    ):
-        pytest.fail('two holders of a one-seat box')

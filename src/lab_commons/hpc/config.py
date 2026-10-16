@@ -68,7 +68,7 @@ class Cost:
             raise ValueError(msg)
 
     def demands(self) -> dict[str, float]:
-        """The cost in :data:`lab_commons.resources.DIMENSIONS` units -- what ``fits`` and ``Broker.admit`` read."""
+        """The cost in :data:`lab_commons.resources.DIMENSIONS` units -- what :func:`lab_commons.width.fits` reads."""
         return {CPU.name: self.cpus, MEMORY.name: self.mem_gb * GIB, GPU.name: self.gpus}
 
 

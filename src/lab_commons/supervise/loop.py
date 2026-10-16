@@ -14,11 +14,12 @@ cannot kill a thread, and that limit is stated here rather than hidden.
 MUTUAL EXCLUSION IS THE BROKER'S, not a lock of this module's own. A second cycle on the same
 target is refused with a message naming the holder. The kit states the rule plainly -- a byte-range
 lock, a pid file or a heartbeat would each be a second definition of the same thing -- so the seat
-is taken from :class:`lab_commons.resources.Broker` and there is no other.
+is a seat on the one box ledger (:func:`lab_commons.box.hold`) and there is no other.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -26,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.resources import Broker, Exhausted
+from lab_commons.box import Demand, hold
 from lab_commons.supervise.alert import Delivery, Notice, Notifier
 from lab_commons.supervise.component import ActionContext, CheckContext, Registry
 from lab_commons.supervise.policy import decide
@@ -49,13 +50,15 @@ __all__ = [
     'STATE_LOST',
     'UNCONFIGURED',
     'CycleResult',
-    'Exhausted',
     'run_cycle',
 ]
 
 #: How long a cycle waits for the seat before giving up. A second cycle that queues behind a slow
 #: one is a supervisor whose own schedule slips; refusing says so instead.
 SEAT_WAIT: Final = 0.0
+
+#: The most a cycle's seat is held, in seconds: past it the ledger lets the next cycle in.
+CYCLE_WALL_S: Final = 3600
 
 #: The severity of an anomaly raised because a check itself failed. It is CRITICAL: a probe that
 #: cannot run is worse than a probe that reports a problem, because nothing is watching.
@@ -363,7 +366,6 @@ def run_cycle(
     manager: ProcessManager,
     *,
     clock: datetime,
-    broker: Broker | None = None,
     notifier: Notifier | None = None,
     dry_run: bool = False,
 ) -> CycleResult:
@@ -376,7 +378,6 @@ def run_cycle(
         project: the target's directory.
         manager: how a remedy reaches the service's process.
         clock: the instant this cycle is judged at.
-        broker: where the cycle's seat comes from. Defaults to the shared broker.
         notifier: how a notice is delivered. Defaults to one over the merged config.
         dry_run: resolve and gate everything, but run no action and send no notice.
 
@@ -384,12 +385,12 @@ def run_cycle(
         What the cycle found, did and said.
 
     Raises:
-        Exhausted: another cycle holds this target's seat.
+        lab_commons.box.Refused: another cycle holds this target's seat.
 
     """
     state = store.read() or new_state()
-    pool = f'supervise-{config.get("target", {}).get("name", "unknown")}'
-    with (broker or Broker()).admit(pool, {'seats': 1}, what='supervision cycle', wait_s=SEAT_WAIT):
+    seat = re.sub(r'[^a-z0-9_]', '_', f'supervise_{config.get("target", {}).get("name", "unknown")}'.lower())
+    with hold(Demand(0, 0.0, CYCLE_WALL_S, {seat: 1}), 'supervision cycle', SEAT_WAIT, key=seat):
         metrics, anomalies, completions = _gather(
             registry, config=config, state=state, project=project, manager=manager, clock=clock
         )

@@ -64,6 +64,9 @@ def run(
     if not argv:
         msg = f'{what}: an empty argv names nothing to run'
         raise ValueError(msg)
+    if demand.cpu < 1 or demand.mem_gb <= 0:
+        msg = f'{what}: a run is enforced to positive cores and memory, not a seat-only claim'
+        raise ValueError(msg)
     contain = _enforcer()
     inside = {**(os.environ if env is None else env), INSIDE_ENV: key}
     with hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint):

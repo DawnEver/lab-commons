@@ -40,7 +40,12 @@ class Refused(RuntimeError):
 
 @dataclass(frozen=True)
 class Demand:
-    """A run's declared resources and time limit. No field has a default; none may be non-positive."""
+    """A run's declared resources and time limit. No field has a default.
+
+    Cores and memory may be 0 only for a claim that holds SEATS alone (an environment, a supervision target):
+    it books a named exclusion on the one ledger and no share of the machine. A run :func:`~lab_commons.box.run`
+    enforces declares both positive.
+    """
 
     cpu: int
     mem_gb: float
@@ -48,10 +53,12 @@ class Demand:
     seats: Mapping[str, int]
 
     def __post_init__(self) -> None:
-        """Refuse every non-positive dimension at once, by name."""
+        """Refuse every non-positive dimension at once, by name; 0 cores and memory only beside a seat."""
+        seats_only = self.cpu == 0 and self.mem_gb == 0 and any(self.seats.values())
         bad = [
-            *(['cpu must be a positive int of cores'] if not _positive_int(self.cpu) else []),
-            *(['mem_gb must be positive'] if not isinstance(self.mem_gb, int | float) or self.mem_gb <= 0 else []),
+            *(['cpu must be a positive int of cores'] if not _positive_int(self.cpu) and not seats_only else []),
+            *(['mem_gb must be positive'] if not isinstance(self.mem_gb, int | float) or self.mem_gb < 0 else []),
+            *(['mem_gb must be positive'] if self.mem_gb == 0 and not seats_only else []),
             *(['wall_s must be a positive int of seconds'] if not _positive_int(self.wall_s) else []),
             *(
                 f'seats[{name!r}] must be an int >= 0'

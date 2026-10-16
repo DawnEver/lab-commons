@@ -16,7 +16,7 @@ open.
 
 WHY IT IS WORSE THAN THE LEAK. A leaked seat starves a taker, but it refuses CLEANLY and the refusal
 names a holder. This one raised ``PermissionError`` out of ``EnvironmentSeat.held()``, so a caller that
-handles ``Exhausted`` -- the refusal this package documents -- got an unhandled OS error instead. A
+handles a refusal -- the refusal this package documents -- got an unhandled OS error instead. A
 reader merely LOOKING at the lock could crash a writer.
 
 TWO CONTROLS, BOTH ON THE REAL FUNCTION. The PLANTED one refuses ``os.replace`` the way Windows
@@ -35,8 +35,6 @@ from typing import Never
 
 import lab_commons._records as records
 from lab_commons._records import publish
-from lab_commons.dev.envseat import EnvironmentSeat
-from lab_commons.resources import Broker, CapacityRegistry
 
 #: The environment whose one seat is taken and released (any prefix: the seat is keyed by it).
 PREFIX = Path('a-checkout') / '.venv'
@@ -66,7 +64,7 @@ def test_a_publish_that_can_NEVER_land_REPORTS_rather_than_raising(tmp_path: Pat
     """THE OTHER SIDE. A permanent refusal is a ``False``, not an ``OSError`` escaping to a caller.
 
     The seat was never taken, so there is nothing to undo and nothing to leak; what there IS, is a
-    caller that was told ``Exhausted`` is how this package refuses. An ``OSError`` out of a take is a
+    caller that was told a refusal is how this package refuses. An ``OSError`` out of a take is a
     second failure mode nobody was told about.
     """
     path = tmp_path / 'pool.claim.1.2.json'
@@ -131,28 +129,3 @@ def test_a_publish_lands_while_a_READER_HOLDS_THE_DESTINATION_OPEN(tmp_path: Pat
     finally:
         hand.join(5.0)
     assert 'second' in path.read_text(encoding='utf-8')
-
-
-def test_the_box_is_TAKEABLE_IN_A_LOOP_while_a_reader_storms_it(tmp_path: Path) -> None:
-    """THE PROPERTY THE MEASUREMENT WAS ABOUT, driven through the REAL ``EnvironmentSeat``.
-
-    The claim file's name repeats per (pid, thread), so iteration N publishes onto iteration N-1's
-    file. A poll storm holding that file open is what turned a take into an ``OSError``.
-    """
-    broker = Broker(CapacityRegistry(), resource_dir=tmp_path)
-    stop = threading.Event()
-
-    def storm() -> None:
-        while not stop.is_set():
-            EnvironmentSeat.holders(PREFIX, broker=broker)
-
-    hand = threading.Thread(target=storm, name='the-poll-storm', daemon=True)
-    hand.start()
-    try:
-        for index in range(20):
-            with EnvironmentSeat(PREFIX, f'take {index}', broker=broker).held():
-                pass
-    finally:
-        stop.set()
-        hand.join(5.0)
-    assert EnvironmentSeat.holders(PREFIX, broker=broker) == (), 'a seat survived the loop and names this live process'

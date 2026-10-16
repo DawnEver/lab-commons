@@ -1,15 +1,10 @@
-"""The reservation RECORD: its one shape, and the two writes that put it on disk atomically.
+"""A RECORD FILE published atomically and removed insistently, against a reader holding it open.
 
-Split out of :mod:`lab_commons.resources` so the broker's file is about ADMISSION and this one is
-about the bytes a peer reads. The seam is real rather than cosmetic: every correctness fix this
-family has made to the record -- the staged-then-linked create, the staged-then-replaced update,
-the ``created`` discriminator -- is a fix HERE, and each was found by a reader seeing a state the
-writer did not mean to publish.
-
-Private by name because the shape is not a contract. A reader that wants a holder asks
-:meth:`lab_commons.resources.Broker.holders` and gets a :class:`~lab_commons.resources.Holder`; the
-JSON keys are this package's business and may gain a field (``created`` did) without any consumer
-being told.
+Once the record of the per-box broker's seats (folded into the one box ledger, :mod:`lab_commons.box`,
+D2 2026-10-16); the two writes stayed because their subject is the BYTES a peer reads, not the broker:
+:mod:`lab_commons.supervise.state` publishes its state through :func:`publish`. Every fix this family made
+here -- the staged-then-linked create, the staged-then-replaced update -- was found by a reader seeing a
+state the writer did not mean to publish.
 """
 
 from __future__ import annotations
@@ -21,15 +16,9 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
-from lab_commons.liveness import CreationClock, creation_stamp
-
-# The annotation only: importing `resources` at runtime here would be the cycle this split made.
-if TYPE_CHECKING:
-    from lab_commons.resources import JobHandle
-
-__all__ = ['publish', 'record', 'stage', 'unpublish']
+__all__ = ['publish', 'stage', 'unpublish']
 
 #: How hard a record operation INSISTS against a reader's open handle, and how long it pauses
 #: between tries. ONE POLICY, BOTH DIRECTIONS -- applied through :func:`_insist`.
@@ -57,41 +46,6 @@ _INSIST_BACKOFF_S: Final = 0.005
 #: The prefix of a record being STAGED before it is published. It carries no dot, so it can never
 #: match the ``{pool}.*`` scans a peer runs while looking for holders.
 STAGED_PREFIX: Final = 'staged-'
-
-
-def record(
-    pool: str,
-    what: str,
-    job: JobHandle,
-    demands: Mapping[str, int],
-    observed_bytes: int | None,
-    *,
-    clock: CreationClock = creation_stamp,
-) -> dict:
-    """One holder's record: WHO holds it and what that holder declared.
-
-    ONE WRITER FOR THE SHAPE. The file a peer reads a microsecond after the seat appears and the
-    file it reads an hour later are published from this function, so the acquisition record and
-    every later update cannot drift into two shapes a reader would have to know about.
-
-    ``created`` IS THE PID'S IDENTITY and is written here BECAUSE this is the one writer. A pid
-    alone is a number the OS recycles, and a reader that tests the number reports a dead holder as
-    alive -- the 2026-09-02 incident :mod:`lab_commons.liveness` carries. ``None`` is written
-    rather than omitted (an opaque handle, or a box with no readable stamp) so a reader can tell
-    "no discriminator" from "a field this writer did not have".
-    """
-    pid = job.pid
-    return {
-        'pool': pool,
-        'what': what,
-        'job_kind': job.kind,
-        'job_ident': job.ident,
-        'created': None if pid is None else clock(pid),
-        'demands': dict(demands),
-        'since': time.strftime('%Y-%m-%dT%H:%M:%S'),
-        'observed_bytes': observed_bytes,
-        'client_pid': os.getpid(),
-    }
 
 
 def stage(path: Path, payload: Mapping[str, object]) -> Path:
@@ -147,7 +101,7 @@ def publish(path: Path, payload: Mapping[str, object]) -> bool:
 
     RETURNS WHETHER THE RECORD LANDED, and does not raise when it did not. Windows refuses a rename
     whose destination a reader holds open, so the ordinary contested case used to throw
-    ``PermissionError`` out of a take -- past a caller that had been told ``Exhausted`` is how this
+    ``PermissionError`` out of a take -- past a caller that had been told a refusal is how this
     package refuses. A failed publish is not a leak and not a half-state: the staging file is
     removed, the old record is untouched, and NOTHING WAS TAKEN, so a boolean is a complete report
     and the caller is the only party that can price it.
@@ -156,13 +110,13 @@ def publish(path: Path, payload: Mapping[str, object]) -> bool:
     raises, so a full disk, a bad directory or an unwritable root is reported as loudly as ever.
 
     WHAT A ``False`` MEANS AT THE ONE PLACE IT IS REACHABLE, and why it is not a refusal.
-    :meth:`lab_commons.resources.Broker._write_claim` is the publish a taker does before it waits;
+    a claim's publish is what a taker does before it waits;
     its file's name repeats per (pid, thread), so take two in a loop renames onto take one's file --
     the one a polling peer has open, which is the measured case. A claim SHARPENS a headroom check
     and is never a seat: peers count it, the taker does not, the release path already tolerates its
     absence, and every seat is still arbitrated by ``os.link``. So a claim that did not land costs
     precision on ONE take, while refusing would spend an available box on a handle a reader drops in
-    microseconds. Refusing as ``Exhausted`` would be worse than either: no dimension is full, and a
+    microseconds. Refusing as a refusal would be worse than either: no dimension is full, and a
     refusal naming a cause that is not true sends its reader somewhere there is nothing to find.
     """
     staged = stage(path, payload)
