@@ -12,20 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.compute.presence import (
-    CHECKS,
-    TTL,
-    Check,
-    cached,
-    declared_versions,
-    demote,
-    femm_find,
-    matlab_find,
-    matlab_version,
-    probe,
-    refresh,
-    simba_find,
-)
+from lab_commons.compute.presence import TTL, cached, declared_versions, demote, probe, refresh
+from lab_commons.compute.toolchecks import CHECKS, Check, femm_find, matlab_find, matlab_version, simba_find
 
 NOW = datetime(2026, 10, 16, 12, tzinfo=UTC)
 EXE = Path('/opt/tool/bin/tool')
