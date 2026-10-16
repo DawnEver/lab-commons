@@ -12,6 +12,8 @@ import re
 import shutil
 import subprocess
 
+import lab_commons.launch as _door
+
 
 def _tool(*argv: str) -> str | None:
     """*argv*'s stdout, or ``None`` when the tool is absent or fails."""
@@ -19,7 +21,7 @@ def _tool(*argv: str) -> str | None:
     if exe is None:
         return None
     try:
-        done = subprocess.run(
+        done = _door.run(
             [exe, *argv[1:]],
             capture_output=True,
             text=True,

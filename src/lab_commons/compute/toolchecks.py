@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
+
 if sys.platform == 'win32':
     import ctypes
     import winreg
@@ -63,7 +65,7 @@ class Check:
 def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, str]:
     """Run *argv*; ``(exit 0, the last line of its output or why it did not run)``."""
     try:
-        done = subprocess.run(
+        done = _door.run(
             list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as failed:
@@ -74,7 +76,7 @@ def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, s
 
 def _first_line(argv: Sequence[str]) -> str | None:
     try:
-        done = subprocess.run(
+        done = _door.run(
             list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60, check=False
         )
     except (OSError, subprocess.TimeoutExpired):

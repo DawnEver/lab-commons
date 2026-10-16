@@ -26,6 +26,7 @@ from collections.abc import Mapping, Sequence
 from ctypes import wintypes
 from typing import Final
 
+import lab_commons.launch as _door
 from lab_commons.box.demand import Demand, Outcome
 
 __all__ = ['contain']
@@ -219,7 +220,7 @@ def contain(
     job, port = _job(k32, demand)
     start = time.monotonic()
     try:
-        child = subprocess.Popen(
+        child = _door.popen(
             list(argv), cwd=cwd, env=None if env is None else dict(env), creationflags=_CREATE_SUSPENDED
         )
         _assign(k32, job, child)
