@@ -20,6 +20,18 @@ is head-of-line blocking, and it is bounded on both sides, which is why EVERY WA
 waits at most until the holders' deadlines (each claim ends by then), and every waiter gives up
 at its own ``queue_s`` -- a required argument -- and its ticket is reaped with it.
 
+A CLAIM MAY OUTLIVE ITS LAUNCHER IN TWO NAMED WAYS, and only those. :func:`hand_over` makes a vendor
+process (a Designer, a solver started outside this tree) the claim's holder: the claim then lives and is
+reaped with THAT process. :func:`persist` makes it EXTERNAL -- a job queued in a vendor scheduler, with no
+process of ours to watch: it outlives its client until :func:`release` is called on terminal evidence, its
+deadline passes, or its LIVENESS PROBE (an argv run by the reaper once its client is gone; exit 0 alive,
+anything else dead) says the job is gone. Without the probe a dead job's claim held the box until its
+deadline (the open defect "an external claim outlives its dead job").
+
+A TREE ALREADY INSIDE A CLAIM DOES NOT CLAIM AGAIN (:data:`INSIDE_ENV`, set on every boxed child): its
+cores and memory are its enclosing claim's. Seats are still booked -- a licence is not a share of a tree --
+and a claim for a process OUTSIDE the tree (``outside=True``, a vendor) always books.
+
 The file is SQLite in WAL mode, every decision inside ``BEGIN IMMEDIATE``: one writer at a time
 across every process on the box, so two racing admissions cannot both see the same free room.
 Location (:func:`box_path`): ``$LAB_COMMONS_BOX`` if set, else on Windows
@@ -35,6 +47,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
@@ -52,7 +65,16 @@ from lab_commons.liveness import creation_stamp, still_the_same_process
 #: The OS reader a decision measures with: the claim pids in, a :class:`~lab_commons.box.supply.Reading` out.
 Read = Callable[[Iterable[int]], Reading]
 
-__all__ = ['BOX_ENV', 'GRACE_S', 'POLL_S', 'Claim', 'box_path', 'hold', 'holdings']
+__all__ = [
+    'BOX_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Claim', 'box_path', 'hand_over', 'hold', 'holdings',
+    'persist', 'release',
+]  # fmt: skip
+
+#: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
+INSIDE_ENV: Final = 'LAB_COMMONS_BOXED'
+
+#: Seconds a liveness probe of an external claim may take before it counts as "cannot say" (kept).
+PROBE_S: Final = 10.0
 
 #: Environment override of the ledger file (tests; a second box on one machine).
 BOX_ENV: Final = 'LAB_COMMONS_BOX'
@@ -71,7 +93,8 @@ _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     cpu INTEGER NOT NULL, mem_bytes INTEGER NOT NULL, seats TEXT NOT NULL,
-    deadline REAL NOT NULL, started REAL NOT NULL, what TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT);
+    deadline REAL NOT NULL, started REAL NOT NULL, what TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT,
+    kept INTEGER NOT NULL DEFAULT 0, probe TEXT);
 CREATE TABLE IF NOT EXISTS tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     gives_up REAL NOT NULL, what TEXT NOT NULL);
@@ -103,7 +126,15 @@ def _connect() -> sqlite3.Connection:
     con = sqlite3.connect(path, timeout=_LOCK_S, isolation_level=None)
     con.execute('PRAGMA journal_mode=WAL')
     con.executescript(_SCHEMA)
+    columns = {row[1] for row in con.execute('PRAGMA table_info(claims)')}
+    for name, spelled in _ADDED:
+        if name not in columns:  # a ledger file written before the column existed: the schema moves forward
+            con.execute(f'ALTER TABLE claims ADD COLUMN {spelled}')
     return con
+
+
+#: Columns added to ``claims`` after the file format was first written: (name, its fixed definition).
+_ADDED: Final = (('kept', 'kept INTEGER NOT NULL DEFAULT 0'), ('probe', 'probe TEXT'))
 
 
 @contextmanager
@@ -137,11 +168,45 @@ _REAPABLE: Final = (
 
 
 def _reap(con: sqlite3.Connection, now: float) -> None:
-    """Delete every claim and ticket whose process is gone or whose time is up."""
-    for listing, delete, grace in _REAPABLE:
+    """Delete every claim and ticket whose process is gone or time is up; an external claim when its probe says so."""
+    probes = dict(con.execute('SELECT id, probe FROM claims WHERE probe IS NOT NULL').fetchall())
+    for table, (listing, delete, grace) in zip(('claims', 'tickets'), _REAPABLE, strict=True):
         for row_id, pid, created, end in con.execute(listing, (grace,)).fetchall():
-            if end < now or not still_the_same_process(pid, created):
+            if end >= now and still_the_same_process(pid, created):
+                continue
+            external = table == 'claims' and row_id in probes
+            if end < now or not external or not _alive(json.loads(probes[row_id])):
                 con.execute(delete, (row_id,))
+
+
+def _alive(probe: Sequence[str]) -> bool:
+    """Whether an external job's liveness *probe* says it still runs: exit 0. A probe that cannot say keeps it."""
+    try:
+        return subprocess.run(list(probe), capture_output=True, timeout=PROBE_S, check=False).returncode == 0
+    except subprocess.TimeoutExpired:
+        return True
+    except OSError:
+        return False
+
+
+def _update(claim: Claim, sql: str, *values: object) -> None:
+    with closing(_connect()) as con, _immediate(con):
+        con.execute(sql, (*values, claim.id))
+
+
+def hand_over(claim: Claim, pid: int) -> None:
+    """Make process *pid* (a vendor started outside this tree) the holder of *claim*: it lives and is reaped with it."""
+    _update(claim, 'UPDATE claims SET pid = ?, created = ?, kept = 1 WHERE id = ?', pid, creation_stamp(pid))
+
+
+def persist(claim: Claim, probe: Sequence[str]) -> None:
+    """Keep *claim* past its client: an EXTERNAL job, gone at :func:`release`, its deadline, or when *probe* fails."""
+    _update(claim, 'UPDATE claims SET kept = 1, probe = ? WHERE id = ?', json.dumps(list(probe)))
+
+
+def release(claim: Claim) -> None:
+    """Drop *claim* now, on terminal evidence of the job it holds for."""
+    _update(claim, 'DELETE FROM claims WHERE id = ?')
 
 
 def _vector(demand: Demand) -> Resources:
@@ -227,6 +292,7 @@ def hold(
     poll_s: float = POLL_S,
     key: str,
     fingerprint: str | None = None,
+    outside: bool = False,
 ) -> Iterator[Claim]:
     """Hold *demand* on this box for the ``with`` body; wait for room at most *queue_s* seconds.
 
@@ -239,6 +305,9 @@ def hold(
             *queue_s* ran out -- naming what is lacking, its holders and their deadlines.
 
     """
+    if INSIDE_ENV in os.environ and not outside and not any(demand.seats.values()):
+        yield Claim(0, float('inf'))  # this tree's enclosing claim already holds it
+        return
     capacity = Capacity.read() if capacity is None else capacity
     size = Resources(
         {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: capacity.seats.get(n, 1) for n in demand.seats}}
@@ -277,7 +346,7 @@ def hold(
             yield claim
         finally:
             with _immediate(con):
-                con.execute('DELETE FROM claims WHERE id = ?', (claim.id,))
+                con.execute('DELETE FROM claims WHERE id = ? AND kept = 0', (claim.id,))
 
 
 def _wait(

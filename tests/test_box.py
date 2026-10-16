@@ -16,7 +16,20 @@ from typing import Any
 import pytest
 from _box_fake import quiet
 
-from lab_commons.box import BOX_ENV, GRACE_S, Capacity, Demand, Holding, Refused, hold, holdings
+from lab_commons.box import (
+    BOX_ENV,
+    GRACE_S,
+    INSIDE_ENV,
+    Capacity,
+    Demand,
+    Holding,
+    Refused,
+    hand_over,
+    hold,
+    holdings,
+    persist,
+    release,
+)
 from lab_commons.box.ledger import _decide
 
 _CAP = Capacity(cpu=4.0, mem_bytes=8 * 2**30, seats={'jmag': 1})
@@ -196,3 +209,78 @@ def test_capacity_reads_the_reserve_margins_compute_reads(tmp_path: Path, monkey
     assert tight.mem_bytes < loose.mem_bytes
     assert loose.seats == {'jmag': 3}
     assert loose.cpu == pytest.approx((os.cpu_count() or 1) - 1, abs=1e-9)  # cores
+
+
+def _external_rows(path: Path) -> list[tuple[int, int]]:
+    with sqlite3.connect(path) as con:
+        return con.execute('SELECT pid, kept FROM claims').fetchall()
+
+
+def test_a_claim_handed_to_a_vendor_lives_and_is_reaped_with_it(box: Path) -> None:
+    """hand_over: the vendor process holds the claim after the launcher's body ends; its death frees it."""
+    vendor = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        with hold(_demand(cpu=2), 'designer', queue_s=1, **_ON) as claim:
+            hand_over(claim, vendor.pid)
+        assert _external_rows(box) == [(vendor.pid, 1)], 'the body ended; the vendor still holds it'
+    finally:
+        vendor.kill()
+        vendor.wait(30)
+    with hold(_demand(cpu=4), 'after', queue_s=1, **_ON):
+        assert [row.what for row in holdings()] == ['after'], 'PLANTED CONTROL: a dead vendor holds nothing'
+
+
+def test_an_external_claim_outlives_its_client_until_its_probe_says_the_job_is_dead(box: Path, tmp_path: Path) -> None:
+    """persist: no process of ours holds it; the reaper asks the probe once the client is gone."""
+    flag = tmp_path / 'job-alive'
+    flag.write_text('', encoding='utf-8')
+    probe = [sys.executable, '-c', f'import pathlib, sys; sys.exit(0 if pathlib.Path({str(flag)!r}).exists() else 1)']
+    client = (
+        'import os, sys; from lab_commons.box import Capacity, Demand, hold, persist; '
+        'from lab_commons.box.supply import Reading; '
+        f'os.environ["{BOX_ENV}"] = {str(box)!r}; c = Capacity(cpu=4.0, mem_bytes=8 * 2**30, seats={{}}); '
+        'r = Reading(4.0, 4.0, 8 * 2**30, 8 * 2**30); '
+        'cm = hold(Demand(2, 1.0, 600, {}), "scheduler job", 1, key="k", capacity=c, read=lambda _p: r); '
+        f'claim = cm.__enter__(); persist(claim, {probe!r}); cm.__exit__(None, None, None)'
+    )
+    subprocess.run([sys.executable, '-c', client], check=True, timeout=120)
+    with hold(_demand(cpu=1), 'peer', queue_s=1, **_ON):
+        assert sorted(row.what for row in holdings()) == ['peer', 'scheduler job'], 'its client died; the job lives'
+    flag.unlink()
+    with hold(_demand(cpu=4), 'after', queue_s=1, **_ON):
+        assert [row.what for row in holdings()] == ['after'], 'the probe says the job is gone: reaped'
+
+
+def test_released_on_terminal_evidence(box: Path) -> None:
+    with hold(_demand(cpu=2), 'job', queue_s=1, **_ON) as claim:
+        persist(claim, [sys.executable, '-c', 'pass'])
+    assert len(_external_rows(box)) == 1
+    release(claim)
+    assert holdings() == []
+
+
+@pytest.mark.usefixtures('box')
+def test_a_tree_inside_a_claim_does_not_claim_again_but_a_vendor_or_a_seat_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(INSIDE_ENV, 'outer')
+    with hold(_demand(cpu=4), 'nested', queue_s=1, **_ON) as claim:
+        assert claim.id == 0
+        assert holdings() == [], 'the enclosing claim already holds this tree'
+    with hold(_demand(cpu=1), 'vendor', queue_s=1, outside=True, **_ON):
+        assert [row.what for row in holdings()] == ['vendor'], 'PLANTED CONTROL: outside the tree books'
+    with hold(_demand(seats={'jmag': 1}), 'seat', queue_s=1, **_ON):
+        assert [row.what for row in holdings()] == ['seat'], 'a licence is not a share of a tree'
+
+
+def test_a_ledger_file_from_before_the_kept_column_moves_forward(tmp_path: Path, monkeypatch) -> None:
+    old = tmp_path / 'old.sqlite'
+    with sqlite3.connect(old) as con:
+        con.execute(
+            'CREATE TABLE claims (id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER, '
+            'cpu INTEGER NOT NULL, mem_bytes INTEGER NOT NULL, seats TEXT NOT NULL, deadline REAL NOT NULL, '
+            'started REAL NOT NULL, what TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT)'
+        )
+    monkeypatch.setenv(BOX_ENV, str(old))
+    with hold(_demand(), 'new', queue_s=1, **_ON):
+        assert [row.what for row in holdings()] == ['new']
