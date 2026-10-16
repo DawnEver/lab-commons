@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import statistics
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -73,8 +74,10 @@ __all__ = [
     'cluster_demand',
     'demand',
     'directory',
+    'folded',
     'learn',
     'learn_peaks',
+    'learn_record',
     'learned',
     'record_ask',
     'record_run',
@@ -220,15 +223,32 @@ class Measured:
         """One Slurm task's memory: :meth:`worker_gb` over these items' files, floored at ``cost.mem_gb``."""
         return self.worker_gb([n for ids in items for n in ids], prior_gb=cost.mem_gb, safety=policy.safety)
 
-    def worker_gb(self, nodes: Iterable[str], *, prior_gb: float, safety: float) -> float:
-        """The worst measured peak of these nodes' files times *safety*, never under *prior_gb*.
+    def prior_mb(self, name: str) -> float | None:
+        """The PRIOR peak of an unmeasured file *name* (D5): its measured siblings' median, else the table's.
 
-        ONE RULE FOR A SLURM TASK AND A BOX WORKER: each is one pytest process over some files. An
-        unmeasured file is priced at *prior_gb* alone, so it cannot mis-price the rest.
+        Siblings are the measured files of its own directory; a directory with none falls back to the median
+        of the whole table (the need-set the table describes). Never the table's maximum: one heavy file must
+        not price every new file as heavy. ``None`` when nothing is measured at all.
+        """
+        folder = name.rpartition('/')[0]
+        siblings = [mb for f, mb in self.peaks_mb.items() if f.rpartition('/')[0] == folder]
+        pool = siblings or list(self.peaks_mb.values())
+        return statistics.median(pool) if pool else None
+
+    def peak_gb(self, nodes: Iterable[str]) -> float:
+        """The worst MEASURED peak of these nodes' files, in GB; an unmeasured file adds nothing."""
+        return max((self.peaks_mb.get(f, 0.0) for f in {_file(n) for n in nodes}), default=0.0) / _MB_PER_GB
+
+    def worker_gb(self, nodes: Iterable[str], *, prior_gb: float, safety: float) -> float:
+        """The worst peak of these nodes' files times *safety*, never under *prior_gb*.
+
+        ONE RULE FOR A SLURM TASK AND A BOX WORKER: each is one pytest process over some files. A measured
+        file is its peak; an unmeasured one its :meth:`prior_mb` (siblings' median); with nothing measured
+        at all, *prior_gb* alone stands.
         """
         files = {_file(n) for n in nodes}
-        worst = max((self.peaks_mb.get(f, 0.0) for f in files), default=0.0) / _MB_PER_GB
-        return task_gb(worst, prior_gb=prior_gb, safety=safety)
+        peaks = [self.peaks_mb[f] if f in self.peaks_mb else (self.prior_mb(f) or 0.0) for f in files]
+        return task_gb(max(peaks, default=0.0) / _MB_PER_GB, prior_gb=prior_gb, safety=safety)
 
 
 def task_gb(peak_gb: float, *, prior_gb: float, safety: float) -> float:
@@ -294,6 +314,22 @@ def _write(repo: str, table: dict[str, Any]) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({**table, 'repo': repo}), encoding='utf-8')
     return target
+
+
+def folded(repo: str) -> frozenset[str]:
+    """The run records (by attachment name) already folded into *repo*'s table: the cache's index."""
+    return frozenset(learned(repo).get('folded', ()))
+
+
+def learn_record(repo: str, name: str, record: Mapping[str, Any]) -> Path:
+    """Fold one forge run record *name* into *repo*'s table: each per-test fact it carries replaces the older one.
+
+    THE TABLE IS A CACHE OF THE FORGE (D4, 2026-10-16): every host folds the same attached records, so every
+    host prices from the same numbers; *name* is remembered so a record is downloaded and folded once.
+    """
+    table = learned(repo)
+    merged = {key: {**table.get(key, {}), **facts} for key, facts in Measured.of(dict(record)).record().items()}
+    return _write(repo, {**table, **merged, 'folded': sorted({*table.get('folded', ()), name})})
 
 
 def learn(record: dict[str, Any]) -> Path:
