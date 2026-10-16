@@ -29,7 +29,8 @@ from typing import Any, Final
 
 from lab_commons.box import GB, Capacity, Holding
 from lab_commons.compute.model import Resources, Supply
-from lab_commons.compute.presence import CHECKS, Evidence, Presence, cached
+from lab_commons.compute.presence import Evidence, Presence, cached
+from lab_commons.compute.toolchecks import CHECKS
 from lab_commons.hpc.plan import headroom
 from lab_commons.hpc.slurm import Snapshot
 
@@ -73,7 +74,7 @@ def seated(
 ) -> tuple[Resources, frozenset[str]]:
     """THE ONE PATH to a host's tools: ``(counts, present)``, each its *seats* (1 when undeclared) less *held*.
 
-    A tool with a check (:data:`~lab_commons.compute.presence.CHECKS`) is present exactly when its
+    A tool with a check (:data:`~lab_commons.compute.toolchecks.CHECKS`) is present exactly when its
     *presence* says so (default: this host's cached reading, :func:`~lab_commons.compute.presence.cached`),
     whatever *seats* says; one without a check is present when *seats* declares it.
     """
