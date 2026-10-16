@@ -227,10 +227,10 @@ RETIRED: Final[dict[str, str]] = {
     '--delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
     'card.delegates': 'lab_commons.dev.forgehosts.card_owners (a card is vouched for by its forge-recorded author)',
     # A tool is present when found, at the declared version, smoke-tested and not failed since (D21, 2026-10-16).
-    'TOOL_PROBES': 'lab_commons.compute.presence.CHECKS (find, version and smoke per tool)',
-    'femm_found': 'lab_commons.compute.presence.femm_find (one step of the femm check)',
-    'matlab_found': 'lab_commons.compute.presence.matlab_find (one step of the matlab check)',
-    'simba_found': 'lab_commons.compute.presence.simba_find (one step of the simba check)',
+    'TOOL_PROBES': 'lab_commons.compute.toolchecks.CHECKS (find, version and smoke per tool)',
+    'femm_found': 'lab_commons.compute.toolchecks.femm_find (one step of the femm check)',
+    'matlab_found': 'lab_commons.compute.toolchecks.matlab_find (one step of the matlab check)',
+    'simba_found': 'lab_commons.compute.toolchecks.simba_find (one step of the simba check)',
     'card.provides': 'lab_commons.dev.forgehosts.HostCard.tools (each tool as probed, with its evidence)',
     # Issues never rot (user ruling 2026-10-15): every tidy rule is on, forge serve runs it, a kind is a Marker.
     'forgetidy.SUBJECT': 'lab_commons.dev.forgepulls.Marker.TIDY (every marker kind is a Marker member)',
