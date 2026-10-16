@@ -10,12 +10,13 @@ import json
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 import pytest
 
-from lab_commons.hpc.builds import builds_at, floating_git, read_builds
+from lab_commons.hpc.builds import builds_at, read_builds
 
 _GIT: Final = shutil.which('git') or 'git'
 COLLECTOR: Final = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / 'collect.py'
@@ -99,14 +100,6 @@ def test_a_commit_declaring_no_install_is_refused_naming_the_key(repo: Path) -> 
         builds_at(repo, sha, python='3.13')
 
 
-def test_an_override_dependency_floats_like_any_other_git_requirement() -> None:
-    text = UNDECLARED.replace(
-        '[tool.lab_commons.hpc]',
-        '[tool.uv]\noverride-dependencies = ["lab-commons @ git+https://gitea/T/lab-commons.git"]\n[tool.lab_commons.hpc]',
-    )
-    assert floating_git(text) == (('https://gitea/T/lab-commons.git', 'HEAD'),)
-
-
 def _collect(repo: Path, cache: Path) -> list[str]:
     out = cache.parent / 'collected.txt'
     argv = [sys.executable, str(COLLECTOR), '--cache', str(cache), '--key', 'k', '--out', str(out), '--', 'tests']
@@ -129,11 +122,11 @@ def test_only_files_whose_content_changed_are_collected_again(repo: Path, tmp_pa
     assert 'tests/test_a.py::test_one' in first
     assert 'tests/test_b.py::test_two' in first
     assert any(line.startswith('ERROR tests/test_broken.py') for line in first)
-    [store] = cache.iterdir()
-    assert len(list(store.iterdir())) == 2, 'a file that failed to collect is never cached'
-    (store / f'{_git(repo, "rev-parse", "HEAD:tests/test_a.py")}.json').write_text(
-        json.dumps(['tests/test_a.py::from_the_cache']), encoding='utf-8'
-    )
+    [store] = cache.iterdir()  # ONE file per key: {blob id: ids}
+    entries = json.loads(store.read_text(encoding='utf-8'))
+    assert len(entries) == 2, 'a file that failed to collect is never cached'
+    entries[_git(repo, 'rev-parse', 'HEAD:tests/test_a.py')] = ['tests/test_a.py::from_the_cache']
+    store.write_text(json.dumps(entries), encoding='utf-8')
     _commit(repo, {'tests/test_b.py': 'def test_three():\n    pass\n'})
     second = _collect(repo, cache)
     assert 'tests/test_a.py::from_the_cache' in second, 'an unchanged file is answered from the cache'
@@ -153,26 +146,26 @@ FLOATING: Final = PYPROJECT.replace(
 )
 
 
-def test_the_env_key_folds_the_current_remote_tip_of_every_floating_git_dependency(repo: Path) -> None:
+def test_the_env_key_is_the_committed_lock_and_no_remote_is_asked(repo: Path, monkeypatch) -> None:
+    """D8: the committed lock is the one input -- a floating git requirement adds nothing to the key.
+
+    PLANTED CONTROL: changing the lock moves the key; a network call would fail the test.
+    """
+    monkeypatch.setattr('subprocess.run', _no_ls_remote(subprocess.run))
     sha = _commit(repo, {'pyproject.toml': FLOATING, 'uv.lock': 'a'})
-    tips = {
-        ('https://forge/dep-a', 'HEAD'): '1',
-        ('https://forge/dep-b', 'dev'): '2',
-        ('https://forge/dep-c', 'main'): '3',
-    }
-    asked: list[tuple[str, str]] = []
-
-    def tip(url: str, ref: str) -> str:
-        asked.append((url, ref))
-        return tips[url, ref]
-
-    before = builds_at(repo, sha, python='3.13', tip=tip)
-    assert sorted(asked) == sorted(tips), 'every floating source is asked once; a 40-hex pin is not'
-    assert builds_at(repo, sha, python='3.13', tip=tip) == before, 'an unchanged tip reuses'
-    tips['https://forge/dep-b', 'dev'] = '9'
-    after = builds_at(repo, sha, python='3.13', tip=tip)
-    assert after.env_key != before.env_key, 'a new upstream tip rebuilds the venv'
+    before = builds_at(repo, sha, python='3.13')
+    assert builds_at(repo, sha, python='3.13') == before, 'an unchanged lock reuses'
+    after = builds_at(repo, _commit(repo, {'uv.lock': 'b'}), python='3.13')
+    assert after.env_key != before.env_key, 'a re-locked commit rebuilds the venv'
     assert after.native_key != before.native_key, 'the native build links against the venv it was built in'
+
+
+def _no_ls_remote(run: Callable[..., object]) -> Callable[..., object]:
+    def guarded(argv: list[str], *args: object, **kwargs: object) -> object:
+        assert 'ls-remote' not in argv, f'the env key asked a remote: {argv}'
+        return run(argv, *args, **kwargs)
+
+    return guarded
 
 
 def test_the_per_scope_timeout_is_declared_data_and_an_unknown_scope_is_refused() -> None:

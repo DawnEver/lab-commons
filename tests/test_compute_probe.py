@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 import pytest
 
 from lab_commons.box import GB, Capacity, Holding
-from lab_commons.compute.probe import TOOL_PROBES, account, box, femm_found, matlab_found, os_name, simba_found, tools
+from lab_commons.compute.presence import Presence
+from lab_commons.compute.probe import account, box, os_name, tools
 from lab_commons.hpc.slurm import Node, Quota, Snapshot
+
+
+def _have(**found: bool) -> dict[str, Presence]:
+    """A presence reading: each named tool present or not (how it was read is :mod:`test_compute_presence`'s)."""
+    return {tool: Presence(tool, present=present) for tool, present in found.items()}
 
 
 def test_the_os_is_a_resource_and_an_unknown_one_is_refused() -> None:
@@ -22,22 +27,22 @@ def test_a_tool_counts_its_seats_less_the_running_jobs_that_use_it() -> None:
     counts, present = tools(
         {'jmag': {'seats': 4}, 'femm': {}},
         running=[frozenset({'jmag'}), frozenset({'jmag', 'windows'}), frozenset()],
-        probes={'jmag': lambda: True},
+        presence=_have(jmag=True, femm=True),
     )
     assert dict(counts) == {'jmag': 2.0, 'femm': 1.0}
     assert present == {'jmag', 'femm'}
 
 
 def test_a_declared_tool_its_probe_does_not_find_is_absent() -> None:
-    counts, present = tools({'jmag': {'seats': 4}}, probes={'jmag': lambda: False})
+    counts, present = tools({'jmag': {'seats': 4}}, presence=_have(jmag=False))
     assert present == frozenset()
     assert not counts
     # PLANTED CONTROL: found by the same probe, the same declaration is present.
-    assert tools({'jmag': {'seats': 4}}, probes={'jmag': lambda: True})[1] == {'jmag'}
+    assert tools({'jmag': {'seats': 4}}, presence=_have(jmag=True))[1] == {'jmag'}
 
 
 def test_a_tool_with_every_seat_in_use_is_present_at_zero() -> None:
-    counts, present = tools({'femm': {'seats': 1}}, running=[frozenset({'femm'})], probes={})
+    counts, present = tools({'femm': {'seats': 1}}, running=[frozenset({'femm'})], presence=_have(femm=True))
     assert present == {'femm'}
     assert counts['femm'] == 0.0
 
@@ -48,16 +53,16 @@ CAPACITY = Capacity(cpu=8.0, mem_bytes=16 * GB, seats={'jmag': 2})
 def test_a_box_is_its_capacity_less_its_ledger_claims_with_its_os_and_tools() -> None:
     """The box ledger is the one source: what is claimed on it is not free, whoever claimed it."""
     held = [Holding('verify:r', 1, cpu=2, mem_bytes=4 * GB, seats={'jmag': 1}, deadline=0.0)]
-    supply = box('ws-01', capacity=CAPACITY, holdings=held, platform='win32', probes={'jmag': lambda: True})
+    supply = box('ws-01', capacity=CAPACITY, holdings=held, platform='win32', presence=_have(jmag=True))
     assert dict(supply.resources) == {'cpu': 6.0, 'mem_gb': 12.0, 'windows': 6.0, 'jmag': 1.0}
     assert supply.present == {'cpu', 'mem_gb', 'windows', 'jmag'}
-    idle = box('ws-01', capacity=CAPACITY, platform='win32', probes={'jmag': lambda: True})
+    idle = box('ws-01', capacity=CAPACITY, platform='win32', presence=_have(jmag=True))
     assert dict(idle.resources) == {'cpu': 8.0, 'mem_gb': 16.0, 'windows': 8.0, 'jmag': 2.0}, 'PLANTED CONTROL'
 
 
 def test_a_full_box_still_has_its_os_present_and_a_tool_its_probe_misses_is_absent() -> None:
     held = [Holding('producer', 1, cpu=8, mem_bytes=16 * GB, seats={}, deadline=0.0)]
-    supply = box('ws-01', capacity=CAPACITY, holdings=held, platform='linux', probes={'jmag': lambda: False})
+    supply = box('ws-01', capacity=CAPACITY, holdings=held, platform='linux', presence=_have(jmag=False))
     assert 'linux' in supply.present
     assert 'jmag' not in supply.present
     assert supply.resources['cpu'] == 0.0
@@ -90,77 +95,18 @@ def test_an_account_whose_qos_is_full_has_no_submits() -> None:
 def test_an_account_supplies_its_declared_tools_through_the_same_probe_as_a_box() -> None:
     """A Slurm account has femm exactly where the probe finds it; the machine file only counts its seats."""
     grant = [(_snapshot(cpus=8, mem_mb=1024, submit=None), 'normal')]
-    supply = account('slurm:me', grant, seats={'femm': 1, 'dev_checkout': 1}, probes={'femm': lambda: True})
+    supply = account('slurm:me', grant, seats={'femm': 1, 'dev_checkout': 1}, presence=_have(femm=True))
     assert supply.resources['femm'] == 1.0
     assert {'femm', 'dev_checkout', 'linux'} <= supply.present
-    missing = account('slurm:me', grant, seats={'femm': 1}, probes={'femm': lambda: False})
+    missing = account('slurm:me', grant, seats={'femm': 1}, presence=_have(femm=False))
     assert 'femm' not in missing.present, 'a declared tool its probe does not find is absent on an account too'
-    found = account('slurm:me', grant, seats={}, probes={'femm': lambda: True})
+    found = account('slurm:me', grant, seats={}, presence=_have(femm=True))
     assert found.resources['femm'] == 1.0, 'PLANTED CONTROL: found and undeclared is present, at one seat'
-
-
-def test_femm_is_probed_never_trusted() -> None:
-    assert TOOL_PROBES['femm'] is femm_found
-
-
-@pytest.mark.parametrize(('platform', 'binary'), [('linux', 'femm_headless'), ('win32', 'femm_headlessw.exe')])
-def test_femm_is_found_by_its_headless_binary_under_femm_dir(tmp_path: Path, platform: str, binary: str) -> None:
-    env = {'FEMM_DIR': str(tmp_path)}
-    assert not femm_found(platform=platform, environ=env)
-    (tmp_path / 'bin').mkdir()
-    (tmp_path / 'bin' / binary).write_bytes(b'')
-    assert femm_found(platform=platform, environ=env)
-    other = 'femm_headlessw.exe' if binary == 'femm_headless' else 'femm_headless'
-    (tmp_path / 'bin' / binary).rename(tmp_path / 'bin' / other)
-    assert not femm_found(platform=platform, environ=env), 'the other OS binary does not count'
-
-
-def test_femm_without_femm_dir_reads_the_default_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('HOME', str(tmp_path))
-    monkeypatch.setenv('USERPROFILE', str(tmp_path))
-    assert not femm_found(platform='linux', environ={})
-    home_bin = tmp_path / '.local' / 'opt' / 'femm-qt' / 'bin'
-    home_bin.mkdir(parents=True)
-    (home_bin / 'femm_headless').write_bytes(b'')
-    assert femm_found(platform='linux', environ={})
-    assert not femm_found(platform='darwin', environ={'FEMM_DIR': str(home_bin)}), 'no FEMM 5 build is known there'
 
 
 def test_a_tool_its_probe_finds_is_present_without_any_declaration() -> None:
     """PRESENCE IS PROBED, NOT DECLARED: no ``[capabilities.<tool>]`` row is needed for a probe-able tool."""
-    counts, present = tools({}, probes={'simba': lambda: True, 'matlab': lambda: True, 'jmag': lambda: False})
+    counts, present = tools({}, presence=_have(simba=True, matlab=True, jmag=False))
     assert present == {'simba', 'matlab'}
     assert dict(counts) == {'simba': 1.0, 'matlab': 1.0}, 'an undeclared tool has one seat'
-    assert tools({'matlab': {'seats': 3}}, probes={'matlab': lambda: True})[0]['matlab'] == 3.0, 'seats declared'
-
-
-@pytest.mark.parametrize('tool', ['femm', 'jmag', 'matlab', 'simba'])
-def test_every_solver_tool_is_probed(tool: str) -> None:
-    assert tool in TOOL_PROBES
-
-
-def test_simba_is_found_where_its_python_api_imports() -> None:
-    assert simba_found(find=lambda name: object() if name == 'aesim.simba' else None)
-    assert not simba_found(find=lambda _name: None)
-
-    def missing_parent(_name: str) -> object:
-        msg = 'aesim'
-        raise ModuleNotFoundError(msg)
-
-    assert not simba_found(find=missing_parent), 'no aesim package at all is absent, never an error'
-
-
-@pytest.mark.parametrize(
-    ('platform', 'launcher'),
-    [('win32', 'R2024b/bin/matlab.exe'), ('linux', 'R2024b/bin/matlab'), ('darwin', 'MATLAB_R2024b.app/bin/matlab')],
-)
-def test_matlab_is_found_on_path_or_in_its_standard_install(tmp_path: Path, platform: str, launcher: str) -> None:
-    system = {'win32': 'windows', 'linux': 'linux', 'darwin': 'macos'}[platform]
-    pattern = 'MATLAB_R*.app/bin/matlab' if system == 'macos' else launcher.replace('R2024b', 'R*')
-    installs = {system: ((str(tmp_path), pattern),)}
-    absent = {'platform': platform, 'which': lambda _p: None, 'installs': installs}
-    assert not matlab_found(**absent)
-    assert matlab_found(platform=platform, which=lambda _p: '/bin/matlab', installs=installs), 'on PATH'
-    (tmp_path / launcher).parent.mkdir(parents=True)
-    (tmp_path / launcher).write_bytes(b'')
-    assert matlab_found(**absent), 'a standard install off PATH'
+    assert tools({'matlab': {'seats': 3}}, presence=_have(matlab=True))[0]['matlab'] == 3.0, 'seats declared'

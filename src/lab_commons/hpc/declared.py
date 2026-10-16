@@ -57,6 +57,7 @@ KNOWN_TABLES: Final = frozenset(
         'schedule',
         'stoprun',
         'tests',
+        'tools',
         'verify',
         'worktrees',
     }

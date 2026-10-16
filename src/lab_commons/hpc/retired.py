@@ -226,6 +226,12 @@ RETIRED: Final[dict[str, str]] = {
     '[reserve] delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
     '--delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
     'card.delegates': 'lab_commons.dev.forgehosts.card_owners (a card is vouched for by its forge-recorded author)',
+    # A tool is present when found, at the declared version, smoke-tested and not failed since (D21, 2026-10-16).
+    'TOOL_PROBES': 'lab_commons.compute.toolchecks.CHECKS (find, version and smoke per tool)',
+    'femm_found': 'lab_commons.compute.toolchecks.femm_find (one step of the femm check)',
+    'matlab_found': 'lab_commons.compute.toolchecks.matlab_find (one step of the matlab check)',
+    'simba_found': 'lab_commons.compute.toolchecks.simba_find (one step of the simba check)',
+    'card.provides': 'lab_commons.dev.forgehosts.HostCard.tools (each tool as probed, with its evidence)',
     # Issues never rot (user ruling 2026-10-15): every tidy rule is on, forge serve runs it, a kind is a Marker.
     'forgetidy.SUBJECT': 'lab_commons.dev.forgepulls.Marker.TIDY (every marker kind is a Marker member)',
     'forgeintegration.SUBJECT': 'lab_commons.dev.forgepulls.Marker.INTEGRATION (every marker kind is a Marker member)',
@@ -252,6 +258,10 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: an Outcome whose killed is true)',
     'free_cores(': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a busy reading)',
     'available_mem_gb': 'lab_commons.compute.probe.box (capacity less the box ledger claims, never a free reading)',
+    # A lock-consuming door is judged against the COMMITTED lock (D8): the old name described the untracked era.
+    'REVERTS': 'UNLOCKED (lab_commons.dev.installdoor.Delivery.UNLOCKED)',
+    'RevertingDoorsError': 'lab_commons.dev.installdoor.UnlockedDoorsError',
+    'reverting(': 'lab_commons.dev.installdoor.unlocked(',
 }
 
 
