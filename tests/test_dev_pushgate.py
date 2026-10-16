@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.dev import admission, mergeaudit
+from lab_commons.dev import mergeaudit, pushgate
 from lab_commons.dev.forge import NoCredential
 from lab_commons.dev.forgestatus import Status
 from lab_commons.dev.platformparts import Part, part_context
@@ -29,18 +29,18 @@ def _status(platform: str, result: str = 'PASS', *, scope: str = 'full', hands: 
     return Status(part_context(platform), part.state, part.description(), 'https://forge/attachments/1')
 
 
-def _trunk(statuses: list[Status]) -> admission.Admission:
-    return admission.admit(admission.TRUNK, head=HEAD, statuses=lambda: statuses)
+def _trunk(statuses: list[Status]) -> pushgate.Decision:
+    return pushgate.decide(pushgate.TRUNK, head=HEAD, statuses=lambda: statuses)
 
 
-@pytest.mark.parametrize('destination', [admission.LANE, admission.INTEGRATION])
+@pytest.mark.parametrize('destination', [pushgate.LANE, pushgate.INTEGRATION])
 def test_a_lane_and_an_integration_push_need_no_part(destination: str) -> None:
     """Parts are produced from pushed shas; asking for one before the push would deadlock."""
 
     def never() -> list[Status]:
         pytest.fail('a lane or integration push read the forge')
 
-    decided = admission.admit(destination, head=HEAD, statuses=never)
+    decided = pushgate.decide(destination, head=HEAD, statuses=never)
     assert decided.allowed
     assert 'no part' in decided.message
 
@@ -91,7 +91,7 @@ def test_the_trunk_waits_when_the_forge_cannot_be_read(error: Exception) -> None
     def down() -> list[Status]:
         raise error
 
-    decided = admission.admit(admission.TRUNK, head=HEAD, statuses=down)
+    decided = pushgate.decide(pushgate.TRUNK, head=HEAD, statuses=down)
     assert not decided.allowed
     assert 'WAITS' in decided.message
     assert 'no local fallback' in decided.message
@@ -100,30 +100,30 @@ def test_the_trunk_waits_when_the_forge_cannot_be_read(error: Exception) -> None
 def test_the_parser_reads_the_last_verdict_in_either_grammar() -> None:
     """The stamp grammar's ONE reader stays here: runners still stamp their logs as evidence."""
     line = f'[verdict tree={HEAD} env=e0 tier=heavy selector=12-paths] PASS -- detail'
-    parsed = admission.parse_verdict_line('noise\n' + line)
+    parsed = pushgate.parse_verdict_line('noise\n' + line)
     assert parsed is not None
     assert (parsed.env, parsed.tier, parsed.result) == ('e0', 'heavy', 'PASS')
     stamped = 'VERDICT result=inconclusive tree=t1 env=e1 log=sha256:00@3 selector=verify'
-    flat = admission.parse_verdict_line(line + '\n' + stamped)
+    flat = pushgate.parse_verdict_line(line + '\n' + stamped)
     assert flat is not None
     assert (flat.tree, flat.tier, flat.result) == ('t1', None, 'INCONCLUSIVE')
-    assert admission.parse_verdict_line('no verdict here') is None
+    assert pushgate.parse_verdict_line('no verdict here') is None
 
 
 def _forge(monkeypatch: pytest.MonkeyPatch, statuses: list[Status]) -> None:
-    monkeypatch.setattr(admission, '_head', lambda _root: HEAD)
-    monkeypatch.setattr(admission, 'unprompted_client', lambda _root: None)
-    monkeypatch.setattr(admission, 'status_list', lambda _client, _sha: statuses)
+    monkeypatch.setattr(pushgate, '_head', lambda _root: HEAD)
+    monkeypatch.setattr(pushgate, 'unprompted_client', lambda _root: None)
+    monkeypatch.setattr(pushgate, 'status_list', lambda _client, _sha: statuses)
 
 
 def test_the_cli_reads_the_forge_and_routes_each_destination(tmp_path: Path, monkeypatch) -> None:
     _forge(monkeypatch, [_status('base', 'FAIL')])
     base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
-    assert admission.main([*base, '--remote-ref', 'refs/heads/feat/x']) == 0
-    assert admission.main([*base, '--remote-ref', 'refs/heads/integrate/main']) == 0
-    assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 1
+    assert pushgate.main([*base, '--remote-ref', 'refs/heads/feat/x']) == 0
+    assert pushgate.main([*base, '--remote-ref', 'refs/heads/integrate/main']) == 0
+    assert pushgate.main([*base, '--remote-ref', 'refs/heads/main']) == 1
     _forge(monkeypatch, [_status('base')])
-    assert admission.main([*base, '--remote-ref', 'refs/heads/main']) == 0
+    assert pushgate.main([*base, '--remote-ref', 'refs/heads/main']) == 0
 
 
 def test_the_hook_spelling_reads_git_s_pre_push_lines_on_stdin(tmp_path: Path, monkeypatch) -> None:
@@ -135,15 +135,15 @@ def test_the_hook_spelling_reads_git_s_pre_push_lines_on_stdin(tmp_path: Path, m
     base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
     sha = 'a' * 40
     monkeypatch.setattr(sys, 'stdin', io.StringIO(f'refs/heads/main {sha} refs/heads/main {"0" * 40}\n'))
-    assert admission.main(base) == 1
+    assert pushgate.main(base) == 1
     monkeypatch.setattr(sys, 'stdin', io.StringIO(f'refs/heads/x {sha} refs/heads/lane/x {"0" * 40}\n'))
-    assert admission.main(base) == 0
+    assert pushgate.main(base) == 0
 
 
 def test_no_remote_ref_anywhere_is_a_refused_argv_and_never_an_admission(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(sys, 'stdin', io.StringIO(''))
     with pytest.raises(SystemExit) as refused:
-        admission.main(['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main'])
+        pushgate.main(['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main'])
     assert refused.value.code == 2
 
 
@@ -156,7 +156,7 @@ def test_a_push_that_only_deletes_refs_admits_nothing_and_passes(tmp_path: Path,
     zero = '0' * 40
     lines = f'(delete) {zero} refs/heads/lane/a {"b" * 40}\n(delete) {zero} refs/heads/lane/b {"c" * 40}\n'
     monkeypatch.setattr(sys, 'stdin', io.StringIO(lines))
-    assert admission.main(['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']) == 0
+    assert pushgate.main(['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']) == 0
 
 
 def _git(root: Path, *args: str) -> None:
@@ -193,8 +193,8 @@ def test_a_push_publishing_many_unnamed_merges_does_no_audit_work(tmp_path: Path
 
     for name in ('audit', '_audit', 'unnamed', 'classify'):
         monkeypatch.setattr(mergeaudit, name, trap)
-    monkeypatch.setattr(admission, 'unprompted_client', lambda _root: None)
-    monkeypatch.setattr(admission, 'status_list', lambda _client, _sha: [_status('base')])
+    monkeypatch.setattr(pushgate, 'unprompted_client', lambda _root: None)
+    monkeypatch.setattr(pushgate, 'status_list', lambda _client, _sha: [_status('base')])
     base = ['--root', str(tmp_path), '--trunk-ref', 'refs/heads/main']
     for ref in ('refs/heads/feat/x', 'refs/heads/integrate/main', 'refs/heads/main'):
-        assert admission.main([*base, '--remote-ref', ref]) == 0
+        assert pushgate.main([*base, '--remote-ref', ref]) == 0

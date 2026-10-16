@@ -51,9 +51,12 @@ RETIRED: Final[dict[str, str]] = {
     'run_part': 'lab_commons.dev.platformparts.part_of (a record proves a Part, posted as a status)',
     'parts_for': 'lab_commons.dev.platformparts.parts_of (the parts of a commit, read from its forge statuses)',
     'record_gap': 'nothing: a failing part is a failure status on the forge, linked to its run record',
-    '--trunk-tier': 'nothing: the trunk admits parts of scope full read from the forge (lab_commons.dev.admission)',
-    'admission --ledger': 'nothing: admission reads the forge, never the local ledger',
-    'admission --gap': 'nothing: a failing part is a failure status on the forge, linked to its run record',
+    '--trunk-tier': 'nothing: the trunk admits parts of scope full read from the forge (lab_commons.dev.pushgate)',
+    'pushgate --ledger': 'nothing: the push gate reads the forge, never the local ledger',
+    'pushgate --gap': 'nothing: a failing part is a failure status on the forge, linked to its run record',
+    # The push gate decides a push; `admit` is the one fit rule (lab_commons.compute.admission), D2 2026-10-16.
+    'lab_commons.dev.admission': 'lab_commons.dev.pushgate (decide, Decision)',
+    'dev import admission': 'from lab_commons.dev import pushgate',
     # A merge's deviations are checked when it is committed; a push does no audit work.
     'unpublished_merges': 'nothing: python -m lab_commons.dev.mergeaudit <msg-file> audits the merge being committed',
     'merge_refusals': 'lab_commons.dev.mergeaudit.pending (the commit-msg hook, on the one merge being committed)',
