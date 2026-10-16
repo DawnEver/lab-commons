@@ -239,6 +239,7 @@ class Candidate:
     origin_host: str = ''  # the host card it says created it; kept only where its origin login vouches for it
     session: str = ''  # the ref it was pushed to (one lane is one session); '' for a request
     producer: str = ''  # a request's declared producer name (lab_commons.dev.forgerequest); '' for a part
+    refused: str = ''  # why its own request body is refused (an unvouched host pin); '' when it is not
 
     @property
     def key(self) -> str:
