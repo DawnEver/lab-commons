@@ -6,10 +6,11 @@ Three sources, one value (:mod:`lab_commons.compute.model`):
   its :class:`~lab_commons.box.Capacity` (cores and memory after the ``[reserve]`` margins, the declared tool
   seats) less every claim it holds now -- an interactive verify, a producer, anything run through
   :func:`lab_commons.box.run` -- and the OS itself (``windows``, ``linux``, ``macos``) with count = ``cpu``.
-* **tools**: the machine file's ``[capabilities.<tool>]`` declares ``seats = N`` -- the one number a person
-  declares, because no probe can read a licence. A tool is present when its probe (:data:`TOOL_PROBES`) finds
-  it installed, or, without a probe, when it is declared. Box and Slurm account alike take their tools through
-  the one path, :func:`declared` -- a declaration is verified where a probe exists, never trusted.
+* **tools**: PRESENCE IS PROBED, NOT DECLARED. A tool with a probe (:data:`TOOL_PROBES`) is present exactly
+  when the probe finds it installed -- declared or not, and a declaration never makes it present. The machine
+  file's ``[capabilities.<tool>]`` ``seats = N`` is the one number a person declares, because no probe can
+  read a licence; a found tool nobody declared has 1. A tool without a probe is present when declared. Box
+  and Slurm account alike take their tools through the one path, :func:`seated`.
 * **slurm account**: ``cpu`` AND ``mem_gb`` over EVERY grant of the account (:func:`account`), plus ``submits``
   -- the job submissions its QOS still accepts (infinite when uncapped) -- and ``files``, what the home's
   FILE quota still takes (user ruling 2026-10-14: an Ada home at its 2,020,000-file limit failed every
@@ -20,6 +21,7 @@ The readers of the OS are module functions taken as defaults, so a test passes f
 
 from __future__ import annotations
 
+import importlib.util
 import math
 import os
 import shutil
@@ -41,9 +43,11 @@ __all__ = [
     'TOOL_PROBES',
     'account',
     'box',
-    'declared',
     'femm_found',
+    'matlab_found',
     'os_name',
+    'seated',
+    'simba_found',
     'tools',
 ]
 
@@ -98,28 +102,60 @@ def femm_found(*, platform: str = sys.platform, environ: Mapping[str, str] = os.
     return any((place / binary).is_file() for place in places)
 
 
+#: Where MATLAB's standard installer puts its launcher, per OS: ``(directory, glob)``; ``R*`` is the release.
+MATLAB_INSTALLS: Final = {
+    'windows': (('C:/Program Files/MATLAB', 'R*/bin/matlab.exe'),),
+    'linux': (('/usr/local/MATLAB', 'R*/bin/matlab'), ('/opt/MATLAB', 'R*/bin/matlab')),
+    'macos': (('/Applications', 'MATLAB_R*.app/bin/matlab'),),
+}
+
+
+def matlab_found(
+    *,
+    platform: str = sys.platform,
+    which: Callable[[str], str | None] = shutil.which,
+    installs: Mapping[str, Sequence[tuple[str, str]]] = MATLAB_INSTALLS,
+) -> bool:
+    """Whether MATLAB is here: ``matlab`` on PATH, else a release under the OS's standard install directory."""
+    if which('matlab') is not None:
+        return True
+    places = installs.get(OS_NAMES.get(platform, ''), ())
+    return any(any(Path(root).glob(pattern)) for root, pattern in places)
+
+
+def simba_found(*, find: Callable[[str], object] = importlib.util.find_spec) -> bool:
+    """Whether SIMBA's Python API, ``aesim.simba``, imports in THIS interpreter -- the repo's own venv."""
+    try:
+        return find('aesim.simba') is not None
+    except (ImportError, ValueError):
+        return False
+
+
 #: Tool -> whether it is installed here. A tool without a probe is present when declared.
 TOOL_PROBES: Final[Mapping[str, Callable[[], bool]]] = {
     'femm': femm_found,
     'jmag': _com_registered('designer.Application', 'scheduler.JobApplication'),
-    'matlab': _on_path('matlab'),
+    'matlab': matlab_found,
     'node': _on_path('node'),
+    'simba': simba_found,
 }
 
 
-def declared(
+def seated(
     seats: Mapping[str, int],
     *,
     held: Iterable[Mapping[str, int]] = (),
     probes: Mapping[str, Callable[[], bool]] = TOOL_PROBES,
 ) -> tuple[Resources, frozenset[str]]:
-    """THE ONE PATH from declared tool *seats* to supply: ``(counts, present)``, each its seats less *held*.
+    """THE ONE PATH to a host's tools: ``(counts, present)``, each its *seats* (1 when undeclared) less *held*.
 
-    A declared tool its probe does not find is ABSENT, whatever its seats say; one without a probe is present.
+    A tool with a probe is present exactly when the probe finds it, whatever *seats* says; one without a
+    probe is present when *seats* declares it.
     """
     claims = list(held)
-    present = frozenset(name for name in seats if name not in probes or probes[name]())
-    counts = {name: max(0, seats[name] - sum(one.get(name, 0) for one in claims)) for name in present}
+    found = {name for name, probe in probes.items() if probe()}
+    present = frozenset(found | {name for name in seats if name not in probes})
+    counts = {name: max(0, seats.get(name, 1) - sum(one.get(name, 0) for one in claims)) for name in present}
     return Resources(counts), present
 
 
@@ -129,9 +165,9 @@ def tools(
     running: Iterable[frozenset[str]] = (),
     probes: Mapping[str, Callable[[], bool]] = TOOL_PROBES,
 ) -> tuple[Resources, frozenset[str]]:
-    """:func:`declared` over ``[capabilities]`` rows (``seats`` default 1), one seat per *running* need-set."""
+    """:func:`seated` over ``[capabilities]`` rows (``seats`` default 1), one seat per *running* need-set."""
     seats = {name: int(facts.get('seats', 1)) for name, facts in capabilities.items()}
-    return declared(seats, held=[dict.fromkeys(needs, 1) for needs in running], probes=probes)
+    return seated(seats, held=[dict.fromkeys(needs, 1) for needs in running], probes=probes)
 
 
 # --- the two kinds of supply ------------------------------------------------------------------------------
@@ -149,7 +185,7 @@ def box(
     cpu = max(0.0, capacity.cpu - sum(one.cpu for one in holdings))
     mem_gb = max(0, capacity.mem_bytes - sum(one.mem_bytes for one in holdings)) / GB
     system = os_name(platform)
-    counts, present = declared(capacity.seats, held=[one.seats for one in holdings], probes=probes)
+    counts, present = seated(capacity.seats, held=[one.seats for one in holdings], probes=probes)
     measured = Resources({'cpu': cpu, 'mem_gb': mem_gb, system: cpu}) + counts
     return Supply(scope, measured, present | measured.names | {system})
 
@@ -164,8 +200,8 @@ def account(
 ) -> Supply:
     """A Slurm account over EVERY grant: ``(snapshot, qos)`` each, summed; ``submits`` infinite if uncapped.
 
-    Its tools are the machine file's declared *seats* through :func:`declared`, as a box's are: the probes run
-    where this runs, on the account's own linux login node, so a declared tool not installed there is absent.
+    Its tools go through :func:`seated`, as a box's do: the probes run where this runs, on the account's own
+    linux login node, so a tool not installed there is absent and one installed there is present.
 
     *files* is the home's file-quota headroom (limit less used): at the limit it is 0, and a run -- every
     run creates files -- is refused naming ``files``. Infinite only where no file quota exists.
@@ -182,6 +218,6 @@ def account(
         room = snapshot.quota.submit_room(qos)
         submits += math.inf if room is None else room
     linux = OS_NAMES['linux']  # a Slurm account runs on linux: the OS is a resource there like any other
-    counts, present = declared(seats, probes=probes)
+    counts, present = seated(seats, probes=probes)
     measured = Resources({'cpu': cpu, 'mem_gb': mem, 'submits': submits, 'files': files, linux: cpu}) + counts
     return Supply(scope, measured, present | {'cpu', 'mem_gb', 'submits', 'files', linux})

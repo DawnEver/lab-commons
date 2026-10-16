@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons.box import GB, Capacity, Holding
-from lab_commons.compute.probe import TOOL_PROBES, account, box, femm_found, os_name, tools
+from lab_commons.compute.probe import TOOL_PROBES, account, box, femm_found, matlab_found, os_name, simba_found, tools
 from lab_commons.hpc.slurm import Node, Quota, Snapshot
 
 
@@ -88,14 +88,15 @@ def test_an_account_whose_qos_is_full_has_no_submits() -> None:
 
 
 def test_an_account_supplies_its_declared_tools_through_the_same_probe_as_a_box() -> None:
-    """A Slurm account claims femm-marked work only when its machine file declares femm AND the probe finds it."""
+    """A Slurm account has femm exactly where the probe finds it; the machine file only counts its seats."""
     grant = [(_snapshot(cpus=8, mem_mb=1024, submit=None), 'normal')]
     supply = account('slurm:me', grant, seats={'femm': 1, 'dev_checkout': 1}, probes={'femm': lambda: True})
     assert supply.resources['femm'] == 1.0
     assert {'femm', 'dev_checkout', 'linux'} <= supply.present
     missing = account('slurm:me', grant, seats={'femm': 1}, probes={'femm': lambda: False})
     assert 'femm' not in missing.present, 'a declared tool its probe does not find is absent on an account too'
-    assert 'femm' not in account('slurm:me', grant, seats={}).present, 'PLANTED CONTROL: undeclared is absent'
+    found = account('slurm:me', grant, seats={}, probes={'femm': lambda: True})
+    assert found.resources['femm'] == 1.0, 'PLANTED CONTROL: found and undeclared is present, at one seat'
 
 
 def test_femm_is_probed_never_trusted() -> None:
@@ -123,3 +124,43 @@ def test_femm_without_femm_dir_reads_the_default_install(tmp_path: Path, monkeyp
     (home_bin / 'femm_headless').write_bytes(b'')
     assert femm_found(platform='linux', environ={})
     assert not femm_found(platform='darwin', environ={'FEMM_DIR': str(home_bin)}), 'no FEMM 5 build is known there'
+
+
+def test_a_tool_its_probe_finds_is_present_without_any_declaration() -> None:
+    """PRESENCE IS PROBED, NOT DECLARED: no ``[capabilities.<tool>]`` row is needed for a probe-able tool."""
+    counts, present = tools({}, probes={'simba': lambda: True, 'matlab': lambda: True, 'jmag': lambda: False})
+    assert present == {'simba', 'matlab'}
+    assert dict(counts) == {'simba': 1.0, 'matlab': 1.0}, 'an undeclared tool has one seat'
+    assert tools({'matlab': {'seats': 3}}, probes={'matlab': lambda: True})[0]['matlab'] == 3.0, 'seats declared'
+
+
+@pytest.mark.parametrize('tool', ['femm', 'jmag', 'matlab', 'simba'])
+def test_every_solver_tool_is_probed(tool: str) -> None:
+    assert tool in TOOL_PROBES
+
+
+def test_simba_is_found_where_its_python_api_imports() -> None:
+    assert simba_found(find=lambda name: object() if name == 'aesim.simba' else None)
+    assert not simba_found(find=lambda _name: None)
+
+    def missing_parent(_name: str) -> object:
+        msg = 'aesim'
+        raise ModuleNotFoundError(msg)
+
+    assert not simba_found(find=missing_parent), 'no aesim package at all is absent, never an error'
+
+
+@pytest.mark.parametrize(
+    ('platform', 'launcher'),
+    [('win32', 'R2024b/bin/matlab.exe'), ('linux', 'R2024b/bin/matlab'), ('darwin', 'MATLAB_R2024b.app/bin/matlab')],
+)
+def test_matlab_is_found_on_path_or_in_its_standard_install(tmp_path: Path, platform: str, launcher: str) -> None:
+    system = {'win32': 'windows', 'linux': 'linux', 'darwin': 'macos'}[platform]
+    pattern = 'MATLAB_R*.app/bin/matlab' if system == 'macos' else launcher.replace('R2024b', 'R*')
+    installs = {system: ((str(tmp_path), pattern),)}
+    absent = {'platform': platform, 'which': lambda _p: None, 'installs': installs}
+    assert not matlab_found(**absent)
+    assert matlab_found(platform=platform, which=lambda _p: '/bin/matlab', installs=installs), 'on PATH'
+    (tmp_path / launcher).parent.mkdir(parents=True)
+    (tmp_path / launcher).write_bytes(b'')
+    assert matlab_found(**absent), 'a standard install off PATH'

@@ -20,12 +20,13 @@ __all__ = [
     'fold',
     'held_outcomes',
     'job_measured',
+    'pack_streams',
     'read_record',
     'read_streams',
     'record_name',
     'record_of',
     'run_shas',
-    'stream_dirs',
+    'stream_sources',
     'summary',
     'write_record',
 ]
@@ -143,30 +144,38 @@ def _killed_after(
     return spent
 
 
-#: Where an unfinished run's streams are KEPT once retention removes its tree: ``runs/<sha>/<KEPT>/<tag>``.
+#: Where an unfinished run's streams are KEPT once retention removes its tree: ``runs/<sha>/<KEPT>/<tag>.txt``.
 KEPT_STREAMS: Final = 'streams'
 
+_LISTING: Final = '@@@ '
 
-def stream_dirs(sha: str, tag: str) -> tuple[str, str]:
-    """The streams of *sha*'s round *tag*: in its tree, else where retention kept them (``runs/<sha>``).
+
+def stream_sources(sha: str, tag: str) -> tuple[str, str]:
+    """The streams of *sha*'s round *tag*: its tree's ``.lab-ci/<tag>``, else the ONE file retention packed.
 
     A superseded run's finished shards are carried (:func:`held_outcomes`) long after its tree is garbage, so
-    retention moves ``.lab-ci/<tag>`` beside the run state before the tree goes
-    (:mod:`lab_commons.dev.retentionplan`).
+    retention packs the round's item streams into one file beside the run state (:func:`pack_streams`) before
+    the tree goes (:mod:`lab_commons.dev.retentionplan`): a file is an HPC resource, and the directory it
+    replaces held two files per shard.
     """
-    return f'{ROOT}/trees/{sha}/.lab-ci/{tag}', f'{ROOT}/runs/{sha}/{KEPT_STREAMS}/{tag}'
+    return f'{ROOT}/trees/{sha}/.lab-ci/{tag}', f'{ROOT}/runs/{sha}/{KEPT_STREAMS}/{tag}.txt'
 
 
-def read_streams(run: Runner, *directories: str) -> dict[int, str]:
-    """Every item stream (``<index>.jsonl``) in the first of *directories* that exists -- one remote command."""
-    listing = 'for f in *.jsonl; do [ -e "$f" ] && echo "@@@ $f" && cat "$f"; done'
-    enter = ' || '.join(f'cd {directory} 2>/dev/null' for directory in directories)
-    out = run(f'{{ {enter}; }} && {listing}; true', None)
+def pack_streams(directory: Path) -> str:
+    """*directory*'s item streams (``<index>.jsonl``) as the one listing :func:`read_streams` parses."""
+    texts = ((p.name, p.read_text(encoding='utf-8')) for p in sorted(directory.glob('*.jsonl')))
+    return ''.join(f'{_LISTING}{name}\n{text}' + ('' if text.endswith('\n') else '\n') for name, text in texts)
+
+
+def read_streams(run: Runner, tree: str, kept: str) -> dict[int, str]:
+    """Every item stream of a round -- from its *tree* directory while it exists, else the *kept* pack."""
+    listing = f'for f in *.jsonl; do [ -e "$f" ] && echo "{_LISTING}$f" && cat "$f"; done'
+    out = run(f'if cd {tree} 2>/dev/null; then {listing}; else cat {kept} 2>/dev/null; fi; true', None)
     streams: dict[int, list[str]] = {}
     current: list[str] = []
     for line in out.splitlines():
-        if line.startswith('@@@ ') and line.endswith('.jsonl'):
-            current = streams.setdefault(int(line[4:-6]), [])
+        if line.startswith(_LISTING) and line.endswith('.jsonl'):
+            current = streams.setdefault(int(line[len(_LISTING) : -6]), [])
         else:
             current.append(line)
     return {index: '\n'.join(lines) for index, lines in streams.items()}
@@ -255,7 +264,7 @@ def held_outcomes(state: dict[str, Any], run: Runner) -> dict[str, tuple[str, st
     outcomes = dict((record or state)['outcomes'])
     current = state.get('current')
     if record is None and current:
-        streams = read_streams(run, *stream_dirs(state['sha'], current['tag']))
+        streams = read_streams(run, *stream_sources(state['sha'], current['tag']))
         for index, item in enumerate(current['items']):
             outcomes.update(read_stream(streams.get(index, ''), item['ids'])['outcomes'])
     origin = (record or state).get('carried', {})

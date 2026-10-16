@@ -6,6 +6,7 @@ box: it logs its argv to ``calls.log`` and keeps its state in files under the te
 
 from __future__ import annotations
 
+import shlex
 import sys
 import tomllib
 from dataclasses import dataclass, replace
@@ -14,7 +15,7 @@ from typing import Final
 
 import pytest
 
-from lab_commons.hpc import deploy, deploy_spec, deploy_steps
+from lab_commons.hpc import deploy, deploy_spec, deploy_steps, tick
 from lab_commons.hpc.deploy_steps import Tools
 from lab_commons.hpc.grants import load_grants
 from lab_commons.hpc.retired import RETIRED
@@ -139,7 +140,10 @@ def test_twice_gives_one_marked_line_per_repo_and_keeps_the_users_own(box: Box) 
     alpha = next(line for line in marked if line.endswith('alpha'))
     assert alpha.startswith('*/5 * * * * ')
     assert 'flock -n' in alpha
-    assert alpha.split(' >> ')[0].endswith('lab_commons.dev.forge serve'), 'serve takes no mode'
+    assert alpha.split(' >> ')[0].endswith('lab_commons.hpc tick alpha'), 'the host ticks the repo'
+    assert f'cd {shlex.quote(str(box.home / "src" / "lab-commons"))} &&' in alpha, (
+        "from the host's kit, never the repo's venv"
+    )
     calls = box.logged()
     assert calls.count('git clone') == 3  # the second run updates, never re-clones
     assert 'fetch -q origin +refs/heads/trunk' in calls
@@ -394,3 +398,58 @@ def test_a_repo_declaring_rclone_artefacts_has_its_remote_checked_and_a_missing_
     else:
         assert 'alpha: the rclone remote answers' in out
         assert 'WARNING' not in err
+
+
+class _Done:
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+
+
+def _tick(box: Box, name: str, served: list[tuple[list[str], Path, str]]) -> int:
+    def run(argv: list[str], *, cwd: Path, **_kw: object) -> _Done:
+        served.append((argv, cwd, box.logged()))
+        return _Done(0)
+
+    return tick.tick(name, home=box.home, config=box.machine, tools=box.tools, run=run)
+
+
+def test_a_tick_refreshes_the_kit_and_the_repo_before_the_repos_own_forge_serve(box: Box) -> None:
+    """THE PLANTED CONTROL (incident 2026-10-13): a stale repo venv is refreshed by the HOST before its forge.
+
+    lab-commons moved upstream, so alpha's venv -- holding a kit too old to update itself -- is overlaid first.
+    """
+    assert box.run(*DECLARE) == 0
+    src = box.home / 'src'
+    (src / 'lab-commons' / '.git' / 'HEAD_SHA').write_text('b' * 40, encoding='utf-8')
+    start, served = len(box.logged()), []
+    assert _tick(box, 'alpha', served) == 0
+    [(argv, cwd, logged)] = served
+    assert cwd == src / 'alpha'
+    assert argv == [str(src / 'alpha' / '.venv' / 'bin' / 'python'), '-m', 'lab_commons.dev.forge', 'serve']
+    before = logged[start:]
+    kit = before.index(f'git -C {src / "lab-commons"} checkout -q -B trunk')
+    repo = before.index(f'git -C {src / "alpha"} checkout -q -B trunk')
+    overlay = before.index(f'--python {src / "alpha" / ".venv" / "bin" / "python"} --reinstall-package lab-commons')
+    assert kit < repo < overlay, 'the kit first, then the repo, then its venv, then its forge'
+    again = len(box.logged())
+    assert _tick(box, 'alpha', []) == 0
+    assert '--reinstall-package' not in box.logged()[again:], 'an unchanged kit reinstalls nothing'
+
+
+def test_a_repo_whose_refresh_fails_is_released_by_name_and_its_forge_never_runs(
+    box: Box, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert box.run(*DECLARE) == 0
+    _write(box.home / 'src' / 'alpha' / 'pyproject.toml', '[project]\nname = "alpha"\n')
+    capsys.readouterr()
+    served: list[tuple[list[str], Path, str]] = []
+    assert _tick(box, 'alpha', served) == 2
+    assert served == []
+    assert 'alpha released, not served this tick' in capsys.readouterr().err
+    assert _tick(box, 'beta', served) == 0, 'one repo released never stops another'
+
+
+def test_a_tick_of_an_undeclared_repo_is_refused(box: Box, capsys: pytest.CaptureFixture[str]) -> None:
+    assert box.run(*DECLARE) == 0
+    assert _tick(box, 'gamma', []) == 2
+    assert 'gamma is not a served repo' in capsys.readouterr().err
