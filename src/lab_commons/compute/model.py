@@ -205,6 +205,8 @@ class Schedule:
     )
     #: The label that makes an open issue a request.
     request_label: str = 'forge:request'
+    #: Hours a request may wait unclaimed before its issue is told, ONCE, why the host that saw it did not admit it.
+    request_unadmitted_hours: float = 6.0
     #: The expected cost, in hours, of work nothing has measured yet.
     prior_cost_h: float = 4.0
 
@@ -237,6 +239,7 @@ class Candidate:
     origin_host: str = ''  # the host card it says created it; kept only where its origin login vouches for it
     session: str = ''  # the ref it was pushed to (one lane is one session); '' for a request
     producer: str = ''  # a request's declared producer name (lab_commons.dev.forgerequest); '' for a part
+    refused: str = ''  # why its own request body is refused (an unvouched host pin); '' when it is not
 
     @property
     def key(self) -> str:

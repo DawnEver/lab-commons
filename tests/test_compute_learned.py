@@ -101,3 +101,14 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
     whole = learned.box_demand(REPO, frozenset(), cpu=30, mem_gb=64)
     assert admit(plain, whole, box)
     assert admit(plain, whole, box, running=(Resources(whole),)).lacking == ('cpu', 'mem_gb')
+
+
+def test_a_request_is_learned_under_its_producer_name_never_a_test_parts_record() -> None:
+    """A request shares no record with a test part of its need-set: unmeasured, it asks what its row declares."""
+    jmag = frozenset({'jmag'})
+    learned.record_run(REPO, learned.LOCAL, jmag, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0))
+    declared = learned.request_demand(REPO, 'deck_solve', jmag, cpu=4, mem_gb=8.0)
+    assert declared == Demand(cpu=4, mem_gb=8.0, jmag=1), 'the test part measured on the same need-set is not it'
+    learned.record_run(REPO, 'deck_solve', jmag, Run(peak_mem_gb=10.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    measured = learned.request_demand(REPO, 'deck_solve', jmag, cpu=4, mem_gb=8.0)
+    assert measured == Demand(cpu=2, mem_gb=10.0 * learned.BOX_HEADROOM, jmag=1), 'measured beats declared'
