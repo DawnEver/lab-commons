@@ -7,6 +7,7 @@ current job; a stall is judged against a fresh probe of every grant, never guess
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -18,13 +19,17 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import free_slots
 from lab_commons.hpc.run import load_state, shares_home
 
-__all__ = ['Progress', 'parse_queue', 'where']
+__all__ = ['Progress', 'held_by_a_limit', 'parse_queue', 'where']
 
 #: One round trip: the cluster's clock, then each task of the job -- state, Slurm's reason, the partitions
 #: it may start in, and when it was submitted. Both times are the cluster's clock, so no timezone is mixed.
 _QUEUE: Final = 'date +%Y-%m-%dT%H:%M:%S; squeue -h -r -j {job} -o "%T|%r|%P|%V"'
 #: squeue's refusal of a job id it has aged out: the job left the queue long ago, so the run is finished.
 _FORGOTTEN: Final = 'Invalid job id specified'
+#: Slurm's pend reasons for an ACCOUNT or QOS resource limit (``AssocGrpMemLimit``, ``QOSMaxCpuPerUserLimit``,
+#: ...): the job waits on what the account's other jobs hold, not on the cluster. ``JobArrayTaskLimit`` is
+#: the array's own throttle, so it never matches.
+_LIMIT: Final = re.compile(r'^(?:Assoc|QOS)(?:Grp|Max)\w+$')
 
 
 @dataclass(frozen=True)
@@ -125,6 +130,24 @@ def _stall(
     if elsewhere:
         remedy += '; another grant has room but its home holds no build of this tree -- run submit from it'
     return said + remedy
+
+
+def held_by_a_limit(progress: Progress, policy: Policy) -> str:
+    """Why a job with NOTHING running has pended past ``policy.stall_minutes`` on an account limit; else ``''``.
+
+    Such a claim is idle on a host whose account cannot run it, while another host's could: the forge
+    releases it (:mod:`lab_commons.dev.forgeslurm`). Measured 2026-10-16: a 52-task array sat an hour on
+    ``AssocGrpMemLimit`` with 0 running while other accounts were nearly idle. A job with a task running is
+    progressing, and a pend for any other reason (priority, resources) is the cluster's, not the account's.
+    """
+    if progress.running or not progress.pending or progress.pending_minutes < policy.stall_minutes:
+        return ''
+    if not progress.reasons or not all(_LIMIT.match(reason) for reason in progress.reasons):
+        return ''
+    return (
+        f'job {progress.job_id} pended {progress.pending_minutes:.0f} min on {", ".join(progress.reasons)} '
+        "with nothing running: the account's own jobs hold its limit; released for a host with headroom"
+    )
 
 
 def where(sha: str, machine: Machine, connect: Callable[[Grant], Runner], *, policy: Policy) -> Progress:

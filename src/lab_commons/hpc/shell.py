@@ -36,6 +36,7 @@ __all__ = [
     'fetch_script',
     'group_items',
     'needs_script',
+    'nothing_collected',
     'pack',
     'parse_collection_errors',
     'parse_ids',
@@ -328,3 +329,24 @@ def pack(repo: Path, sha: str) -> str:
         [*git, 'pack-objects', '--revs', '--stdout', '-q'], input=revs.encode('ascii'), capture_output=True, check=True
     )
     return base64.b64encode(done.stdout).decode('ascii')
+
+
+#: How many lines of the collector's own output an empty-collection refusal quotes.
+_COLLECT_TAIL: Final = 25
+
+
+def nothing_collected(spec: RunSpec, collected: str) -> str:
+    """The refusal for a collection that yielded no id, CARRYING the collector's own last lines.
+
+    An empty collection is almost always a failed one -- an import error in a conftest or a package the
+    install did not provide -- and a refusal that only says "nothing collected" hides the one line that
+    names the cause.
+    """
+    said = [line for line in collected.splitlines() if line.strip()][-_COLLECT_TAIL:]
+    quoted = '\n'.join(f'  | {line}' for line in said) or '  | (the collector printed nothing)'
+    return (
+        f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass. '
+        f'The collector said:\n{quoted}\n'
+        f"Remedy: fix the error above; an ImportError usually means the commit's "
+        f'[tool.lab_commons.hpc] install does not install what the tests import.'
+    )

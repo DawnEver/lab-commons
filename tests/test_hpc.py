@@ -115,9 +115,28 @@ def test_a_long_shard_skips_partitions_whose_ceiling_it_breaks() -> None:
         )  # beyond the 2-day free QOS
 
 
-def test_a_held_quota_throttles_by_the_ceiling_and_only_delays() -> None:
+def test_a_held_quota_throttles_by_the_headroom_and_records_that_none_is_left() -> None:
+    """The fixture's caller holds all 96 CPUs: the array runs one at a time, and ``room`` 0 says why.
+
+    PLANTED CONTROL: the same quota with nothing held runs every shard at once.
+    """
     plan = make_plan(10, Cost(), parse_snapshot(FIXTURE), cluster=CLUSTER, policy=Policy(), limits=Limits())
-    assert plan.throttle == len(plan.shards)  # not 0: Slurm pends them until the caller's own job ends
+    assert (plan.throttle, plan.room) == (1, 0)
+    idle = make_plan(10, Cost(), parse_snapshot(IDLE_CALLER), cluster=CLUSTER, policy=Policy(), limits=Limits())
+    assert (idle.throttle, idle.room) == (len(idle.shards), 96)
+
+
+def test_the_throttle_is_the_memory_headroom_over_one_tasks_ask() -> None:
+    """Measured 2026-10-16: 232 GB of a 360 GB ceiling held by 29 tasks of other campaigns.
+
+    An 8 GB task fits 16 in the 128 GB left (the ceiling alone said 45); a 352 GB task fits none.
+    """
+    held = parse_snapshot(IDLE_CALLER + 'acct-free|1|1|8G|N/A\n' * 29)
+    assert held.quota.remaining()['mem'] == (360 - 232) * 1024
+    plan = make_plan(100, Cost(mem_gb=8), held, cluster=CLUSTER, policy=Policy(), limits=Limits())
+    assert (plan.room, plan.throttle) == (16, min(16, len(plan.shards)))
+    hog = make_plan(52, Cost(mem_gb=352.2), held, cluster=CLUSTER, policy=Policy(), limits=Limits())
+    assert (hog.room, hog.throttle) == (0, 1)
 
 
 def test_an_item_wider_than_the_ceiling_is_refused() -> None:
