@@ -67,7 +67,7 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import Plan, allocate, balance, grantable_gb
-from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of, stream_dirs
+from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of, stream_sources
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
     COLLECT_MODULE,
@@ -376,7 +376,7 @@ def gather_run(
     if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
         return None
     measured = Measured.of(state['measured'])
-    streams = read_streams(run, *stream_dirs(sha, current['tag']))
+    streams = read_streams(run, *stream_sources(sha, current['tag']))
     planned = state['rounds'][-1]
     wall = planned['minutes'] * 60
     walls = [

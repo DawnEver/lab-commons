@@ -3,10 +3,12 @@
 Shipped to the cluster as ``~/ci/bin/lab_ci_collect.py`` and run there with the tree's venv, in the
 tree. STANDARD LIBRARY ONLY: it must run under whatever ``lab_commons`` the tested project pins.
 
-A file's ids are cached under ``<cache>/<global key>/<blob id>.json``; the GLOBAL key hashes the caller's
-seed (the build keys, the marker expression), ``pyproject.toml`` and every ``conftest.py`` -- what can
-change the ids of a file whose own content did not change. Only files without a cached entry are
-collected, in ONE pytest call; a file that failed to collect is reported and never cached. The output is
+A key's ids live in ONE file, ``<cache>/<global key>.json`` (``{blob id: ids}``, replaced atomically): a
+file is an HPC resource, and one file per test file per key measured ~1 M files on one account. The
+GLOBAL key hashes the caller's seed (the build keys, the marker expression), ``pyproject.toml`` and every
+``conftest.py`` -- what can change the ids of a file whose own content did not change. Only files without
+a cached entry are collected, in ONE pytest call; a file that failed to collect is reported and never
+cached. Which keys stay is retention's (``collect-over-budget``, :mod:`lab_commons.dev.retentionplan`). The output is
 ``pytest --collect-only -q``'s own shape (ids, then ``ERROR <file>`` lines), written to ``--out`` -- the
 caller ``cat``s it -- so the reader is unchanged.
 
@@ -87,16 +89,14 @@ def main(argv: list[str]) -> int:
     files = _tracked()
     shared = sorted(f'{p} {o}' for p, o in files.items() if p in _GLOBAL or PurePosixPath(p).name == 'conftest.py')
     key = hashlib.sha256('\n'.join([seed, *marker, *shared]).encode('utf-8')).hexdigest()[:24]
-    store = cache / key
+    store = cache / f'{key}.json'
+    try:
+        known: dict[str, list[str]] = json.loads(store.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        known = {}
     tests = [p for p in files if _is_test(p) and _under(p, roots)]
-    found: dict[str, list[str]] = {}
-    stale = []
-    for path in tests:
-        entry = store / f'{files[path]}.json'
-        if entry.is_file():
-            found[path] = json.loads(entry.read_text(encoding='utf-8'))
-        else:
-            stale.append(path)
+    found = {path: known[files[path]] for path in tests if files[path] in known}
+    stale = [path for path in tests if path not in found]
     errors: list[str] = []
     if stale:
         try:
@@ -107,11 +107,14 @@ def main(argv: list[str]) -> int:
             )
             return 1
         failed = {line[len('ERROR ') :].split(' - ', 1)[0].strip() for line in errors}
-        store.mkdir(parents=True, exist_ok=True)
         for path, ids in fresh.items():
             found[path] = ids
             if path not in failed and path in files:
-                (store / f'{files[path]}.json').write_text(json.dumps(ids), encoding='utf-8')
+                known[files[path]] = ids
+        cache.mkdir(parents=True, exist_ok=True)
+        part = store.with_name(f'{store.name}.{os.getpid()}.tmp')
+        part.write_text(json.dumps(known), encoding='utf-8')
+        part.replace(store)  # a concurrent collector of the same key loses at most its own additions
     lines = [node for path in tests for node in found.get(path, ())] + errors
     Path(opts[opts.index('--out') + 1]).write_text(''.join(f'{line}\n' for line in lines), encoding='utf-8')
     return 0
