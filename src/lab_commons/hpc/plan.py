@@ -363,7 +363,7 @@ def session_room(session: Session | None, snapshots: Sequence[Snapshot], cost: C
         raise ValueError(msg)
     cpus, mem_gb = (session.cpus, session.mem_gb)
     if cpus is None or mem_gb is None:
-        cpus, mem_gb = derived(session.name, snapshots)
+        cpus, mem_gb = derived(session.name, snapshots, session.fixed)
     held = sum((s.usage.get(session.name, Held()) for s in snapshots), Held())
     left = [
         math.inf if session.tasks is None else session.tasks - held.tasks,

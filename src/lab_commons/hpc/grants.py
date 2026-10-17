@@ -82,8 +82,9 @@ _RETIRED_KEYS: Final = {
 class Session:
     """What one session may hold at once across the whole pool, pending tasks included.
 
-    Caps ``None`` are DERIVED at plan time (:func:`lab_commons.hpc.allocation.derived`); the override record
-    (:data:`lab_commons.hpc.allocation.RECORD`) sets them. Per-task ceilings are optional either way.
+    Caps ``None`` are DERIVED at plan time (:func:`lab_commons.hpc.allocation.derived`) -- of the whole pool, or
+    of what the override record's *fixed* named shares leave (:data:`lab_commons.hpc.allocation.RECORD`).
+    Per-task ceilings are optional either way.
     """
 
     name: str
@@ -92,6 +93,8 @@ class Session:
     tasks: int | None = None
     task_cpus: float | None = None
     task_mem_gb: float | None = None
+    #: Under an override that does not name this session: each named session's fixed ``(name, cpus, mem_gb)``.
+    fixed: tuple[tuple[str, float, float], ...] = ()
 
     def __post_init__(self) -> None:
         """No cap is negative; a per-task ceiling is positive."""

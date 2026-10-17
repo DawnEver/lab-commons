@@ -13,7 +13,9 @@ submissions WAIT (:func:`lab_commons.hpc.plan.session_room` gives them no room);
 
 THE OVERRIDE IS ONE RECORD, :data:`RECORD`, on the forge's records home (``python -m lab_commons.hpc
 allocate``): ``{"expires": <UTC iso>, "sessions": {name: {cpus, mem_gb, tasks?, task_cpus?, task_mem_gb?}}}``.
-While it is unexpired it decides every session: a session it does not name gets nothing and waits. Expired
+While it is unexpired it FIXES the named sessions' shares; the remainder -- the pool less what each named
+session uses of its share, floored at 0 -- is divided by the same max-min among the unnamed active streams,
+untagged included, so a named session's slack lends out exactly as a derived share's does. Expired
 or absent, the derived default stands. Every submitter -- any agent, any tool -- reads the same record
 under its own ``$LC_HPC_SESSION``.
 """
@@ -72,7 +74,7 @@ def parse(text: str) -> Allocation:
 def render(allocation: Allocation) -> str:
     """The record's JSON; an unset optional cap is left out."""
     sessions = {
-        name: {k: v for k, v in asdict(session).items() if k != 'name' and v is not None}
+        name: {k: v for k, v in asdict(session).items() if k not in {'name', 'fixed'} and v is not None}
         for name, session in sorted(allocation.sessions.items())
     }
     return json.dumps({'expires': allocation.expires.astimezone(UTC).isoformat(), 'sessions': sessions}, indent=2)
@@ -93,7 +95,7 @@ def parse_shares(words: Sequence[str]) -> dict[str, Session]:
 
 
 def session_for(name: str | None, record: str | None, *, now: datetime) -> Session | None:
-    """*name*'s session: the record's caps while it is unexpired (unnamed: nothing), else derived (no caps)."""
+    """*name*'s session: the record's caps while it is unexpired (unnamed: derived from the remainder), else derived."""
     if name is None:
         return None
     if record is None:
@@ -101,7 +103,10 @@ def session_for(name: str | None, record: str | None, *, now: datetime) -> Sessi
     allocation = parse(record)
     if now >= allocation.expires:
         return Session(name)
-    return allocation.sessions.get(name, Session(name, cpus=0, mem_gb=0))
+    if name in allocation.sessions:
+        return allocation.sessions[name]
+    fixed = tuple((n, x.cpus or 0.0, x.mem_gb or 0.0) for n, x in sorted(allocation.sessions.items()))
+    return Session(name, fixed=fixed)
 
 
 def active(snapshots: Sequence[Snapshot]) -> dict[str, Held]:
@@ -143,11 +148,21 @@ def fair(capacity: float, demands: Mapping[str, float]) -> dict[str, float]:
     return shares
 
 
-def derived(name: str, snapshots: Sequence[Snapshot]) -> tuple[float, float]:
-    """*name*'s derived caps -- CPUs and memory (GB) -- the max-min share of the pool among the active streams."""
+def derived(
+    name: str, snapshots: Sequence[Snapshot], fixed: Sequence[tuple[str, float, float]] = ()
+) -> tuple[float, float]:
+    """*name*'s derived caps -- CPUs and memory (GB) -- its max-min share among the active streams.
+
+    The share is of the pool less what each *fixed* (named) session USES of its fixed share, floored at 0.
+    """
     held = active(snapshots)
-    others = {tag: h for tag, h in held.items() if tag != name}
+    named = {n: (cpus, mem_gb) for n, cpus, mem_gb in fixed}
     cpus, mem_mb = pool(snapshots)
+    for n, (cap_cpus, cap_gb) in named.items():
+        used = held.get(n, Held())
+        cpus = max(0.0, cpus - min(cap_cpus, used.cpus))
+        mem_mb = max(0.0, mem_mb - min(cap_gb * 1024, used.mem_mb))
+    others = {tag: h for tag, h in held.items() if tag != name and tag not in named}
     by_cpu = fair(cpus, {name: math.inf, **{tag: h.cpus for tag, h in others.items()}})
     by_mem = fair(mem_mb, {name: math.inf, **{tag: h.mem_mb for tag, h in others.items()}})
     return by_cpu[name], by_mem[name] / 1024
