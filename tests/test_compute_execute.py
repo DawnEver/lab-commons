@@ -5,7 +5,7 @@ The entries are this module's own functions, named ``<module>:<function>`` exact
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -26,7 +26,9 @@ from lab_commons.compute.execute import (
     RAN,
     REFUSED,
     SKIPPED,
+    Hold,
     LocalExecutor,
+    Offer,
     Where,
     presence_check,
 )
@@ -107,22 +109,34 @@ def _calls() -> None:
     CALLS.clear()
 
 
-def executor(tmp_path: Path, *, shared: Shared | None = None, **kw: object) -> LocalExecutor:
-    held: list[Demand] = []
-    kw.setdefault('hold', partial(free_hold, held=held))
-    kw.setdefault('present', lambda _e: '')
-    built = LocalExecutor(ResultStore(tmp_path / 'store', shared), tmp_path / 'journal', **kw)  # type: ignore[arg-type]
-    built.held = held  # type: ignore[attr-defined]
-    return built
+def executor(
+    tmp_path: Path,
+    *,
+    shared: Shared | None = None,
+    held: list[Demand] | None = None,
+    hold: Hold | None = None,
+    present: Callable[[Engine], str] = lambda _e: '',
+    where: Where = Where.HERE,
+    offer: Offer | None = None,
+) -> LocalExecutor:
+    return LocalExecutor(
+        ResultStore(tmp_path / 'store', shared),
+        tmp_path / 'journal',
+        present=present,
+        where=where,
+        offer=offer,
+        hold=hold or partial(free_hold, held=[] if held is None else held),
+    )
 
 
 def test_a_graph_runs_in_order_under_the_ledger_and_a_rerun_is_a_cache_hit(tmp_path: Path) -> None:
     graph = Graph({'a': unit('write', n=21), 'b': unit('double', x=Output('a', 'out'))})
-    ex = executor(tmp_path)
+    held: list[Demand] = []
+    ex = executor(tmp_path, held=held)
     first = ex.run(graph)
     assert [first[n].state for n in 'ab'] == [RAN, RAN]
     assert first['b'].result.output('out').read_text(encoding='utf-8') == '42'
-    assert ex.held == [SMALL, SMALL]  # type: ignore[attr-defined]
+    assert held == [SMALL, SMALL]
     again = ex.run(graph)
     assert [again[n].state for n in 'ab'] == [CACHED, CACHED]
     assert CALLS == ['write', 'double']  # THE CHECK: a cache hit runs nothing

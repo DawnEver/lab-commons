@@ -22,7 +22,7 @@ import hashlib
 import json
 import shutil
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
@@ -120,7 +120,7 @@ class Engine:
 
     @classmethod
     def ours(cls, name: str, environment: Environment) -> Engine:
-        """Our engine *name* (``motronics.fea``); its version IS the environment key."""
+        """Our engine *name* (``<package>.<solver>``); its version IS the environment key."""
         return cls(name, environment.key, environment)
 
     @classmethod
@@ -166,16 +166,18 @@ class Unit:
     inputs: Mapping[str, Any]
     outputs: tuple[str, ...]
     demand: Demand
-    params: Mapping[str, Any] = field(init=False)
 
     def __post_init__(self) -> None:
         """Refuse an entry that is not ``module:function`` and a parameter JSON cannot spell."""
         if ':' not in self.entry:
             msg = f'unit entry {self.entry!r} is not `module:function`'
             raise ValueError(msg)
-        params = {k: v for k, v in self.inputs.items() if not isinstance(v, Path | Output)}
-        canonical(params)  # refuses a parameter JSON cannot spell, at declaration
-        object.__setattr__(self, 'params', params)
+        canonical(self.params)  # refuses a parameter JSON cannot spell, at declaration
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """The inputs that are parameters (JSON values), not files."""
+        return {k: v for k, v in self.inputs.items() if not isinstance(v, Path | Output)}
 
     @property
     def version(self) -> str:

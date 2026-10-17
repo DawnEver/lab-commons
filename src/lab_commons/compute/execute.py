@@ -21,8 +21,8 @@ both and RESUMES -- the entry sees its own checkpoint in *work* -- and says so (
 
 from __future__ import annotations
 
-import importlib
 import json
+import pkgutil
 import shutil
 import socket
 from collections.abc import Callable, Mapping
@@ -138,8 +138,7 @@ def presence_check(here: Environment | None, presence: Mapping[str, Presence]) -
 
 
 def _entry(spec: str) -> Callable[[Mapping[str, Any], Path], object]:
-    module, _, name = spec.partition(':')
-    return getattr(importlib.import_module(module), name)
+    return pkgutil.resolve_name(spec)
 
 
 def _now() -> str:
@@ -196,8 +195,8 @@ class LocalExecutor:
                 return self._run(name, unit, unit_hash, files)
             except Refused as refused:
                 absent, action = str(refused), PLACEMENT[self.where, False]
-        if action == OFFER and not unit.engine.local_only:
-            return Outcome(OFFERED, unit_hash, why=absent, job=self.offer(unit, unit_hash, files))  # type: ignore[misc]
+        if action == OFFER and self.offer is not None and not unit.engine.local_only:
+            return Outcome(OFFERED, unit_hash, why=absent, job=self.offer(unit, unit_hash, files))
         local = ' (a dirty tree is local-only: it cannot be offered)' if action == OFFER else ''
         return Outcome(REFUSED, unit_hash, why=f'{name}: {absent or "--where " + self.where}{local}')
 
