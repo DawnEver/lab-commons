@@ -277,10 +277,21 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.box.admit': 'lab_commons.box.hold (books a claim the one rule admits on the measured room)',
     'lab_commons.box.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
     'demand.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
-    # A lock-consuming door is judged against the COMMITTED lock (D8): the old name described the untracked era.
+    # A lock-consuming door that moves the environment serves whatever a local lock last resolved: UNLOCKED names it.
     'REVERTS': 'UNLOCKED (lab_commons.dev.installdoor.Delivery.UNLOCKED)',
     'RevertingDoorsError': 'lab_commons.dev.installdoor.UnlockedDoorsError',
     'reverting(': 'lab_commons.dev.installdoor.unlocked(',
+    # Dependencies are not pinned (user rulings 2026-10-15/17): no committed lock, no lock age, no scheduled
+    # re-lock. A run says what it resolved instead (its record's resolved environment).
+    'lockcheck': 'nothing: no lock is committed, so no push is refused for one (dependencies float)',
+    'lockupgrade': 'nothing: every bootstrap resolves the newest; no scheduled `uv lock --upgrade`',
+    'Lock-Upgraded': 'nothing: no commit trailer records a lock upgrade',
+    'integrator.lock_max_age_days': 'nothing: delete the key -- no lock is committed, so it has no age',
+    'branchset.update': 'nothing: delete the key -- no lock upgrade branch exists',
+    'update/lock': 'nothing: no lock upgrade branch exists',
+    'requests.lock_upgrade': 'nothing: delete the request -- every bootstrap resolves the newest',
+    'Delivery.LOCKED': 'Delivery.UNLOCKED (a lock-consuming door replaying a local lock serves a stale pin)',
+    'unreproducible(': 'nothing: a request runs at any sha; its record names the resolved environment',
 }
 
 

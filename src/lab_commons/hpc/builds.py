@@ -17,9 +17,10 @@ editable install. A fresh sha with unchanged inputs therefore builds NOTHING. Th
 
 A key is a SHA-256 over the git object ids of the declared inputs AT THE COMMIT (``git rev-parse
 <sha>:<path>`` -- a read-only call; an absent path keys as absent) plus the build command and the
-interpreter request. The committed ``uv.lock`` (D8) is the one input that pins every dependency, git ones
-included: a new upstream tip reaches the venv only through a re-locked commit (the scheduled
-``uv lock --upgrade``), so no remote is asked here.
+interpreter request. A git dependency that FLOATS (a ``name @ git+<url>[@<ref>]`` requirement, or a
+``[tool.uv.sources]`` ``git`` table without a ``rev``) adds the CURRENT remote tip of its ref to the env
+key (``git ls-remote`` -- read-only, the pyproject is the one list), so a new upstream tip rebuilds the
+venv and an unchanged one reuses it; a 40-hex pin is already in the hashed pyproject.
 EVERY ENV HAS A KEY, AND THE KEY IS EVERY INPUT THAT BUILDS IT: the install command, the needs and the
 interpreter request always; the declared inputs when there are some, else the commit itself (a venv
 per commit). Measured 2026-10-10: a resubmit with a corrected install reused the tree's venv built by
@@ -29,10 +30,14 @@ the first, because the venv was keyed by the tree alone.
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
+import tomllib
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
+from urllib.parse import urlsplit
 
 import lab_commons.launch as _door
 from lab_commons.hpc.declared import kit_tables
@@ -43,8 +48,12 @@ __all__ = [
     'SCOPES',
     'Builds',
     'builds_at',
+    'floating_git',
+    'floating_tips',
+    'git_dependencies',
     'key_of',
     'read_builds',
+    'remote_tip',
 ]
 
 _GIT: Final = shutil.which('git') or 'git'
@@ -134,7 +143,65 @@ def _oids(repo: Path, sha: str, paths: tuple[str, ...]) -> dict[str, str]:
     return out
 
 
-def builds_at(repo: Path, sha: str, *, python: str) -> Builds:
+_PINNED: Final = re.compile(r'[0-9a-f]{40}')
+
+
+def _requirements(raw: dict[str, Any]) -> Iterator[str]:
+    project = raw.get('project', {})
+    yield from project.get('dependencies', ())
+    yield from raw.get('tool', {}).get('uv', {}).get('override-dependencies', ())
+    for group in (*project.get('optional-dependencies', {}).values(), *raw.get('dependency-groups', {}).values()):
+        yield from (r for r in group if isinstance(r, str))
+
+
+def git_dependencies(text: str) -> tuple[tuple[str, str], ...]:
+    """``(url, ref)`` of every git dependency of pyproject *text*, in declaration order; ref ``HEAD`` when unnamed.
+
+    A ``[tool.uv.sources]`` table pinned by ``rev`` reports that rev, so :func:`floating_git` can drop it.
+    """
+    raw = tomllib.loads(text)
+    found: dict[tuple[str, str], None] = {}
+    for req in _requirements(raw):
+        _, sep, ref_url = req.partition('git+')
+        if not sep:
+            continue
+        parts = urlsplit(re.split(r'[\s;#]', ref_url, maxsplit=1)[0])
+        path, _, ref = parts.path.partition('@')
+        found[parts._replace(path=path).geturl(), ref or 'HEAD'] = None
+    for source in raw.get('tool', {}).get('uv', {}).get('sources', {}).values():
+        for entry in source if isinstance(source, list) else [source]:
+            if 'git' in entry:
+                found[entry['git'], entry.get('rev') or entry.get('branch') or entry.get('tag') or 'HEAD'] = None
+    return tuple(found)
+
+
+def floating_git(text: str) -> tuple[tuple[str, str], ...]:
+    """``(url, ref)`` of every git dependency of pyproject *text* NOT pinned to a commit; ref ``HEAD`` when unnamed."""
+    return tuple(sorted((url, ref) for url, ref in git_dependencies(text) if not _PINNED.fullmatch(ref)))
+
+
+def remote_tip(url: str, ref: str) -> str:
+    """The commit *ref* of the remote at *url* names now -- ``git ls-remote``, which writes nothing."""
+    done = _door.run(
+        [_GIT, 'ls-remote', url, ref], capture_output=True, text=True, encoding='utf-8', check=False, timeout=60
+    )
+    words = done.stdout.split()
+    if done.returncode != 0 or not words:
+        msg = f'git ls-remote {url} {ref} named no commit (exit {done.returncode}): {done.stderr.strip()}'
+        raise RuntimeError(msg)
+    return words[0]
+
+
+def floating_tips(text: str, tip: Callable[[str, str], str] = remote_tip) -> dict[str, str]:
+    """``{'git+<url>@<ref>': <tip>}`` for every floating git dependency of pyproject *text* -- the one fold.
+
+    Dependencies are not pinned (user rulings 2026-10-15/17), so an environment is a function of its inputs AND
+    of what each floating source names NOW: every key that decides whether to rebuild a venv folds these in.
+    """
+    return {f'git+{url}@{ref}': tip(url, ref) for url, ref in floating_git(text)}
+
+
+def builds_at(repo: Path, sha: str, *, python: str, tip: Callable[[str, str], str] = remote_tip) -> Builds:
     """The declaration commit *sha* of *repo* carries, with its keys -- every git call here only READS.
 
     Raises:
@@ -152,7 +219,11 @@ def builds_at(repo: Path, sha: str, *, python: str) -> Builds:
     if not builds.install:
         msg = f'{sha[:12]} declares no [tool.lab_commons.hpc] install, e.g. install = "uv sync --extra dev"'
         raise ValueError(msg)
-    oids = _oids(repo, sha, builds.dependency_inputs) if builds.dependency_inputs else {'commit': sha}
+    if builds.dependency_inputs:
+        oids = _oids(repo, sha, builds.dependency_inputs)
+        oids.update(floating_tips(text, tip))
+    else:
+        oids = {'commit': sha}
     env_key = key_of(oids, builds.install, python, *builds.needs)
     native_key = ''
     if builds.native_inputs:

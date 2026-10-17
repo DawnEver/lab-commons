@@ -259,6 +259,7 @@ def submit_run(
         'platform': spec.part,
         'system': told.get('platform', ''),
         'env': told['env'],
+        'resolved': json.loads(told.get('resolved') or '[]'),  # every name==version it ran against (envkey)
         'builds': {'env': spec.builds.env_key, 'native': spec.builds.native_key},  # ~/ci/envs, ~/ci/native keys
         'cluster': host,
         'python': told.get('python', ''),

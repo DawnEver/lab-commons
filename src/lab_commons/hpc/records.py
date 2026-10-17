@@ -39,6 +39,7 @@ _STATE_KEYS: Final = (
     'platform',
     'system',
     'env',
+    'resolved',
     'cluster',
     'python',
     'prep',
