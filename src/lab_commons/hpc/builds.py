@@ -49,6 +49,7 @@ __all__ = [
     'Builds',
     'builds_at',
     'floating_git',
+    'git_dependencies',
     'key_of',
     'read_builds',
     'remote_tip',
@@ -152,22 +153,30 @@ def _requirements(raw: dict[str, Any]) -> Iterator[str]:
         yield from (r for r in group if isinstance(r, str))
 
 
-def floating_git(text: str) -> tuple[tuple[str, str], ...]:
-    """``(url, ref)`` of every git dependency of pyproject *text* NOT pinned to a commit; ref ``HEAD`` when unnamed."""
+def git_dependencies(text: str) -> tuple[tuple[str, str], ...]:
+    """``(url, ref)`` of every git dependency of pyproject *text*, in declaration order; ref ``HEAD`` when unnamed.
+
+    A ``[tool.uv.sources]`` table pinned by ``rev`` reports that rev, so :func:`floating_git` can drop it.
+    """
     raw = tomllib.loads(text)
-    found: set[tuple[str, str]] = set()
+    found: dict[tuple[str, str], None] = {}
     for req in _requirements(raw):
         _, sep, ref_url = req.partition('git+')
         if not sep:
             continue
         parts = urlsplit(re.split(r'[\s;#]', ref_url, maxsplit=1)[0])
         path, _, ref = parts.path.partition('@')
-        found.add((parts._replace(path=path).geturl(), ref or 'HEAD'))
+        found[parts._replace(path=path).geturl(), ref or 'HEAD'] = None
     for source in raw.get('tool', {}).get('uv', {}).get('sources', {}).values():
         for entry in source if isinstance(source, list) else [source]:
-            if 'git' in entry and 'rev' not in entry:
-                found.add((entry['git'], entry.get('branch') or entry.get('tag') or 'HEAD'))
-    return tuple(sorted((url, ref) for url, ref in found if not _PINNED.fullmatch(ref)))
+            if 'git' in entry:
+                found[entry['git'], entry.get('rev') or entry.get('branch') or entry.get('tag') or 'HEAD'] = None
+    return tuple(found)
+
+
+def floating_git(text: str) -> tuple[tuple[str, str], ...]:
+    """``(url, ref)`` of every git dependency of pyproject *text* NOT pinned to a commit; ref ``HEAD`` when unnamed."""
+    return tuple(sorted((url, ref) for url, ref in git_dependencies(text) if not _PINNED.fullmatch(ref)))
 
 
 def remote_tip(url: str, ref: str) -> str:
