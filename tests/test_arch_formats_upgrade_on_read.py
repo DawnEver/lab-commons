@@ -36,9 +36,7 @@ _FLOOR: Final = 2
 
 #: A format whose upgrade path is OWED by a named lane -- on record, never skipped. A row whose module
 #: complies is a red too (the ratchet's other side): delete it in the merge that brings the upgrade.
-_OWED: Final = {
-    'lab_commons/dev/forgerun.py': 'lane/journal-schema (6c9042e: _UPGRADES = {1: _from_1}, adopt on read)',
-}
+_OWED: Final[dict[str, str]] = {}
 
 
 def _is_version_name(name: str) -> bool:
