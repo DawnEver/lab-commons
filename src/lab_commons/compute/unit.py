@@ -7,9 +7,8 @@ computed once answers both; a unit reads no undeclared host state, which is what
 
 WHAT A VERSION IS. A vendor engine's version is PROBED on the host (:mod:`lab_commons.compute.presence`), never
 declared there. Ours is an :class:`Environment` -- our code at a commit plus the key of the environment that
-commit builds (:func:`lab_commons.hpc.builds.builds_at`: the dependency inputs and the tips of floating git
-dependencies, the install command, the interpreter), so a host builds it once per key. A DIRTY tree is the
-commit plus the hash of its diff: it runs
+commit builds (:func:`lab_commons.hpc.builds.builds_at`: the committed lock, the install command, the
+interpreter), so a host builds it once per key. A DIRTY tree is the commit plus the hash of its diff: it runs
 here and nowhere else -- its result is LOCAL-ONLY, never shared, never a verdict, never shipped.
 
 AN INPUT MAY BE ANOTHER UNIT'S OUTPUT (:class:`Output`), which is how a :class:`~lab_commons.compute.graph.Graph`

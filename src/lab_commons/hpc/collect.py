@@ -1,7 +1,7 @@
 """Collect node ids PER TEST FILE, reusing what an earlier commit collected for a file with the same content.
 
 Shipped to the cluster as ``~/ci/bin/lab_ci_collect.py`` and run there with the tree's venv, in the
-tree. STANDARD LIBRARY ONLY: it must run under whatever ``lab_commons`` the tested project resolved.
+tree. STANDARD LIBRARY ONLY: it must run under whatever ``lab_commons`` the tested project pins.
 
 A key's ids live in ONE file, ``<cache>/<global key>.json`` (``{blob id: ids}``, replaced atomically): a
 file is an HPC resource, and one file per test file per key measured ~1 M files on one account. The
