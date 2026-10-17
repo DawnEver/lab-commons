@@ -9,11 +9,13 @@ on it without inheriting anything else. Importing ``lab_commons`` does not impor
 - :mod:`~lab_commons.outcomes.expectation` -- ``Expectation``, part of a task's declaration.
 - :mod:`~lab_commons.outcomes.jsonl` -- the append-only JSONL reader (torn last line tolerated).
 - :mod:`~lab_commons.outcomes.record` -- ``Record``: durable events, DECIDED finality, views, replay.
+- :mod:`~lab_commons.outcomes.conclusion` -- ``Conclusion`` (PASS / FAIL / INCONCLUSIVE).
 """
 
 from __future__ import annotations
 
 from lab_commons.outcomes.cell import Cell, Cost, Reason
+from lab_commons.outcomes.conclusion import Conclusion
 from lab_commons.outcomes.expectation import Expectation
 from lab_commons.outcomes.identity import INACTIVE, Identity
 from lab_commons.outcomes.jsonl import JsonlRead, TornRecord, read_jsonl
@@ -34,6 +36,7 @@ __all__ = [
     'SCHEMA_VERSION',
     'SUBMITTED',
     'Cell',
+    'Conclusion',
     'Cost',
     'Event',
     'Evidence',
