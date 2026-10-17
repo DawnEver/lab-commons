@@ -126,6 +126,8 @@ RETIRED: Final[dict[str, str]] = {
     'githooks script branchset-push': _BRANCHSET_ROW,
     'branchset-push.sh': _BRANCHSET_ROW,
     'lab_commons.dev.githooks cz-push-range': 'python -m lab_commons.dev.githooks script cz-push-range',
+    # A session share is temporary: derived from Slurm or one expiring forge record, never a machine file (2026-10-17).
+    '[hpc.session.': 'python -m lab_commons.hpc allocate (one expiring forge record), else the derived share',
     # Where a run is and what the cluster can take are read from the forge, from any machine; no verb asks over ssh.
     'lab_commons.hpc probe': (
         'python -m lab_commons.dev.forge queue (each cluster host card carries its supply, partitions and quota)'

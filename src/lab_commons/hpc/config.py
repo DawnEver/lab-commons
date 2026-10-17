@@ -125,6 +125,8 @@ class JobSpec:
     sha: str = ''
     #: Where that commit is fetched from (read-only HTTPS); required with ``sha``.
     repo_url: str = ''
+    #: Every item reruns to the same result, so a short task may be moved (``[hpc.paging]``); declared, never guessed.
+    rerun_safe: bool = False
 
     def __post_init__(self) -> None:
         """A commit names its remote."""
