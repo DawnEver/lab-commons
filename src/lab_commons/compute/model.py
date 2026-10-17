@@ -203,6 +203,10 @@ class Schedule:
     classes_by_ref: Mapping[str, str] = field(
         default_factory=lambda: {'feat/*': FEATURE, 'fix/*': FEATURE, 'lane/*': BRANCH}
     )
+    #: Classes whose ref is COALESCED (D6, user ruling 2026-10-17): at most one run per (ref, part) in flight
+    #: across the fleet, and the ref's current tip waits behind it -- the next tip is tested as one batch. A
+    #: class absent here (a lane ``branch``, a ``pr`` head) is tested at every pushed sha.
+    coalesce: tuple[str, ...] = (INTEGRATION, FEATURE)
     #: The label that makes an open issue a request.
     request_label: str = 'forge:request'
     #: Hours a request may wait unclaimed before its issue is told, ONCE, why the host that saw it did not admit it.
