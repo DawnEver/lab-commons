@@ -39,6 +39,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from typing import Final
 
+from lab_commons.hpc.allocation import derived
 from lab_commons.hpc.config import GIB, Cluster, Cost, Limits, Policy
 from lab_commons.hpc.grants import COMMENT_PREFIX, Grant, Paging, Session
 from lab_commons.hpc.slurm import Held, Snapshot
@@ -340,10 +341,12 @@ def headroom(snapshot: Snapshot) -> int:
 
 
 def session_room(session: Session | None, snapshots: Sequence[Snapshot], cost: Cost) -> int | None:
-    """Tasks of *cost* *session* may still start: its cap less what its tag holds on EVERY account; ``None`` uncapped.
+    """Tasks of *cost* *session* may still start: its share less what its tag holds on EVERY account; ``None`` uncapped.
 
     The accounts are one pool (user ruling 2026-10-17), so the session is counted across all of them, pending
-    tasks included. A task past the per-task ceiling is refused; one that fits is never refused, only held to 0.
+    tasks included. Its share is the override record's caps, else derived from Slurm now
+    (:func:`lab_commons.hpc.allocation.derived`). A task past a per-task ceiling is refused; one that fits is
+    never refused, only held to 0.
     """
     if session is None:
         return None
@@ -358,13 +361,17 @@ def session_room(session: Session | None, snapshots: Sequence[Snapshot], cost: C
     if over:
         msg = f'session {session.name!r}: one task asks past its per-task ceiling ({", ".join(over)})'
         raise ValueError(msg)
+    cpus, mem_gb = (session.cpus, session.mem_gb)
+    if cpus is None or mem_gb is None:
+        cpus, mem_gb = derived(session.name, snapshots)
     held = sum((s.usage.get(session.name, Held()) for s in snapshots), Held())
-    left = (
-        session.tasks - held.tasks,
-        (session.cpus - held.cpus) // cost.cpus,
-        (session.mem_gb * 1024 - held.mem_mb) // (cost.mem_gb * 1024),
-    )
-    return max(0, int(min(left)))
+    left = [
+        math.inf if session.tasks is None else session.tasks - held.tasks,
+        (cpus - held.cpus) // cost.cpus if cost.cpus else math.inf,
+        (mem_gb * 1024 - held.mem_mb) // (cost.mem_gb * 1024) if cost.mem_gb else math.inf,
+    ]
+    least = min(left)
+    return None if math.isinf(least) else max(0, int(least))
 
 
 def free_mem_mb(snapshot: Snapshot) -> float:

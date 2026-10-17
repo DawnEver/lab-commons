@@ -7,12 +7,12 @@ from Slurm at plan time, never stored, because every job a session submits carri
 (:mod:`lab_commons.hpc.slurm`). A stored usage figure would be a second copy of Slurm's own state, wrong
 the moment a job ends.
 
-A SESSION HAS A CAP, NOT AN ACCOUNT (user ruling 2026-10-17). ``$LC_HPC_SESSION`` names the session this
-process submits for; its ``[hpc.session.<name>]`` table is the one declaration of what it may hold at once
-across the whole pool -- tasks, CPUs and memory, pending tasks included -- and, optionally, the most one
-task may ask. Past the cap a job WAITS (:func:`lab_commons.hpc.plan.allocate` gives it no room); only a task
-past the per-task ceiling is refused. No ``$LC_HPC_SESSION`` tags nothing and caps nothing; a name with no
-table is refused.
+A SESSION HAS A SHARE, NOT AN ACCOUNT, AND NO MACHINE FILE HOLDS IT (user ruling 2026-10-17).
+``$LC_HPC_SESSION`` names the session this process submits for. What it may hold at once across the whole
+pool is derived from Slurm at plan time, or set by one expiring forge record
+(:mod:`lab_commons.hpc.allocation`) -- an allocation between sessions is temporary. Past its share a job
+WAITS (:func:`lab_commons.hpc.plan.allocate` gives it no room); only a task past a per-task ceiling is
+refused. No ``$LC_HPC_SESSION`` tags nothing and caps nothing.
 
 AN ACCOUNT IS ``(user, slurm_account)``, REACHED THROUGH ANY OF ITS LOGIN HOSTS. ``hosts`` is ordered: the
 runner (:func:`lab_commons.hpc.cluster.runner_for`) tries each with ``BatchMode`` ssh and a short connect timeout
@@ -32,13 +32,6 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     partitions = ["shortq", "defq"]               # optional cluster facts: candidates, in preference order
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
     setup = ["module load git/2.42.0"]   # optional: run first in every array task
-
-    [hpc.session.wdg-design]             # one per session; $LC_HPC_SESSION picks this process's
-    tasks = 2                            # concurrent tasks, pending + running, across every account
-    cpus = 128
-    mem_gb = 600
-    task_cpus = 64                       # optional per-task ceilings: a bigger task is refused
-    task_mem_gb = 300
 
     [hpc.paging]                         # optional; undeclared, placement ignores size and region
     page_cpus = 8                        # one page: a SMALL task fits it
@@ -77,26 +70,35 @@ SESSION_ENV: Final = 'LC_HPC_SESSION'
 
 #: Keys of ``[hpc]`` that were retired, each with its remedy.
 _RETIRED_KEYS: Final = {
-    'workstation': f'jobs are tagged by session (${SESSION_ENV}, capped by [hpc.session.<name>]) -- delete the line',
+    'workstation': f'jobs are tagged by session (${SESSION_ENV}) -- delete the line',
+    'session': (
+        'a session share is derived from Slurm, or overridden by one expiring forge record '
+        '(python -m lab_commons.hpc allocate) -- delete the table'
+    ),
 }
 
 
 @dataclass(frozen=True)
 class Session:
-    """What one session may hold at once across the whole pool, pending tasks included; per-task ceilings optional."""
+    """What one session may hold at once across the whole pool, pending tasks included.
+
+    Caps ``None`` are DERIVED at plan time (:func:`lab_commons.hpc.allocation.derived`); the override record
+    (:data:`lab_commons.hpc.allocation.RECORD`) sets them. Per-task ceilings are optional either way.
+    """
 
     name: str
-    tasks: int
-    cpus: float
-    mem_gb: float
+    cpus: float | None = None
+    mem_gb: float | None = None
+    tasks: int | None = None
     task_cpus: float | None = None
     task_mem_gb: float | None = None
 
     def __post_init__(self) -> None:
-        """Every cap is positive."""
-        caps = (self.tasks, self.cpus, self.mem_gb, self.task_cpus or 1, self.task_mem_gb or 1)
-        if any(c <= 0 for c in caps):
-            msg = f'every session cap is positive, got {self}'
+        """No cap is negative; a per-task ceiling is positive."""
+        caps = (self.tasks, self.cpus, self.mem_gb)
+        ceilings = (self.task_cpus, self.task_mem_gb)
+        if any(c is not None and c < 0 for c in caps) or any(c is not None and c <= 0 for c in ceilings):
+            msg = f'a session cap is never negative and a per-task ceiling is positive, got {self}'
             raise ValueError(msg)
 
 
@@ -136,27 +138,15 @@ def _paging(raw: dict[str, Any] | None, source: str) -> Paging | None:
     return Paging(**raw)
 
 
-def _session(raw: dict[str, Any], source: str) -> Session | None:
-    """``$LC_HPC_SESSION``'s ``[hpc.session.<name>]``; ``None`` when unset. A name without a table is refused."""
+def _session(source: str) -> Session | None:
+    """``$LC_HPC_SESSION``'s session, its caps derived; ``None`` when unset."""
     name = os.environ.get(SESSION_ENV, '').strip()
     if not name:
         return None
     if any(c.isspace() or c in ',;' for c in name):
-        msg = f'${SESSION_ENV} must be a name without spaces, commas or semicolons, got {name!r}'
+        msg = f'{source}: ${SESSION_ENV} must be a name without spaces, commas or semicolons, got {name!r}'
         raise ValueError(msg)
-    table = raw.get(name)
-    if table is None:
-        msg = f'{source}: ${SESSION_ENV}={name} but there is no [hpc.session.{name}] declaring its cap'
-        raise ValueError(msg)
-    known = set(Session.__dataclass_fields__) - {'name'}
-    if unknown := set(table) - known:
-        msg = f'{source}: [hpc.session.{name}] has unknown keys {sorted(unknown)}; known: {sorted(known)}'
-        raise ValueError(msg)
-    try:
-        return Session(name=name, **table)
-    except TypeError as missing:
-        msg = f'{source}: [hpc.session.{name}] needs tasks, cpus and mem_gb: {missing}'
-        raise ValueError(msg) from missing
+    return Session(name)
 
 
 @dataclass(frozen=True)
@@ -241,9 +231,9 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
         if key in raw:
             msg = f'{source}: [hpc] {key} is retired: {remedy}'
             raise ValueError(msg)
-    unknown = set(raw) - {'grant', 'session', 'paging'}
+    unknown = set(raw) - {'grant', 'paging'}
     if unknown:
-        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging", "session"]'
+        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging"]'
         raise ValueError(msg)
     grants = tuple(_grant(g, source) for g in raw.get('grant', []))
     if not grants:
@@ -255,5 +245,5 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
             msg = f'{source}: account {grant.account!r} is granted twice; one grant per account'
             raise ValueError(msg)
         seen.add(grant.account)
-    session = _session(raw.get('session', {}), source)
+    session = _session(source)
     return Machine(session=session, grants=grants, paging=_paging(raw.get('paging'), source))
