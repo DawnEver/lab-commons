@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
+import sys
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ __all__ = [
     'checkout_of',
     'cron_lines',
     'has_grant',
+    'host_serve_argv',
     'load',
     'merge_crontab',
     'parse_repo',
@@ -155,7 +157,7 @@ def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: 
     """The shell command of one tick of *repo*: cron PATH, ``flock -n``, the HOST's ``hpc tick <repo>``.
 
     It runs from the lab-commons checkout's venv, never the repo's: the host refreshes the repo (and
-    itself) before the repo's own ``forge serve`` runs, so a stale repo venv cannot block its own update.
+    itself), then serves it with its own kit (:func:`host_serve_argv`), so a stale repo venv blocks nothing.
     """
     path = ':'.join(tick_dirs(home, slurm))
     cache = home / '.cache'
@@ -181,3 +183,16 @@ def tick_dirs(home: Path, slurm: Sequence[str] = ()) -> list[str]:
 def checkout_of(spec: Deployment, home: Path, repo: Repo) -> Path:
     """Where *repo* is checked out: ``~/<root>/<name>``."""
     return home / spec.root / repo.name
+
+
+def host_serve_argv() -> list[str]:
+    """``forge serve`` as THE HOST KIT runs it, in a served repo's checkout (cwd): the one scheduler on a host.
+
+    The interpreter is this process's -- the host's lab-commons -- never the repo's venv: a repo venv holds
+    whatever kit it pinned (a non-editable older one, measured), so serving from it ran a second scheduler
+    the host's fixes never reached. The repo's venv only runs its producers, in their trees. ``-P`` keeps
+    the checkout (the cwd) off ``sys.path``, so the repo's files never shadow the kit.
+    """
+    python = Path(sys.executable)  # under the Task's windowless interpreter, its console twin keeps the streams
+    console = python.with_name(python.name.lower().replace('pythonw', 'python'))
+    return [str(console if console.is_file() else python), '-P', '-m', 'lab_commons.dev.forge', 'serve']

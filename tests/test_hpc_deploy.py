@@ -425,7 +425,7 @@ def test_a_tick_refreshes_the_kit_and_the_repo_before_the_repos_own_forge_serve(
     assert _tick(box, 'alpha', served) == 0
     [(argv, cwd, logged)] = served
     assert cwd == src / 'alpha'
-    assert argv == [str(src / 'alpha' / '.venv' / 'bin' / 'python'), '-m', 'lab_commons.dev.forge', 'serve']
+    assert argv == deploy_spec.host_serve_argv(), 'the HOST kit serves; the repo venv only runs its producers'
     before = logged[start:]
     kit = before.index(f'git -C {src / "lab-commons"} checkout -q -B trunk')
     repo = before.index(f'git -C {src / "alpha"} checkout -q -B trunk')

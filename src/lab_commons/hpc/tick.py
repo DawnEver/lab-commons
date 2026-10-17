@@ -1,9 +1,10 @@
 """ONE CRON TICK of a served repo on a cluster account: ``python -m lab_commons.hpc tick <repo>``.
 
-THE HOST REFRESHES, THE REPO SERVES (incident 2026-10-13): a repo served from its OWN venv cannot update
+THE HOST REFRESHES AND SERVES (incident 2026-10-13): a repo served from its OWN venv cannot update
 itself when the kit in that venv is too old to run -- the code that would update it is the code that
 fails. So the cron line runs THIS, from the host's lab-commons checkout
-(:func:`lab_commons.hpc.deploy_spec.tick_command`), and only then the repo's own ``forge serve``. Every
+(:func:`lab_commons.hpc.deploy_spec.tick_command`), and then THE HOST KIT's ``forge serve`` in the repo's
+checkout (:func:`~lab_commons.hpc.deploy_spec.host_serve_argv`); the repo's venv only runs its producers. Every
 step is the deploy's own and keyed (:func:`lab_commons.hpc.deploy_steps.update` and ``build``), so an
 unchanged tick only fetches.
 """
@@ -17,7 +18,7 @@ from typing import Any
 import lab_commons.launch as _door
 from lab_commons.config import config_path
 from lab_commons.hpc.declared import OutdatedKit, RetiredTable
-from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of, load
+from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of, host_serve_argv, load
 from lab_commons.hpc.deploy_steps import Step, Tools, build, update
 from lab_commons.log import emit
 
@@ -43,14 +44,15 @@ def tick(
     tools: Tools | None = None,
     run: Callable[..., Any] = _door.run,
 ) -> int:
-    """One cron tick of served repo *name*: THE HOST refreshes, then the repo's own ``forge serve`` runs.
+    """One cron tick of served repo *name*: THE HOST refreshes, then serves it with its own kit.
 
     Runs from the host's lab-commons checkout, never the repo's venv (incident 2026-10-13: a repo venv
     whose old ``forge serve`` exited 2 every tick could never run the code that would update it). First
     lab-commons follows its declared ref, then *name* follows its own and its venv is rebuilt where its
     inputs or the served lab-commons HEAD moved (:func:`lab_commons.hpc.deploy_steps.build`). A kit that
     cannot move is reported and the repo serves with the kit it has; a repo that cannot is RELEASED this
-    tick with its reason, exit 2, and its ``forge serve`` never runs on a stale venv.
+    tick with its reason, exit 2, and is not served. Serving is the host kit's ``forge serve`` in the repo's
+    checkout (:func:`~lab_commons.hpc.deploy_spec.host_serve_argv`), never the repo venv's.
     """
     spec = load(config or config_path())
     repo = next((one for one in spec.repos if one.name == name), None) if spec else None
@@ -65,5 +67,4 @@ def tick(
         emit(f'[tick] {name} released, not served this tick: {why}', err=True)
         return 2
     checkout = checkout_of(spec, home, repo)
-    argv = [str(checkout / '.venv' / 'bin' / 'python'), '-m', 'lab_commons.dev.forge', 'serve']
-    return run(argv, cwd=checkout, check=False).returncode
+    return run(host_serve_argv(), cwd=checkout, check=False).returncode
