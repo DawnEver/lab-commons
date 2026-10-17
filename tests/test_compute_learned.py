@@ -77,12 +77,13 @@ def test_an_unmeasured_file_is_priced_at_its_measured_siblings_median_never_the_
 def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
     """A box part is learned under (local, its need-set) and read back under the same key -- not under its OS.
 
-    PLANTED CONTROL: the base part learned nothing, so it declares the whole box; a cluster reads slurm runs.
+    PLANTED CONTROL: the base part learned nothing, so it declares its prior -- the median of this host's measured
+    parts (:func:`learned.part_prior`), never the whole box; a cluster reads slurm runs.
     """
     learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=2 * 3600.0, wall_s=3600.0))
     jmag = learned.box_demand(REPO, frozenset({'jmag'}), cpu=8, mem_gb=64)
     assert jmag == Demand(cpu=2, mem_gb=6.0 * learned.BOX_HEADROOM, jmag=1)
-    assert learned.box_demand(REPO, frozenset(), cpu=8, mem_gb=64) == Demand(cpu=8, mem_gb=64)
+    assert learned.box_demand(REPO, frozenset(), cpu=8, mem_gb=64) == Demand(cpu=2, mem_gb=6.0 * learned.BOX_HEADROOM)
     assert learned.cluster_demand(REPO)(frozenset({'jmag'})) == Demand(cpu=1, mem_gb=1.0, jmag=1, files=50_000)
 
 
@@ -107,15 +108,19 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
 
     PLANTED CONTROL: a box already running a part declared at the whole box admits no second one.
     """
+    learned.record_run(REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=64.0, cpu_s=30 * 3600.0, wall_s=3600.0))
     learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0))
     plain, jmag = Job('', 'a' * 40, 'windows'), Job('', 'b' * 40, 'windows', frozenset({'jmag'}))
     box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1))
     measured = learned.box_demand(REPO, frozenset({'jmag'}), cpu=30, mem_gb=64)
     assert measured == Demand(cpu=30, mem_gb=64.0, jmag=1), 'cores and memory capped at the box'
     assert admit(jmag, measured, box)
-    whole = learned.box_demand(REPO, frozenset(), cpu=30, mem_gb=64)
+    whole = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
+    assert whole == Demand(cpu=30, mem_gb=64.0, femm=1)
+    plain = Job('', 'a' * 40, 'windows', frozenset({'femm'}))
+    box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1, femm=1))
     assert admit(plain, whole, box)
-    assert admit(plain, whole, box, running=(Resources(whole),)).lacking == ('cpu', 'mem_gb')
+    assert admit(plain, whole, box, running=(Resources(whole),)).lacking == ('cpu', 'femm', 'mem_gb')
 
 
 def test_a_request_is_learned_under_its_producer_name_never_a_test_parts_record() -> None:
@@ -127,3 +132,36 @@ def test_a_request_is_learned_under_its_producer_name_never_a_test_parts_record(
     learned.record_run(REPO, 'deck_solve', jmag, Run(peak_mem_gb=10.0, cpu_s=2 * 3600.0, wall_s=3600.0))
     measured = learned.request_demand(REPO, 'deck_solve', jmag, cpu=4, mem_gb=8.0)
     assert measured == Demand(cpu=2, mem_gb=10.0 * learned.BOX_HEADROOM, jmag=1), 'measured beats declared'
+
+
+def test_an_unmeasured_part_is_priced_by_the_d5_prior_never_the_whole_box() -> None:
+    """D5: the host's measured parts first, else every host's forge records for its need-set, else the task floor."""
+    floor = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
+    assert floor == Demand(cpu=1, mem_gb=1.0 * learned.BOX_HEADROOM, femm=1), 'nothing known: the per-task floor'
+    learned.learn_record(REPO, 'r1.json.gz', {'repo': REPO, 'platform': 'femm', 'peaks_mb': {'t/a.py': 2048.0}})
+    learned.learn_record(REPO, 'r2.json.gz', {'repo': REPO, 'platform': 'femm', 'peaks_mb': {'t/a.py': 6144.0}})
+    learned.learn_record(REPO, 'r3.json.gz', {'repo': REPO, 'platform': 'base', 'peaks_mb': {'t/a.py': 99999.0}})
+    forged = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
+    assert forged == Demand(cpu=1, mem_gb=4.0 * learned.BOX_HEADROOM, femm=1), 'the median of its need-set only'
+    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=8.0, cpu_s=4 * 3600.0, wall_s=3600.0))
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=2.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    local = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
+    assert local == Demand(cpu=3, mem_gb=5.0 * learned.BOX_HEADROOM, femm=1), "this host's parts come first"
+    learned.record_run(REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=20.0, cpu_s=6 * 3600.0, wall_s=3600.0))
+    ran = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
+    assert ran == Demand(cpu=6, mem_gb=20.0 * learned.BOX_HEADROOM, femm=1), 'once run, its own peak replaces the prior'
+
+
+def test_a_part_priced_at_the_whole_box_is_refused_on_a_busy_box_and_its_prior_is_admitted() -> None:
+    """THE ALWAYS-REFUSED PART: a busy box's measured room is under its size, so a whole-box ask never fits.
+
+    PLANTED CONTROL: the whole-box ask is refused where the D5 prior of the same part is admitted.
+    """
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=4.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    part = Job('', 'a' * 40, 'windows', frozenset({'femm'}))
+    busy = Supply('G', Resources(cpu=12, mem_gb=20.0, femm=1))
+    whole = Demand(cpu=30, mem_gb=64.0, femm=1)
+    assert not admit(part, whole, busy)
+    prior = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
+    assert prior == Demand(cpu=2, mem_gb=4.0 * learned.BOX_HEADROOM, femm=1)
+    assert admit(part, prior, busy)

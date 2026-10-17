@@ -60,6 +60,7 @@ from typing import Any, Final
 from lab_commons.compute.model import Demand
 from lab_commons.config import config_path
 from lab_commons.hpc.config import Cost, Policy
+from lab_commons.hpc.needsets import needs_of
 
 __all__ = [
     'BOX_HEADROOM',
@@ -67,6 +68,8 @@ __all__ = [
     'CLUSTER_PRIOR',
     'LOCAL',
     'OOM_GROWTH',
+    'PART_PEAKS',
+    'PART_PEAKS_KEPT',
     'SLURM',
     'Measured',
     'Run',
@@ -79,6 +82,7 @@ __all__ = [
     'learn_peaks',
     'learn_record',
     'learned',
+    'part_prior',
     'record_ask',
     'record_run',
     'request_demand',
@@ -329,7 +333,13 @@ def learn_record(repo: str, name: str, record: Mapping[str, Any]) -> Path:
     """
     table = learned(repo)
     merged = {key: {**table.get(key, {}), **facts} for key, facts in Measured.of(dict(record)).record().items()}
-    return _write(repo, {**table, **merged, 'folded': sorted({*table.get('folded', ()), name})})
+    parts = {key: list(peaks) for key, peaks in table.get(PART_PEAKS, {}).items()}
+    peak = max((float(mb) for mb in (record.get('peaks_mb') or {}).values()), default=0.0) / _MB_PER_GB
+    if peak > 0 and record.get('platform'):
+        key = _key(LOCAL, needs_of(str(record['platform'])))
+        parts[key] = [*parts.get(key, []), peak][-PART_PEAKS_KEPT:]
+    folded_now = sorted({*table.get('folded', ()), name})
+    return _write(repo, {**table, **merged, PART_PEAKS: parts, 'folded': folded_now})
 
 
 def learn(record: dict[str, Any]) -> Path:
@@ -404,6 +414,12 @@ SLURM: Final = 'slurm'
 #: How far a box part's declared memory sits above the peak it measured: the box kills the tree AT the declaration.
 BOX_HEADROOM: Final = 1.5
 
+#: The table key of the part peaks folded from every host's forge records (:func:`learn_record`), per need-set.
+PART_PEAKS: Final = 'part_peaks_gb'
+
+#: How many of a need-set's latest forge part peaks are kept for :func:`part_prior`'s median.
+PART_PEAKS_KEPT: Final = 20
+
 #: The wall a box part declares, in seconds: past it the box kills the tree (one day, as a hung run).
 BOX_WALL_S: Final = 24 * 3600
 
@@ -430,16 +446,35 @@ def cluster_demand(
     return ask
 
 
+def part_prior(repo_url: str, needs: Iterable[str], *, cost: Cost | None = None) -> Run:
+    """What an UNMEASURED box part is taken to hold (D5): never the whole box.
+
+    The median of *repo_url*'s parts measured on THIS host (every ``(local, need-set)`` run: cores kept busy
+    and peak); else the median of the part peaks every host's forge records carry for this need-set
+    (:func:`learn_record`), at one core; else *cost*'s per-task floor (:class:`~lab_commons.hpc.config.Cost`).
+    Once the part runs, its own measurement replaces this (:func:`box_demand`).
+    """
+    table = learned(repo_url)
+    local = [Run(**one) for key, one in table.get('runs', {}).items() if key.startswith(f'{LOCAL}|')]
+    if local:
+        cores = statistics.median(one.demand()['cpu'] for one in local)
+        return Run(statistics.median(one.peak_mem_gb for one in local), cpu_s=cores, wall_s=1.0)
+    hosts = table.get(PART_PEAKS, {}).get(_key(LOCAL, needs), [])
+    if hosts:
+        return Run(statistics.median(hosts), cpu_s=1.0, wall_s=1.0)
+    floor = cost or Cost()
+    return Run(floor.mem_gb, cpu_s=floor.cpus, wall_s=1.0)
+
+
 def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:
     """What a box part DECLARES to the box -- admitted at it, and killed past it (:func:`lab_commons.box.run`).
 
     The cores its last ``(local, need-set)`` run kept busy and its peak memory times :data:`BOX_HEADROOM`,
-    each capped at the box's *cpu* and *mem_gb*; unmeasured, the whole box. One seat of each need.
+    each capped at the box's *cpu* and *mem_gb*; unmeasured, :func:`part_prior` in its place. One seat of each need.
     """
-    run = run_of(repo_url, LOCAL, needs)
-    measured = run.demand(needs) if run is not None else Demand({'cpu': cpu, 'mem_gb': mem_gb})
-    cores = max(1, min(math.floor(cpu), int(measured['cpu'])))
-    memory = min(mem_gb, measured['mem_gb'] * BOX_HEADROOM) if run is not None else mem_gb
+    run = run_of(repo_url, LOCAL, needs) or part_prior(repo_url, needs)
+    cores = max(1, min(math.floor(cpu), int(run.demand(needs)['cpu'])))
+    memory = min(mem_gb, run.peak_mem_gb * BOX_HEADROOM)
     return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(memory, 1.0)})
 
 
