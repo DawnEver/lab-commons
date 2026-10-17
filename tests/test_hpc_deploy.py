@@ -113,6 +113,7 @@ def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Box:
     monkeypatch.setenv('FAKE_ID', 'alice')
     monkeypatch.setenv('FAKE_SACCT', SACCT)
     monkeypatch.setattr(deploy, '_which', lambda name, **_kw: f'/x/{name}')
+    monkeypatch.setattr(deploy, '_proves', lambda _git, _scratch: '')  # every git qualifies unless a test says not
     calls = tmp_path / 'calls.log'
     crontab = tmp_path / 'crontab.txt'
     logger = str(_write(tmp_path / 'logger.py', FAKE_LOGGER))
@@ -362,6 +363,37 @@ def test_the_cron_path_carries_where_slurm_resolved_at_deploy_time(
     monkeypatch.setattr(deploy, '_which', lambda name, **_kw: None if name == 'sbatch' else slurm.get(name, '/x/y'))
     assert box.run() == 2
     assert 'sbatch' in capsys.readouterr().err
+
+
+def test_the_cron_path_puts_first_the_git_the_grant_setup_loads_when_the_tick_path_git_is_too_old(
+    box: Box, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ada 2026-10-17: cron's /usr/bin/git 2.31.1 has no ``merge-tree --write-tree``, so every serve tick failed.
+
+    PLANTED CONTROLS: a qualifying tick-PATH git adds nothing to the PATH; no qualifying git refuses the deploy.
+    """
+    assert box.run(*DECLARE) == 0
+    marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
+    assert all(line.startswith(f'*/5 * * * * PATH={box.home / ".local/bin"}:') for line in marked), marked[0]
+    text = box.machine.read_text(encoding='utf-8')
+    box.machine.write_text(text.replace('[[hpc.grant]]\n', '[[hpc.grant]]\nsetup = ["module load git/2.42"]\n'))
+    loaded = '/opt/git/2.42/bin/git'
+    monkeypatch.setenv('FAKE_SH', f'Lmod noise\n{loaded}\n')
+    answer = box.tools.id[1]
+    sh = replace(box.tools, sh=(sys.executable, answer, 'FAKE_SH', str(box.calls), 'sh'))
+    shbox = replace(box, tools=sh)
+    monkeypatch.setattr(deploy, '_proves', lambda git, _scratch: '' if git == loaded else 'usage: git merge-tree')
+    assert shbox.run() == 0
+    assert 'sh module load git/2.42; command -v git' in box.logged()
+    marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
+    assert all(line.startswith(f'*/5 * * * * PATH={Path(loaded).parent}:') for line in marked), marked[0]
+    monkeypatch.setattr(deploy, '_proves', lambda _git, _scratch: 'usage: git merge-tree')
+    capsys.readouterr()
+    assert shbox.run() == 2
+    err = capsys.readouterr().err
+    assert 'git >= 2.38' in err
+    assert '/x/git' in err
+    assert loaded in err
 
 
 FAKE_RCLONE: Final = r"""

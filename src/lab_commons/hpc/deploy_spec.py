@@ -123,10 +123,19 @@ def render_grant(grant: Mapping[str, Any]) -> str:
     return f'\n[[hpc.grant]]\n{rows}'
 
 
+def _grant_of(path: Path, user: str) -> dict[str, Any] | None:
+    raw = tomllib.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    return next((grant for grant in raw.get('hpc', {}).get('grant', []) if grant.get('user') == user), None)
+
+
 def has_grant(path: Path, user: str) -> bool:
     """Whether the machine file at *path* already grants *user* a share."""
-    raw = tomllib.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
-    return any(grant.get('user') == user for grant in raw.get('hpc', {}).get('grant', []))
+    return _grant_of(path, user) is not None
+
+
+def grant_setup(path: Path, user: str) -> tuple[str, ...]:
+    """The ``setup`` lines of *user*'s grant in the machine file at *path* -- the cluster's own environment."""
+    return tuple((_grant_of(path, user) or {}).get('setup', ()))
 
 
 def parse_repo(text: str) -> Repo:
@@ -139,10 +148,11 @@ def parse_repo(text: str) -> Repo:
     return Repo(name, url, ref)
 
 
-def cron_lines(spec: Deployment, home: Path, *, slurm: Sequence[str] = ()) -> list[str]:
+def cron_lines(spec: Deployment, home: Path, *, slurm: Sequence[str] = (), git: str = '') -> list[str]:
     """One marked line per served repo: every 5 min, ``flock -n`` so a host never overlaps itself."""
     return [
-        f'*/5 * * * * {tick_command(spec, home, repo, log=True, slurm=slurm)} {MARK}{repo.name}' for repo in spec.repos
+        f'*/5 * * * * {tick_command(spec, home, repo, log=True, slurm=slurm, git=git)} {MARK}{repo.name}'
+        for repo in spec.repos
     ]
 
 
@@ -153,13 +163,15 @@ def merge_crontab(current: str, lines: Sequence[str]) -> str:
     return text + '\n' if text else ''
 
 
-def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: Sequence[str] = ()) -> str:
+def tick_command(
+    spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: Sequence[str] = (), git: str = ''
+) -> str:
     """The shell command of one tick of *repo*: cron PATH, ``flock -n``, the HOST's ``hpc tick <repo>``.
 
     It runs from the lab-commons checkout's venv, never the repo's: the host refreshes the repo (and
     itself), then serves it with its own kit (:func:`host_serve_argv`), so a stale repo venv blocks nothing.
     """
-    path = ':'.join(tick_dirs(home, slurm))
+    path = ':'.join(tick_dirs(home, slurm, git=git))
     cache = home / '.cache'
     lab = next(one for one in spec.repos if one.name == LAB_COMMONS)
     command = (
@@ -170,14 +182,15 @@ def tick_command(spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: 
     return command + (f' >> {shlex.quote(str(cache / f"lab-forge-{repo.name}.log"))} 2>&1' if log else '')
 
 
-def tick_dirs(home: Path, slurm: Sequence[str] = ()) -> list[str]:
+def tick_dirs(home: Path, slurm: Sequence[str] = (), *, git: str = '') -> list[str]:
     """The directories of a tick's PATH, in order: cron's own PATH is not the login shell's.
 
     *slurm* is where ``sbatch``, ``sacct`` and ``squeue`` resolved when the deploy ran -- a site install
-    (``/opt/slurm/<version>/bin``) that cron's PATH never names.
+    (``/opt/slurm/<version>/bin``) that cron's PATH never names. *git*, when set, is the directory of the
+    qualifying git the grant's ``setup`` loaded; it goes FIRST, ahead of the system git it must shadow.
     """
     base = [str(home / '.local/bin'), str(home / '.cargo/bin'), '/usr/local/bin', '/usr/bin', '/bin']
-    return [*base, *(d for d in dict.fromkeys(slurm) if d not in base)]
+    return [*([git] if git else []), *base, *(d for d in dict.fromkeys(slurm) if d not in base)]
 
 
 def checkout_of(spec: Deployment, home: Path, repo: Repo) -> Path:
