@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 from typing import Final
 
 from lab_commons.hpc.config import GIB, Cluster, Cost, Limits, Policy
-from lab_commons.hpc.grants import COMMENT_PREFIX, Grant, Session
+from lab_commons.hpc.grants import COMMENT_PREFIX, Grant, Paging, Session
 from lab_commons.hpc.slurm import Held, Snapshot
 from lab_commons.resources import CPU, GPU, MEMORY
 from lab_commons.width import fits
@@ -60,8 +60,10 @@ __all__ = [
     'grantable_gb',
     'headroom',
     'make_plan',
+    'may_place',
     'plan_on',
     'quota_slots',
+    'region',
     'session_room',
 ]
 
@@ -365,6 +367,50 @@ def session_room(session: Session | None, snapshots: Sequence[Snapshot], cost: C
     return max(0, int(min(left)))
 
 
+def free_mem_mb(snapshot: Snapshot) -> float:
+    """The account's group-memory headroom: ``GrpTRES`` mem less what runs; no ceiling is unbounded."""
+    left = snapshot.quota.remaining()['mem']
+    return math.inf if left is None else left
+
+
+def _waits_large(snapshot: Snapshot, paging: Paging) -> bool:
+    return any(paging.pages(held.cpus, held.mem_mb / 1024) > paging.large_pages for held in snapshot.pending)
+
+
+def region(snapshots: Sequence[Snapshot], paging: Paging) -> int | None:
+    """The large-job region's index: where a large task WAITS, else the emptiest account; ``None`` for one account.
+
+    Emptiest is the most group memory free, the earlier account on a tie, so the region rotates as load moves
+    and belongs to no session. A waiting large task pins it, so it keeps draining until that task starts.
+    """
+    if len(snapshots) < 2:  # noqa: PLR2004 -- a region is one account set apart from the rest
+        return None
+    waiting = [i for i, snapshot in enumerate(snapshots) if _waits_large(snapshot, paging)]
+    if waiting:
+        return waiting[0]
+    return max(range(len(snapshots)), key=lambda i: (free_mem_mb(snapshots[i]), -i))
+
+
+def may_place(
+    index: int, plan: Plan, cost: Cost, snapshots: Sequence[Snapshot], paging: Paging, *, rerun_safe: bool
+) -> bool:
+    """Whether *plan* may run on account *index*: a large task only in the region; elsewhere anything but large.
+
+    The region takes a SMALL task that is MOVABLE -- rerun-safe and its wall within ``movable_minutes`` -- and
+    only while no large task waits there: drain, never kill.
+    """
+    where = region(snapshots, paging)
+    if where is None:
+        return True
+    size = paging.size(cost)
+    if size == 'large':
+        return index == where
+    if index != where:
+        return True
+    movable = rerun_safe and plan.minutes <= paging.movable_minutes
+    return size == 'small' and movable and not _waits_large(snapshots[where], paging)
+
+
 #: The files a submitted array adds to the home: its run directory, ``logs/``, ``results/``, manifest, script.
 FILES_PER_RUN: Final = 5
 
@@ -430,6 +476,8 @@ def allocate(
     policy: Policy,
     seconds: Sequence[float] | None = None,
     min_minutes: float = 0.0,
+    paging: Paging | None = None,
+    rerun_safe: bool = False,
 ) -> tuple[Grant, Plan]:
     """The ONE grant with room whose plan finishes EARLIEST (:func:`plan_on`), held to *session*'s cap. Pure.
 
@@ -440,9 +488,13 @@ def allocate(
     so without the headroom key the first in the file took every run however loaded it was. A session past
     its cap gets a plan with ``room`` 0 and a throttle of 1: it WAITS, never refused. No grant that can plan
     raises, naming each account and why. Spreading one batch over SEVERAL grants is :func:`lab_commons.hpc.span.span`.
+
+    With *paging* declared, an account :func:`may_place` refuses is no option, and the CPU-headroom tie-break
+    becomes BEST FIT: the account with the least group memory free -- the fullest that holds the task.
     """
-    capped = session_room(session, [snapshot for _, snapshot in candidates], cost)
-    options: list[tuple[bool, float, int, int, int, Grant, Plan]] = []
+    snapshots = [snapshot for _, snapshot in candidates]
+    capped = session_room(session, snapshots, cost)
+    options: list[tuple[bool, float, float, int, int, Grant, Plan]] = []
     refusals = []
     for order, (grant, snapshot) in enumerate(candidates):
         try:
@@ -459,10 +511,14 @@ def allocate(
         except ValueError as refused:
             refusals.append(str(refused))
             continue
+        if paging is not None and not may_place(order, plan, cost, snapshots, paging, rerun_safe=rerun_safe):
+            refusals.append(f'{grant.name}: the large-job region')
+            continue
         if capped is not None:
             room = capped if plan.room is None else min(plan.room, capped)
             plan = replace(plan, room=room, throttle=min(plan.throttle, max(1, capped)))
-        rank = (plan.room == 0, plan.makespan_minutes, -headroom(snapshot), -grant.priority, order)
+        fit = -headroom(snapshot) if paging is None else free_mem_mb(snapshot)
+        rank = (plan.room == 0, plan.makespan_minutes, fit, -grant.priority, order)
         options.append((*rank, grant, plan))
     if not options:
         msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])

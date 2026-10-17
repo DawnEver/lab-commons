@@ -40,6 +40,16 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     task_cpus = 64                       # optional per-task ceilings: a bigger task is refused
     task_mem_gb = 300
 
+    [hpc.paging]                         # optional; undeclared, placement ignores size and region
+    page_cpus = 8                        # one page: a SMALL task fits it
+    page_mem_gb = 20
+    large_pages = 4                      # more pages than this is LARGE; between, MEDIUM
+    movable_minutes = 30                 # a rerun-safe task this short may borrow the large-job region
+
+PAGING IS OS MEMORY MANAGEMENT OVER THE POOL (user design 2026-10-17). Tasks are page-sized so free memory
+is never shattered into holes no task fits; the emptiest account is the large-job region, borrowed only by
+small movable tasks, and drained -- never killed -- while a large job waits (:func:`lab_commons.hpc.plan.region`).
+
 ``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster.s
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
 ``FileNotFoundError: 'git'`` there, while the login node has it) -- so it is declared once per grant and
@@ -48,15 +58,16 @@ prepended to every shard script that grant submits, before the job's own set-up.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Any, Final
 
 from lab_commons.config import config_path, section
-from lab_commons.hpc.config import Cluster
+from lab_commons.hpc.config import Cluster, Cost
 from lab_commons.hpc.retired import RETIRED
 
-__all__ = ['COMMENT_PREFIX', 'SESSION_ENV', 'Grant', 'Machine', 'Session', 'load_grants']
+__all__ = ['COMMENT_PREFIX', 'SESSION_ENV', 'Grant', 'Machine', 'Paging', 'Session', 'load_grants']
 
 #: Every submitted job's ``--comment`` starts with this, followed by the session name.
 COMMENT_PREFIX: Final = 'lc:session='
@@ -87,6 +98,42 @@ class Session:
         if any(c <= 0 for c in caps):
             msg = f'every session cap is positive, got {self}'
             raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class Paging:
+    """The page every task is sized in, where LARGE begins, and the wall under which a rerun-safe task is movable."""
+
+    page_cpus: int
+    page_mem_gb: float
+    large_pages: int
+    movable_minutes: float
+
+    def __post_init__(self) -> None:
+        """Every bound is positive."""
+        if min(self.page_cpus, self.page_mem_gb, self.large_pages, self.movable_minutes) <= 0:
+            msg = f'every paging bound is positive, got {self}'
+            raise ValueError(msg)
+
+    def pages(self, cpus: float, mem_gb: float) -> int:
+        """Pages a task of *cpus* and *mem_gb* occupies -- the larger of its two dimensions."""
+        return max(1, math.ceil(cpus / self.page_cpus), math.ceil(mem_gb / self.page_mem_gb))
+
+    def size(self, cost: Cost) -> str:
+        """``small`` (one page), ``large`` (more than ``large_pages``) or ``medium``."""
+        pages = self.pages(cost.cpus, cost.mem_gb)
+        return 'small' if pages == 1 else 'large' if pages > self.large_pages else 'medium'
+
+
+def _paging(raw: dict[str, Any] | None, source: str) -> Paging | None:
+    """``[hpc.paging]``, every key required; ``None`` when undeclared."""
+    if raw is None:
+        return None
+    known = set(Paging.__dataclass_fields__)
+    if set(raw) != known:
+        msg = f'{source}: [hpc.paging] declares exactly {sorted(known)}, got {sorted(raw)}'
+        raise ValueError(msg)
+    return Paging(**raw)
 
 
 def _session(raw: dict[str, Any], source: str) -> Session | None:
@@ -160,6 +207,7 @@ class Machine:
 
     session: Session | None
     grants: tuple[Grant, ...]
+    paging: Paging | None = None
 
     @property
     def comment(self) -> str:
@@ -193,9 +241,9 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
         if key in raw:
             msg = f'{source}: [hpc] {key} is retired: {remedy}'
             raise ValueError(msg)
-    unknown = set(raw) - {'grant', 'session'}
+    unknown = set(raw) - {'grant', 'session', 'paging'}
     if unknown:
-        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "session"]'
+        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging", "session"]'
         raise ValueError(msg)
     grants = tuple(_grant(g, source) for g in raw.get('grant', []))
     if not grants:
@@ -207,4 +255,5 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
             msg = f'{source}: account {grant.account!r} is granted twice; one grant per account'
             raise ValueError(msg)
         seen.add(grant.account)
-    return Machine(session=_session(raw.get('session', {}), source), grants=grants)
+    session = _session(raw.get('session', {}), source)
+    return Machine(session=session, grants=grants, paging=_paging(raw.get('paging'), source))

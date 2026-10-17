@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from itertools import accumulate
 
 from lab_commons.hpc.config import Cost, Policy
-from lab_commons.hpc.grants import Grant, Session
-from lab_commons.hpc.plan import Plan, allocate, plan_on, session_room
+from lab_commons.hpc.grants import Grant, Paging, Session
+from lab_commons.hpc.plan import Plan, allocate, may_place, plan_on, session_room
 from lab_commons.hpc.slurm import Snapshot
 
 __all__ = ['Placement', 'span', 'split']
@@ -62,19 +62,27 @@ def span(
     session: Session | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
+    paging: Paging | None = None,
+    rerun_safe: bool = False,
 ) -> tuple[Placement, ...]:
     """Where *n_items* run: every useful grant's slice, or the one fastest grant -- see the module docstring.
 
-    Raises ``ValueError`` naming every account and why when no grant can take the work.
+    Raises ``ValueError`` naming every account and why when no grant can take the work. With *paging*, a grant
+    :func:`lab_commons.hpc.plan.may_place` refuses takes no slice -- so a large job stays whole in the region.
     """
     each = list(seconds) if seconds is not None else [cost.seconds] * n_items
-    grant, plan = allocate(n_items, cost, candidates, session=session, policy=policy, seconds=seconds)
+    snapshots = [snapshot for _, snapshot in candidates]
+    grant, plan = allocate(
+        n_items, cost, candidates, session=session, policy=policy, seconds=seconds, paging=paging, rerun_safe=rerun_safe
+    )
     alone = (Placement(grant, plan, (0, n_items)),)
     able: list[tuple[Grant, Snapshot, float]] = []
-    for candidate, snapshot in candidates:
+    for index, (candidate, snapshot) in enumerate(candidates):
         try:
             whole = plan_on(candidate, snapshot, n_items, cost, session=session, policy=policy, seconds=seconds)
         except ValueError:
+            continue
+        if paging is not None and not may_place(index, whole, cost, snapshots, paging, rerun_safe=rerun_safe):
             continue
         able.append((candidate, snapshot, sum(each) / whole.makespan_minutes))
     if len(able) <= 1:  # a spread needs two grants
@@ -98,7 +106,7 @@ def span(
         except ValueError:
             return alone
         placements.append(Placement(candidate, part, (start, stop)))
-    capped = session_room(session, [snapshot for _, snapshot in candidates], cost)
+    capped = session_room(session, snapshots, cost)
     if capped is not None and sum(p.plan.throttle for p in placements) > capped:
         return alone  # the session cap counts the whole pool; one array holds it
     spread = max(p.plan.makespan_minutes for p in placements)

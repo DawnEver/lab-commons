@@ -34,6 +34,7 @@ __all__ = [
     'Snapshot',
     'parse_inodes',
     'parse_minutes',
+    'parse_pending',
     'parse_records',
     'parse_snapshot',
     'parse_tres',
@@ -73,13 +74,17 @@ def probe_command(slurm_account: str = '') -> str:
 
     ``--me`` AS WELL AS ``-A``: the share is of THIS login's per-user quota, and an account like a
     university's free tier carries thousands of other people's jobs that count against nothing of ours.
-    Pending jobs are included -- they are claims the scheduler will honour before a new submission.
+    Pending jobs are included -- they are claims the scheduler will honour before a new submission -- and
+    listed again on their own (``@@@ pending``): a waiting large task pins the region
+    (:func:`lab_commons.hpc.plan.region`).
     """
     if not slurm_account:
         return PROBE_COMMAND
+    account = shlex.quote(slurm_account)
     return (
         f'{PROBE_COMMAND}; echo "@@@ shared"; '
-        f'squeue -h --me -r -t PENDING,RUNNING -A {shlex.quote(slurm_account)} -o "%C|%m|%D|%k"'
+        f'squeue -h --me -r -t PENDING,RUNNING -A {account} -o "%C|%m|%D|%k"; '
+        f'echo "@@@ pending"; squeue -h --me -r -t PENDING -A {account} -o "%C|%m|%D"'
     )
 
 
@@ -94,6 +99,14 @@ class Held:
     def __add__(self, other: Held) -> Held:
         """Summed per dimension -- one session across several accounts."""
         return Held(self.tasks + other.tasks, self.cpus + other.cpus, self.mem_mb + other.mem_mb)
+
+
+def parse_pending(text: str) -> tuple[Held, ...]:
+    """``squeue -r -t PENDING -o "%C|%m|%D"`` lines, one :class:`Held` per waiting task."""
+    return tuple(
+        sum(parse_usage(f'{line}|').values(), Held())
+        for line in filter(None, (raw.strip() for raw in text.splitlines()))
+    )
 
 
 def parse_usage(text: str) -> dict[str, Held]:
@@ -244,6 +257,8 @@ class Snapshot:
     usage: dict[str, Held] = field(default_factory=dict)
     #: Free inodes of the home's filesystem (``df -i``) -- the file-count quota a run writes against; ``None`` unread.
     inodes_free: int | None = None
+    #: Each task the caller has WAITING on the account, pending only; ``()`` unread.
+    pending: tuple[Held, ...] = ()
 
 
 def parse_inodes(text: str) -> int | None:
@@ -361,4 +376,5 @@ def parse_snapshot(text: str, account: str = '') -> Snapshot:
         quota=_quota(sections, account),
         usage=parse_usage(sections.get('shared', '')),
         inodes_free=parse_inodes(sections.get('files', '')),
+        pending=parse_pending(sections.get('pending', '')),
     )
