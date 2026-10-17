@@ -9,8 +9,9 @@ see is a claim that has not grown to its declaration yet, and that rest is still
 
 per dimension, memory by resident bytes and cores by busy cores over a short sample. It is CAPPED at the
 size less every declaration (:class:`~lab_commons.box.demand.Capacity` less the claims): a sample taken
-before a claim showed its load never lends what a declaration already owns. Tool seats are declared, not
-measured -- a licence is no OS reading -- each its ``[capabilities]`` count (1 when undeclared) less those held.
+before a claim showed its load never lends what a declaration already owns. Tool seats are no OS reading:
+each is its tool's supply as its own probe measures it (:func:`lab_commons.box.demand.seat_supply`; the declared
+``[capabilities]`` count when there is no probe or it cannot say, 1 when undeclared) less those held.
 
 :func:`room` is the one formula, read by the ledger (:func:`lab_commons.box.ledger.hold`) and by the
 forge's box supply (:func:`lab_commons.compute.probe.box`); :meth:`Reading.now` is the one OS reader.

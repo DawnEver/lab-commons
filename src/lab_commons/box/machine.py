@@ -70,12 +70,20 @@ def own_reserve(total: Mapping[str, float], table: ReserveTable) -> dict[str, fl
 
 
 def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """The machine file's ``[capabilities]``: ``{name: facts}``; a malformed row is refused by name."""
+    """The machine file's ``[capabilities]``: ``{name: facts}``; a malformed row is refused by name.
+
+    ``seats`` is the DECLARED count (default 1); ``supply``, when given, is the argv of the probe that MEASURES it
+    (:func:`lab_commons.box.demand.seat_supply`).
+    """
     out: dict[str, dict[str, Any]] = {}
     for name, facts in table.items():
         seats = facts.get('seats', 1) if isinstance(facts, dict) else None
         if not RESOURCE_NAME.match(name) or not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
             msg = f'{_WHERE}: [capabilities.{name}] must be a table named {RESOURCE_NAME.pattern}, seats a positive int'
+            raise ValueError(msg)
+        supply = facts.get('supply', [])
+        if not isinstance(supply, list) or not all(isinstance(arg, str) for arg in supply):
+            msg = f'{_WHERE}: [capabilities.{name}] supply must be an argv list of strings printing the seat count'
             raise ValueError(msg)
         out[name] = dict(facts)
     return out

@@ -14,11 +14,13 @@ from lab_commons.box.demand import (
     GB,
     Capacity,
     Demand,
+    DuplicateKey,
     Holding,
     Outcome,
     Refused,
     declared_seats,
     read_ended,
+    seat_supply,
     write_ended,
 )
 from lab_commons.box.ledger import (
@@ -47,6 +49,7 @@ __all__ = [
     'Capacity',
     'Claim',
     'Demand',
+    'DuplicateKey',
     'Holding',
     'Outcome',
     'Refused',
@@ -60,5 +63,6 @@ __all__ = [
     'read_ended',
     'release',
     'run',
+    'seat_supply',
     'write_ended',
 ]
