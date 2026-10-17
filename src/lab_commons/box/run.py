@@ -32,7 +32,18 @@ from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
 from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, hold
 from lab_commons.box.supply import Reading
 
-__all__ = ['command', 'run']
+__all__ = ['BLAS_THREAD_VARS', 'command', 'run']
+
+#: The runtimes that build one thread pool per PROCESS behind numpy/scipy, read at IMPORT time, so they must be
+#: in the environment the child is LAUNCHED with. Unset, each sizes its pool to the whole box, and on Windows --
+#: where the box limits COMMIT -- OpenBLAS reserves its buffers per thread at import: 756 MB per ``import numpy``
+#: on a 32-thread host, 17 MB at one thread. :func:`run` sets them to the claim's cores: declared == used.
+BLAS_THREAD_VARS: tuple[str, ...] = (
+    'OMP_NUM_THREADS',
+    'MKL_NUM_THREADS',
+    'OPENBLAS_NUM_THREADS',
+    'NUMEXPR_NUM_THREADS',
+)
 
 #: One backend per platform that has one: ``contain(argv, demand, cwd, env, (key, fingerprint)) -> Outcome``.
 Contain = Callable[[Sequence[str], Demand, str | None, Mapping[str, str] | None, tuple[str, str | None]], Outcome]
@@ -70,7 +81,9 @@ def run(
         msg = f'{what}: a run is enforced to positive cores and memory, not a seat-only claim'
         raise ValueError(msg)
     contain = _enforcer()
-    inside = {**(os.environ if env is None else env), INSIDE_ENV: key, CPU_ENV: str(demand.cpu)}
+    cores = str(demand.cpu)
+    pools = dict.fromkeys(BLAS_THREAD_VARS, cores)
+    inside = {**(os.environ if env is None else env), **pools, INSIDE_ENV: key, CPU_ENV: cores}
     with hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint):
         return contain(argv, demand, cwd, inside, (key, fingerprint))
 

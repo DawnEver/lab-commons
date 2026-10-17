@@ -25,7 +25,7 @@ from lab_commons.box import (
 )
 from lab_commons.box.__main__ import _parser, main
 from lab_commons.box._linux import in_slurm_job, manager, scope_argv
-from lab_commons.box.run import _ENFORCERS
+from lab_commons.box.run import _ENFORCERS, BLAS_THREAD_VARS
 
 
 @pytest.mark.parametrize('missing', ['--cpu', '--mem-gb', '--wall', '--queue-s', '--key', '--outcome'])
@@ -187,3 +187,28 @@ def test_the_child_is_told_the_cores_it_was_admitted_at(monkeypatch: pytest.Monk
     run(['tool'], demand, 'w', 1, key='k', env={'KEEP': '1'}, capacity=size, read=quiet(size))
     assert seen[0] is not None
     assert (seen[0][CPU_ENV], seen[0]['KEEP']) == ('3', '1')
+
+
+def test_the_childs_thread_pools_are_sized_to_the_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Every BLAS/OpenMP pool in the tree is sized to the claim's cores, never the box's.
+
+    THE INCIDENT (lab-commons 57cafb9d5f, tests/base on a 32-thread Windows host): ``import numpy`` with no
+    pool size COMMITS 756 MB (OpenBLAS reserves one buffer per box thread; 17 MB at one thread), and the
+    Job Object limits commit, so a serial pytest sat at 880 MB before its first test and any child python
+    importing numpy cost another 750 MB -- the part was killed past its 3 GB claim at 3 %.
+
+    PLANTED CONTROL: a caller's own pool size is overridden; a box-wide figure inside a claim is the defect.
+    """
+    monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
+    seen: list[Mapping[str, str] | None] = []
+
+    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> Outcome:
+        seen.append(env)
+        return Outcome(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+
+    monkeypatch.setitem(_ENFORCERS, sys.platform, fake)
+    size = Capacity(cpu=32.0, mem_bytes=2**34, seats={})
+    demand = Demand(cpu=2, mem_gb=0.5, wall_s=5, seats={})
+    run(['tool'], demand, 'w', 1, key='k', env={'OPENBLAS_NUM_THREADS': '32'}, capacity=size, read=quiet(size))
+    assert seen[0] is not None
+    assert {name: seen[0][name] for name in BLAS_THREAD_VARS} == dict.fromkeys(BLAS_THREAD_VARS, '2')
