@@ -23,8 +23,9 @@ the tick PATH's, else the one this account's grant ``setup`` loads in a login sh
 leads the cron PATH -- or refuse naming every git tried; clone or update each checkout; install ``uv`` and
 every declared ``needs`` the tick's PATH
 lacks, or refuse naming it; build each ``.venv`` with the repo's own ``[tool.lab_commons.hpc] install``
-(and its ``native`` build), skipped when the key of its inputs is unchanged, then install the served
-lab-commons checkout over the sha the repo pins -- keyed by that checkout's HEAD, so a lab-commons update
+(and its ``native`` build), skipped when the key of its inputs -- the current tip of every floating git
+dependency included -- is unchanged, then install the served lab-commons checkout -- the newest of the
+served ref -- keyed by that checkout's HEAD, so a lab-commons update
 reinstalls it everywhere; warn, naming the recipe, when a repo declares an rclone
 artefact store this account's remote cannot reach (:func:`lab_commons.hpc.rclone.probe`; parts with outputs
 are then not claimed here); replace this tool's marked crontab lines (one per repo, every 5 min, under

@@ -49,6 +49,7 @@ __all__ = [
     'Builds',
     'builds_at',
     'floating_git',
+    'floating_tips',
     'git_dependencies',
     'key_of',
     'read_builds',
@@ -191,6 +192,15 @@ def remote_tip(url: str, ref: str) -> str:
     return words[0]
 
 
+def floating_tips(text: str, tip: Callable[[str, str], str] = remote_tip) -> dict[str, str]:
+    """``{'git+<url>@<ref>': <tip>}`` for every floating git dependency of pyproject *text* -- the one fold.
+
+    Dependencies are not pinned (user rulings 2026-10-15/17), so an environment is a function of its inputs AND
+    of what each floating source names NOW: every key that decides whether to rebuild a venv folds these in.
+    """
+    return {f'git+{url}@{ref}': tip(url, ref) for url, ref in floating_git(text)}
+
+
 def builds_at(repo: Path, sha: str, *, python: str, tip: Callable[[str, str], str] = remote_tip) -> Builds:
     """The declaration commit *sha* of *repo* carries, with its keys -- every git call here only READS.
 
@@ -211,7 +221,7 @@ def builds_at(repo: Path, sha: str, *, python: str, tip: Callable[[str, str], st
         raise ValueError(msg)
     if builds.dependency_inputs:
         oids = _oids(repo, sha, builds.dependency_inputs)
-        oids.update({f'git+{url}@{ref}': tip(url, ref) for url, ref in floating_git(text)})
+        oids.update(floating_tips(text, tip))
     else:
         oids = {'commit': sha}
     env_key = key_of(oids, builds.install, python, *builds.needs)
