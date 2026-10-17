@@ -19,8 +19,8 @@ STEPS, each one reporting, each one safe to repeat: refuse off the declared host
 anything changes (:mod:`lab_commons.hpc.deploy_checks`: git's credential helper and its store, every repo's
 ``git ls-remote``, and the forge API calls a tick makes); write this account's own ``[[hpc.grant]]`` when
 it has none; prove the serve's git (``git merge-tree --write-tree``, git >= 2.38) on a toy repository --
-the tick PATH's, else the one this account's grant ``setup`` loads in a login shell, whose directory then
-leads the cron PATH -- or refuse naming every git tried; clone or update each checkout; install ``uv`` and
+IN the tick's environment (cron's PATH, then this account's grant ``setup``, which every cron line runs
+before its tick) -- or refuse naming that environment; clone or update each checkout; install ``uv`` and
 every declared ``needs`` the tick's PATH
 lacks, or refuse naming it; build each ``.venv`` with the repo's own ``[tool.lab_commons.hpc] install``
 (and its ``native`` build), skipped when the key of its inputs -- the current tip of every floating git
@@ -77,6 +77,7 @@ from lab_commons.hpc.deploy_spec import (
     render_grant,
     tick_command,
     tick_dirs,
+    tick_environment,
 )
 from lab_commons.hpc.deploy_steps import Step, Tools, build, declared, update
 from lab_commons.hpc.rclone import declared_remote, probe
@@ -94,9 +95,9 @@ _CREDENTIAL_REMEDY: Final = (
 _which = shutil.which
 
 
-def _proves(git: str, scratch: Path) -> str:
-    """``''`` when *git* runs the serve's trial merge (:func:`merge_tree_refusal`); else why not."""
-    return merge_tree_refusal([git], scratch)
+def _proves(git: Sequence[str], scratch: Path) -> str:
+    """``''`` when the *git* argv runs the serve's trial merge (:func:`merge_tree_refusal`); else why not."""
+    return merge_tree_refusal(git, scratch)
 
 
 #: Reads the forge API a tick needs for one repo url; ``''`` when nothing is refused.
@@ -266,36 +267,27 @@ def _refuse(refused: Refused, repo: Repo, why: str) -> None:
     refused[repo.name] = why
 
 
-def _serve_git(step: Step, home: Path, path: Path, slurm: Sequence[str], lead: list[str]) -> int:
-    """Prove a git the tick can run merge-tree with; one the grant's setup loads leads the cron PATH via *lead*.
+def _serve_git(step: Step, home: Path, path: Path, slurm: Sequence[str], setup: list[str]) -> int:
+    """Prove the tick's git runs merge-tree IN the tick's environment; the grant's setup goes into *setup*.
 
-    No silent fallback: a tick whose git cannot trial-merge serves nothing, so none qualifying refuses the deploy.
+    The proof runs ``git`` under :func:`tick_environment` -- cron's PATH, then this account's grant setup -- the
+    same prefix every cron line runs, so what is proven is what ticks. No silent fallback: a git that cannot
+    trial-merge there serves nothing, so it refuses the deploy.
     """
-    emit(f"[git] {MERGE_TREE_GIT}, on the tick's PATH")
-    candidates: list[tuple[str, str]] = []
-    if on_path := _which('git', path=os.pathsep.join(tick_dirs(home, slurm))):
-        candidates.append(('the tick PATH', on_path))
+    emit(f"[git] {MERGE_TREE_GIT}, in the tick's environment")
     user = step.read([*step.tools.id, '-un']).stdout.strip()
-    if setup := grant_setup(path, user):
-        loaded = step.read([*step.tools.sh, '; '.join([*setup, 'command -v git'])])
-        lines = loaded.stdout.strip().splitlines()
-        if loaded.returncode == 0 and lines:
-            candidates.append((f'the grant setup ({"; ".join(setup)})', lines[-1].strip()))
-    tried = []
+    loaded = grant_setup(path, user)
+    environment = tick_environment(home, slurm, loaded)
     with tempfile.TemporaryDirectory() as scratch:
-        for at, (source, git) in enumerate(candidates):
-            if not (why := _proves(git, Path(scratch) / str(at))):
-                emit(f'  {git}, from {source}: merge-tree --write-tree runs')
-                if source != 'the tick PATH':
-                    lead.append(str(Path(git).parent))
-                return 0
-            tried.append(f'{git}, from {source}: {why}')
+        why = _proves([*step.tools.sh, f'{environment}; exec git "$@"', 'git'], Path(scratch))
+    if not why:
+        emit(f'  git in `{environment}`: merge-tree --write-tree runs')
+        setup.extend(loaded)
+        return 0
     emit(
-        f'deploy refused: every serve tick runs {MERGE_TREE_GIT} and no git qualifies '
-        f'({"; ".join(tried) or "none found"}); add setup = ["module load <git 2.38 or later>"] to this '
-        "account's [[hpc.grant]] in {path}, or link a qualifying git into ~/.local/bin, and re-run".replace(
-            '{path}', str(path)
-        ),
+        f'deploy refused: every serve tick runs {MERGE_TREE_GIT} and the git in its environment '
+        f'(`{environment}`) does not: {why}. Add setup = ["module load <git 2.38 or later>"] to this '
+        f"account's [[hpc.grant]] in {path}, or link a qualifying git into ~/.local/bin, and re-run",
         err=True,
     )
     return 2
@@ -344,20 +336,24 @@ def _tools(step: Step, spec: Deployment, home: Path, slurm: Sequence[str], refus
     return 0
 
 
-def _cron(step: Step, spec: Deployment, home: Path, refused: Refused, *, slurm: Sequence[str], git: str) -> int:
+def _cron(
+    step: Step, spec: Deployment, home: Path, refused: Refused, *, slurm: Sequence[str], setup: Sequence[str]
+) -> int:
     """One marked line per repo not refused; a refused repo's line is removed, so a broken line never runs."""
     emit('[cron] one marked line per served repo')
     if not step.dry:
         (home / '.cache').mkdir(parents=True, exist_ok=True)
-    lines = cron_lines(replace(spec, repos=tuple(_healthy(spec, refused))), home, slurm=slurm, git=git)
+    lines = cron_lines(replace(spec, repos=tuple(_healthy(spec, refused))), home, slurm=slurm, setup=setup)
     rc = _crontab(step, lines)
     for line in lines:
         emit(f'  {line}')
     return rc
 
 
-def _tick(step: Step, spec: Deployment, home: Path, repo: Repo, *, slurm: Sequence[str] = (), git: str = '') -> int:
-    command = tick_command(spec, home, repo, log=False, slurm=slurm, git=git)
+def _tick(
+    step: Step, spec: Deployment, home: Path, repo: Repo, *, slurm: Sequence[str] = (), setup: Sequence[str] = ()
+) -> int:
+    command = tick_command(spec, home, repo, log=False, slurm=slurm, setup=setup)
     rc = step.change(f'tick {repo.name}: {command}', [*step.tools.sh, command])
     if not step.dry:
         busy = ' (1 also means a tick of this host is still running)' if rc == 1 else ''
@@ -429,24 +425,24 @@ def deploy(
         emit(f'deploy refused: {slurm}', err=True)
         return 2
     refused: Refused = {}
-    lead: list[str] = []  # the qualifying git's directory, when the grant's setup had to load it
+    setup: list[str] = []  # the grant's setup lines: every tick runs inside them
     artefacts = '[artefacts] the rclone remote, where a repo declares one'
     phases = (
         lambda: _credentials(step, spec, home, check),
         lambda: _grant(step, spec, path, hostname),
         lambda: _declare(step, spec, path),
-        lambda: _serve_git(step, home, path, slurm, lead),
+        lambda: _serve_git(step, home, path, slurm, setup),
         lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', update, refused=refused),
         lambda: _tools(step, spec, home, slurm, refused),
         lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', build, refused=refused),
         lambda: _each(step, spec, home, artefacts, _artefacts, refused=refused),
-        lambda: _cron(step, spec, home, refused, slurm=slurm, git=''.join(lead)),
+        lambda: _cron(step, spec, home, refused, slurm=slurm, setup=setup),
         lambda: _each(
             step,
             spec,
             home,
             '[tick] one now, per repo',
-            lambda *a: _tick(*a, slurm=slurm, git=''.join(lead)),
+            lambda *a: _tick(*a, slurm=slurm, setup=setup),
             refused=refused,
         ),
     )
