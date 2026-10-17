@@ -70,8 +70,14 @@ NEEDS: Final = ('git', 'uv')
 _SHA_HEX: Final = 40
 
 
-#: Prints the tree venv's env hash (:func:`lab_commons.dev.envkey.env_key`) -- the key a base part is carried under.
-_ENV_KEY: Final = 'from lab_commons.dev.envkey import env_key, env_manifest; print(env_key(env_manifest()))'
+#: Prints the tree venv's env record as two facts from ONE manifest reading, the fields of
+#: :func:`lab_commons.dev.envkey.env_record`: ``env`` (the key a base part is carried under) and ``resolved``
+#: (every ``name==version`` it ran against, JSON). Spelled with ``env_manifest``/``env_key`` so a tree whose
+#: resolved kit predates ``env_record`` still reports both. Single quotes only: it runs inside ``python -c "..."``.
+_ENV_FACTS: Final = (
+    'import json; from lab_commons.dev import envkey as k; m = list(k.env_manifest()); '
+    "print(k.env_key(m)); print('resolved=' + json.dumps(m))"
+)
 
 _GIT: Final = shutil.which('git') or 'git'
 
@@ -249,7 +255,7 @@ def build_script(spec: RunSpec) -> str:
         'echo "@@@ facts"',
         'echo "platform=$(uname -s | tr A-Z a-z)-$(uname -m)/glibc$(getconf GNU_LIBC_VERSION | cut -d" " -f2)"',
         f'echo "python=$({ENV} && python -c "import platform; print(platform.python_version())")"',
-        f'echo "env=$({ENV} && python -c "{_ENV_KEY}" 2>/dev/null)"',
+        f'echo "env=$({ENV} && python -c "{_ENV_FACTS}" 2>/dev/null)"',
     ]
     return '\n'.join(lines)
 

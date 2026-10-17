@@ -10,7 +10,7 @@ from typing import ClassVar
 
 import pytest
 
-from lab_commons.dev.envkey import UNREADABLE, env_key, env_manifest, interpreter_identity
+from lab_commons.dev.envkey import UNREADABLE, env_key, env_manifest, env_record, interpreter_identity
 
 
 class _Dist:
@@ -97,3 +97,18 @@ class TestAGitInstallIsNamedByItsCommit:
     def test_a_plain_release_install_still_keys(self) -> None:
         """The other side: a version with no local segment is ordinary, not a degraded reading."""
         assert 'lab-commons==0.4.0' in env_manifest([_Dist('lab-commons', '0.4.0')])
+
+
+def test_the_env_record_states_the_key_and_every_resolved_line() -> None:
+    """Reproducibility by RECORD (user ruling 2026-10-17): nothing is pinned, so a run says what it ran against.
+
+    PLANTED CONTROL: one moved version moves both the key and the line that names it.
+    """
+    one = env_record(env_manifest([_Dist('lab-commons', '0.3.0'), _Dist('numpy', '2.3.0')]))
+    assert one == {
+        'env': env_key(one['resolved']),
+        'resolved': [interpreter_identity(), 'lab-commons==0.3.0', 'numpy==2.3.0'],
+    }
+    moved = env_record(env_manifest([_Dist('lab-commons', '0.3.1'), _Dist('numpy', '2.3.0')]))
+    assert moved['env'] != one['env']
+    assert 'lab-commons==0.3.1' in moved['resolved']
