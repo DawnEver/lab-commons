@@ -36,9 +36,10 @@ def settle(
     config: Config,
     output: Path,
     *,
+    part: str,
     sleep: Callable[[float], object] | None,
 ) -> int:
-    """Gather each of *shas*; with a *sleep*, poll every ``policy.poll_seconds`` until all have a record.
+    """Gather *part* on each of *shas*; with a *sleep*, poll every ``policy.poll_seconds`` until all are done.
 
     Exit: 0 every record green, 1 any red (or a run that cannot be gathered), :data:`PENDING` when not
     waiting and some run is still on the cluster.
@@ -47,9 +48,9 @@ def settle(
     while True:
         for sha in list(left):
             try:
-                record = gather_run(sha, machine, connect, cost=config.cost, policy=config.policy)
+                record = gather_run(sha, part, machine, connect, cost=config.cost, policy=config.policy)
                 if record is None:
-                    emit(where(sha, machine, connect, policy=config.policy).describe())
+                    emit(where(sha, part, machine, connect, policy=config.policy).describe())
                     continue
             except Unreachable as exc:
                 emit(f'pending: {exc}')

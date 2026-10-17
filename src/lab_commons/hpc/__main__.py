@@ -253,7 +253,9 @@ _sleep = time.sleep
 
 
 def _run_gather(args: argparse.Namespace, machine: Machine, config: Config) -> int:
-    return settle([args.sha], machine, submitter(), config, args.output, sleep=_sleep if args.wait else None)
+    return settle(
+        [args.sha], machine, submitter(), config, args.output, part=args.part, sleep=_sleep if args.wait else None
+    )
 
 
 #: Each ``run`` step and the flags it cannot do without.
@@ -285,7 +287,9 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
     group.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
     group.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
-    group.add_argument('--part', default=BASE, help=f'run submit: the part (a need-set) to run; default {BASE}')
+    group.add_argument(
+        '--part', default=BASE, help=f'run submit/gather: the part (a need-set) the run runs; default {BASE}'
+    )
     group.add_argument(
         '--repo',
         type=Path,
