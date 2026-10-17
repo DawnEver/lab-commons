@@ -27,6 +27,7 @@ from typing import Final
 __all__ = [
     'PROBE_COMMAND',
     'WORKDIRS_COMMAND',
+    'Held',
     'Node',
     'Partition',
     'Quota',
@@ -54,8 +55,8 @@ PROBE_COMMAND: Final = (
     'echo "@@@ files"; df -iP "$HOME" | tail -n 1'
 )
 
-#: The comment tag every job of a workstation carries -- :data:`lab_commons.hpc.grants.COMMENT_PREFIX`.
-_WS_TAG: Final = re.compile(r'(?:^|[\s,;])lc:ws=([^\s,;]+)')
+#: The comment tag every job of a session carries -- :data:`lab_commons.hpc.grants.COMMENT_PREFIX`.
+_SESSION_TAG: Final = re.compile(r'(?:^|[\s,;])lc:session=([^\s,;]+)')
 
 
 #: The working directory of every job of the caller's still queued or running (``%Z``, one per line).
@@ -76,17 +77,37 @@ def probe_command(slurm_account: str = '') -> str:
     """
     if not slurm_account:
         return PROBE_COMMAND
-    return f'{PROBE_COMMAND}; echo "@@@ shared"; squeue -h --me -A {shlex.quote(slurm_account)} -o "%C %k"'
+    return (
+        f'{PROBE_COMMAND}; echo "@@@ shared"; '
+        f'squeue -h --me -r -t PENDING,RUNNING -A {shlex.quote(slurm_account)} -o "%C|%m|%D|%k"'
+    )
 
 
-def parse_usage(text: str) -> dict[str, float]:
-    """``squeue -o "%C %k"`` lines into CPUs held per workstation tag; an untagged job is held by ``''``."""
-    usage: dict[str, float] = {}
+@dataclass(frozen=True)
+class Held:
+    """What pending and running tasks hold on an account: tasks, CPUs and memory (MB)."""
+
+    tasks: int = 0
+    cpus: float = 0.0
+    mem_mb: float = 0.0
+
+    def __add__(self, other: Held) -> Held:
+        """Summed per dimension -- one session across several accounts."""
+        return Held(self.tasks + other.tasks, self.cpus + other.cpus, self.mem_mb + other.mem_mb)
+
+
+def parse_usage(text: str) -> dict[str, Held]:
+    """``squeue -r -o "%C|%m|%D|%k"`` lines into what each session tag holds; an untagged job is ``''``'s.
+
+    ``-r`` prints one line per array task, so a pending array counts every task it will start.
+    """
+    usage: dict[str, Held] = {}
     for line in filter(None, (raw.strip() for raw in text.splitlines())):
-        cpus, _, comment = line.partition(' ')
-        tag = _WS_TAG.search(comment)
+        cpus, mem, nodes, comment = line.split('|', 3)
+        tag = _SESSION_TAG.search(comment)
         key = tag.group(1) if tag else ''
-        usage[key] = usage.get(key, 0.0) + float(cpus)
+        mem_mb = _megabytes(mem) * float(nodes or 1) if mem not in {'', '0'} else 0.0
+        usage[key] = usage.get(key, Held()) + Held(1, float(cpus), mem_mb)
     return usage
 
 
@@ -219,8 +240,8 @@ class Snapshot:
     nodes: tuple[Node, ...]
     partitions: dict[str, Partition]
     quota: Quota
-    #: CPUs the caller's jobs on the account hold, per workstation tag (``''`` = untagged); see :func:`parse_usage`.
-    usage: dict[str, float] = field(default_factory=dict)
+    #: What the caller's pending and running tasks on the account hold, per session tag (``''`` = untagged).
+    usage: dict[str, Held] = field(default_factory=dict)
     #: Free inodes of the home's filesystem (``df -i``) -- the file-count quota a run writes against; ``None`` unread.
     inodes_free: int | None = None
 

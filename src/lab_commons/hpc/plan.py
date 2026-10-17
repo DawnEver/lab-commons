@@ -40,8 +40,8 @@ from dataclasses import dataclass, replace
 from typing import Final
 
 from lab_commons.hpc.config import GIB, Cluster, Cost, Limits, Policy
-from lab_commons.hpc.grants import COMMENT_PREFIX, Grant
-from lab_commons.hpc.slurm import Snapshot
+from lab_commons.hpc.grants import COMMENT_PREFIX, Grant, Session
+from lab_commons.hpc.slurm import Held, Snapshot
 from lab_commons.resources import CPU, GPU, MEMORY
 from lab_commons.width import fits
 
@@ -62,6 +62,7 @@ __all__ = [
     'make_plan',
     'plan_on',
     'quota_slots',
+    'session_room',
 ]
 
 
@@ -81,7 +82,7 @@ class Plan:
     throttle: int
     free_slots: int
     makespan_minutes: float
-    #: The ``--comment`` every task carries -- the workstation tag :func:`allocate` stamps.
+    #: The ``--comment`` every task carries -- the session tag :func:`plan_on` stamps.
     comment: str = ''
     #: The grant's compute-node set-up (``module load ...``), run before the job's own; :func:`allocate` stamps it.
     setup: tuple[str, ...] = ()
@@ -332,8 +333,36 @@ def headroom(snapshot: Snapshot) -> int:
     if quota is None:
         cap = float(sum(node.cpus for node in snapshot.nodes if node.schedulable))
     else:
-        cap = quota - sum(snapshot.usage.values())
+        cap = quota - sum(held.cpus for held in snapshot.usage.values())
     return max(0, math.floor(cap))
+
+
+def session_room(session: Session | None, snapshots: Sequence[Snapshot], cost: Cost) -> int | None:
+    """Tasks of *cost* *session* may still start: its cap less what its tag holds on EVERY account; ``None`` uncapped.
+
+    The accounts are one pool (user ruling 2026-10-17), so the session is counted across all of them, pending
+    tasks included. A task past the per-task ceiling is refused; one that fits is never refused, only held to 0.
+    """
+    if session is None:
+        return None
+    over = [
+        f'{name} {asked:g} > {ceiling:g}'
+        for name, asked, ceiling in (
+            ('cpus', cost.cpus, session.task_cpus),
+            ('mem_gb', cost.mem_gb, session.task_mem_gb),
+        )
+        if ceiling is not None and asked > ceiling
+    ]
+    if over:
+        msg = f'session {session.name!r}: one task asks past its per-task ceiling ({", ".join(over)})'
+        raise ValueError(msg)
+    held = sum((s.usage.get(session.name, Held()) for s in snapshots), Held())
+    left = (
+        session.tasks - held.tasks,
+        (session.cpus - held.cpus) // cost.cpus,
+        (session.mem_gb * 1024 - held.mem_mb) // (cost.mem_gb * 1024),
+    )
+    return max(0, int(min(left)))
 
 
 #: The files a submitted array adds to the home: its run directory, ``logs/``, ``results/``, manifest, script.
@@ -354,19 +383,19 @@ def plan_on(
     n_items: int,
     cost: Cost,
     *,
-    workstation: str | None,
+    session: Session | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
     min_minutes: float = 0.0,
 ) -> Plan:
-    """*grant*'s plan for *n_items* on its headroom, stamped with the workstation tag and the grant's set-up.
+    """*grant*'s plan for *n_items* on its headroom, stamped with the session tag and the grant's set-up.
 
     Refused (``ValueError``, naming the account and why) when the account has no CPU headroom for one item, no
     partition can hold the work, or the home has fewer free inodes than the array writes (:func:`files_needed`).
     """
     room = headroom(snapshot)
     if room < cost.cpus:
-        held = ', '.join(f'{tag or "untagged"}={cpus:g}' for tag, cpus in sorted(snapshot.usage.items()))
+        held = ', '.join(f'{tag or "untagged"}={h.cpus:g}' for tag, h in sorted(snapshot.usage.items()))
         msg = (
             f'{grant.name}: headroom {room} CPU < {cost.cpus} per item '
             f'(quota {snapshot.quota.cpus}, held {held or "nothing"})'
@@ -389,7 +418,7 @@ def plan_on(
     if snapshot.inodes_free is not None and files_needed(plan) > snapshot.inodes_free:
         msg = f'{grant.name}: the home has {snapshot.inodes_free} free inodes, the array writes {files_needed(plan)}'
         raise ValueError(msg)
-    return replace(plan, comment=COMMENT_PREFIX + workstation if workstation else '', setup=grant.setup)
+    return replace(plan, comment=COMMENT_PREFIX + session.name if session else '', setup=grant.setup)
 
 
 def allocate(
@@ -397,20 +426,23 @@ def allocate(
     cost: Cost,
     candidates: Sequence[tuple[Grant, Snapshot]],
     *,
-    workstation: str | None,
+    session: Session | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
     min_minutes: float = 0.0,
 ) -> tuple[Grant, Plan]:
-    """The ONE grant whose plan finishes EARLIEST (:func:`plan_on`). Pure.
+    """The ONE grant with room whose plan finishes EARLIEST (:func:`plan_on`), held to *session*'s cap. Pure.
 
-    A tie goes to the grant with MORE headroom -- measured now, pending jobs included (:func:`headroom`) --
-    then to the higher ``priority``, then to the earlier grant in the file. Two grants on one cluster plan
-    the same makespan for a small batch, so without the headroom key the first in the file took every run
-    however loaded it was. No grant with room raises, naming each account and why -- an empty answer is
-    never a silent queue. Spreading one batch over SEVERAL grants is :func:`lab_commons.hpc.span.span`.
+    A grant with ``room`` -- the account's headroom now, group memory included, and the session's
+    (:func:`session_room`) -- beats one without; then the earlier makespan; a tie goes to the grant with MORE
+    CPU headroom -- measured now, pending jobs included (:func:`headroom`) -- then to the higher ``priority``,
+    then to the earlier grant in the file. Two grants on one cluster plan the same makespan for a small batch,
+    so without the headroom key the first in the file took every run however loaded it was. A session past
+    its cap gets a plan with ``room`` 0 and a throttle of 1: it WAITS, never refused. No grant that can plan
+    raises, naming each account and why. Spreading one batch over SEVERAL grants is :func:`lab_commons.hpc.span.span`.
     """
-    options: list[tuple[float, int, int, int, Grant, Plan]] = []
+    capped = session_room(session, [snapshot for _, snapshot in candidates], cost)
+    options: list[tuple[bool, float, int, int, int, Grant, Plan]] = []
     refusals = []
     for order, (grant, snapshot) in enumerate(candidates):
         try:
@@ -419,7 +451,7 @@ def allocate(
                 snapshot,
                 n_items,
                 cost,
-                workstation=workstation,
+                session=session,
                 policy=policy,
                 seconds=seconds,
                 min_minutes=min_minutes,
@@ -427,9 +459,13 @@ def allocate(
         except ValueError as refused:
             refusals.append(str(refused))
             continue
-        options.append((plan.makespan_minutes, -headroom(snapshot), -grant.priority, order, grant, plan))
+        if capped is not None:
+            room = capped if plan.room is None else min(plan.room, capped)
+            plan = replace(plan, room=room, throttle=min(plan.throttle, max(1, capped)))
+        rank = (plan.room == 0, plan.makespan_minutes, -headroom(snapshot), -grant.priority, order)
+        options.append((*rank, grant, plan))
     if not options:
         msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])
         raise ValueError(msg)
-    *_, grant, plan = min(options, key=lambda o: o[:4])
+    *_, grant, plan = min(options, key=lambda o: o[:5])
     return grant, plan

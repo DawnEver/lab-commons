@@ -15,7 +15,7 @@ from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc import jobs
 from lab_commons.hpc.cluster import Unreachable
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
-from lab_commons.hpc.grants import Grant, Machine
+from lab_commons.hpc.grants import Grant, Machine, Session
 from lab_commons.hpc.jobs import built_config, gather_job, retry_job, status_job, submit_job
 from lab_commons.hpc.plan import files_needed, plan_on
 from lab_commons.hpc.slurm import parse_inodes, parse_snapshot
@@ -40,19 +40,30 @@ def test_split_cuts_consecutive_ranges_by_share_of_the_seconds() -> None:
 
 def test_a_large_batch_spans_both_grants_and_finishes_sooner() -> None:
     candidates = [(NEAR, _snap()), (FAR, _snap())]
-    placements = span(2000, BIG, candidates, workstation=None, policy=Policy())
+    placements = span(2000, BIG, candidates, session=None, policy=Policy())
     assert [p.grant for p in placements] == [NEAR, FAR]
     assert placements[0].items[0] == 0
     assert placements[0].items[1] == placements[1].items[0]
     assert placements[1].items[1] == 2000
-    alone = plan_on(NEAR, _snap(), 2000, BIG, workstation=None, policy=Policy())
+    alone = plan_on(NEAR, _snap(), 2000, BIG, session=None, policy=Policy())
     assert max(p.plan.makespan_minutes for p in placements) < alone.makespan_minutes
 
 
 def test_a_small_batch_stays_on_the_one_fastest_grant() -> None:
-    placements = span(4, Cost(seconds=60), [(NEAR, _snap()), (FAR, _snap())], workstation=None, policy=Policy())
+    placements = span(4, Cost(seconds=60), [(NEAR, _snap()), (FAR, _snap())], session=None, policy=Policy())
     assert len(placements) == 1
     assert placements[0].items == (0, 4)
+
+
+def test_a_spread_never_runs_more_at_once_than_the_session_cap() -> None:
+    """The cap counts the whole pool: two slices of a capped session would each take the cap, so it stays one."""
+    capped = Session(name='s', tasks=4, cpus=1000, mem_gb=10000)
+    placements = span(2000, BIG, [(NEAR, _snap()), (FAR, _snap())], session=capped, policy=Policy())
+    assert len(placements) == 1
+    assert placements[0].plan.throttle <= 4
+    # Planted control: a cap wider than both slices together keeps the spread.
+    wide = Session(name='s', tasks=10000, cpus=10000, mem_gb=100000)
+    assert len(span(2000, BIG, [(NEAR, _snap()), (FAR, _snap())], session=wide, policy=Policy())) == 2
 
 
 def test_the_file_quota_is_a_resource_a_grant_is_refused_on() -> None:
@@ -60,8 +71,8 @@ def test_the_file_quota_is_a_resource_a_grant_is_refused_on() -> None:
     assert parse_inodes('') is None
     full = _snap('/dev/x 2000000 1999990 10 100% /home')
     with pytest.raises(ValueError, match='free inodes'):
-        plan_on(NEAR, full, 200, Cost(seconds=60), workstation=None, policy=Policy())
-    placements = span(2000, BIG, [(NEAR, full), (FAR, _snap())], workstation=None, policy=Policy())
+        plan_on(NEAR, full, 200, Cost(seconds=60), session=None, policy=Policy())
+    placements = span(2000, BIG, [(NEAR, full), (FAR, _snap())], session=None, policy=Policy())
     assert [p.grant for p in placements] == [FAR]
     assert files_needed(placements[0].plan) == 5 + 2 * len(placements[0].plan.shards)
 
@@ -99,7 +110,7 @@ def _config(tmp_path: Path, cost: Cost = BIG) -> Config:
 
 def _cluster(*, far_up: bool = True) -> tuple[Machine, dict[str, _Login]]:
     logins = {'near': _Login('near'), 'far': _Login('far', up=far_up)}
-    return Machine(workstation=None, grants=(NEAR, FAR)), logins
+    return Machine(session=None, grants=(NEAR, FAR)), logins
 
 
 def test_one_record_lists_every_grants_slice_and_each_tree_is_ensured(tmp_path: Path) -> None:
@@ -223,7 +234,7 @@ def _wait_cli(monkeypatch: pytest.MonkeyPatch, polls: list[object]) -> tuple[lis
         gathered.append(1)
         return [], 2, []
 
-    monkeypatch.setattr(cli, 'load_grants', lambda: Machine(workstation='ws-a', grants=(NEAR,)))
+    monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=None, grants=(NEAR,)))
     monkeypatch.setattr(cli, 'runner_for', lambda _g, *_a: None)
     monkeypatch.setattr(cli, '_job_config', lambda _p, _a: Config(policy=Policy(poll_seconds=7)))
     monkeypatch.setattr(cli, '_record', lambda _c: RECORD)
