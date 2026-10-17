@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 import pytest
 from _box_fake import boxed_as_run
 
-from lab_commons.resources import Broker, Exhausted
+from lab_commons.box import Demand, Refused, hold
 from lab_commons.supervise.alert import Notifier
 from lab_commons.supervise.component import ActionContext, CheckContext, Component, Handler, Registry
 from lab_commons.supervise.loop import UNCONFIGURED, CycleResult, run_cycle
@@ -391,11 +391,11 @@ def test_dry_run_touches_nothing(tmp_path: Path) -> None:
     assert [attempt.action for attempt in result.attempts] == ['refresh']
 
 
-def test_a_second_cycle_on_one_target_is_refused_by_the_broker(tmp_path: Path) -> None:
+def test_a_second_cycle_on_one_target_is_refused_by_its_seat(tmp_path: Path) -> None:
     """THE ONLY LOCK. The kit forbids a pid file or a heartbeat as a second definition of it."""
-    broker = Broker()
-    with broker.admit('supervise-unit-test', {'seats': 1}, wait_s=0.0), pytest.raises(Exhausted):
-        _run(_registry(_Probe()), tmp_path, broker=broker)
+    seat = Demand(0, 0.0, 60, {'supervise_unit_test': 1})
+    with hold(seat, 'another cycle', 0.0, key='k'), pytest.raises(Refused):
+        _run(_registry(_Probe()), tmp_path)
 
 
 def test_a_warranted_notice_reaches_the_channel(tmp_path: Path) -> None:

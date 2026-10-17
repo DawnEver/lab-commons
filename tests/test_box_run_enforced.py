@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _box_fake import quiet
 
 from lab_commons.box import BOX_ENV, GB, Capacity, Demand, Outcome, Refused, holdings, read_ended, run
 from lab_commons.box.__main__ import main
@@ -23,6 +24,7 @@ from lab_commons.proc import pid_alive
 ENFORCES = sys.platform == 'win32' or (sys.platform.startswith('linux') and refusal() is None)
 
 _CAP = Capacity(cpu=2.0, mem_bytes=4 * GB, seats={})
+_QUIET = quiet(_CAP)
 _MB = 2**20
 #: 400 MB, touched page by page so a lazily-committing kernel (Linux) accounts it, then HELD: a watched
 #: (Slurm) run is sampled per tick, and a hog that held nothing would not be the case under test.
@@ -42,10 +44,10 @@ def _run(code: str, *, mem_mb: int = 200, wall_s: int = 30) -> Outcome | None:
     argv = [sys.executable, '-c', code]
     if not ENFORCES:
         with pytest.raises(Refused, match='unenforced'):
-            run(argv, demand, 'refused', queue_s=5, capacity=_CAP, key='k')
+            run(argv, demand, 'refused', queue_s=5, capacity=_CAP, read=_QUIET, key='k')
         assert holdings() == []
         return None
-    return run(argv, demand, 'enforced', queue_s=5, capacity=_CAP, key='solve|ipm|fea', fingerprint='abc')
+    return run(argv, demand, 'enforced', queue_s=5, capacity=_CAP, read=_QUIET, key='solve|ipm|fea', fingerprint='abc')
 
 
 def _gone(pid: int, within_s: float = 5.0) -> bool:

@@ -45,8 +45,8 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Final
 
+from lab_commons.box import Refused
 from lab_commons.log import emit
-from lab_commons.resources import Broker, Exhausted
 from lab_commons.supervise import notify
 from lab_commons.supervise.alert import Notifier
 from lab_commons.supervise.component import Registry
@@ -133,7 +133,6 @@ class Loop:
         config: the merged configuration.
         project: the target's directory.
         manager: how a remedy reaches the service's process.
-        broker: where a cycle's seat comes from. Defaults to the shared broker.
         notifier: how a notice is delivered. Defaults to one over the merged config.
         stop: set to ask the loop to finish the cycle in flight and return.
         definition: what this process loaded, re-taken from disk each cycle. When it moves, the
@@ -147,7 +146,6 @@ class Loop:
     config: dict[str, Any]
     project: Path
     manager: ProcessManager
-    broker: Broker | None = None
     notifier: Notifier | None = None
     stop: threading.Event = field(default_factory=threading.Event)
     definition: Definition | None = None
@@ -180,10 +178,9 @@ class Loop:
                 self.project,
                 self.manager,
                 clock=clock or now(),
-                broker=self.broker,
                 notifier=self.notifier,
             )
-        except Exhausted as exc:
+        except Refused as exc:
             emit(f'supervise: skipped, another cycle holds this target ({exc})', flush=True)
             return None
 

@@ -220,7 +220,7 @@ def job_measured(
     """
     walls = [r.get('walls_s') or [0.0] for r in rounds]
     return Run(
-        peak_mem_gb=measured.worker_gb(outcomes, prior_gb=0.0, safety=1.0),
+        peak_mem_gb=measured.peak_gb(outcomes),
         cpu_s=sum(sum(w) for w in walls) * cpus,
         wall_s=max(1.0, sum(max(w) for w in walls)),
         files=files,

@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from _box_fake import quiet
 
-from lab_commons.box import BOX_ENV, Capacity, Demand, Outcome, Refused, admit, command, read_ended, run, write_ended
+from lab_commons.box import BOX_ENV, Capacity, Demand, Outcome, Refused, command, hold, read_ended, run, write_ended
 from lab_commons.box.__main__ import _parser, main
 from lab_commons.box._linux import in_slurm_job, manager, scope_argv
 from lab_commons.box.run import _ENFORCERS
@@ -118,9 +119,15 @@ def test_the_key_and_fingerprint_ride_on_the_ledger_row(monkeypatch: pytest.Monk
     monkeypatch.setenv(BOX_ENV, str(path))
     demand = Demand(cpu=1, mem_gb=0.5, wall_s=5, seats={})
     with (
-        admit(
-            demand, 'tagged', 1, capacity=Capacity(cpu=2.0, mem_bytes=2**31, seats={}), key='case|fea', fingerprint='f0'
-        ),
+        hold(
+            demand,
+            'tagged',
+            1,
+            capacity=(size := Capacity(cpu=2.0, mem_bytes=2**31, seats={})),
+            read=quiet(size),
+            key='case|fea',
+            fingerprint='f0',
+        ),  # fmt: skip
         sqlite3.connect(path) as con,
     ):
         assert con.execute('SELECT key, fingerprint FROM claims').fetchall() == [('case|fea', 'f0')]

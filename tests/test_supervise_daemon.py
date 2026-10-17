@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.resources import Broker
+from lab_commons.box import Demand, hold
 from lab_commons.supervise import daemon
 from lab_commons.supervise.cli import build_registry
 from lab_commons.supervise.component import CheckContext, Component, Registry
@@ -47,7 +47,7 @@ def _manager() -> SystemdProcessManager:
     return SystemdProcessManager(runner=run)
 
 
-def _loop(tmp_path: Path, probe: Component, *, broker: Broker | None = None) -> Loop:
+def _loop(tmp_path: Path, probe: Component) -> Loop:
     registry = Registry()
     registry.register(probe)
     config = {
@@ -62,7 +62,6 @@ def _loop(tmp_path: Path, probe: Component, *, broker: Broker | None = None) -> 
         config=config,
         project=_PROJECT,
         manager=_manager(),
-        broker=broker,
     )
 
 
@@ -87,10 +86,9 @@ def test_a_cycle_that_finds_the_seat_taken_skips_rather_than_fails(tmp_path: Pat
 
     The other cycle is the one doing the work, which is why the seat is taken before measuring.
     """
-    broker = Broker()
     probe = _Probe()
-    loop = _loop(tmp_path, probe, broker=broker)
-    with broker.admit('supervise-unit-test', {'seats': 1}, wait_s=0.0):
+    loop = _loop(tmp_path, probe)
+    with hold(Demand(0, 0.0, 60, {'supervise_unit_test': 1}), 'another cycle', 0.0, key='k'):
         assert loop.once(_CLOCK) is None
     assert probe.runs == 0, 'the seat is taken before any work, so no check should have run'
 

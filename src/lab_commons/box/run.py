@@ -24,16 +24,13 @@ import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Final
 
 from lab_commons.box import _linux, _win
 from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
-from lab_commons.box.ledger import admit
+from lab_commons.box.ledger import INSIDE_ENV, Read, hold
+from lab_commons.box.supply import Reading
 
-__all__ = ['INSIDE_ENV', 'command', 'run']
-
-#: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
-INSIDE_ENV: Final = 'LAB_COMMONS_BOXED'
+__all__ = ['command', 'run']
 
 #: One backend per platform that has one: ``contain(argv, demand, cwd, env, (key, fingerprint)) -> Outcome``.
 Contain = Callable[[Sequence[str], Demand, str | None, Mapping[str, str] | None, tuple[str, str | None]], Outcome]
@@ -51,6 +48,7 @@ def run(
     cwd: str | None = None,
     env: Mapping[str, str] | None = None,
     capacity: Capacity | None = None,
+    read: Read = Reading.now,
 ) -> Outcome:
     """Admit *demand* (waiting at most *queue_s*), run *argv* enforced to it, release, report.
 
@@ -66,9 +64,12 @@ def run(
     if not argv:
         msg = f'{what}: an empty argv names nothing to run'
         raise ValueError(msg)
+    if demand.cpu < 1 or demand.mem_gb <= 0:
+        msg = f'{what}: a run is enforced to positive cores and memory, not a seat-only claim'
+        raise ValueError(msg)
     contain = _enforcer()
     inside = {**(os.environ if env is None else env), INSIDE_ENV: key}
-    with admit(demand, what, queue_s, capacity=capacity, key=key, fingerprint=fingerprint):
+    with hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint):
         return contain(argv, demand, cwd, inside, (key, fingerprint))
 
 

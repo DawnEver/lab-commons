@@ -54,9 +54,24 @@ def test_one_worker_rule_prices_a_box_worker_and_a_slurm_task_alike() -> None:
     learned.learn_peaks(REPO, {'tests/a.py': 1024.0, 'tests/b.py': 3072.0})
     assert learned.worker_gb(REPO, ['tests/a.py'], prior_gb=0.5, safety=1.5) == 1.5
     assert learned.worker_gb(REPO, ['tests/a.py::t', 'tests/b.py::u'], prior_gb=0.5, safety=1.5) == 4.5
-    assert learned.worker_gb(REPO, ['tests/new.py'], prior_gb=0.5, safety=1.5) == 0.5, 'unmeasured is the prior'
+    assert learned.worker_gb(REPO, ['tests/new.py'], prior_gb=0.5, safety=1.5) == 3.0, 'its siblings median, 2 GB'
     measured = Measured.of(learned.learned(REPO))
     assert measured.worker_gb(['tests/b.py'], prior_gb=1.0, safety=1.5) == 4.5
+
+
+def test_an_unmeasured_file_is_priced_at_its_measured_siblings_median_never_the_global_max() -> None:
+    """D5: the prior of an unmeasured file is the median of its directory's measured files, else the table's.
+
+    PLANTED CONTROL: a 16 GB file elsewhere in the table moves neither prior the way the global max would.
+    """
+    measured = Measured(peaks_mb={'tests/u/a.py': 100.0, 'tests/u/b.py': 300.0, 'tests/u/c.py': 200.0,
+                                  'tests/heavy/h.py': 16384.0})  # fmt: skip
+    assert measured.prior_mb('tests/u/new.py') == 200.0, 'the median of its three siblings'
+    assert measured.prior_mb('tests/other/new.py') == 250.0, 'no sibling: the median of the whole table'
+    assert Measured().prior_mb('tests/x.py') is None, 'an empty table has no prior'
+    assert measured.worker_gb(['tests/u/new.py'], prior_gb=0.0, safety=1.0) == pytest.approx(200 / 1024, abs=1e-9)
+    assert Measured().worker_gb(['tests/x.py'], prior_gb=0.5, safety=1.0) == 0.5, 'nothing measured: the floor'
+    assert measured.peak_gb(['tests/u/new.py']) == 0.0, 'the own peak of a run never includes a prior'
 
 
 def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:

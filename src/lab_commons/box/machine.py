@@ -23,11 +23,11 @@ __all__ = [
     'reserve_table',
 ]
 
-#: Cores kept free above what the box's own user is using now.
+#: Cores kept free above what the box's own user is using now (measured, :mod:`lab_commons.box.supply`).
 DEFAULT_CPU_MARGIN: Final = 1.0
 
 #: The fraction of the box's memory kept free above what its own user is using now.
-DEFAULT_MEM_MARGIN: Final = 0.25
+DEFAULT_MEM_MARGIN: Final = 0.10
 
 #: The spelling of one resource name: a ``[capabilities.<name>]`` table, a need-set marker.
 RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
@@ -59,12 +59,13 @@ def reserve_table(table: Mapping[str, Any]) -> ReserveTable:
     return ReserveTable(float(cpu), float(mem))
 
 
-def own_reserve(total: Mapping[str, float], in_use: Mapping[str, float], table: ReserveTable) -> dict[str, float]:
-    """What this box keeps for its own user: ``{'cpu', 'mem_gb'}`` in use now plus the margins, capped at the box."""
-    wanted = {
-        'cpu': in_use.get('cpu', 0.0) + table.cpu_margin,
-        'mem_gb': in_use.get('mem_gb', 0.0) + table.mem_margin * total.get('mem_gb', 0.0),
-    }
+def own_reserve(total: Mapping[str, float], table: ReserveTable) -> dict[str, float]:
+    """The margin this box keeps above what its own user uses: ``{'cpu', 'mem_gb'}``, capped at the box.
+
+    What the user USES is not here: it is in the OS reading the box supply is measured from
+    (:mod:`lab_commons.box.supply`), so it is counted once, as it happens, and never declared.
+    """
+    wanted = {'cpu': table.cpu_margin, 'mem_gb': table.mem_margin * total.get('mem_gb', 0.0)}
     return {name: min(amount, total.get(name, 0.0)) for name, amount in wanted.items()}
 
 

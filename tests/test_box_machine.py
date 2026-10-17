@@ -7,13 +7,13 @@ import pytest
 from lab_commons.box.machine import DEFAULT_CPU_MARGIN, DEFAULT_MEM_MARGIN, own_reserve, provided, reserve_table
 
 
-def test_the_own_reserve_is_what_the_user_uses_now_plus_a_margin_capped_at_the_box() -> None:
+def test_the_own_reserve_is_the_declared_margin_capped_at_the_box() -> None:
+    """What the user USES is measured (lab_commons.box.supply); the reserve is only the margin above it."""
     table = reserve_table({})
-    assert table.mem_margin == DEFAULT_MEM_MARGIN == 0.25
+    assert table.mem_margin == DEFAULT_MEM_MARGIN == 0.10
     total = {'cpu': 16.0, 'mem_gb': 64.0}
-    own = own_reserve(total, {'cpu': 3.0, 'mem_gb': 10.0}, table)
-    assert own == {'cpu': 3 + DEFAULT_CPU_MARGIN, 'mem_gb': 10.0 + 16.0}
-    assert own_reserve(total, {'cpu': 16.0, 'mem_gb': 60.0}, table) == total, 'never more than the box'
+    assert own_reserve(total, table) == {'cpu': DEFAULT_CPU_MARGIN, 'mem_gb': 6.4}
+    assert own_reserve({'cpu': 0.5, 'mem_gb': 64.0}, table)['cpu'] == 0.5, 'never more than the box'
 
 
 def test_the_reserve_table_declares_margins_and_refuses_the_rest() -> None:

@@ -1,17 +1,15 @@
 """Tier 1 -- the one width formula: how many copies of a demand fit in a capacity.
 
-ONE QUESTION, THREE ASKERS, ONE ANSWER. A box sizing its worker pool
-(:func:`lab_commons.dev.bounded.worker_width`), a cluster node's free cores and memory, and a
-scheduler quota (:mod:`lab_commons.hpc.plan`) all ask the same thing of the same shape: the smallest
-``capacity // demand`` over the dimensions both sides name. Each used to spell it privately -- the
-first as ``min(cores, available_gb // gb_per_worker)`` -- and two spellings of one formula drift.
+ONE QUESTION, ONE ANSWER. A cluster node's free cores and memory and a scheduler quota
+(:mod:`lab_commons.hpc.plan`) ask the same thing of the same shape: the smallest ``capacity // demand``
+over the dimensions both sides name. (A box no longer sizes a pool here: what runs on a box is a claim
+the one ledger admits, :mod:`lab_commons.box`.)
 
-KEYED BY :data:`lab_commons.resources.DIMENSIONS`, so a demand here is the same mapping
-``Broker.admit`` takes, in the same units (memory in bytes). Memory-first is not a special case: memory
+KEYED BY :data:`lab_commons.resources.DIMENSIONS`, in their units (memory in bytes). Memory-first is not a
+special case: memory
 is a dimension like any other, and ``min`` is what makes the tightest one win.
 
-Its own module rather than a function in ``resources``: that module is pinned by the size alarm, and
-this formula is pure arithmetic that needs nothing from the broker but the dimension names.
+Pure arithmetic that needs nothing but the dimension names.
 """
 
 from __future__ import annotations
