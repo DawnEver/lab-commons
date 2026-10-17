@@ -16,7 +16,7 @@ once; a later run with flags that disagree is refused, naming the file); every l
 ``lab-commons`` is always among the repos: every tick RUNS it, so the host serves it.
 
 STEPS, each one reporting, each one safe to repeat: refuse off the declared host; check the account BEFORE
-anything changes (:mod:`lab_commons.hpc.deploy_checks`: git's credential helper and its store, every repo's
+anything changes (:mod:`lab_commons.hpc.deploy_account`: git's credential helper and its store, every repo's
 ``git ls-remote``, and the forge API calls a tick makes); write this account's own ``[[hpc.grant]]`` when
 it has none; prove the serve's git (``git merge-tree --write-tree``, git >= 2.38) on a toy repository --
 the tick PATH's, else the one this account's grant ``setup`` loads in a login shell, whose directory then
@@ -48,7 +48,6 @@ import argparse
 import os
 import shutil
 import socket
-import stat
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
@@ -59,7 +58,8 @@ from typing import Final
 import lab_commons.launch as _door
 from lab_commons.config import config_path
 from lab_commons.hpc.declared import OutdatedKit, RetiredTable
-from lab_commons.hpc.deploy_checks import MERGE_TREE_GIT, grant_of, merge_tree_refusal, store_problem, tool_plan
+from lab_commons.hpc.deploy_account import ApiCheck, auth_check, credentials, grant
+from lab_commons.hpc.deploy_checks import MERGE_TREE_GIT, merge_tree_refusal, tool_plan
 from lab_commons.hpc.deploy_spec import (
     DEFAULT_PYTHON,
     DEFAULT_ROOT,
@@ -69,12 +69,10 @@ from lab_commons.hpc.deploy_spec import (
     checkout_of,
     cron_lines,
     grant_setup,
-    has_grant,
     load,
     merge_crontab,
     parse_repo,
     render,
-    render_grant,
     tick_command,
     tick_dirs,
 )
@@ -85,12 +83,6 @@ from lab_commons.log import emit
 __all__ = ['deploy', 'main']
 
 
-_CREDENTIAL_REMEDY: Final = (
-    'store your OWN forge token for it once: `git config --global credential.helper store`, then '
-    '`python -m lab_commons.dev.forge auth login` (or one line https://<user>:<token>@<forge host> in '
-    '~/.git-credentials, chmod 600) and re-run'
-)
-
 _which = shutil.which
 
 
@@ -98,9 +90,6 @@ def _proves(git: str, scratch: Path) -> str:
     """``''`` when *git* runs the serve's trial merge (:func:`merge_tree_refusal`); else why not."""
     return merge_tree_refusal([git], scratch)
 
-
-#: Reads the forge API a tick needs for one repo url; ``''`` when nothing is refused.
-ApiCheck = Callable[[str, Path], str]
 
 #: Raises one forge alarm: ``(repo url, subject, body)``.
 AlarmSink = Callable[[str, str, str], object]
@@ -175,71 +164,6 @@ def _declare(step: Step, spec: Deployment, path: Path) -> int:
     with path.open('a', encoding='utf-8') as out:
         out.write(render(spec))
     emit(f'  declared [deploy] in {path}')
-    return 0
-
-
-def _store_mode(store: Path) -> int | None:
-    if not store.is_file():
-        return None
-    return stat.S_IMODE(store.stat().st_mode) if os.name == 'posix' else 0o600  # modes are POSIX's
-
-
-def _credentials(step: Step, spec: Deployment, home: Path, api: ApiCheck) -> int:
-    emit('[credentials] git credential helper, git ls-remote and the forge API, per served repo')
-    helper = step.read([*step.tools.git, 'config', '--global', '--get', 'credential.helper']).stdout.strip()
-    store = home / '.git-credentials'
-    if problem := store_problem(helper, store, mode=_store_mode(store)):
-        emit(f'deploy refused: {problem}', err=True)
-        return 2
-    denied = []
-    for repo in spec.repos:
-        rc = step.read([*step.tools.git, 'ls-remote', repo.url, f'refs/heads/{repo.ref}']).returncode
-        emit(f'  {repo.name}: {"ok" if rc == 0 else f"refused (exit {rc})"}')
-        if rc:
-            denied.append(repo.name)
-    if denied:
-        emit(f'deploy refused: no read access to {", ".join(denied)}; {_CREDENTIAL_REMEDY}', err=True)
-        return 2
-    refused = {repo.name: why for repo in spec.repos if (why := api(repo.url, home))}
-    for name, why in refused.items():
-        emit(f'  {name}: {why}', err=True)
-    if refused:
-        emit(
-            f'deploy refused: the forge API refuses what a tick needs on {", ".join(refused)}; store a token '
-            'with the scopes each refusal names: `python -m lab_commons.dev.forge auth login`',
-            err=True,
-        )
-        return 2
-    return 0
-
-
-def _auth_check(url: str, home: Path) -> str:
-    """The forge's own ``auth check`` of *url*, run as a subprocess: :mod:`lab_commons.hpc` imports no dev code."""
-    argv = [sys.executable, '-m', 'lab_commons.dev.forge', 'auth', 'check', '--url', url]
-    done = _door.run(argv, cwd=home, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
-    return '' if done.returncode == 0 else done.stderr.strip() or f'auth check exited {done.returncode}'
-
-
-def _grant(step: Step, spec: Deployment, path: Path, hostname: str) -> int:
-    """Write this account's own ``[[hpc.grant]]`` when the machine file has none for it."""
-    emit("[grant] this account's own [[hpc.grant]]")
-    user = step.read([*step.tools.id, '-un']).stdout.strip()
-    if has_grant(path, user):
-        emit(f'  {user} already holds a grant in {path}')
-        return 0
-    sacct = step.read([*step.tools.sacctmgr, '-nP', 'show', 'assoc', f'user={user}', 'format=account,grptres'])
-    grant = grant_of(user, sacct.stdout, spec=spec, host=hostname)
-    if isinstance(grant, str):
-        emit(f'deploy refused: {grant}', err=True)
-        return 2
-    text = render_grant(grant)
-    if step.dry:
-        emit(f'  [dry-run] write to {path}:{text}')
-        return 0
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('a', encoding='utf-8') as out:
-        out.write(text)
-    emit(f'  wrote the grant of {user} ({grant["slurm_account"]}) to {path}')
     return 0
 
 
@@ -423,7 +347,7 @@ def deploy(
     if args.remove:
         emit('[cron] removing the marked lines')
         return _crontab(step, [])
-    check = api or _auth_check
+    check = api or auth_check
     slurm = _slurm_dirs()
     if isinstance(slurm, str):
         emit(f'deploy refused: {slurm}', err=True)
@@ -432,8 +356,8 @@ def deploy(
     lead: list[str] = []  # the qualifying git's directory, when the grant's setup had to load it
     artefacts = '[artefacts] the rclone remote, where a repo declares one'
     phases = (
-        lambda: _credentials(step, spec, home, check),
-        lambda: _grant(step, spec, path, hostname),
+        lambda: credentials(step, spec, home, check),
+        lambda: grant(step, spec, path, hostname),
         lambda: _declare(step, spec, path),
         lambda: _serve_git(step, home, path, slurm, lead),
         lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', update, refused=refused),
