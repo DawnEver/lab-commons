@@ -21,9 +21,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import accumulate
 
+from lab_commons.hpc.allocation import session_room
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.grants import Grant, Paging, Session
-from lab_commons.hpc.plan import Plan, allocate, may_place, plan_on, session_room
+from lab_commons.hpc.plan import Plan, allocate, plan_on
+from lab_commons.hpc.region import may_place
 from lab_commons.hpc.slurm import Snapshot
 
 __all__ = ['Placement', 'span', 'split']
@@ -68,7 +70,7 @@ def span(
     """Where *n_items* run: every useful grant's slice, or the one fastest grant -- see the module docstring.
 
     Raises ``ValueError`` naming every account and why when no grant can take the work. With *paging*, a grant
-    :func:`lab_commons.hpc.plan.may_place` refuses takes no slice -- so a large job stays whole in the region.
+    :func:`lab_commons.hpc.region.may_place` refuses takes no slice -- so a large job stays whole in the region.
     """
     each = list(seconds) if seconds is not None else [cost.seconds] * n_items
     snapshots = [snapshot for _, snapshot in candidates]
@@ -82,7 +84,7 @@ def span(
             whole = plan_on(candidate, snapshot, n_items, cost, session=session, policy=policy, seconds=seconds)
         except ValueError:
             continue
-        if paging is not None and not may_place(index, whole, cost, snapshots, paging, rerun_safe=rerun_safe):
+        if paging is not None and not may_place(index, whole.minutes, cost, snapshots, paging, rerun_safe=rerun_safe):
             continue
         able.append((candidate, snapshot, sum(each) / whole.makespan_minutes))
     if len(able) <= 1:  # a spread needs two grants

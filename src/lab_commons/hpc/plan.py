@@ -33,16 +33,17 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 
 from __future__ import annotations
 
-import heapq
 import math
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from typing import Final
 
-from lab_commons.hpc.allocation import derived
+from lab_commons.hpc.allocation import session_room
 from lab_commons.hpc.config import GIB, Cluster, Cost, Limits, Policy
 from lab_commons.hpc.grants import COMMENT_PREFIX, Grant, Paging, Session
-from lab_commons.hpc.slurm import Held, Snapshot
+from lab_commons.hpc.region import free_mem_mb, may_place
+from lab_commons.hpc.shards import one_wave
+from lab_commons.hpc.slurm import Snapshot
 from lab_commons.resources import CPU, GPU, MEMORY
 from lab_commons.width import fits
 
@@ -55,17 +56,13 @@ __all__ = [
     'MIB',
     'Plan',
     'allocate',
-    'balance',
     'files_needed',
     'free_slots',
     'grantable_gb',
     'headroom',
     'make_plan',
-    'may_place',
     'plan_on',
     'quota_slots',
-    'region',
-    'session_room',
 ]
 
 
@@ -152,87 +149,6 @@ def _ceiling(snapshot: Snapshot, partition: str, qos: str) -> float | None:
     return min(values) if values else None
 
 
-def _pack(seconds: Sequence[float], low: float, high: float) -> list[tuple[int, int]]:
-    """Consecutive ranges: close a shard once it holds *low* seconds, never let one pass *high* unless alone."""
-    shards: list[tuple[int, int]] = []
-    start, held = 0, 0.0
-    for index, cost in enumerate(seconds):
-        if index > start and (held >= low or held + cost > high):
-            shards.append((start, index))
-            start, held = index, 0.0
-        held += cost
-    shards.append((start, len(seconds)))
-    return shards
-
-
-def _shards(seconds: Sequence[float], policy: Policy, room: int | None) -> list[tuple[int, int]]:
-    """The policy window first, then both bounds grown until the array fits ``max_array`` and *room*."""
-    cap = policy.max_array if room is None else min(policy.max_array, room)
-    low, high = policy.shard_minutes_min * 60, policy.shard_minutes_max * 60
-    floor = sum(seconds) / cap
-    low, high = max(low, floor), max(high, floor)
-    while len(shards := _pack(seconds, low, high)) > cap:
-        low, high = low * 1.1, high * 1.1
-    return shards
-
-
-def balance(
-    seconds: Sequence[float], shards: Sequence[tuple[int, int]]
-) -> tuple[list[int], tuple[tuple[int, int], ...]]:
-    """The same NUMBER of shards, refilled longest-processing-time first: ``(order, shards)``.
-
-    *order* permutes the items so each LPT bin is a consecutive range (the array script slices ranges);
-    within a bin the items keep their original order. The refill is kept only when its slowest shard is
-    faster than the given one's, else the input comes back unchanged. Measured 2026-10-11: consecutive
-    ranges of collection order put the heaviest files of one directory in one shard -- a 72-min shard
-    beside a median of 8, so the round's wall was its straggler.
-    """
-    slowest = max((sum(seconds[a:b]) for a, b in shards), default=0.0)
-    bins: list[list[int]] = [[] for _ in shards]
-    loads = [(0.0, n) for n in range(len(shards))]
-    for index in sorted(range(len(seconds)), key=lambda i: -seconds[i]):
-        load, n = heapq.heappop(loads)
-        bins[n].append(index)
-        heapq.heappush(loads, (load + seconds[index], n))
-    if not bins or max(load for load, _ in loads) >= slowest:
-        return list(range(len(seconds))), tuple(shards)
-    order, ranges, start = [], [], 0
-    for members in bins:
-        order += sorted(members)
-        ranges.append((start, start + len(members)))
-        start += len(members)
-    return order, tuple(ranges)
-
-
-def _wall(seconds: Sequence[float], shards: Sequence[tuple[int, int]]) -> int:
-    """The slowest shard's padded sum, in whole minutes."""
-    return max(1, math.ceil(max(sum(seconds[a:b]) for a, b in shards) / 60))
-
-
-def _one_wave(
-    padded: Sequence[float],
-    policy: Policy,
-    room: int | None,
-    *,
-    at_once: int,
-    ceiling: float | None,
-    min_minutes: float,
-) -> tuple[list[tuple[int, int]], int]:
-    """Shards no more than run *at_once*, so the makespan IS the wall; more only when *ceiling* forces it.
-
-    Measured 2026-10-10: a round planned 24 shards of 21 min for 17 concurrent tasks -- a 42-min makespan
-    under a 21-min wall, so every task was killed at half the time the round itself expected to take.
-    A second wave buys nothing a longer wall does not, and the longer wall is what a slow id needs.
-    *min_minutes* (a retry after a TIMEOUT) raises the wall, held to *ceiling*.
-    """
-    cap = at_once if room is None else min(room, at_once)
-    shards = _shards(padded, policy, cap)
-    if ceiling is not None and _wall(padded, shards) > ceiling:
-        shards = _shards(padded, policy, room)
-    floor = min_minutes if ceiling is None else min(min_minutes, ceiling)
-    return shards, max(_wall(padded, shards), math.ceil(floor))
-
-
 def make_plan(
     n_items: int,
     cost: Cost,
@@ -279,7 +195,7 @@ def make_plan(
             continue
         ceiling = _ceiling(snapshot, name, qos)
         at_once = min(allowed, snapshot.quota.qos_max_jobs.get(qos) or allowed)
-        shards, minutes = _one_wave(padded, policy, room, at_once=at_once, ceiling=ceiling, min_minutes=min_minutes)
+        shards, minutes = one_wave(padded, policy, room, at_once=at_once, ceiling=ceiling, min_minutes=min_minutes)
         if ceiling is not None and minutes > ceiling:
             refusals.append(f'{name}: a {minutes}-min shard exceeds its {ceiling:.0f}-min ceiling')
             continue
@@ -338,84 +254,6 @@ def headroom(snapshot: Snapshot) -> int:
     else:
         cap = quota - sum(held.cpus for held in snapshot.usage.values())
     return max(0, math.floor(cap))
-
-
-def session_room(session: Session | None, snapshots: Sequence[Snapshot], cost: Cost) -> int | None:
-    """Tasks of *cost* *session* may still start: its share less what its tag holds on EVERY account; ``None`` uncapped.
-
-    The accounts are one pool (user ruling 2026-10-17), so the session is counted across all of them, pending
-    tasks included. Its share is the override record's caps, else derived from Slurm now
-    (:func:`lab_commons.hpc.allocation.derived`). A task past a per-task ceiling is refused; one that fits is
-    never refused, only held to 0.
-    """
-    if session is None:
-        return None
-    over = [
-        f'{name} {asked:g} > {ceiling:g}'
-        for name, asked, ceiling in (
-            ('cpus', cost.cpus, session.task_cpus),
-            ('mem_gb', cost.mem_gb, session.task_mem_gb),
-        )
-        if ceiling is not None and asked > ceiling
-    ]
-    if over:
-        msg = f'session {session.name!r}: one task asks past its per-task ceiling ({", ".join(over)})'
-        raise ValueError(msg)
-    cpus, mem_gb = (session.cpus, session.mem_gb)
-    if cpus is None or mem_gb is None:
-        cpus, mem_gb = derived(session.name, snapshots, session.fixed)
-    held = sum((s.usage.get(session.name, Held()) for s in snapshots), Held())
-    left = [
-        math.inf if session.tasks is None else session.tasks - held.tasks,
-        (cpus - held.cpus) // cost.cpus if cost.cpus else math.inf,
-        (mem_gb * 1024 - held.mem_mb) // (cost.mem_gb * 1024) if cost.mem_gb else math.inf,
-    ]
-    least = min(left)
-    return None if math.isinf(least) else max(0, int(least))
-
-
-def free_mem_mb(snapshot: Snapshot) -> float:
-    """The account's group-memory headroom: ``GrpTRES`` mem less what runs; no ceiling is unbounded."""
-    left = snapshot.quota.remaining()['mem']
-    return math.inf if left is None else left
-
-
-def _waits_large(snapshot: Snapshot, paging: Paging) -> bool:
-    return any(paging.pages(held.cpus, held.mem_mb / 1024) > paging.large_pages for held in snapshot.pending)
-
-
-def region(snapshots: Sequence[Snapshot], paging: Paging) -> int | None:
-    """The large-job region's index: where a large task WAITS, else the emptiest account; ``None`` for one account.
-
-    Emptiest is the most group memory free, the earlier account on a tie, so the region rotates as load moves
-    and belongs to no session. A waiting large task pins it, so it keeps draining until that task starts.
-    """
-    if len(snapshots) <= 1:  # a region is one account set apart from the rest
-        return None
-    waiting = [i for i, snapshot in enumerate(snapshots) if _waits_large(snapshot, paging)]
-    if waiting:
-        return waiting[0]
-    return max(range(len(snapshots)), key=lambda i: (free_mem_mb(snapshots[i]), -i))
-
-
-def may_place(
-    index: int, plan: Plan, cost: Cost, snapshots: Sequence[Snapshot], paging: Paging, *, rerun_safe: bool
-) -> bool:
-    """Whether *plan* may run on account *index*: a large task only in the region; elsewhere anything but large.
-
-    The region takes a SMALL task that is MOVABLE -- rerun-safe and its wall within ``movable_minutes`` -- and
-    only while no large task waits there: drain, never kill.
-    """
-    where = region(snapshots, paging)
-    if where is None:
-        return True
-    size = paging.size(cost)
-    if size == 'large':
-        return index == where
-    if index != where:
-        return True
-    movable = rerun_safe and plan.minutes <= paging.movable_minutes
-    return size == 'small' and movable and not _waits_large(snapshots[where], paging)
 
 
 #: The files a submitted array adds to the home: its run directory, ``logs/``, ``results/``, manifest, script.
@@ -518,7 +356,7 @@ def allocate(
         except ValueError as refused:
             refusals.append(str(refused))
             continue
-        if paging is not None and not may_place(order, plan, cost, snapshots, paging, rerun_safe=rerun_safe):
+        if paging is not None and not may_place(order, plan.minutes, cost, snapshots, paging, rerun_safe=rerun_safe):
             refusals.append(f'{grant.name}: the large-job region')
             continue
         if capped is not None:

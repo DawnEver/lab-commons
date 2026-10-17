@@ -64,8 +64,9 @@ from lab_commons.hpc.jobs import (
 )
 from lab_commons.hpc.needsets import BASE, vocabulary_at
 from lab_commons.hpc.retired import refusal
-from lab_commons.hpc.run import NotSubmitted, build_run, submit_run
+from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import ENV, FULL, INCREMENTAL, ROOT, RunSpec
+from lab_commons.hpc.tree import NotSubmitted, build_run
 from lab_commons.hpc.watch import settle
 from lab_commons.log import emit
 

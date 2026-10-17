@@ -15,7 +15,8 @@ from lab_commons.hpc import jobs
 from lab_commons.hpc.config import Cost, Policy, load_config
 from lab_commons.hpc.grants import Grant, Machine, Paging, load_grants
 from lab_commons.hpc.jobs import plan_job
-from lab_commons.hpc.plan import allocate, region
+from lab_commons.hpc.plan import allocate
+from lab_commons.hpc.region import region
 from lab_commons.hpc.slurm import parse_snapshot
 from lab_commons.hpc.span import span
 

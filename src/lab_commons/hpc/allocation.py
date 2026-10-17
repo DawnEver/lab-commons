@@ -9,7 +9,7 @@ heartbeat, Slurm is the source of truth. Jobs without a tag are one more stream,
 alarms on them). The pool is divided by MAX-MIN FAIRNESS, work-conserving (:func:`fair`): every other stream
 is held to what it holds now, the asking session's demand is unbounded, so an idle session takes nothing
 and its share lends out, and two busy sessions meet at equal halves. Past its share a session's new
-submissions WAIT (:func:`lab_commons.hpc.plan.session_room` gives them no room); nothing is ever cancelled.
+submissions WAIT (:func:`session_room` gives them no room); nothing is ever cancelled.
 
 THE OVERRIDE IS ONE RECORD, :data:`RECORD`, on the forge's records home (``python -m lab_commons.hpc
 allocate``): ``{"expires": <UTC iso>, "sessions": {name: {cpus, mem_gb, tasks?, task_cpus?, task_mem_gb?}}}``.
@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Final
 
+from lab_commons.hpc.config import Cost
 from lab_commons.hpc.grants import Session
 from lab_commons.hpc.slurm import Held, Snapshot
 
@@ -44,6 +45,7 @@ __all__ = [
     'pool',
     'render',
     'session_for',
+    'session_room',
 ]
 
 #: The one override record's name on the forge records home.
@@ -166,3 +168,37 @@ def derived(
     by_cpu = fair(cpus, {name: math.inf, **{tag: h.cpus for tag, h in others.items()}})
     by_mem = fair(mem_mb, {name: math.inf, **{tag: h.mem_mb for tag, h in others.items()}})
     return by_cpu[name], by_mem[name] / 1024
+
+
+def session_room(session: Session | None, snapshots: Sequence[Snapshot], cost: Cost) -> int | None:
+    """Tasks of *cost* *session* may still start: its share less what its tag holds on EVERY account; ``None`` uncapped.
+
+    The accounts are one pool (user ruling 2026-10-17), so the session is counted across all of them, pending
+    tasks included. Its share is the override record's caps, else derived from Slurm now
+    (:func:`derived`). A task past a per-task ceiling is refused; one that fits is
+    never refused, only held to 0.
+    """
+    if session is None:
+        return None
+    over = [
+        f'{name} {asked:g} > {ceiling:g}'
+        for name, asked, ceiling in (
+            ('cpus', cost.cpus, session.task_cpus),
+            ('mem_gb', cost.mem_gb, session.task_mem_gb),
+        )
+        if ceiling is not None and asked > ceiling
+    ]
+    if over:
+        msg = f'session {session.name!r}: one task asks past its per-task ceiling ({", ".join(over)})'
+        raise ValueError(msg)
+    cpus, mem_gb = (session.cpus, session.mem_gb)
+    if cpus is None or mem_gb is None:
+        cpus, mem_gb = derived(session.name, snapshots, session.fixed)
+    held = sum((s.usage.get(session.name, Held()) for s in snapshots), Held())
+    left = [
+        math.inf if session.tasks is None else session.tasks - held.tasks,
+        (cpus - held.cpus) // cost.cpus if cost.cpus else math.inf,
+        (mem_gb * 1024 - held.mem_mb) // (cost.mem_gb * 1024) if cost.mem_gb else math.inf,
+    ]
+    least = min(left)
+    return None if math.isinf(least) else max(0, int(least))

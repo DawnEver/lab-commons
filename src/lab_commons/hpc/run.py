@@ -56,7 +56,6 @@ import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
-from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
@@ -66,47 +65,34 @@ from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.phases import round_clock
-from lab_commons.hpc.plan import Plan, allocate, balance, grantable_gb
+from lab_commons.hpc.plan import Plan, allocate, grantable_gb
 from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of, stream_sources
+from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
-    BUILD_FAILED,
-    COLLECT_MODULE,
     ENV,
     ITEM_MODULE,
     ROOT,
     RunSpec,
-    build_script,
     collect_command,
-    facts,
-    fetch_script,
     group_items,
-    needs_script,
     nothing_collected,
-    pack,
     parse_collection_errors,
     parse_ids,
     parse_times,
 )
 from lab_commons.hpc.slurm import Snapshot
+from lab_commons.hpc.tree import NotSubmitted, build_run
 
 __all__ = [
     'ACTIVE',
     'RETRIES',
     'NoRoom',
-    'NotSubmitted',
     'gather_run',
     'item_seconds',
     'load_state',
     'shares_home',
     'submit_run',
 ]
-
-
-class NotSubmitted(RuntimeError):
-    """:func:`submit_run` stopped before any job was queued; no test ran, so it is not a red run.
-
-    A missing need, an unfetchable commit, a failed build or an empty collection: the CLI exits INCONCLUSIVE.
-    """
 
 
 class NoRoom(NotSubmitted):
@@ -218,48 +204,6 @@ def _rewalled(
     minutes = min(plan.minutes, max(1, math.ceil(slowest / 60), math.ceil(min_minutes)))
     waves = plan.makespan_minutes // plan.minutes
     return replace(plan, shards=shards, minutes=minutes, makespan_minutes=waves * minutes)
-
-
-def build_run(spec: RunSpec, run: Runner, where: str) -> dict[str, Any]:
-    """Fetch *spec*'s commit into ``~/ci/trees/<sha>`` and build its env there; its facts, plus ``prep`` times.
-
-    The first half of :func:`submit_run` and the whole of ``run build``: nothing is collected or submitted
-    and no run state is written, so a job file (:mod:`lab_commons.hpc.config`) whose ``workdir`` is the
-    tree and whose ``setup`` is :data:`~lab_commons.hpc.shell.ENV` runs ANY entry in the env a test run uses.
-    *where* names the login node in a refusal.
-    """
-    said = run(needs_script(spec), None).splitlines()
-    lacking = [line.removeprefix('@@@ missing ') for line in said if line.startswith('@@@ missing ')]
-    if lacking:
-        msg = f'{where} lacks {", ".join(lacking)} on its login node; nothing was fetched or built'
-        raise NotSubmitted(msg)
-
-    shipping = time.monotonic()
-    if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
-        if spec.pack_from is None:
-            msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to pack it from'
-            raise NotSubmitted(msg)
-        run(f'base64 -d > {ROOT}/packs/{spec.sha}.pack', pack(spec.pack_from, spec.sha))
-        if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
-            msg = f'commit {spec.sha} is still missing on {where} after the pack was indexed'
-            raise NotSubmitted(msg)
-
-    here = Path(__file__).parent
-    run(f'cat > {ROOT}/bin/{COLLECT_MODULE}.py', (here / 'collect.py').read_text(encoding='utf-8'))
-    shipped = round(time.monotonic() - shipping)
-    built = run(build_script(spec), (here / 'pytest_item.py').read_text(encoding='utf-8'))
-    if BUILD_FAILED in built:
-        tail = built.split(BUILD_FAILED, 1)[1].strip()
-        msg = f'the build for {spec.sha[:12]} failed on {where}, nothing was submitted; {tail}'
-        raise NotSubmitted(msg)
-    told: dict[str, Any] = dict(facts(built))
-    if not told.get('env'):
-        msg = (
-            f'the venv built for {spec.sha[:12]} on {where} reported no env hash (lab_commons.dev.envkey is not '
-            'importable there), so its part could never be carried; nothing was submitted'
-        )
-        raise NotSubmitted(msg)
-    return {**told, 'prep': {'ship': shipped, **parse_times(built)}}
 
 
 def submit_run(

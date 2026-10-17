@@ -41,7 +41,7 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
 
 PAGING IS OS MEMORY MANAGEMENT OVER THE POOL (user design 2026-10-17). Tasks are page-sized so free memory
 is never shattered into holes no task fits; the emptiest account is the large-job region, borrowed only by
-small movable tasks, and drained -- never killed -- while a large job waits (:func:`lab_commons.hpc.plan.region`).
+small movable tasks, and drained -- never killed -- while a large job waits (:func:`lab_commons.hpc.region.region`).
 
 ``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster.s
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored

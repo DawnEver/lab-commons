@@ -76,7 +76,7 @@ def probe_command(slurm_account: str = '') -> str:
     university's free tier carries thousands of other people's jobs that count against nothing of ours.
     Pending jobs are included -- they are claims the scheduler will honour before a new submission -- and
     listed again on their own (``@@@ pending``): a waiting large task pins the region
-    (:func:`lab_commons.hpc.plan.region`).
+    (:func:`lab_commons.hpc.region.region`).
     """
     if not slurm_account:
         return PROBE_COMMAND
