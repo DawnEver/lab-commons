@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 __all__ = [
+    'FORGE_SESSION',
     'PROBE_COMMAND',
     'WORKDIRS_COMMAND',
     'Held',
@@ -32,6 +33,7 @@ __all__ = [
     'Partition',
     'Quota',
     'Snapshot',
+    'is_run_job',
     'parse_inodes',
     'parse_minutes',
     'parse_pending',
@@ -41,6 +43,7 @@ __all__ = [
     'parse_usage',
     'parse_workdirs',
     'probe_command',
+    'stream_of',
 ]
 
 #: Every question a plan needs, asked at once. ``--me``/``$USER`` keep it about the caller.
@@ -58,6 +61,31 @@ PROBE_COMMAND: Final = (
 
 #: The comment tag every job of a session carries -- :data:`lab_commons.hpc.grants.COMMENT_PREFIX`.
 _SESSION_TAG: Final = re.compile(r'(?:^|[\s,;])lc:session=([^\s,;]+)')
+
+#: The stream the forge serve submits as when no ``$LC_HPC_SESSION`` names one -- a known stream, and cron
+#: sets no environment. ONE name, not one per repo: a host serves every repo as one stream, and a per-repo
+#: tag would split its share by how many repos it serves.
+FORGE_SESSION: Final = 'forge'
+
+#: A run's Slurm job name (:func:`lab_commons.hpc.run.job_name`), or the ``run-<sha12>`` an older tool gave it.
+_RUN_JOB: Final = re.compile(r'run-[0-9a-f]{12}(?:-\S+)?')
+
+
+def is_run_job(name: str) -> bool:
+    """Whether a Slurm job *name* is a run's -- the forge's own, tagged or not."""
+    return _RUN_JOB.fullmatch(name) is not None
+
+
+def stream_of(comment: str, name: str = '') -> str:
+    """THE ONE CLASSIFIER of a task's stream -- the untagged alarm and the allocation both read it.
+
+    Its ``lc:session=`` tag, else :data:`FORGE_SESSION` for a run's job name (an array sbatched before the
+    forge tagged itself), else ``''`` -- untagged (:data:`lab_commons.hpc.allocation.UNTAGGED`).
+    """
+    tag = _SESSION_TAG.search(comment)
+    if tag:
+        return tag.group(1)
+    return FORGE_SESSION if is_run_job(name) else ''
 
 
 #: The working directory of every job of the caller's still queued or running (``%Z``, one per line).
@@ -83,7 +111,7 @@ def probe_command(slurm_account: str = '') -> str:
     account = shlex.quote(slurm_account)
     return (
         f'{PROBE_COMMAND}; echo "@@@ shared"; '
-        f'squeue -h --me -r -t PENDING,RUNNING -A {account} -o "%C|%m|%D|%k"; '
+        f'squeue -h --me -r -t PENDING,RUNNING -A {account} -o "%C|%m|%D|%k|%j"; '
         f'echo "@@@ pending"; squeue -h --me -r -t PENDING -A {account} -o "%C|%m|%D"'
     )
 
@@ -110,15 +138,14 @@ def parse_pending(text: str) -> tuple[Held, ...]:
 
 
 def parse_usage(text: str) -> dict[str, Held]:
-    """``squeue -r -o "%C|%m|%D|%k"`` lines into what each session tag holds; an untagged job is ``''``'s.
+    """``squeue -r -o "%C|%m|%D|%k|%j"`` lines into what each stream holds (:func:`stream_of`); untagged is ``''``.
 
     ``-r`` prints one line per array task, so a pending array counts every task it will start.
     """
     usage: dict[str, Held] = {}
     for line in filter(None, (raw.strip() for raw in text.splitlines())):
-        cpus, mem, nodes, comment = line.split('|', 3)
-        tag = _SESSION_TAG.search(comment)
-        key = tag.group(1) if tag else ''
+        cpus, mem, nodes, comment, *name = line.split('|', 4)
+        key = stream_of(comment, *name)
         mem_mb = _megabytes(mem) * float(nodes or 1) if mem not in {'', '0'} else 0.0
         usage[key] = usage.get(key, Held()) + Held(1, float(cpus), mem_mb)
     return usage

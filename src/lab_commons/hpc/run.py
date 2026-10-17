@@ -53,7 +53,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
@@ -89,7 +88,6 @@ __all__ = [
     'RETRIES',
     'NoRoom',
     'gather_run',
-    'is_run_job',
     'item_seconds',
     'load_state',
     'shares_home',
@@ -289,15 +287,6 @@ def submit_run(
 def job_name(sha: str, part: str) -> str:
     """The Slurm job name of the run of *part* on *sha*: another part of the sha never takes it for its own."""
     return f'run-{sha[:12]}-{part}'
-
-
-#: :func:`job_name`, and the ``run-<sha12>`` an older tool named a run's jobs before the part was named.
-_RUN_JOB: Final = re.compile(r'run-[0-9a-f]{12}(?:-\S+)?')
-
-
-def is_run_job(name: str) -> bool:
-    """Whether a Slurm job *name* is a run's (:func:`job_name`, or the part-less name an older tool gave it)."""
-    return _RUN_JOB.fullmatch(name) is not None
 
 
 def load_state(sha: str, part: str, machine: Machine, runners: dict[str, Runner]) -> tuple[dict[str, Any], Runner]:
