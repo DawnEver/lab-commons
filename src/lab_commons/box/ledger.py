@@ -67,12 +67,15 @@ from lab_commons.liveness import creation_stamp, still_the_same_process
 Read = Callable[[Iterable[int]], Reading]
 
 __all__ = [
-    'BOX_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Claim', 'box_path', 'hand_over', 'hold', 'holdings',
-    'persist', 'release',
+    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Claim', 'box_path', 'hand_over', 'hold',
+    'holdings', 'persist', 'release',
 ]  # fmt: skip
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
 INSIDE_ENV: Final = 'LAB_COMMONS_BOXED'
+
+#: Set on every boxed child to the cores its claim declared: a worker pool inside sizes to them (declared == used).
+CPU_ENV: Final = 'LAB_COMMONS_BOX_CPU'
 
 #: Seconds a liveness probe of an external claim may take before it counts as "cannot say" (kept).
 PROBE_S: Final = 10.0

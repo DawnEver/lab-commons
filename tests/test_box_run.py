@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 from _box_fake import quiet
 
-from lab_commons.box import BOX_ENV, Capacity, Demand, Outcome, Refused, command, hold, read_ended, run, write_ended
+from lab_commons.box import (
+    BOX_ENV,
+    CPU_ENV,
+    Capacity,
+    Demand,
+    Outcome,
+    Refused,
+    command,
+    hold,
+    read_ended,
+    run,
+    write_ended,
+)
 from lab_commons.box.__main__ import _parser, main
 from lab_commons.box._linux import in_slurm_job, manager, scope_argv
 from lab_commons.box.run import _ENFORCERS
@@ -154,3 +167,23 @@ def test_the_child_holds_against_the_capacity_its_caller_sized_the_demand_by(mon
     unsized = command(['tool'], demand, 1.0, key='k', what='w', outcome=Path('o.json'))
     assert main(unsized[3:]) == 0
     assert held == [size, None]
+
+
+def test_the_child_is_told_the_cores_it_was_admitted_at(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Declared == used: the child's environment carries the claim's cores, so a pool inside sizes to them.
+
+    PLANTED CONTROL: the caller's own environment is kept beside it, and the cores are the DEMAND's, not the box's.
+    """
+    monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
+    seen: list[Mapping[str, str] | None] = []
+
+    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> Outcome:
+        seen.append(env)
+        return Outcome(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+
+    monkeypatch.setitem(_ENFORCERS, sys.platform, fake)
+    size = Capacity(cpu=12.0, mem_bytes=2**34, seats={})
+    demand = Demand(cpu=3, mem_gb=0.5, wall_s=5, seats={})
+    run(['tool'], demand, 'w', 1, key='k', env={'KEEP': '1'}, capacity=size, read=quiet(size))
+    assert seen[0] is not None
+    assert (seen[0][CPU_ENV], seen[0]['KEEP']) == ('3', '1')

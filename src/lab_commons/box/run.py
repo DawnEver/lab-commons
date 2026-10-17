@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lab_commons.box import _linux, _win
 from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
-from lab_commons.box.ledger import INSIDE_ENV, Read, hold
+from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, hold
 from lab_commons.box.supply import Reading
 
 __all__ = ['command', 'run']
@@ -70,7 +70,7 @@ def run(
         msg = f'{what}: a run is enforced to positive cores and memory, not a seat-only claim'
         raise ValueError(msg)
     contain = _enforcer()
-    inside = {**(os.environ if env is None else env), INSIDE_ENV: key}
+    inside = {**(os.environ if env is None else env), INSIDE_ENV: key, CPU_ENV: str(demand.cpu)}
     with hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint):
         return contain(argv, demand, cwd, inside, (key, fingerprint))
 
