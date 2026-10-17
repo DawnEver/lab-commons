@@ -84,6 +84,8 @@ def plan_job(config: Config, n_items: int, machine: Machine, reach: Reach) -> tu
         _answering(machine.grants, reach),
         session=machine.session,
         policy=config.policy,
+        paging=machine.paging,
+        rerun_safe=config.job.rerun_safe,
     )
 
 
@@ -110,6 +112,8 @@ def _place(
             _answering(tuple(usable), reach),
             session=machine.session,
             policy=config.policy,
+            paging=machine.paging,
+            rerun_safe=config.job.rerun_safe,
         )
         failed = []
         for placement in placements:

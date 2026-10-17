@@ -26,6 +26,11 @@ the repository's last record measured
 refused by name (:mod:`lab_commons.hpc.retired`). ``deploy [--dry-run|--remove]`` makes this account's
 login host a ``forge serve`` host in one run (:mod:`lab_commons.hpc.deploy`); ``tick <repo>`` is one
 cron tick of it: the host refreshes the kit and the repo, then the repo's ``forge serve`` runs.
+
+``allocate --until <iso> name=cpus/mem_gb ...`` writes the ONE expiring allocation record on the forge
+(:mod:`lab_commons.hpc.allocation`), ``allocate --show`` prints it, ``allocate --clear`` deletes it. Every
+planning verb resolves ``$LC_HPC_SESSION``'s share from that record, else derives it from Slurm
+(:func:`lab_commons.hpc.allocate.resolve`).
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.hpc import deploy, tick
+from lab_commons.hpc.allocate import allocate, resolve
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
 from lab_commons.hpc.config import Config, load_config
@@ -58,8 +64,9 @@ from lab_commons.hpc.jobs import (
 )
 from lab_commons.hpc.needsets import BASE, vocabulary_at
 from lab_commons.hpc.retired import refusal
-from lab_commons.hpc.run import NotSubmitted, build_run, submit_run
+from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import ENV, FULL, INCREMENTAL, ROOT, RunSpec
+from lab_commons.hpc.tree import NotSubmitted, build_run
 from lab_commons.hpc.watch import settle
 from lab_commons.log import emit
 
@@ -320,7 +327,8 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     config = load_config(args.config) if args.config else Config()
     steps = {'submit': _run_submit, 'gather': _run_gather, 'build': _run_build}
     try:
-        return steps[args.step](args, load_grants(), config)
+        machine = load_grants()
+        return steps[args.step](args, resolve(machine) if args.step == 'submit' else machine, config)
     except NotOnCluster as off:
         emit(f'run {args.step} refused: {off}', err=True)
         return 2
@@ -338,14 +346,8 @@ def _job_config(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Co
     return load_config(args.config)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Parse the verb and dispatch it against this machine's grants."""
-    parser = _parser()
-    argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ['deploy']:
-        return deploy.main(argv[1:])
-    if argv[:1] == ['tick'] and argv[1:]:
-        return max(tick.tick(name, home=Path.home()) for name in argv[1:])
+def _refuse_retired(parser: argparse.ArgumentParser, argv: list[str]) -> None:
+    """A retired verb, step or flag is refused by name with its remedy."""
     if argv and (refused := refusal('lab_commons.hpc', argv[0])):
         parser.error(refused)
     if argv[:1] == ['run'] and len(argv) > 1 and (refused := refusal('lab_commons.hpc run', argv[1])):
@@ -353,10 +355,24 @@ def main(argv: list[str] | None = None) -> int:
     for word in argv:
         if (refused := refusal('run submit', word.split('=', 1)[0])) is not None:
             parser.error(refused)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse the verb and dispatch it against this machine's grants."""
+    parser = _parser()
+    argv = sys.argv[1:] if argv is None else argv
+    direct = {'deploy': deploy.main, 'allocate': allocate}
+    if argv and argv[0] in direct:
+        return direct[argv[0]](argv[1:])
+    if argv[:1] == ['tick'] and argv[1:]:
+        return max(tick.tick(name, home=Path.home()) for name in argv[1:])
+    _refuse_retired(parser, argv)
     args = parser.parse_args(argv)
     if args.verb == 'run':
         return _run(parser, args)
     machine = load_grants()
+    if args.verb in {'plan', 'submit', 'retry'}:
+        machine = resolve(machine)
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
     if args.wait and args.verb != 'gather':
