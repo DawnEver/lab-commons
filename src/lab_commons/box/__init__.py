@@ -13,6 +13,7 @@ from __future__ import annotations
 from lab_commons.box.demand import (
     GB,
     Capacity,
+    Claim,
     Demand,
     DuplicateKey,
     Holding,
@@ -29,7 +30,6 @@ from lab_commons.box.ledger import (
     GRACE_S,
     INSIDE_ENV,
     POLL_S,
-    Claim,
     box_path,
     hand_over,
     hold,

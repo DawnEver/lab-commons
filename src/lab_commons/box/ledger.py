@@ -56,13 +56,12 @@ import subprocess
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import GB, Capacity, Demand, DuplicateKey, Holding, Refused
+from lab_commons.box.demand import GB, Capacity, Claim, Demand, DuplicateKey, Holding, Refused
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.admission import admit
 from lab_commons.compute.model import Job, Resources, Supply
@@ -72,7 +71,7 @@ from lab_commons.liveness import creation_stamp, still_the_same_process
 Read = Callable[[Iterable[int]], Reading]
 
 __all__ = [
-    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Claim', 'box_path', 'hand_over', 'hold',
+    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'box_path', 'hand_over', 'hold',
     'holdings', 'persist', 'release',
 ]  # fmt: skip
 
@@ -119,14 +118,6 @@ def box_path() -> Path:
         return Path(os.environ.get('PROGRAMDATA', r'C:\ProgramData')) / 'lab-commons' / 'box.sqlite'
     state = os.environ.get('XDG_STATE_HOME') or str(Path.home() / '.local' / 'state')
     return Path(state) / 'lab-commons' / 'box.sqlite'
-
-
-@dataclass(frozen=True)
-class Claim:
-    """An admitted run's row: its id in the ledger and the moment its time limit ends."""
-
-    id: int
-    deadline: float
 
 
 def _connect() -> sqlite3.Connection:

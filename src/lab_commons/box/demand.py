@@ -22,19 +22,15 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import lab_commons.launch as _door
 from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
 from lab_commons.proc import system_memory
 
-if TYPE_CHECKING:
-    from lab_commons.box.ledger import Claim
-
 __all__ = [
-    'GB', 'Capacity', 'Demand', 'DuplicateKey', 'Holding', 'Outcome', 'Refused', 'declared_seats', 'read_ended',
-    'seat_supply', 'write_ended',
+    'GB', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'Outcome', 'Refused', 'declared_seats',
+    'read_ended', 'seat_supply', 'write_ended',
 ]  # fmt: skip
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
@@ -118,7 +114,9 @@ def _measured(supply: list[str] | None) -> int | None:
     if not supply:
         return None
     try:
-        done = _door.run(supply, capture_output=True, text=True, timeout=SUPPLY_S, check=False)
+        done = _door.run(
+            supply, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=SUPPLY_S, check=False
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     text = done.stdout.strip()
@@ -159,6 +157,14 @@ class Capacity:
 
 
 @dataclass(frozen=True)
+class Claim:
+    """An admitted run's row: its id in the ledger and the moment its time limit ends."""
+
+    id: int
+    deadline: float
+
+
+@dataclass(frozen=True)
 class Holding:
     """One running claim as the ledger records it.
 
@@ -178,9 +184,7 @@ class Holding:
 
     @property
     def claim(self) -> Claim:
-        """The :class:`~lab_commons.box.ledger.Claim` this row is, for :func:`~lab_commons.box.ledger.release`."""
-        from lab_commons.box.ledger import Claim  # noqa: PLC0415 -- the ledger imports this module
-
+        """The :class:`Claim` this row is, for :func:`~lab_commons.box.ledger.release`."""
         return Claim(self.id, self.deadline)
 
 
