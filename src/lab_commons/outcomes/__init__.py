@@ -9,6 +9,20 @@ from __future__ import annotations
 from lab_commons.outcomes.cell import Cell, Cost, Reason
 from lab_commons.outcomes.expectation import Expectation
 from lab_commons.outcomes.identity import INACTIVE, Identity
+from lab_commons.outcomes.jsonl import JsonlRead, TornRecord, read_jsonl
 from lab_commons.outcomes.status import Evidence, Family, Status
 
-__all__ = ['INACTIVE', 'Cell', 'Cost', 'Evidence', 'Expectation', 'Family', 'Identity', 'Reason', 'Status']
+__all__ = [
+    'INACTIVE',
+    'Cell',
+    'Cost',
+    'Evidence',
+    'Expectation',
+    'Family',
+    'Identity',
+    'JsonlRead',
+    'Reason',
+    'Status',
+    'TornRecord',
+    'read_jsonl',
+]
