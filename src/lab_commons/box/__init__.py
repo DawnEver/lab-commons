@@ -20,6 +20,7 @@ from lab_commons.box.demand import (
     Refused,
     declared_seats,
     read_ended,
+    seat_supply,
     write_ended,
 )
 from lab_commons.box.ledger import (
@@ -62,5 +63,6 @@ __all__ = [
     'read_ended',
     'release',
     'run',
+    'seat_supply',
     'write_ended',
 ]

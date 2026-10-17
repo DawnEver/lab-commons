@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import sys
+from pathlib import Path
+
 import pytest
 
+from lab_commons.box import Capacity, seat_supply
 from lab_commons.box.machine import DEFAULT_CPU_MARGIN, DEFAULT_MEM_MARGIN, own_reserve, provided, reserve_table
 
 
@@ -33,3 +38,40 @@ def test_the_machine_file_declares_what_this_host_provides() -> None:
 def test_a_malformed_capability_is_refused_by_name(table: dict[str, object]) -> None:
     with pytest.raises(ValueError, match=r'\[capabilities'):
         provided(table)
+
+
+def _capabilities(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    config = tmp_path / 'config.toml'
+    monkeypatch.setenv('LAB_COMMONS_CONFIG', str(config))
+    config.write_text(body, encoding='utf-8')
+
+
+def _argv(code: str) -> str:
+    return json.dumps([sys.executable, '-c', code])
+
+
+def test_a_seat_count_is_measured_by_its_supply_probe_over_the_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _capabilities(
+        tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(2)")}\n[capabilities.femm]\n'
+    )
+    assert seat_supply() == {'jmag': 2, 'femm': 1}, 'measured beats declared; no probe falls back to the declaration'
+    assert Capacity.read().seats == {'jmag': 2, 'femm': 1}
+
+
+def test_a_supply_probe_that_cannot_say_falls_back_to_the_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _capabilities(
+        tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("import sys; sys.exit(3)")}\n'
+    )
+    assert seat_supply() == {'jmag': 5}
+    _capabilities(tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(chr(120))")}\n')
+    assert seat_supply() == {'jmag': 5}, 'PLANTED CONTROL: output that is no count is no measurement'
+
+
+def test_a_malformed_supply_is_refused_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _capabilities(tmp_path, monkeypatch, '[capabilities.jmag]\nsupply = "lmstat"\n')
+    with pytest.raises(ValueError, match=r'capabilities\.jmag.*supply'):
+        seat_supply()

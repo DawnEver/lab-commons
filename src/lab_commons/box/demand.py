@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import lab_commons.launch as _door
 from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
 from lab_commons.proc import system_memory
@@ -32,7 +34,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     'GB', 'Capacity', 'Demand', 'DuplicateKey', 'Holding', 'Outcome', 'Refused', 'declared_seats', 'read_ended',
-    'write_ended',
+    'seat_supply', 'write_ended',
 ]  # fmt: skip
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
@@ -94,6 +96,35 @@ def declared_seats() -> dict[str, int]:
     return {name: int(facts.get('seats', 1)) for name, facts in provided(section('capabilities')).items()}
 
 
+#: Seconds a seat-supply probe may take before its tool falls back to the declared count.
+SUPPLY_S = 10.0
+
+
+def seat_supply() -> dict[str, int]:
+    """Each ``[capabilities]`` tool's seats as MEASURED (D3): its ``supply`` probe's count, else its declaration.
+
+    A ``supply`` argv prints the TOTAL seats this box may lend (a vendor's licence count, say) as one integer;
+    the ledger subtracts what its claims hold. A probe that fails, times out or prints no count cannot say,
+    and the declared ``seats`` stand in for it.
+    """
+    return {
+        name: _measured(facts.get('supply')) or int(facts.get('seats', 1))
+        for name, facts in provided(section('capabilities')).items()
+    }
+
+
+def _measured(supply: list[str] | None) -> int | None:
+    """The count *supply* prints, or ``None`` when there is no probe or it cannot say."""
+    if not supply:
+        return None
+    try:
+        done = _door.run(supply, capture_output=True, text=True, timeout=SUPPLY_S, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = done.stdout.strip()
+    return int(text) if done.returncode == 0 and text.isdecimal() else None
+
+
 @dataclass(frozen=True)
 class Capacity:
     """The machine's SIZE for admitted runs: cores and bytes after the reserve margins, and tool seats.
@@ -110,7 +141,7 @@ class Capacity:
 
     @classmethod
     def read(cls) -> Capacity:
-        """The OS totals less the machine file's ``[reserve]``, plus its ``[capabilities]`` seats."""
+        """The OS totals less the machine file's ``[reserve]``, plus its tools' MEASURED seats (:func:`seat_supply`)."""
         memory = system_memory()
         if memory is None:
             msg = 'the box cannot read this machine total memory, so it has no capacity to admit against'
@@ -121,7 +152,7 @@ class Capacity:
         return cls(
             cpu=cores - kept['cpu'],
             mem_bytes=int(memory.total_bytes - kept['mem_gb'] * GB),
-            seats=declared_seats(),
+            seats=seat_supply(),
             kept_cpu=kept['cpu'],
             kept_bytes=int(kept['mem_gb'] * GB),
         )
