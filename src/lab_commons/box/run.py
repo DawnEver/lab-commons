@@ -20,9 +20,11 @@ LEARNING IS THE CALLER'S. The box knows nothing of repos or producers and must n
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 from lab_commons.box import _linux, _win
@@ -82,15 +84,21 @@ def command(
     what: str,
     outcome: Path,
     fingerprint: str | None = None,
+    capacity: Capacity | None = None,
 ) -> list[str]:
     """*argv* spelled as ``python -m lab_commons.box run ... -- argv``: the CLI that runs it enforced to *demand*.
 
     For a caller that streams the child's output itself: both streams stay the child's and so does the
     exit code. How the BOX ended it is the record at *outcome*, read back with
     :func:`~lab_commons.box.demand.read_ended` -- never the exit code, which the child may set to anything.
+
+    *capacity* is the size the caller sized *demand* against, handed to the child (``--capacity``) so it holds
+    against that ONE reading and never re-derives a size from its own cwd or machine file; ``None`` lets the
+    child read this box (:meth:`Capacity.read`).
     """
     seats = [f'--seat={name}={count}' for name, count in sorted(demand.seats.items()) if count]
     marks = ['--fingerprint', fingerprint] if fingerprint else []
+    marks += ['--capacity', json.dumps(asdict(capacity), sort_keys=True)] if capacity is not None else []
     limits = ['--cpu', str(demand.cpu), '--mem-gb', f'{demand.mem_gb:g}', '--wall', str(demand.wall_s)]
     return [
         sys.executable, '-m', 'lab_commons.box', 'run', *limits, '--queue-s', f'{queue_s:g}', *seats,

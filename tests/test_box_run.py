@@ -131,3 +131,26 @@ def test_the_key_and_fingerprint_ride_on_the_ledger_row(monkeypatch: pytest.Monk
         sqlite3.connect(path) as con,
     ):
         assert con.execute('SELECT key, fingerprint FROM claims').fetchall() == [('case|fea', 'f0')]
+
+
+def test_the_child_holds_against_the_capacity_its_caller_sized_the_demand_by(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ONE capacity reading: the caller's size reaches the child's hold, never re-read from the child's cwd.
+
+    PLANTED CONTROL: without ``--capacity`` the child reads this box itself (``None``).
+    """
+    size = Capacity(cpu=12.0, mem_bytes=40 * 1024**3, seats={'jmag': 2}, kept_cpu=1.0, kept_bytes=2 * 1024**3)
+    demand = Demand(cpu=2, mem_gb=4.0, wall_s=60, seats={})
+    argv = command(['tool'], demand, 1.0, key='k', what='w', outcome=Path('o.json'), capacity=size)
+    assert _parser().parse_args(argv[3:]).capacity == size
+    held: list[Capacity | None] = []
+
+    def fake_run(*_args: object, capacity: Capacity | None = None, **_kw: object) -> Outcome:
+        held.append(capacity)
+        return Outcome(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+
+    monkeypatch.setattr('lab_commons.box.__main__.run', fake_run)
+    monkeypatch.setattr('lab_commons.box.__main__.write_ended', lambda *_a: None)
+    assert main(argv[3:]) == 0
+    unsized = command(['tool'], demand, 1.0, key='k', what='w', outcome=Path('o.json'))
+    assert main(unsized[3:]) == 0
+    assert held == [size, None]
