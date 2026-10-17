@@ -390,7 +390,7 @@ def region(snapshots: Sequence[Snapshot], paging: Paging) -> int | None:
     Emptiest is the most group memory free, the earlier account on a tie, so the region rotates as load moves
     and belongs to no session. A waiting large task pins it, so it keeps draining until that task starts.
     """
-    if len(snapshots) < 2:  # noqa: PLR2004 -- a region is one account set apart from the rest
+    if len(snapshots) <= 1:  # a region is one account set apart from the rest
         return None
     waiting = [i for i, snapshot in enumerate(snapshots) if _waits_large(snapshot, paging)]
     if waiting:
