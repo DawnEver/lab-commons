@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -67,3 +68,28 @@ def test_a_grant_that_cannot_be_derived_is_refused_naming_why(sacct: str, spec: 
     refused = deploy_checks.grant_of('alice', sacct, spec=spec, host='h')
     assert isinstance(refused, str)
     assert named in refused
+
+
+FAKE_GIT: Final = r"""
+import sys
+args = sys.argv[2:]
+if 'merge-tree' in args:
+    if sys.argv[1] == 'old':  # git 2.31.1, measured on Ada 2026-10-17: no --write-tree
+        sys.stderr.write('usage: git merge-tree <base-tree> <branch1> <branch2>\n'); sys.exit(129)
+    sys.stdout.write('4b825dc642cb6eb9a060e54bf8d69288fbee4904\n')
+"""
+
+
+@pytest.mark.parametrize('version', ['old', 'new'])
+def test_the_serve_git_floor_is_proven_by_a_toy_merge_tree_never_by_its_version(tmp_path: Path, version: str) -> None:
+    """PLANTED CONTROLS: a git without ``merge-tree --write-tree`` is refused naming why; one with it is accepted."""
+    fake = tmp_path / 'git.py'
+    fake.write_text(FAKE_GIT, encoding='utf-8')
+    why = deploy_checks.merge_tree_refusal([sys.executable, str(fake), version], tmp_path / 'scratch')
+    assert (why == '') == (version == 'new'), why
+    if version == 'old':
+        assert 'usage: git merge-tree' in why
+
+
+def test_a_git_that_does_not_run_is_refused(tmp_path: Path) -> None:
+    assert 'does not run' in deploy_checks.merge_tree_refusal([str(tmp_path / 'absent-git')], tmp_path)

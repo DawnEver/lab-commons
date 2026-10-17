@@ -14,6 +14,10 @@ Measured 2026-10-12 deploying three accounts on one cluster: every one of these 
   OFFICIAL installers into ``~/.local/bin`` and ``~/.cargo/bin`` -- user-space, removable, and with no
   PATH modification, because the tick's PATH already names both directories; ``cmake`` comes through
   ``uv tool``. Anything else is the cluster's to provide, so it is refused by name.
+* THE SERVE'S GIT (:func:`merge_tree_refusal`). Every serve tick's trial merge runs
+  ``git merge-tree --write-tree`` (git >= 2.38); cron's ``/usr/bin/git`` can be older (Ada 2026-10-17:
+  2.31.1, every tick refused with merge-tree's usage). The floor is PROVEN on a toy repository, never read
+  from ``--version`` -- a vendor build's version string is not the capability.
 * THE GRANT (:func:`grant_of`). A tick on a cluster needs this account's own ``[[hpc.grant]]``
   (:mod:`lab_commons.hpc.grants`): the user from ``id -un``, the account and its CPU limit from
   ``sacctmgr``, this host, and the partitions the deployment declares (a partition list is a choice,
@@ -22,13 +26,21 @@ Measured 2026-10-12 deploying three accounts on one cluster: every one of these 
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+import re
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, Final
 
+import lab_commons.launch as _door
 from lab_commons.hpc.deploy_spec import Deployment
 
-__all__ = ['INSTALLERS', 'grant_of', 'store_problem', 'tool_plan']
+__all__ = ['INSTALLERS', 'MERGE_TREE_GIT', 'grant_of', 'merge_tree_refusal', 'store_problem', 'tool_plan']
+
+#: The git every serve tick needs: its trial merge (:mod:`lab_commons.dev.trialmerge`) and ``integrate``.
+MERGE_TREE_GIT: Final = 'git >= 2.38 (`git merge-tree --write-tree`, the serve tick trial merge)'
+
+_TREE: Final = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+_PROBE_TIMEOUT_S: Final = 60
 
 #: The official, user-space installer of each tool the deploy may install itself, in install order.
 INSTALLERS: Final = {
@@ -55,6 +67,37 @@ def store_problem(helper: str, store: Path, *, mode: int | None) -> str:
     if mode & _PRIVATE:
         return f'{store} is readable by others (mode {mode:o}): `chmod 600 {store}`'
     return ''
+
+
+def merge_tree_refusal(git: Sequence[str], scratch: Path) -> str:
+    """``''`` when *git* writes a merge tree of a toy repository made under *scratch*; else why not, as evidence."""
+    toy = str(scratch / 'merge-tree-probe')
+    who = ('-c', 'user.name=probe', '-c', 'user.email=probe@invalid')
+    steps = {
+        'init': ('init', '-q', toy),
+        'commit': ('-C', toy, *who, 'commit', '-q', '--allow-empty', '-m', 'probe'),
+        'merge-tree --write-tree': ('-C', toy, 'merge-tree', '--write-tree', 'HEAD', 'HEAD'),
+    }
+    name = ' '.join(git)
+    done = None
+    for label, args in steps.items():
+        try:
+            done = _door.run(
+                [*git, *args],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=_PROBE_TIMEOUT_S,
+                check=False,
+            )
+        except OSError as why:
+            return f'{name} does not run: {why}'
+        if done.returncode:
+            said = (done.stderr.strip() or done.stdout.strip()).splitlines()
+            return f'{name} {label} exited {done.returncode}: {said[0] if said else ""}'
+    first = done.stdout.strip().splitlines()[:1] if done else []
+    return '' if first and _TREE.fullmatch(first[0]) else f'{name} merge-tree --write-tree wrote no tree: {first}'
 
 
 def tool_plan(needs: Iterable[str], *, found: Callable[[str], bool]) -> tuple[list[tuple[str, str]], list[str]]:

@@ -18,7 +18,10 @@ once; a later run with flags that disagree is refused, naming the file); every l
 STEPS, each one reporting, each one safe to repeat: refuse off the declared host; check the account BEFORE
 anything changes (:mod:`lab_commons.hpc.deploy_checks`: git's credential helper and its store, every repo's
 ``git ls-remote``, and the forge API calls a tick makes); write this account's own ``[[hpc.grant]]`` when
-it has none; clone or update each checkout; install ``uv`` and every declared ``needs`` the tick's PATH
+it has none; prove the serve's git (``git merge-tree --write-tree``, git >= 2.38) on a toy repository --
+the tick PATH's, else the one this account's grant ``setup`` loads in a login shell, whose directory then
+leads the cron PATH -- or refuse naming every git tried; clone or update each checkout; install ``uv`` and
+every declared ``needs`` the tick's PATH
 lacks, or refuse naming it; build each ``.venv`` with the repo's own ``[tool.lab_commons.hpc] install``
 (and its ``native`` build), skipped when the key of its inputs is unchanged, then install the served
 lab-commons checkout over the sha the repo pins -- keyed by that checkout's HEAD, so a lab-commons update
@@ -46,6 +49,7 @@ import shutil
 import socket
 import stat
 import sys
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -54,7 +58,7 @@ from typing import Final
 import lab_commons.launch as _door
 from lab_commons.config import config_path
 from lab_commons.hpc.declared import OutdatedKit, RetiredTable
-from lab_commons.hpc.deploy_checks import grant_of, store_problem, tool_plan
+from lab_commons.hpc.deploy_checks import MERGE_TREE_GIT, grant_of, merge_tree_refusal, store_problem, tool_plan
 from lab_commons.hpc.deploy_spec import (
     DEFAULT_PYTHON,
     DEFAULT_ROOT,
@@ -63,6 +67,7 @@ from lab_commons.hpc.deploy_spec import (
     Repo,
     checkout_of,
     cron_lines,
+    grant_setup,
     has_grant,
     load,
     merge_crontab,
@@ -86,6 +91,12 @@ _CREDENTIAL_REMEDY: Final = (
 )
 
 _which = shutil.which
+
+
+def _proves(git: str, scratch: Path) -> str:
+    """``''`` when *git* runs the serve's trial merge (:func:`merge_tree_refusal`); else why not."""
+    return merge_tree_refusal([git], scratch)
+
 
 #: Reads the forge API a tick needs for one repo url; ``''`` when nothing is refused.
 ApiCheck = Callable[[str, Path], str]
@@ -254,6 +265,41 @@ def _refuse(refused: Refused, repo: Repo, why: str) -> None:
     refused[repo.name] = why
 
 
+def _serve_git(step: Step, home: Path, path: Path, slurm: Sequence[str], lead: list[str]) -> int:
+    """Prove a git the tick can run merge-tree with; one the grant's setup loads leads the cron PATH via *lead*.
+
+    No silent fallback: a tick whose git cannot trial-merge serves nothing, so none qualifying refuses the deploy.
+    """
+    emit(f"[git] {MERGE_TREE_GIT}, on the tick's PATH")
+    candidates: list[tuple[str, str]] = []
+    if on_path := _which('git', path=os.pathsep.join(tick_dirs(home, slurm))):
+        candidates.append(('the tick PATH', on_path))
+    user = step.read([*step.tools.id, '-un']).stdout.strip()
+    if setup := grant_setup(path, user):
+        loaded = step.read([*step.tools.sh, '; '.join([*setup, 'command -v git'])])
+        lines = loaded.stdout.strip().splitlines()
+        if loaded.returncode == 0 and lines:
+            candidates.append((f'the grant setup ({"; ".join(setup)})', lines[-1].strip()))
+    tried = []
+    with tempfile.TemporaryDirectory() as scratch:
+        for at, (source, git) in enumerate(candidates):
+            if not (why := _proves(git, Path(scratch) / str(at))):
+                emit(f'  {git}, from {source}: merge-tree --write-tree runs')
+                if source != 'the tick PATH':
+                    lead.append(str(Path(git).parent))
+                return 0
+            tried.append(f'{git}, from {source}: {why}')
+    emit(
+        f'deploy refused: every serve tick runs {MERGE_TREE_GIT} and no git qualifies '
+        f'({"; ".join(tried) or "none found"}); add setup = ["module load <git 2.38 or later>"] to this '
+        "account's [[hpc.grant]] in {path}, or link a qualifying git into ~/.local/bin, and re-run".replace(
+            '{path}', str(path)
+        ),
+        err=True,
+    )
+    return 2
+
+
 #: The Slurm commands a tick runs: it submits, then gathers and watches.
 SLURM_TOOLS: Final = ('sbatch', 'sacct', 'squeue')
 
@@ -297,20 +343,20 @@ def _tools(step: Step, spec: Deployment, home: Path, slurm: Sequence[str], refus
     return 0
 
 
-def _cron(step: Step, spec: Deployment, home: Path, slurm: Sequence[str], refused: Refused) -> int:
+def _cron(step: Step, spec: Deployment, home: Path, refused: Refused, *, slurm: Sequence[str], git: str) -> int:
     """One marked line per repo not refused; a refused repo's line is removed, so a broken line never runs."""
     emit('[cron] one marked line per served repo')
     if not step.dry:
         (home / '.cache').mkdir(parents=True, exist_ok=True)
-    lines = cron_lines(replace(spec, repos=tuple(_healthy(spec, refused))), home, slurm=slurm)
+    lines = cron_lines(replace(spec, repos=tuple(_healthy(spec, refused))), home, slurm=slurm, git=git)
     rc = _crontab(step, lines)
     for line in lines:
         emit(f'  {line}')
     return rc
 
 
-def _tick(step: Step, spec: Deployment, home: Path, repo: Repo, slurm: Sequence[str] = ()) -> int:
-    command = tick_command(spec, home, repo, log=False, slurm=slurm)
+def _tick(step: Step, spec: Deployment, home: Path, repo: Repo, *, slurm: Sequence[str] = (), git: str = '') -> int:
+    command = tick_command(spec, home, repo, log=False, slurm=slurm, git=git)
     rc = step.change(f'tick {repo.name}: {command}', [*step.tools.sh, command])
     if not step.dry:
         busy = ' (1 also means a tick of this host is still running)' if rc == 1 else ''
@@ -382,17 +428,26 @@ def deploy(
         emit(f'deploy refused: {slurm}', err=True)
         return 2
     refused: Refused = {}
+    lead: list[str] = []  # the qualifying git's directory, when the grant's setup had to load it
     artefacts = '[artefacts] the rclone remote, where a repo declares one'
     phases = (
         lambda: _credentials(step, spec, home, check),
         lambda: _grant(step, spec, path, hostname),
         lambda: _declare(step, spec, path),
+        lambda: _serve_git(step, home, path, slurm, lead),
         lambda: _each(step, spec, home, f'[checkouts] under ~/{spec.root}', update, refused=refused),
         lambda: _tools(step, spec, home, slurm, refused),
         lambda: _each(step, spec, home, f'[venvs] python {spec.python} (uv-managed)', build, refused=refused),
         lambda: _each(step, spec, home, artefacts, _artefacts, refused=refused),
-        lambda: _cron(step, spec, home, slurm, refused),
-        lambda: _each(step, spec, home, '[tick] one now, per repo', lambda *a: _tick(*a, slurm), refused=refused),
+        lambda: _cron(step, spec, home, refused, slurm=slurm, git=''.join(lead)),
+        lambda: _each(
+            step,
+            spec,
+            home,
+            '[tick] one now, per repo',
+            lambda *a: _tick(*a, slurm=slurm, git=''.join(lead)),
+            refused=refused,
+        ),
     )
     for phase in phases:
         if rc := phase():
