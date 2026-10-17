@@ -45,13 +45,13 @@ import os
 import shutil
 import socket
 import stat
-import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
 from lab_commons.config import config_path
 from lab_commons.hpc.declared import OutdatedKit, RetiredTable
 from lab_commons.hpc.deploy_checks import grant_of, store_problem, tool_plan
@@ -204,9 +204,7 @@ def _credentials(step: Step, spec: Deployment, home: Path, api: ApiCheck) -> int
 def _auth_check(url: str, home: Path) -> str:
     """The forge's own ``auth check`` of *url*, run as a subprocess: :mod:`lab_commons.hpc` imports no dev code."""
     argv = [sys.executable, '-m', 'lab_commons.dev.forge', 'auth', 'check', '--url', url]
-    done = subprocess.run(
-        argv, cwd=home, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False
-    )
+    done = _door.run(argv, cwd=home, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
     return '' if done.returncode == 0 else done.stderr.strip() or f'auth check exited {done.returncode}'
 
 
@@ -333,7 +331,7 @@ def _artefacts(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
 def _sound(url: str, subject: str, body: str) -> object:
     """One forge ``run`` alarm, raised by :mod:`lab_commons.dev.forgealarm` in a subprocess (hpc imports no dev)."""
     argv = [sys.executable, '-m', 'lab_commons.dev.forgealarm', 'run', url, subject, body]
-    return subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
+    return _door.run(argv, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
 
 
 def _report(spec: Deployment, refused: Refused, host: str, alarm: AlarmSink) -> int:

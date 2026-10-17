@@ -122,11 +122,11 @@ def test_only_files_whose_content_changed_are_collected_again(repo: Path, tmp_pa
     assert 'tests/test_a.py::test_one' in first
     assert 'tests/test_b.py::test_two' in first
     assert any(line.startswith('ERROR tests/test_broken.py') for line in first)
-    [store] = cache.iterdir()
-    assert len(list(store.iterdir())) == 2, 'a file that failed to collect is never cached'
-    (store / f'{_git(repo, "rev-parse", "HEAD:tests/test_a.py")}.json').write_text(
-        json.dumps(['tests/test_a.py::from_the_cache']), encoding='utf-8'
-    )
+    [store] = cache.iterdir()  # ONE file per key: {blob id: ids}
+    entries = json.loads(store.read_text(encoding='utf-8'))
+    assert len(entries) == 2, 'a file that failed to collect is never cached'
+    entries[_git(repo, 'rev-parse', 'HEAD:tests/test_a.py')] = ['tests/test_a.py::from_the_cache']
+    store.write_text(json.dumps(entries), encoding='utf-8')
     _commit(repo, {'tests/test_b.py': 'def test_three():\n    pass\n'})
     second = _collect(repo, cache)
     assert 'tests/test_a.py::from_the_cache' in second, 'an unchanged file is answered from the cache'

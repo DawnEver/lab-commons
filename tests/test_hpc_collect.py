@@ -23,7 +23,7 @@ def _fake_run(stdout: str, returncode: int) -> Callable[..., subprocess.Complete
 
 @pytest.mark.parametrize('returncode', [2, 3, 4])
 def test_a_failed_collection_run_is_reported_and_never_cached(tmp_path: Path, monkeypatch, returncode: int) -> None:
-    monkeypatch.setattr(collect.subprocess, 'run', _fake_run('', returncode))
+    monkeypatch.setattr(collect._door, 'run', _fake_run('', returncode))
     out = tmp_path / 'out.txt'
     collect.main(['--cache', str(tmp_path / 'c'), '--key', 'k', '--out', str(out), '--', 'tests'])
     assert not list((tmp_path / 'c').rglob('*.json')), 'a failed run poisoned the cache with empty id lists'
@@ -31,7 +31,7 @@ def test_a_failed_collection_run_is_reported_and_never_cached(tmp_path: Path, mo
 
 
 def test_a_clean_run_still_caches_its_ids(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(collect.subprocess, 'run', _fake_run('tests/test_a.py::test_x\n', 0))
+    monkeypatch.setattr(collect._door, 'run', _fake_run('tests/test_a.py::test_x\n', 0))
     out = tmp_path / 'out.txt'
     collect.main(['--cache', str(tmp_path / 'c'), '--key', 'k', '--out', str(out), '--', 'tests'])
     assert len(list((tmp_path / 'c').rglob('*.json'))) == 1
@@ -50,7 +50,7 @@ def test_a_key_is_one_file_however_many_test_files_it_caches(tmp_path: Path, mon
             return subprocess.CompletedProcess(argv, 0, stdout=listing, stderr=b'')
         return subprocess.CompletedProcess(argv, 0, stdout=ids, stderr='')
 
-    monkeypatch.setattr(collect.subprocess, 'run', run)
+    monkeypatch.setattr(collect._door, 'run', run)
     cache, out = tmp_path / 'c', tmp_path / 'out.txt'
     collect.main(['--cache', str(cache), '--key', 'k', '--out', str(out), '--', 'tests'])
     assert [p.suffix for p in cache.rglob('*')] == ['.json'], 'one file, directly under the cache'

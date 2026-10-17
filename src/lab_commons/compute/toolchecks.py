@@ -7,6 +7,7 @@ is a module function, so a test passes fakes.
 from __future__ import annotations
 
 import contextlib
+import importlib.machinery
 import importlib.metadata
 import importlib.util
 import os
@@ -18,7 +19,9 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
+
+import lab_commons.launch as _door
 
 if sys.platform == 'win32':
     import ctypes
@@ -62,7 +65,7 @@ class Check:
 def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, str]:
     """Run *argv*; ``(exit 0, the last line of its output or why it did not run)``."""
     try:
-        done = subprocess.run(
+        done = _door.run(
             list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as failed:
@@ -73,7 +76,7 @@ def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, s
 
 def _first_line(argv: Sequence[str]) -> str | None:
     try:
-        done = subprocess.run(
+        done = _door.run(
             list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60, check=False
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -181,7 +184,9 @@ def matlab_version(path: Path) -> tuple[str, str] | None:
     return ('install path', release) if release else None
 
 
-def simba_find(*, find: Callable[[str], Any] = importlib.util.find_spec) -> tuple[str, Path] | None:
+def simba_find(
+    *, find: Callable[[str], importlib.machinery.ModuleSpec | None] = importlib.util.find_spec
+) -> tuple[str, Path] | None:
     """SIMBA's Python API, ``aesim.simba``, as THIS interpreter -- the serving repo's own venv -- imports it."""
     try:
         spec = find('aesim.simba')

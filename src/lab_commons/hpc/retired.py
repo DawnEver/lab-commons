@@ -275,6 +275,10 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.box.admit': 'lab_commons.box.hold (books a claim the one rule admits on the measured room)',
     'lab_commons.box.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
     'demand.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
+    # A lock-consuming door is judged against the COMMITTED lock (D8): the old name described the untracked era.
+    'REVERTS': 'UNLOCKED (lab_commons.dev.installdoor.Delivery.UNLOCKED)',
+    'RevertingDoorsError': 'lab_commons.dev.installdoor.UnlockedDoorsError',
+    'reverting(': 'lab_commons.dev.installdoor.unlocked(',
 }
 
 

@@ -19,6 +19,8 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING, Final
 
+import lab_commons.launch as _door
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
@@ -100,7 +102,7 @@ def _credential(
     loader path), and the no-prompt switches overlay both.
     """
     payload = ''.join(f'{key}={value}\n' for key, value in {'protocol': 'https', **fields}.items())
-    return subprocess.run(
+    return _door.run(
         [_GIT, 'credential', verb],
         input=payload + '\n',
         cwd=cwd,

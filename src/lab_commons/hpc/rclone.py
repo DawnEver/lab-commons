@@ -15,6 +15,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
+
 __all__ = ['RECIPE', 'declared_remote', 'probe']
 
 _TIMEOUT_S: Final = 60
@@ -39,7 +41,7 @@ def probe(remote: str, *, rclone: Sequence[str] = ('rclone',)) -> str:
     """Why rclone *remote* (``name:path``) cannot be used from here, ``''`` when its root lists."""
     name = remote.partition(':')[0]
     try:
-        done = subprocess.run(
+        done = _door.run(
             [*rclone, 'lsd', f'{name}:', '--max-depth', '1'], capture_output=True, text=True, encoding='utf-8',
             errors='replace', check=False, timeout=_TIMEOUT_S,
         )  # fmt: skip

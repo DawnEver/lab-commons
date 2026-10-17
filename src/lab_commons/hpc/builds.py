@@ -30,11 +30,11 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-import subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
 from lab_commons.hpc.declared import kit_tables
 
 __all__ = [
@@ -123,7 +123,7 @@ def key_of(oids: dict[str, str], *recipe: str) -> str:
 def _oids(repo: Path, sha: str, paths: tuple[str, ...]) -> dict[str, str]:
     out: dict[str, str] = {}
     for path in paths:
-        done = subprocess.run(
+        done = _door.run(
             [_GIT, '-C', str(repo), 'rev-parse', '--verify', '-q', f'{sha}:{path.rstrip("/")}'],
             capture_output=True,
             text=True,
@@ -141,7 +141,7 @@ def builds_at(repo: Path, sha: str, *, python: str) -> Builds:
         ValueError: the commit declares no ``[tool.lab_commons.hpc] install`` -- a venv with no build command.
 
     """
-    text = subprocess.run(
+    text = _door.run(
         [_GIT, '-C', str(repo), 'show', f'{sha}:pyproject.toml'],
         capture_output=True,
         text=True,

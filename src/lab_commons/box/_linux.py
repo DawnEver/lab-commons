@@ -35,6 +35,7 @@ from functools import cache
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
 from lab_commons.box.demand import Demand, Outcome
 from lab_commons.proc import working_set_bytes
 
@@ -99,7 +100,7 @@ def _systemd_run() -> str | None:
     if found is None or not _delegated():
         return None
     try:
-        probe = subprocess.run(
+        probe = _door.run(
             [found, *_here().flags, '--scope', '--quiet', '--', 'true'],
             capture_output=True,
             text=True,
@@ -160,7 +161,7 @@ def contain(
     command = list(argv) if systemd_run is None else scope_argv(systemd_run, _here(), argv, demand)
     watch = systemd_run is None
     start = time.monotonic()
-    child = subprocess.Popen(command, cwd=cwd, env=None if env is None else dict(env), start_new_session=True)
+    child = _door.popen(command, cwd=cwd, env=None if env is None else dict(env), start_new_session=True)
     deadline, why, peak = start + demand.wall_s, 'exit', 0
     while child.poll() is None:
         held = _group_resident(child.pid) if watch else 0

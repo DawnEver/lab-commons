@@ -41,6 +41,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import lab_commons.launch as _door
 from lab_commons.proc import _creation_time, _kernel32, pid_alive
 
 __all__ = ['SLACK_S', 'CreationClock', 'boot_time', 'creation_stamp', 'predates_boot', 'still_the_same_process']
@@ -134,7 +135,7 @@ def _procfs() -> float | None:
 
 def _darwin() -> float | None:
     try:
-        text = subprocess.run(
+        text = _door.run(
             ['/usr/sbin/sysctl', '-n', 'kern.boottime'],
             capture_output=True,
             text=True,

@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
 from lab_commons.box import Demand, Refused, command, read_ended
 from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process.base import Ran
@@ -105,7 +106,7 @@ def subprocess_runner(argv: list[str], timeout: int, cwd: str | None) -> Ran:
     environment = {key: value for key, value in os.environ.items() if key != NOTIFY_SOCKET}
     try:
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-            done = subprocess.run(argv, stdout=out, stderr=err, timeout=timeout, cwd=cwd, check=False, env=environment)
+            done = _door.run(argv, stdout=out, stderr=err, timeout=timeout, cwd=cwd, check=False, env=environment)
             out.seek(0)
             err.seek(0)
             kept_out = out.read(OUTPUT_CAP).decode('utf-8', 'replace')

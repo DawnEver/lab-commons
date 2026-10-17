@@ -26,11 +26,11 @@ Standard library only, like the rest of :mod:`lab_commons.hpc`.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any, Final
 
+import lab_commons.launch as _door
 from lab_commons.hpc.retired import RETIRED
 
 __all__ = ['KNOWN_TABLES', 'OutdatedKit', 'RetiredTable', 'kit_tables', 'pyproject_at']
@@ -102,9 +102,7 @@ def pyproject_at(repo: Path, sha: str) -> str:
     """The pyproject text commit *sha* of *repo* carries -- the declaration it is judged by; ``''`` when it has none."""
 
     def git(*args: str) -> str:
-        done = subprocess.run(
-            [_GIT, '-C', str(repo), *args], capture_output=True, text=True, encoding='utf-8', check=True
-        )
+        done = _door.run([_GIT, '-C', str(repo), *args], capture_output=True, text=True, encoding='utf-8', check=True)
         return done.stdout
 
     return (

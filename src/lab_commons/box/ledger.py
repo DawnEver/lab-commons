@@ -56,6 +56,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+import lab_commons.launch as _door
 from lab_commons.box.demand import GB, Capacity, Demand, Holding, Refused
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.admission import admit
@@ -182,7 +183,7 @@ def _reap(con: sqlite3.Connection, now: float) -> None:
 def _alive(probe: Sequence[str]) -> bool:
     """Whether an external job's liveness *probe* says it still runs: exit 0. A probe that cannot say keeps it."""
     try:
-        return subprocess.run(list(probe), capture_output=True, timeout=PROBE_S, check=False).returncode == 0
+        return _door.run(list(probe), capture_output=True, timeout=PROBE_S, check=False).returncode == 0
     except subprocess.TimeoutExpired:
         return True
     except OSError:

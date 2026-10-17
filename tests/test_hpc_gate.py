@@ -18,6 +18,7 @@ TIER_ONE = (
     'lab_commons.compute',
     'lab_commons.config',
     'lab_commons.hpc',
+    'lab_commons.launch',
     'lab_commons.log',
     'lab_commons.resources',
     'lab_commons.width',
