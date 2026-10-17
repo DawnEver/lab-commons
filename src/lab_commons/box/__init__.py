@@ -23,6 +23,7 @@ from lab_commons.box.demand import (
 )
 from lab_commons.box.ledger import (
     BOX_ENV,
+    CPU_ENV,
     GRACE_S,
     INSIDE_ENV,
     POLL_S,
@@ -38,6 +39,7 @@ from lab_commons.box.run import command, run
 
 __all__ = [
     'BOX_ENV',
+    'CPU_ENV',
     'GB',
     'GRACE_S',
     'INSIDE_ENV',

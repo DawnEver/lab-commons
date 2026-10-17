@@ -113,10 +113,10 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
     plain, jmag = Job('', 'a' * 40, 'windows'), Job('', 'b' * 40, 'windows', frozenset({'jmag'}))
     box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1))
     measured = learned.box_demand(REPO, frozenset({'jmag'}), cpu=30, mem_gb=64)
-    assert measured == Demand(cpu=30, mem_gb=64.0, jmag=1), 'cores and memory capped at the box'
+    assert measured == Demand(cpu=21, mem_gb=64.0, jmag=1), 'memory capped, the cores narrowed to it: 30 x 64 / 90'
     assert admit(jmag, measured, box)
     whole = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
-    assert whole == Demand(cpu=30, mem_gb=64.0, femm=1)
+    assert whole == Demand(cpu=20, mem_gb=64.0, femm=1), '30 x 64 / 96'
     plain = Job('', 'a' * 40, 'windows', frozenset({'femm'}))
     box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1, femm=1))
     assert admit(plain, whole, box)
@@ -135,14 +135,18 @@ def test_a_request_is_learned_under_its_producer_name_never_a_test_parts_record(
 
 
 def test_an_unmeasured_part_is_priced_by_the_d5_prior_never_the_whole_box() -> None:
-    """D5: the host's measured parts first, else every host's forge records for its need-set, else the task floor."""
+    """D5: the host's measured parts first, else every host's forge records for its need-set, else the task floor.
+
+    A forge peak and the floor are ONE WORKER's, so the part declares :data:`learned.PART_WIDTH` of them.
+    """
     floor = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
-    assert floor == Demand(cpu=1, mem_gb=1.0 * learned.BOX_HEADROOM, femm=1), 'nothing known: the per-task floor'
+    width = learned.PART_WIDTH
+    assert floor == Demand(cpu=width, mem_gb=width * 1.0 * learned.BOX_HEADROOM, femm=1), 'the task floor a worker'
     learned.learn_record(REPO, 'r1.json.gz', {'repo': REPO, 'platform': 'femm', 'peaks_mb': {'t/a.py': 2048.0}})
     learned.learn_record(REPO, 'r2.json.gz', {'repo': REPO, 'platform': 'femm', 'peaks_mb': {'t/a.py': 6144.0}})
     learned.learn_record(REPO, 'r3.json.gz', {'repo': REPO, 'platform': 'base', 'peaks_mb': {'t/a.py': 99999.0}})
     forged = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
-    assert forged == Demand(cpu=1, mem_gb=4.0 * learned.BOX_HEADROOM, femm=1), 'the median of its need-set only'
+    assert forged == Demand(cpu=width, mem_gb=width * 4.0 * learned.BOX_HEADROOM, femm=1), 'its need-set median'
     learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=8.0, cpu_s=4 * 3600.0, wall_s=3600.0))
     learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=2.0, cpu_s=2 * 3600.0, wall_s=3600.0))
     local = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
@@ -165,3 +169,34 @@ def test_a_part_priced_at_the_whole_box_is_refused_on_a_busy_box_and_its_prior_i
     prior = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
     assert prior == Demand(cpu=2, mem_gb=4.0 * learned.BOX_HEADROOM, femm=1)
     assert admit(part, prior, busy)
+
+
+def test_an_unmeasured_part_declares_its_width_times_the_worker_price_never_one_worker() -> None:
+    """A forge part peak is ONE worker's; the part runs :data:`learned.PART_WIDTH` of them in one tree.
+
+    PLANTED CONTROL: a part whose real tree peak is width x worker peak is killed at the per-worker price
+    (what a part declared before) and admitted at the width price, at the cores its pytest then runs.
+    """
+    learned.learn_record(REPO, 'r1.json.gz', {'repo': REPO, 'platform': 'base', 'peaks_mb': {'t/a.py': 3072.0}})
+    width = learned.PART_WIDTH
+    tree = width * 3.0
+    assert tree > 3.0 * learned.BOX_HEADROOM, 'PLANTED: the per-worker price is killed by the real tree'
+    asked = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=64)
+    assert asked == Demand(cpu=width, mem_gb=tree * learned.BOX_HEADROOM)
+    assert asked['mem_gb'] >= tree, 'the width price holds the real tree'
+    narrow = learned.box_demand(REPO, frozenset(), cpu=2, mem_gb=64)
+    assert narrow == Demand(cpu=2, mem_gb=2 * 3.0 * learned.BOX_HEADROOM), 'a smaller box is a narrower width'
+
+
+def test_a_killed_part_is_reclaimed_at_its_grown_peak_and_narrows_to_fit_the_box() -> None:
+    """A box kill records the peak it died at grown by OOM_GROWTH; the next claim of the part asks THAT.
+
+    A grown peak past the box is not a part refused forever: its cores narrow in proportion (4 x 32 / 60),
+    and the producer runs exactly those (declared == used), so its memory scales down with them.
+    """
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=6.0, cpu_s=4 * 60.0, wall_s=60.0), killed=True)
+    again = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=64)
+    assert again == Demand(cpu=4, mem_gb=6.0 * OOM_GROWTH * learned.BOX_HEADROOM), 'the grown figure, at its width'
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=20.0, cpu_s=4 * 60.0, wall_s=60.0), killed=True)
+    fit = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=32)
+    assert fit == Demand(cpu=2, mem_gb=32.0), 'narrowed to the workers the box can hold'

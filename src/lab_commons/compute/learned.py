@@ -70,6 +70,7 @@ __all__ = [
     'OOM_GROWTH',
     'PART_PEAKS',
     'PART_PEAKS_KEPT',
+    'PART_WIDTH',
     'SLURM',
     'Measured',
     'Run',
@@ -420,6 +421,9 @@ PART_PEAKS: Final = 'part_peaks_gb'
 #: How many of a need-set's latest forge part peaks are kept for :func:`part_prior`'s median.
 PART_PEAKS_KEPT: Final = 20
 
+#: The workers an UNMEASURED box part runs at most: its declared cores, and the pytest ``-n`` it then runs.
+PART_WIDTH: Final = 4
+
 #: The wall a box part declares, in seconds: past it the box kills the tree (one day, as a hung run).
 BOX_WALL_S: Final = 24 * 3600
 
@@ -446,13 +450,15 @@ def cluster_demand(
     return ask
 
 
-def part_prior(repo_url: str, needs: Iterable[str], *, cost: Cost | None = None) -> Run:
+def part_prior(repo_url: str, needs: Iterable[str], *, workers: int, cost: Cost | None = None) -> Run:
     """What an UNMEASURED box part is taken to hold (D5): never the whole box.
 
     The median of *repo_url*'s parts measured on THIS host (every ``(local, need-set)`` run: cores kept busy
-    and peak); else the median of the part peaks every host's forge records carry for this need-set
-    (:func:`learn_record`), at one core; else *cost*'s per-task floor (:class:`~lab_commons.hpc.config.Cost`).
-    Once the part runs, its own measurement replaces this (:func:`box_demand`).
+    and its whole tree's peak); else the median of the part peaks every host's forge records carry for this
+    need-set (:func:`learn_record`), else *cost*'s per-task floor (:class:`~lab_commons.hpc.config.Cost`). Those
+    two are ONE WORKER's peak (one task's worst file), and the part runs *workers* of them in one tree: it is
+    taken to hold ``workers`` cores and ``workers`` times that peak. Once the part runs, its own measurement
+    replaces this (:func:`box_demand`).
     """
     table = learned(repo_url)
     local = [Run(**one) for key, one in table.get('runs', {}).items() if key.startswith(f'{LOCAL}|')]
@@ -460,22 +466,26 @@ def part_prior(repo_url: str, needs: Iterable[str], *, cost: Cost | None = None)
         cores = statistics.median(one.demand()['cpu'] for one in local)
         return Run(statistics.median(one.peak_mem_gb for one in local), cpu_s=cores, wall_s=1.0)
     hosts = table.get(PART_PEAKS, {}).get(_key(LOCAL, needs), [])
-    if hosts:
-        return Run(statistics.median(hosts), cpu_s=1.0, wall_s=1.0)
-    floor = cost or Cost()
-    return Run(floor.mem_gb, cpu_s=floor.cpus, wall_s=1.0)
+    worker = statistics.median(hosts) if hosts else (cost or Cost()).mem_gb
+    return Run(workers * worker, cpu_s=float(workers), wall_s=1.0)
 
 
 def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:
     """What a box part DECLARES to the box -- admitted at it, and killed past it (:func:`lab_commons.box.run`).
 
-    The cores its last ``(local, need-set)`` run kept busy and its peak memory times :data:`BOX_HEADROOM`,
-    each capped at the box's *cpu* and *mem_gb*; unmeasured, :func:`part_prior` in its place. One seat of each need.
+    The cores its last ``(local, need-set)`` run kept busy and its whole tree's peak times :data:`BOX_HEADROOM`;
+    unmeasured, :func:`part_prior` at :data:`PART_WIDTH` workers (capped at the box). The cores ARE the workers
+    its producer runs (:func:`lab_commons.dev.verifybox.claimed_width`), so memory scales with them: past the
+    box's *mem_gb* the cores narrow in proportion -- a peak a kill grew (:func:`record_run`) is never a part
+    refused forever. One seat of each need.
     """
-    run = run_of(repo_url, LOCAL, needs) or part_prior(repo_url, needs)
+    width = max(1, min(PART_WIDTH, math.floor(cpu)))
+    run = run_of(repo_url, LOCAL, needs) or part_prior(repo_url, needs, workers=width)
     cores = max(1, min(math.floor(cpu), int(run.demand(needs)['cpu'])))
-    memory = min(mem_gb, run.peak_mem_gb * BOX_HEADROOM)
-    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(memory, 1.0)})
+    memory = run.peak_mem_gb * BOX_HEADROOM
+    if memory > mem_gb:
+        cores = max(1, math.floor(cores * mem_gb / memory))
+    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(min(memory, mem_gb), 1.0)})
 
 
 def request_demand(repo_url: str, producer: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:
