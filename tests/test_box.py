@@ -22,6 +22,7 @@ from lab_commons.box import (
     INSIDE_ENV,
     Capacity,
     Demand,
+    DuplicateKey,
     Holding,
     Refused,
     hand_over,
@@ -240,7 +241,7 @@ def test_an_external_claim_outlives_its_client_until_its_probe_says_the_job_is_d
         'from lab_commons.box.supply import Reading; '
         f'os.environ["{BOX_ENV}"] = {str(box)!r}; c = Capacity(cpu=4.0, mem_bytes=8 * 2**30, seats={{}}); '
         'r = Reading(4.0, 4.0, 8 * 2**30, 8 * 2**30); '
-        'cm = hold(Demand(2, 1.0, 600, {}), "scheduler job", 1, key="k", capacity=c, read=lambda _p: r); '
+        'cm = hold(Demand(2, 1.0, 600, {}), "scheduler job", 1, key="job", capacity=c, read=lambda _p: r); '
         f'claim = cm.__enter__(); persist(claim, {probe!r}); cm.__exit__(None, None, None)'
     )
     subprocess.run([sys.executable, '-c', client], check=True, timeout=120)
@@ -284,3 +285,71 @@ def test_a_ledger_file_from_before_the_kept_column_moves_forward(tmp_path: Path,
     monkeypatch.setenv(BOX_ENV, str(old))
     with hold(_demand(), 'new', queue_s=1, **_ON):
         assert [row.what for row in holdings()] == ['new']
+
+
+def _external_client(box: Path, what: str, key: str, probe: list[str], seats: dict[str, int] | None = None) -> None:
+    """A client in ANOTHER process holds *what* under *key*, persists it with *probe*, and exits."""
+    client = (
+        'import os; from lab_commons.box import Capacity, Demand, hold, persist; '
+        'from lab_commons.box.supply import Reading; '
+        f'os.environ["{BOX_ENV}"] = {str(box)!r}; c = Capacity(cpu=4.0, mem_bytes=8 * 2**30, seats={{"jmag": 1}}); '
+        'r = Reading(4.0, 4.0, 8 * 2**30, 8 * 2**30); '
+        f'cm = hold(Demand(1, 1.0, 600, {seats or {}!r}), {what!r}, 1, key={key!r}, capacity=c, read=lambda _p: r); '
+        f'claim = cm.__enter__(); persist(claim, {probe!r}); cm.__exit__(None, None, None)'
+    )
+    subprocess.run([sys.executable, '-c', client], check=True, timeout=120)
+
+
+_ALIVE = [sys.executable, '-c', 'pass']
+_DEAD = [sys.executable, '-c', 'import sys; sys.exit(1)']
+
+
+def test_a_holding_carries_its_id_key_and_probe(box: Path) -> None:
+    _external_client(box, 'study', 'proj/study-1', _ALIVE)
+    (row,) = holdings()
+    assert (row.key, row.probe) == ('proj/study-1', tuple(_ALIVE))
+    assert row.id > 0
+    assert row.claim.id == row.id
+
+
+def test_another_process_releases_an_external_claim_by_its_id(box: Path) -> None:
+    _external_client(box, 'study', 'proj/study-1', _ALIVE)
+    (row,) = holdings()
+    release(row.claim)
+    assert holdings() == []
+
+
+def test_a_live_external_key_refuses_a_duplicate_and_admits_another(box: Path) -> None:
+    _external_client(box, 'study', 'proj/study-1', _ALIVE)
+    with (
+        pytest.raises(DuplicateKey, match=r'proj/study-1.*unresolved'),
+        hold(_demand(), 'again', queue_s=1, **{**_ON, 'key': 'proj/study-1'}),
+    ):
+        pass
+    with hold(_demand(), 'other', queue_s=1, **{**_ON, 'key': 'proj/study-2'}):
+        assert sorted(r.what for r in holdings()) == ['other', 'study'], 'PLANTED CONTROL: a different key is admitted'
+
+
+@pytest.mark.usefixtures('box')
+def test_a_running_non_external_key_is_no_duplicate() -> None:
+    with hold(_demand(), 'a', queue_s=1, **_ON), hold(_demand(), 'b', queue_s=1, **_ON):
+        assert len(holdings()) == 2, 'only an EXTERNAL claim makes its key exclusive'
+
+
+def test_a_dead_probe_frees_the_key_and_the_seat(box: Path) -> None:
+    _external_client(box, 'study', 'proj/study-1', _DEAD, seats={'jmag': 1})
+    with hold(_demand(seats={'jmag': 1}), 'again', queue_s=1, **{**_ON, 'key': 'proj/study-1'}):
+        assert [r.what for r in holdings()] == ['again']
+
+
+def test_an_external_seat_is_held_until_released(box: Path) -> None:
+    _external_client(box, 'study', 'proj/study-1', _ALIVE, seats={'jmag': 1})
+    with (
+        pytest.raises(Refused, match='jmag'),
+        hold(_demand(seats={'jmag': 1}), 'second', queue_s=0.2, **{**_ON, 'key': 'x'}),
+    ):
+        pass
+    (row,) = holdings()
+    release(row.claim)
+    with hold(_demand(seats={'jmag': 1}), 'second', queue_s=1, **{**_ON, 'key': 'x'}):
+        assert [r.what for r in holdings()] == ['second']

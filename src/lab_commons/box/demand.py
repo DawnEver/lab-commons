@@ -21,13 +21,18 @@ import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
 from lab_commons.proc import system_memory
 
+if TYPE_CHECKING:
+    from lab_commons.box.ledger import Claim
+
 __all__ = [
-    'GB', 'Capacity', 'Demand', 'Holding', 'Outcome', 'Refused', 'declared_seats', 'read_ended', 'write_ended',
+    'GB', 'Capacity', 'Demand', 'DuplicateKey', 'Holding', 'Outcome', 'Refused', 'declared_seats', 'read_ended',
+    'write_ended',
 ]  # fmt: skip
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
@@ -36,6 +41,10 @@ GB = 2**30
 
 class Refused(RuntimeError):
     """Admission said no: the message names the dimension short, its holders and their deadlines."""
+
+
+class DuplicateKey(Refused):
+    """An EXTERNAL claim under the same key is still unresolved: its job must not be submitted twice."""
 
 
 @dataclass(frozen=True)
@@ -120,7 +129,11 @@ class Capacity:
 
 @dataclass(frozen=True)
 class Holding:
-    """One running claim as the ledger records it."""
+    """One running claim as the ledger records it.
+
+    ``id``, ``key`` and ``probe`` are its identity: any process may rebuild its :attr:`claim` and release it
+    (an external job found finished offline). ``probe`` is ``None`` unless the claim is external.
+    """
 
     what: str
     pid: int
@@ -128,6 +141,16 @@ class Holding:
     mem_bytes: int
     seats: Mapping[str, int]
     deadline: float
+    id: int = 0
+    key: str = ''
+    probe: tuple[str, ...] | None = None
+
+    @property
+    def claim(self) -> Claim:
+        """The :class:`~lab_commons.box.ledger.Claim` this row is, for :func:`~lab_commons.box.ledger.release`."""
+        from lab_commons.box.ledger import Claim  # noqa: PLC0415 -- the ledger imports this module
+
+        return Claim(self.id, self.deadline)
 
 
 @dataclass(frozen=True)

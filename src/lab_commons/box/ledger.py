@@ -28,6 +28,11 @@ deadline passes, or its LIVENESS PROBE (an argv run by the reaper once its clien
 anything else dead) says the job is gone. Without the probe a dead job's claim held the box until its
 deadline (the open defect "an external claim outlives its dead job").
 
+AN EXTERNAL CLAIM'S KEY IS EXCLUSIVE: while a persisted claim under *key* lives, a new :func:`hold` under
+the same key is refused at once with :class:`~lab_commons.box.demand.DuplicateKey` -- a study whose earlier
+job is unresolved is not submitted twice. Each :class:`~lab_commons.box.demand.Holding` carries its ``id``,
+``key`` and ``probe``, so ANY process can rebuild the claim (``holding.claim``) and :func:`release` it.
+
 A TREE ALREADY INSIDE A CLAIM DOES NOT CLAIM AGAIN (:data:`INSIDE_ENV`, set on every boxed child): its
 cores and memory are its enclosing claim's. Seats are still booked -- a licence is not a share of a tree --
 and a claim for a process OUTSIDE the tree (``outside=True``, a vendor) always books.
@@ -57,7 +62,7 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import GB, Capacity, Demand, Holding, Refused
+from lab_commons.box.demand import GB, Capacity, Demand, DuplicateKey, Holding, Refused
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.admission import admit
 from lab_commons.compute.model import Job, Resources, Supply
@@ -153,8 +158,23 @@ def _immediate(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 
 def _read(con: sqlite3.Connection) -> list[Holding]:
-    rows = con.execute('SELECT what, pid, cpu, mem_bytes, seats, deadline FROM claims ORDER BY id').fetchall()
-    return [Holding(what, pid, cpu, mem, json.loads(seats), deadline) for what, pid, cpu, mem, seats, deadline in rows]
+    rows = con.execute(
+        'SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe FROM claims ORDER BY id'
+    ).fetchall()
+    return [
+        Holding(
+            what,
+            pid,
+            cpu,
+            mem,
+            json.loads(seats),
+            deadline,
+            row_id,
+            key,
+            None if probe is None else tuple(json.loads(probe)),
+        )
+        for what, pid, cpu, mem, seats, deadline, row_id, key, probe in rows
+    ]
 
 
 def holdings() -> list[Holding]:
@@ -258,6 +278,12 @@ def _try(
     """
     now = time.time()
     _reap(con, now)
+    earlier = con.execute('SELECT what FROM claims WHERE key = ? AND probe IS NOT NULL', (tag[0],)).fetchone()
+    if earlier is not None:
+        msg = (
+            f'{what}: key {tag[0]!r} is held by the external claim {earlier[0]!r}, still unresolved -- release it first'
+        )
+        raise DuplicateKey(msg)
     head = con.execute('SELECT id, what FROM tickets ORDER BY id LIMIT 1').fetchone()
     refusal = _decide(capacity, _read(con), reading, demand, what)
     if refusal is not None:
