@@ -174,6 +174,8 @@ def _submit_round(
         session=machine.session,
         policy=policy,
         seconds=seconds,
+        paging=machine.paging,
+        rerun_safe=True,  # a forge test part reruns to the same verdict
         min_minutes=state.get('min_minutes', 0.0),
     )
     if not state['rounds'] and plan.room == 0:
@@ -283,7 +285,9 @@ def submit_run(
     """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
-    grant, _ = allocate(1, cost, snapshots, session=machine.session, policy=policy)
+    grant, _ = allocate(
+        1, cost, snapshots, session=machine.session, policy=policy, paging=machine.paging, rerun_safe=True
+    )
     run = runners[grant.account]
     host = grant.hosts[0]
     told = build_run(spec, run, f'{grant.name} ({host})')

@@ -6,12 +6,15 @@ running jobs and pending tasks written in, so group-memory headroom is read exac
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from lab_commons.hpc.config import Cost, Policy
-from lab_commons.hpc.grants import Grant, Paging, load_grants
+from lab_commons.hpc import jobs
+from lab_commons.hpc.config import Cost, Policy, load_config
+from lab_commons.hpc.grants import Grant, Machine, Paging, load_grants
+from lab_commons.hpc.jobs import plan_job
 from lab_commons.hpc.plan import allocate, region
 from lab_commons.hpc.slurm import parse_snapshot
 from lab_commons.hpc.span import span
@@ -144,3 +147,19 @@ def test_fragmented_memory_drains_one_region_for_a_large_job_within_one_movable_
     assert started_at is not None
     assert started_at <= PAGING.movable_minutes, f'the region drained in {started_at} min'
     assert elsewhere > 0, 'small tasks kept flowing on the other accounts'
+
+
+def test_a_job_declares_itself_rerun_safe_and_its_placement_reads_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / 'job.toml'
+    path.write_text('[job]\nrerun_safe = true\n[cost]\ncpus = 8\nmem_gb = 16\nseconds = 600\n', encoding='utf-8')
+    config = load_config(path)
+    assert config.job.rerun_safe
+    pool = {g.slurm_account: snapshot for g, snapshot in _pool([350, 350, 350, 350, 0])}  # only the region has room
+    monkeypatch.setattr(jobs, 'probe', lambda _runner, account: pool[account])
+    machine = Machine(session=None, grants=POOL, paging=PAGING)
+    assert plan_job(config, 1, machine, reach=lambda _g: None)[0].grant is POOL[4]
+    # Planted control: the same job undeclared never borrows the region.
+    undeclared = replace(config, job=replace(config.job, rerun_safe=False))
+    assert plan_job(undeclared, 1, machine, reach=lambda _g: None)[0].grant is not POOL[4]
