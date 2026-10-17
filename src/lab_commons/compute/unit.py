@@ -133,12 +133,11 @@ class Engine:
 
         """
         found = presence.get(name)
-        read = [e.value for e in found.evidence if e.source.startswith('version: ')] if found else []
-        if found is None or not found.present or not read:
+        if found is None or found.version is None:
             why = '; '.join(f'{e.source}: {e.value}' for e in found.evidence) if found else 'never probed'
             msg = f'engine {name!r} is not present on this host -- {why}'
             raise EngineAbsent(msg)
-        return cls(name, read[-1])
+        return cls(name, found.version)
 
     @property
     def local_only(self) -> bool:
