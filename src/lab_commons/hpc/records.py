@@ -240,15 +240,15 @@ def files_made(home: Runner, state: dict[str, Any]) -> float:
     return float(text) if text.isdigit() else 0.0
 
 
-def run_shas(machine: Machine, runners: dict[str, Runner]) -> list[str]:
-    """Every sha some grant holds a run state of (``~/ci/runs/<sha>/state.json``); an unreachable grant holds none."""
+def run_shas(machine: Machine, runners: dict[str, Runner], part: str) -> list[str]:
+    """Every sha some grant holds a run of *part* of (``~/ci/runs/<sha>/<part>/state.json``); unreachable holds none."""
     found: set[str] = set()
     for grant in machine.grants:
         try:
-            listing = runners[grant.account](f'ls {ROOT}/runs/*/state.json 2>/dev/null || true', None)
+            listing = runners[grant.account](f'ls {ROOT}/runs/*/{part}/state.json 2>/dev/null || true', None)
         except Unreachable:
             continue
-        found |= {line.rstrip('/').split('/')[-2] for line in listing.split() if line.endswith('/state.json')}
+        found |= {line.split('/')[-3] for line in listing.split() if line.endswith(f'/{part}/state.json')}
     return sorted(found)
 
 

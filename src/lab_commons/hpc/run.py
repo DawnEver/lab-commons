@@ -5,7 +5,7 @@ EVERYTHING LIVES UNDER ``~/ci/`` ON THE CLUSTER, AND NOTHING ELSE IS TOUCHED. A 
 
     ~/ci/cache.git              bare cache; fetched from the read-only HTTPS remote
     ~/ci/packs/<sha>.pack       only when the commit is not on the remote (sent over stdin, indexed here)
-    ~/ci/runs/<sha>/state.json  the run: its rounds, outcomes so far and the job of the round in flight
+    ~/ci/runs/<sha>/<part>/state.json  the run of one part: its rounds, outcomes so far and the job in flight
     ~/ci/trees/<sha>/           a worktree of the cache, with its OWN .venv (reused when present)
     ~/ci/bin/lab_ci_pytest_item.py   the item runner, shipped from this checkout (pytest_item.py)
 
@@ -140,12 +140,14 @@ def shares_home(grant: Grant, builder: Grant) -> bool:
     return grant.same_cluster(builder) and grant.user == builder.user
 
 
-def _state_dir(sha: str) -> str:
-    return f'{ROOT}/runs/{sha}'
+def _state_dir(sha: str, part: str) -> str:
+    """One run is one PART of one sha: two parts of a sha are two runs, never one state (Ada, 2026-10-17)."""
+    return f'{ROOT}/runs/{sha}/{part}'
 
 
 def _save(run: Runner, state: dict[str, Any]) -> None:
-    run(f'mkdir -p {_state_dir(state["sha"])} && cat > {_state_dir(state["sha"])}/state.json', json.dumps(state))
+    where = _state_dir(state['sha'], state['platform'])
+    run(f'mkdir -p {where} && cat > {where}/state.json', json.dumps(state))
 
 
 def _submit_round(
@@ -188,7 +190,9 @@ def _submit_round(
     items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl', **ceiling} for i, group in enumerate(pending)]
     setup = (ENV,)
     sha = state['sha']
-    job = JobSpec(name=f'run-{sha[:12]}', workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run')
+    job = JobSpec(
+        name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run'
+    )
     sub = submit(runners[grant.account], plan, Config(job=job, cost=cost, policy=policy), items, stamp=tag)
     state['rounds'].append({**_plan_record(plan, grant, sub.job_id, sub.run_dir), 'unmeasured': unmeasured})
     state['current'] = {
@@ -269,7 +273,7 @@ def submit_run(
 ) -> dict[str, Any]:
     """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns that state.
 
-    The state is ``~/ci/runs/<sha>/state.json``; :func:`gather_run` reads it. *history* is a previous
+    The state is ``~/ci/runs/<sha>/<part>/state.json``; :func:`gather_run` reads it. *history* is a previous
     record, read for its measurements only. Nothing here waits for a job.
 
     *carry*, given the env key the build reported, names the outcomes earlier runs of THAT env hold for
@@ -331,12 +335,17 @@ def submit_run(
     return state
 
 
-def load_state(sha: str, machine: Machine, runners: dict[str, Runner]) -> tuple[dict[str, Any], Runner]:
-    """The state of *sha*'s run from whichever grant holds it; :class:`Unreachable` when no grant answered."""
+def job_name(sha: str, part: str) -> str:
+    """The Slurm job name of the run of *part* on *sha*: another part of the sha never takes it for its own."""
+    return f'run-{sha[:12]}-{part}'
+
+
+def load_state(sha: str, part: str, machine: Machine, runners: dict[str, Runner]) -> tuple[dict[str, Any], Runner]:
+    """The state of *sha*'s run of *part* from whichever grant holds it; :class:`Unreachable` when none answered."""
     answered = False
     for grant in machine.grants:
         try:
-            text = runners[grant.account](f'cat {_state_dir(sha)}/state.json 2>/dev/null || true', None)
+            text = runners[grant.account](f'cat {_state_dir(sha, part)}/state.json 2>/dev/null || true', None)
         except Unreachable:
             continue
         answered = True
@@ -345,12 +354,13 @@ def load_state(sha: str, machine: Machine, runners: dict[str, Runner]) -> tuple[
     if not answered:
         msg = f'no login host of any grant answered; the jobs of {sha[:12]} keep running -- gather again later'
         raise Unreachable(msg)
-    msg = f'no run of {sha} was submitted on any grant (no {_state_dir(sha)}/state.json)'
+    msg = f'no run of {sha} ({part}) was submitted on any grant (no {_state_dir(sha, part)}/state.json)'
     raise RuntimeError(msg)
 
 
 def gather_run(
     sha: str,
+    part: str,
     machine: Machine,
     connect: Callable[[Grant], Runner],
     *,
@@ -365,7 +375,7 @@ def gather_run(
     stays on the cluster, so the next gather picks up where this one could not.
     """
     runners = {g.account: connect(g) for g in machine.grants}
-    state, home = load_state(sha, machine, runners)
+    state, home = load_state(sha, part, machine, runners)
     if 'record' in state:
         return state['record']
     current = state['current']

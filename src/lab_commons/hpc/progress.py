@@ -150,10 +150,10 @@ def held_by_a_limit(progress: Progress, policy: Policy) -> str:
     )
 
 
-def where(sha: str, machine: Machine, connect: Callable[[Grant], Runner], *, policy: Policy) -> Progress:
-    """Where *sha*'s run is now -- see :class:`Progress`. Reads; submits nothing."""
+def where(sha: str, part: str, machine: Machine, connect: Callable[[Grant], Runner], *, policy: Policy) -> Progress:
+    """Where *sha*'s run of *part* is now -- see :class:`Progress`. Reads; submits nothing."""
     runners = {g.account: connect(g) for g in machine.grants}
-    state, home = load_state(sha, machine, runners)
+    state, home = load_state(sha, part, machine, runners)
     if 'record' in state:
         last = state['rounds'][-1]
         return Progress(sha=sha, job_id=last['job_id'], shards=len(last['shards']), finished=True)
