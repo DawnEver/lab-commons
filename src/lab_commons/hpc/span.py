@@ -9,7 +9,8 @@ about the same time. Each slice is then planned on its own grant.
 ONE GRANT ONLY WHEN THAT IS FASTEST. The spread is kept only when every slice holds at least one shortest
 shard (``policy.shard_minutes_min`` of padded time -- less is start-up a grant is not worth) and its
 slowest slice finishes strictly before the best single grant's plan (:func:`lab_commons.hpc.plan.allocate`,
-whose tie rules stand); otherwise the batch goes to that one grant. Nothing is reserved on any grant:
+whose tie rules stand) and the slices together start no more tasks at once than the session cap allows;
+otherwise the batch goes to that one grant. Nothing is reserved on any grant:
 each plan is Slurm's to queue, and a grant that later dies hands its slice back to
 :func:`span` over the grants still answering.
 """
@@ -21,8 +22,8 @@ from dataclasses import dataclass
 from itertools import accumulate
 
 from lab_commons.hpc.config import Cost, Policy
-from lab_commons.hpc.grants import Grant
-from lab_commons.hpc.plan import Plan, allocate, plan_on
+from lab_commons.hpc.grants import Grant, Session
+from lab_commons.hpc.plan import Plan, allocate, plan_on, session_room
 from lab_commons.hpc.slurm import Snapshot
 
 __all__ = ['Placement', 'span', 'split']
@@ -58,7 +59,7 @@ def span(
     cost: Cost,
     candidates: Sequence[tuple[Grant, Snapshot]],
     *,
-    workstation: str | None,
+    session: Session | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
 ) -> tuple[Placement, ...]:
@@ -67,12 +68,12 @@ def span(
     Raises ``ValueError`` naming every account and why when no grant can take the work.
     """
     each = list(seconds) if seconds is not None else [cost.seconds] * n_items
-    grant, plan = allocate(n_items, cost, candidates, workstation=workstation, policy=policy, seconds=seconds)
+    grant, plan = allocate(n_items, cost, candidates, session=session, policy=policy, seconds=seconds)
     alone = (Placement(grant, plan, (0, n_items)),)
     able: list[tuple[Grant, Snapshot, float]] = []
     for candidate, snapshot in candidates:
         try:
-            whole = plan_on(candidate, snapshot, n_items, cost, workstation=workstation, policy=policy, seconds=seconds)
+            whole = plan_on(candidate, snapshot, n_items, cost, session=session, policy=policy, seconds=seconds)
         except ValueError:
             continue
         able.append((candidate, snapshot, sum(each) / whole.makespan_minutes))
@@ -90,12 +91,15 @@ def span(
                 snapshot,
                 stop - start,
                 cost,
-                workstation=workstation,
+                session=session,
                 policy=policy,
                 seconds=None if seconds is None else each[start:stop],
             )
         except ValueError:
             return alone
         placements.append(Placement(candidate, part, (start, stop)))
+    capped = session_room(session, [snapshot for _, snapshot in candidates], cost)
+    if capped is not None and sum(p.plan.throttle for p in placements) > capped:
+        return alone  # the session cap counts the whole pool; one array holds it
     spread = max(p.plan.makespan_minutes for p in placements)
     return tuple(placements) if spread < plan.makespan_minutes else alone

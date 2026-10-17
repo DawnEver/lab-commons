@@ -82,7 +82,7 @@ def plan_job(config: Config, n_items: int, machine: Machine, reach: Reach) -> tu
         n_items,
         config.cost,
         _answering(machine.grants, reach),
-        workstation=machine.workstation,
+        session=machine.session,
         policy=config.policy,
     )
 
@@ -108,7 +108,7 @@ def _place(
             len(items),
             config.cost,
             _answering(tuple(usable), reach),
-            workstation=machine.workstation,
+            session=machine.session,
             policy=config.policy,
         )
         failed = []

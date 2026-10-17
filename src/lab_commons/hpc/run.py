@@ -171,7 +171,7 @@ def _submit_round(
         len(pending),
         replace(cost, mem_gb=mem_gb),
         snapshots,
-        workstation=machine.workstation,
+        session=machine.session,
         policy=policy,
         seconds=seconds,
         min_minutes=state.get('min_minutes', 0.0),
@@ -283,7 +283,7 @@ def submit_run(
     """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
-    grant, _ = allocate(1, cost, snapshots, workstation=machine.workstation, policy=policy)
+    grant, _ = allocate(1, cost, snapshots, session=machine.session, policy=policy)
     run = runners[grant.account]
     host = grant.hosts[0]
     told = build_run(spec, run, f'{grant.name} ({host})')

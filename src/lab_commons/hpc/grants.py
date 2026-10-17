@@ -1,17 +1,23 @@
 """Which cluster accounts THIS MACHINE may use -- the ``[hpc]`` table of the machine file.
 
-A GRANT IS AN ACCOUNT THIS BOX MAY REACH, NEVER A SHARE OF IT. One workstation may hold several grants (two
-clusters, two Slurm accounts); one login may be reached from several workstations. How an account is divided
-is not this file's: admission fits each job against what the account has free now. What each
-box is USING is read from Slurm at plan time,
-never stored, because every job a box submits carries ``--comment=lc:ws=<workstation>`` and ``squeue``
-reports it back (:mod:`lab_commons.hpc.slurm`). A stored usage figure would be a second copy of Slurm's
-own state, wrong the moment a job ends.
+A GRANT IS AN ACCOUNT THIS BOX MAY REACH, NEVER A SHARE OF IT. The accounts are ONE POOL: no session owns
+one, and admission fits each job against what the account has free now. What each SESSION is USING is read
+from Slurm at plan time, never stored, because every job a session submits carries
+``--comment=lc:session=<name>`` and ``squeue`` reports it back on every account
+(:mod:`lab_commons.hpc.slurm`). A stored usage figure would be a second copy of Slurm's own state, wrong
+the moment a job ends.
+
+A SESSION HAS A CAP, NOT AN ACCOUNT (user ruling 2026-10-17). ``$LC_HPC_SESSION`` names the session this
+process submits for; its ``[hpc.session.<name>]`` table is the one declaration of what it may hold at once
+across the whole pool -- tasks, CPUs and memory, pending tasks included -- and, optionally, the most one
+task may ask. Past the cap a job WAITS (:func:`lab_commons.hpc.plan.allocate` gives it no room); only a task
+past the per-task ceiling is refused. No ``$LC_HPC_SESSION`` tags nothing and caps nothing; a name with no
+table is refused.
 
 AN ACCOUNT IS ``(user, slurm_account)``, REACHED THROUGH ANY OF ITS LOGIN HOSTS. ``hosts`` is ordered: the
 runner (:func:`lab_commons.hpc.cluster.runner_for`) tries each with ``BatchMode`` ssh and a short connect timeout
 and uses the first that answers. Every host of one grant shares Slurm and the home directory, so a run
-submitted through one is read back through another. Quota and the ``lc:ws=`` usage tags are per account.
+submitted through one is read back through another. Quota is per account; a session's tags span them all.
 
 NO SECRETS. ``user@host`` is the ``ssh`` target; keys, ports and jump hosts stay in ``~/.ssh/config``.
 
@@ -27,9 +33,12 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
     setup = ["module load git/2.42.0"]   # optional: run first in every array task
 
-THE WORKSTATION NAME IS THE HARNESS'S, NOT THIS FILE'S. It is ``$HARNESS_MACHINE`` when the machine's
-harness sets it, and ABSENT otherwise (a teammate without one): an absent box tags no job and so holds
-nothing tagged. One name, one source -- the retired ``[hpc] workstation`` key is refused by name.
+    [hpc.session.wdg-design]             # one per session; $LC_HPC_SESSION picks this process's
+    tasks = 2                            # concurrent tasks, pending + running, across every account
+    cpus = 128
+    mem_gb = 600
+    task_cpus = 64                       # optional per-task ceilings: a bigger task is refused
+    task_mem_gb = 300
 
 ``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster.s
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
@@ -47,29 +56,60 @@ from lab_commons.config import config_path, section
 from lab_commons.hpc.config import Cluster
 from lab_commons.hpc.retired import RETIRED
 
-__all__ = ['COMMENT_PREFIX', 'MACHINE_ENV', 'Grant', 'Machine', 'load_grants', 'workstation']
+__all__ = ['COMMENT_PREFIX', 'SESSION_ENV', 'Grant', 'Machine', 'Session', 'load_grants']
 
-#: Every submitted job's ``--comment`` starts with this, followed by the workstation name.
-COMMENT_PREFIX: Final = 'lc:ws='
+#: Every submitted job's ``--comment`` starts with this, followed by the session name.
+COMMENT_PREFIX: Final = 'lc:session='
 
-#: The machine's name, set by the machine's harness; the one source of the workstation name.
-MACHINE_ENV: Final = 'HARNESS_MACHINE'
+#: The session this process submits for; the one source of the tag.
+SESSION_ENV: Final = 'LC_HPC_SESSION'
 
 #: Keys of ``[hpc]`` that were retired, each with its remedy.
 _RETIRED_KEYS: Final = {
-    'workstation': f'the name now comes from ${MACHINE_ENV} (set by the machine harness) -- delete the line',
+    'workstation': f'jobs are tagged by session (${SESSION_ENV}, capped by [hpc.session.<name>]) -- delete the line',
 }
 
 
-def workstation() -> str | None:
-    """``$HARNESS_MACHINE`` when present and non-empty, else ``None``. A name with spaces or commas is refused."""
-    name = os.environ.get(MACHINE_ENV, '').strip()
+@dataclass(frozen=True)
+class Session:
+    """What one session may hold at once across the whole pool, pending tasks included; per-task ceilings optional."""
+
+    name: str
+    tasks: int
+    cpus: float
+    mem_gb: float
+    task_cpus: float | None = None
+    task_mem_gb: float | None = None
+
+    def __post_init__(self) -> None:
+        """Every cap is positive."""
+        caps = (self.tasks, self.cpus, self.mem_gb, self.task_cpus or 1, self.task_mem_gb or 1)
+        if any(c <= 0 for c in caps):
+            msg = f'every session cap is positive, got {self}'
+            raise ValueError(msg)
+
+
+def _session(raw: dict[str, Any], source: str) -> Session | None:
+    """``$LC_HPC_SESSION``'s ``[hpc.session.<name>]``; ``None`` when unset. A name without a table is refused."""
+    name = os.environ.get(SESSION_ENV, '').strip()
     if not name:
         return None
-    if any(c.isspace() or c == ',' for c in name):
-        msg = f'${MACHINE_ENV} must be a name without spaces or commas, got {name!r}'
+    if any(c.isspace() or c in ',;' for c in name):
+        msg = f'${SESSION_ENV} must be a name without spaces, commas or semicolons, got {name!r}'
         raise ValueError(msg)
-    return name
+    table = raw.get(name)
+    if table is None:
+        msg = f'{source}: ${SESSION_ENV}={name} but there is no [hpc.session.{name}] declaring its cap'
+        raise ValueError(msg)
+    known = set(Session.__dataclass_fields__) - {'name'}
+    if unknown := set(table) - known:
+        msg = f'{source}: [hpc.session.{name}] has unknown keys {sorted(unknown)}; known: {sorted(known)}'
+        raise ValueError(msg)
+    try:
+        return Session(name=name, **table)
+    except TypeError as missing:
+        msg = f'{source}: [hpc.session.{name}] needs tasks, cpus and mem_gb: {missing}'
+        raise ValueError(msg) from missing
 
 
 @dataclass(frozen=True)
@@ -116,15 +156,15 @@ class Grant:
 
 @dataclass(frozen=True)
 class Machine:
-    """A workstation's name and every grant it holds."""
+    """The session this process submits for, and every grant the machine holds."""
 
-    workstation: str | None
+    session: Session | None
     grants: tuple[Grant, ...]
 
     @property
     def comment(self) -> str:
-        """The ``--comment`` every job of this machine carries; ``''`` for an unnamed machine."""
-        return COMMENT_PREFIX + self.workstation if self.workstation else ''
+        """The ``--comment`` every job of this session carries; ``''`` without one."""
+        return COMMENT_PREFIX + self.session.name if self.session else ''
 
 
 _GRANT_KEYS: Final = frozenset(Grant.__dataclass_fields__)
@@ -153,9 +193,9 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
         if key in raw:
             msg = f'{source}: [hpc] {key} is retired: {remedy}'
             raise ValueError(msg)
-    unknown = set(raw) - {'grant'}
+    unknown = set(raw) - {'grant', 'session'}
     if unknown:
-        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant"]'
+        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "session"]'
         raise ValueError(msg)
     grants = tuple(_grant(g, source) for g in raw.get('grant', []))
     if not grants:
@@ -167,4 +207,4 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
             msg = f'{source}: account {grant.account!r} is granted twice; one grant per account'
             raise ValueError(msg)
         seen.add(grant.account)
-    return Machine(workstation=workstation(), grants=grants)
+    return Machine(session=_session(raw.get('session', {}), source), grants=grants)
