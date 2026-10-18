@@ -5,6 +5,7 @@ The entries are this module's own functions, named ``<module>:<function>`` exact
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from functools import partial
@@ -17,7 +18,7 @@ from test_compute_store import Shared
 
 from lab_commons.box import BOX_ENV, Capacity
 from lab_commons.box.demand import Demand
-from lab_commons.box.ledger import hold
+from lab_commons.box.ledger import hold, holdings
 from lab_commons.compute.execute import (
     CACHED,
     FAILED,
@@ -248,3 +249,87 @@ def test_presence_check_reads_environment_and_probed_version() -> None:
     assert why(Engine('femm', '5.0')) == ''
     assert why(Engine('femm', '5.1')) == 'femm 5.1 wanted, 5.0 here'
     assert 'not present' in why(Engine('jmag', '25'))
+
+
+SPANS: dict[str, tuple[float, float]] = {}
+
+
+def nap(inputs: Mapping[str, Any], work: Path) -> None:
+    """Sleeps a moment, recording when it ran."""
+    start = time.monotonic()
+    time.sleep(0.4)
+    SPANS[inputs['tag']] = (start, time.monotonic())
+    (work / 'out').write_text(inputs['tag'], encoding='utf-8')
+
+
+def interrupted(_inputs: Mapping[str, Any], _work: Path) -> None:
+    time.sleep(0.2)  # long enough for the napping sibling to hold its claim
+    raise KeyboardInterrupt
+
+
+def _overlap(a: str, b: str) -> bool:
+    return SPANS[a][0] < SPANS[b][1] and SPANS[b][0] < SPANS[a][1]
+
+
+def ledger_executor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seats: Mapping[str, int]) -> LocalExecutor:
+    monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
+    box = Capacity(cpu=4, mem_bytes=4 << 30, kept_cpu=0, kept_bytes=0, seats=dict(seats))
+    real = partial(hold, capacity=box, read=quiet(box), poll_s=0.02)
+    return LocalExecutor(
+        ResultStore(tmp_path / 'store'), tmp_path / 'journal', present=lambda _e: '', hold=real, queue_s=30.0
+    )
+
+
+def test_ready_units_the_ledger_admits_run_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    SPANS.clear()
+    ex = ledger_executor(tmp_path, monkeypatch, {})
+    graph = Graph(
+        {'a': unit('nap', tag='a'), 'b': unit('nap', tag='b'), 'c': unit('nap', tag='c', x=Output('a', 'out'))}
+    )
+    got = ex.run(graph)
+    assert {o.state for o in got.values()} == {RAN}
+    assert list(got) == ['a', 'b', 'c']  # outcomes in graph order, whatever order they finished in
+    assert _overlap('a', 'b')  # THE CHECK: two independent admissible units overlap in time
+    assert SPANS['c'][0] >= SPANS['a'][1]  # PLANTED: a dependant waits for its input
+    assert holdings() == []
+
+
+def test_one_seat_serialises_two_seat_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    SPANS.clear()
+    seat = Demand(1, 0.1, 60, {'jmag': 1})
+    graph = Graph({'a': unit('nap', demand=seat, tag='a'), 'b': unit('nap', demand=seat, tag='b')})
+    assert {o.state for o in ledger_executor(tmp_path, monkeypatch, {'jmag': 1}).run(graph).values()} == {RAN}
+    assert not _overlap('a', 'b')  # the ledger, not a pool size, bounds a vendor's concurrency
+    SPANS.clear()
+    ledger_executor(tmp_path / 'two', monkeypatch, {'jmag': 2}).run(graph)
+    assert _overlap('a', 'b')  # PLANTED: two seats admit both
+
+
+def test_a_failure_stops_only_its_subtree_while_a_sibling_runs(tmp_path: Path) -> None:
+    SPANS.clear()
+    graph = Graph(
+        {
+            'a': unit('boom'),
+            'b': unit('double', x=Output('a', 'out')),
+            'c': unit('double', x=Output('b', 'out')),
+            'd': unit('nap', tag='d'),
+        }
+    )
+    got = executor(tmp_path).run(graph)
+    assert [got[n].state for n in 'abcd'] == [FAILED, SKIPPED, SKIPPED, RAN]
+    assert got['c'].why == 'upstream b skipped'
+
+
+def test_two_units_of_one_hash_run_once(tmp_path: Path) -> None:
+    got = executor(tmp_path).run(Graph({'a': unit('counter'), 'b': unit('counter')}))
+    assert [got[n].state for n in 'ab'] == [RAN, CACHED]
+    assert CALLS == ['counter']
+
+
+def test_an_interrupt_releases_every_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    SPANS.clear()
+    ex = ledger_executor(tmp_path, monkeypatch, {})
+    with pytest.raises(KeyboardInterrupt):
+        ex.run(Graph({'i': unit('interrupted'), 'n': unit('nap', tag='n')}))
+    assert 'n' not in SPANS  # PLANTED: the sibling was still running when run() returned
+    assert holdings() == []  # THE CHECK: its claim is released anyway
