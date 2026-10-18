@@ -1,4 +1,11 @@
-"""A run's RESULTS: streams folded into outcomes, and the record ``run-<sha>-<part>-<req>.json.gz``."""
+"""A run's RESULTS: streams folded into test cells, and the record ``run-<sha>-<part>-<req>.json.gz``.
+
+A run's ``cells`` map each id it COVERED to its plain test cell (:class:`lab_commons.hpc.testcells.TestCell`);
+an id it hands to another part is in ``handed`` and nowhere else. A run's state (``state.json``) is LIVE
+-- a run in flight crosses any change -- so a state still holding the retired ``outcomes`` words is upgraded
+on read (:func:`upgraded_state`). A run RECORD is regenerable: one in the retired shape is refused by name
+(:func:`read_record`) and the forge re-produces its sha.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +20,15 @@ from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
 from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, read_stream, split_streams, tagged
 from lab_commons.hpc.shell import ROOT
+from lab_commons.hpc.testcells import TestCell, counts, upgraded
+from lab_commons.outcomes import Cell, Reason, Status
 
 __all__ = [
+    'RetiredRecord',
+    'cells_of',
     'files_made',
     'fold',
-    'held_outcomes',
+    'held_cells',
     'job_measured',
     'kept_text',
     'read_record',
@@ -28,6 +39,7 @@ __all__ = [
     'split_streams',
     'stream_sources',
     'summary',
+    'upgraded_state',
     'write_record',
 ]
 
@@ -44,21 +56,37 @@ _STATE_KEYS: Final = (
     'python',
     'prep',
     'rounds',
-    'outcomes',
+    'cells',
     'handed',
     'carried',
 )
 
-#: Outcomes that are not a run's own: never reported, or handed to another part.
-_NOT_RUN: Final = frozenset({'lost', 'missing', 'not-covered'})
+#: The key the retired record and state shapes held their per-id words under.
+_RETIRED_KEY: Final = 'outcomes'
+
+
+class RetiredRecord(ValueError):
+    """A run record in the retired word shape: regenerable, so refused -- the forge re-produces its sha."""
+
+
+def _plain(line: dict[str, Any]) -> dict[str, Any]:
+    """A stream's plain test cell, a retired ``{"outcome", "why"}`` line upgraded (a round in flight)."""
+    one = TestCell.from_plain(line) if 'status' in line else upgraded(str(line['outcome']), str(line.get('why', '')))
+    if one is None:
+        msg = f'a stream line reads as no cell: {line!r}'
+        raise ValueError(msg)
+    return one.to_plain()
+
+
+def _cell(status: Status, kind: str, text: str) -> dict[str, Any]:
+    return TestCell(Cell(status, reason=Reason(kind, text))).to_plain()
 
 
 def fold(
     items: list[dict[str, Any]],
     streams: dict[int, str],
-    outcomes: dict[str, str],
+    cells: dict[str, dict[str, Any]],
     measured: Measured,
-    reasons: dict[str, str],
     *,
     shards: Sequence[Sequence[int]],
     walls: Sequence[float],
@@ -69,18 +97,19 @@ def fold(
     *busy* is the sum of every closed item's own wall -- what the processes used of the cores charged.
 
     An item that EXITED (``done`` >= 0) before reporting every id names the id it was running: its last
-    START line, when that id has no outcome. It is ``failed`` with the exit as its reason, and only the ids
+    START line, when that id has no cell. It is ``ERROR`` with the exit as its reason, and only the ids
     after it are re-queued; with no unreported START to name it (a file that never imported, an id no longer
-    collected), the unreported ids are ``missing``.
+    collected), the unreported ids are ``PENDING``: never reported.
 
     An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
-    they are retried, halved, like an item that never closed -- never stamped ``missing``.
+    they are retried, halved, like an item that never closed -- never stamped ``PENDING``.
 
-    AN OUT_OF_MEMORY ITEM IS BISECTED, AND A LONE HOG IS ITS OWN FAILURE. *alone* maps each item killed
+    AN OUT_OF_MEMORY ITEM IS BISECTED, AND A LONE HOG IS ITS OWN CELL. *alone* maps each item killed
     OUT_OF_MEMORY at the most memory any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`) to that
     limit in MB. Halving it again isolates the test that blows the memory; once one unfinished id is
-    left, no grant can give it more, so it is ``failed`` by id with its peak and the limit as its reason,
-    and every other id of the item got a real result on the way down.
+    left, no grant can give it more, so it is ``OUT_OF_MEMORY`` by id with its peak and the limit as its
+    reason -- never ``REJECTED``: the machine, not the test, said no -- and every other id of the item got
+    a real result on the way down.
 
     WHAT A KILL COST IS MEASURED TOO. A shard (*shards*: item ranges) runs its items back to back for
     the seconds Slurm says it ran (*walls*, one per shard), so the first item of a shard that never closed
@@ -96,29 +125,30 @@ def fold(
     spent = _killed_after(folds, shards, walls)
     for index, (item, folded) in enumerate(zip(items, folds, strict=True)):
         group = item['ids']
-        outcomes.update(folded['outcomes'])
-        reasons.update(folded['whys'])
+        cells.update({node: _plain(line) for node, line in folded['cells'].items()})
         measured.learn(group, folded)
-        rest = [n for n in group if n not in folded['outcomes']]
+        rest = [n for n in group if n not in folded['cells']]
         signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
         killed = killed or signalled
         if folded['done'] is not None and not signalled:
             hit = folded['started']
             if hit not in rest:
-                outcomes.update(dict.fromkeys(rest, 'missing'))
+                exited = f'the item exited {folded["done"]["done"]} without reporting it'
+                cells.update(dict.fromkeys(rest, _cell(Status.PENDING, 'unreported', exited)))
                 continue
-            outcomes[hit] = 'failed'
-            reasons[hit] = f'the item exited {folded["done"]["done"]} while this test ran; the ids after it re-run'
+            why = f'the item exited {folded["done"]["done"]} while this test ran; the ids after it re-run'
+            cells[hit] = _cell(Status.ERROR, 'exit', why)
             after = [n for n in rest if n != hit]
             pending += [after] if after else []
             continue
         measured.killed(group, folded, spent.get(index, 0.0))
         if len(rest) == 1 and index in limits:
             peak = (folded['done'] or {}).get('peak_mb')
-            outcomes[rest[0]] = 'failed'
-            reasons[rest[0]] = (
-                f'OUT_OF_MEMORY alone at {limits[index]} MB, the most any grant gives'
-                f' (peak {"unread" if peak is None else f"{float(peak):.0f} MB"})'
+            cells[rest[0]] = _cell(
+                Status.OUT_OF_MEMORY,
+                'out_of_memory',
+                f'alone at {limits[index]} MB, the most any grant gives'
+                f' (peak {"unread" if peak is None else f"{float(peak):.0f} MB"})',
             )
             continue
         half = (len(rest) + 1) // 2
@@ -148,7 +178,7 @@ def _killed_after(
 def stream_sources(sha: str, tag: str) -> tuple[str, str]:
     """The ONE stream file of *sha*'s round *tag* in its tree, and the ONE file retention keeps per run.
 
-    A superseded run's finished shards are carried (:func:`held_outcomes`) long after its tree is garbage, so
+    A superseded run's finished shards are carried (:func:`held_cells`) long after its tree is garbage, so
     retention keeps the round's stream beside the run state (:func:`kept_text`) before the tree goes
     (:mod:`lab_commons.dev.retentionplan`): a file is an HPC resource.
     """
@@ -195,12 +225,14 @@ def read_streams(run: Runner, live: str, kept: str) -> dict[int, str]:
     return split_streams(out, tag)
 
 
+def cells_of(record: dict[str, Any]) -> dict[str, TestCell]:
+    """``{id: its test cell}`` over the ids *record* covered."""
+    return {node: TestCell.from_plain(plain) for node, plain in record['cells'].items()}
+
+
 def summary(record: dict[str, Any]) -> str:
-    """``passed=…, failed=…`` counts of a record, worst first."""
-    counts: dict[str, int] = {}
-    for outcome in record['outcomes'].values():
-        counts[outcome] = counts.get(outcome, 0) + 1
-    return ', '.join(f'{k}={v}' for k, v in sorted(counts.items()))
+    """``ok=…, rejected=…`` counts of a record's cells, by status (an xfail as ``rejected/expected-rejected``)."""
+    return ', '.join(f'{k}={v}' for k, v in sorted(counts(cells_of(record).values()).items()))
 
 
 def record_name(record: dict[str, Any]) -> str:
@@ -219,12 +251,19 @@ def write_record(record: dict[str, Any], directory: Path) -> Path:
 
 
 def read_record(path: Path) -> dict[str, Any]:
-    """The record :func:`write_record` wrote."""
-    return json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))
+    """The record :func:`write_record` wrote; one in the retired word shape raises :class:`RetiredRecord`."""
+    record = json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))
+    if 'cells' not in record:
+        msg = (
+            f'{path.name} is a run record of the retired word shape ({_RETIRED_KEY}: passed/failed/...); a record '
+            'is regenerable, so it is refused, never upgraded -- the forge re-produces its sha'
+        )
+        raise RetiredRecord(msg)
+    return record
 
 
 def job_measured(
-    rounds: Sequence[dict[str, Any]], outcomes: Iterable[str], measured: Measured, *, cpus: int, files: float = 0.0
+    rounds: Sequence[dict[str, Any]], nodes: Iterable[str], measured: Measured, *, cpus: int, files: float = 0.0
 ) -> Run:
     """What a whole Slurm run measured, as one :class:`~lab_commons.compute.learned.Run`.
 
@@ -234,7 +273,7 @@ def job_measured(
     """
     walls = [r.get('walls_s') or [0.0] for r in rounds]
     return Run(
-        peak_mem_gb=measured.peak_gb(outcomes),
+        peak_mem_gb=measured.peak_gb(nodes),
         cpu_s=sum(sum(w) for w in walls) * cpus,
         wall_s=max(1.0, sum(max(w) for w in walls)),
         files=files,
@@ -266,37 +305,58 @@ def run_shas(machine: Machine, runners: dict[str, Runner], part: str) -> list[st
     return sorted(found)
 
 
-def held_outcomes(state: dict[str, Any], run: Runner) -> dict[str, tuple[str, str]]:
-    """``{node: (outcome, origin sha)}`` a run's *state* holds, its superseded shards included.
+def held_cells(state: dict[str, Any], run: Runner) -> dict[str, tuple[dict[str, Any], str]]:
+    """``{node: (plain test cell, origin sha)}`` of every DECIDED cell a run's *state* holds, superseded shards too.
 
     Its record when it has one, else its folded rounds plus every id the streams of its round in flight
-    already reported -- the finished shards of a SUPERSEDED run.
+    already reported -- the finished shards of a SUPERSEDED run. A RETRYABLE cell (never reported, lost, killed)
+    is no answer and is never carried. *state* is LIVE and is read through :func:`upgraded_state`.
 
-    An outcome carried into it keeps its origin; one it ran names its own sha.
+    A cell carried into it keeps its origin; one it ran names its own sha.
     """
+    state = upgraded_state(state)
     record = state.get('record')
-    outcomes = dict((record or state)['outcomes'])
+    cells = dict((record or state)['cells'])
     current = state.get('current')
     if record is None and current:
         streams = read_streams(run, *stream_sources(state['sha'], current['tag']))
         for index, item in enumerate(current['items']):
-            outcomes.update(read_stream(streams.get(index, ''), item['ids'])['outcomes'])
+            found = read_stream(streams.get(index, ''), item['ids'])['cells']
+            cells.update({node: _plain(line) for node, line in found.items()})
     origin = (record or state).get('carried', {})
     return {
-        node: (outcome, origin.get(node, state['sha']))
-        for node, outcome in outcomes.items()
-        if '::' in node and outcome not in _NOT_RUN
+        node: (plain, origin.get(node, state['sha']))
+        for node, plain in cells.items()
+        if '::' in node and TestCell.from_plain(plain).status.decided
     }
 
 
+def _upgraded_words(holder: dict[str, Any]) -> dict[str, Any]:
+    """*holder* with its retired ``outcomes`` words (and ``reasons``) read as ``cells``; a handed id is dropped."""
+    if _RETIRED_KEY not in holder:
+        return holder
+    reasons = holder.get('reasons', {})
+    rest = {k: v for k, v in holder.items() if k not in (_RETIRED_KEY, 'reasons')}
+    read = {node: upgraded(word, reasons.get(node, '')) for node, word in holder[_RETIRED_KEY].items()}
+    cells = {node: one.to_plain() for node, one in read.items() if one is not None}
+    return {**rest, 'cells': cells}
+
+
+def upgraded_state(state: dict[str, Any]) -> dict[str, Any]:
+    """A run's LIVE *state*, its retired word shape (and that of the record it may hold) upgraded on read."""
+    state = _upgraded_words(state)
+    if isinstance(state.get('record'), dict):
+        state = {**state, 'record': _upgraded_words(state['record'])}
+    return state
+
+
 def record_of(state: dict[str, Any], account: str) -> dict[str, Any]:
-    """The run record of a finished *state*; ``carried`` names each outcome another run's sha ran."""
+    """The run record of a finished *state*; ``carried`` names each cell another run's sha ran."""
     return {
         **{key: state.get(key, {}) for key in _STATE_KEYS},
         'req': state['stamp'],
         'account': account,
         'job_ids': [r['job_id'] for r in state['rounds']],
         'plan': state['rounds'][0] if state['rounds'] else {},
-        'reasons': {n: why for n, why in state['reasons'].items() if state['outcomes'].get(n) in ('failed', 'error')},
         **state['measured'],
     }

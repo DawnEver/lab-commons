@@ -16,17 +16,16 @@ from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.phases import describe, phases
 from lab_commons.hpc.progress import where
-from lab_commons.hpc.records import summary, write_record
+from lab_commons.hpc.records import cells_of, summary, write_record
 from lab_commons.hpc.run import gather_run
+from lab_commons.hpc.testcells import conclude
 from lab_commons.log import emit
+from lab_commons.outcomes import Conclusion
 
-__all__ = ['PENDING', 'RED', 'settle']
+__all__ = ['PENDING', 'settle']
 
 #: Exit status of a gather that wrote no record yet: still running, re-submitted, or unreachable.
 PENDING: Final = 3
-
-#: Outcomes that make a written record a FAILED run: the code failed, or the run could not say.
-RED: Final = frozenset({'failed', 'error', 'lost', 'missing'})
 
 
 def settle(
@@ -62,7 +61,7 @@ def settle(
                 continue
             path = write_record(record, output)
             left.remove(sha)
-            red = red or not RED.isdisjoint(record['outcomes'].values())
+            red = red or conclude(cells_of(record).values()) is not Conclusion.PASS
             emit(
                 f'{sha[:12]} on {record["cluster"]} ({record["system"]}, python {record["python"]}): {summary(record)}'
             )

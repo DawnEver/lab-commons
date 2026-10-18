@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Final
 
-__all__ = ['RETIRED', 'refusal', 'refuse_retired_keys']
+__all__ = ['RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys']
 
 _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev/githooks/base.toml)'
 
@@ -312,6 +312,27 @@ RETIRED: Final[dict[str, str]] = {
     'occupied_trees': 'lab_commons.dev.retentionplan.occupied_shas (a test run tree or a job run directory)',
     '--output=logs/': 'nothing: a task writes to node-local $TMPDIR; its tail is kept in results.jsonl',
     'reuse that tree and env': 'run build builds the commit artifact, one file (lab_commons.hpc.artifact)',
+    # A test's result is an outcomes Cell under its Expectation (plan A1.1/A1.2, user rulings 2026-10-18).
+    'not-covered': "nothing: a handed id is no cell; the run record's `handed` names its part",
+    'NOT_COVERED': "nothing: a handed id is no cell; the run record's `handed` names its part",
+    'UNCARRIED': 'nothing: lab_commons.hpc.records.held_cells offers DECIDED cells only',
+    'held_outcomes': 'lab_commons.hpc.records.held_cells',
+    'outcome_of(': 'lab_commons.hpc.pytest_item.judged (the one pytest mapping, to a plain test cell)',
+}
+
+#: THE RETIRED PER-TEST WORDS, and only for LIVE state -- a cluster run's ``state.json`` and the stream of a
+#: round in flight across the change (FORMATS-UPGRADE-ON-READ): each word -> ``(status word, reason kind)`` it
+#: now reads as (:func:`lab_commons.hpc.testcells.upgraded`; a status word is ``TestCell.word``'s spelling).
+#: ``None``: a handed id, which is no cell. A regenerable artefact in these words is refused, never upgraded.
+TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {
+    'passed': ('ok', ''),
+    'failed': ('rejected', 'assertion'),
+    'error': ('error', 'error'),
+    'skipped': ('not_applicable', 'skipped'),
+    'xfailed': ('rejected/expected-rejected', 'expected'),
+    'lost': ('infra', 'lost'),
+    'missing': ('pending', ''),
+    'not-covered': None,
 }
 
 

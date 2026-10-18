@@ -161,11 +161,11 @@ class Measured:
     def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float) -> None:
         """An item killed after *spent* seconds: its first unfinished id ran for what the rest does not explain.
 
-        Pytest runs an item's ids in the order given, so the first id without an outcome is the one the
+        Pytest runs an item's ids in the order given, so the first id without a cell is the one the
         kill interrupted. It took at least *spent* minus the finished ids' durations and the files' known
         overheads; that is its FLOOR. The ids after it never started and keep their estimate.
         """
-        rest = [n for n in ids if n not in folded['outcomes']]
+        rest = [n for n in ids if n not in folded['cells']]
         if not rest or spent <= 0:
             return
         files = dict.fromkeys(_file(n) for n in ids)

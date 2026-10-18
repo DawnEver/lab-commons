@@ -40,19 +40,27 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any, Final, Protocol
 
 __all__ = [
+    'DECIDED',
     'IDS_ENV',
     'ITEM_ENV',
     'MANY_FILE_HEADER',
+    'NOT_APPLICABLE_LINE',
+    'NOT_APPLICABLE_MARKER',
     'STREAM_ENV',
+    'badness',
     'canonical',
+    'declared_resources',
     'entry_of',
     'item_argv',
-    'outcome_of',
+    'judged',
     'pytest_collection_modifyitems',
+    'pytest_configure',
     'pytest_runtest_logreport',
     'pytest_runtest_logstart',
     'read_stream',
@@ -70,8 +78,27 @@ ITEM_ENV = 'LAB_CI_ITEM'
 #: The environment variable naming a JSON list of the node ids to keep -- selection is by id, not by argv.
 IDS_ENV = 'LAB_CI_IDS'
 
-#: Worst first: a test with a failing call and an erroring teardown is ``failed``.
-_RANK = ('failed', 'error', 'xfailed', 'skipped', 'passed')
+#: The statuses that are a conclusion about the test: :class:`lab_commons.outcomes.Status`'s DECIDED family,
+#: restated by token because this file imports nothing (``tests/test_hpc_pytest_mapping.py`` pins the two equal).
+DECIDED: Final = frozenset({'ok', 'rejected', 'not_applicable'})
+
+#: The marker DECLARING that a test may not apply here: a skip of a test carrying it is ``not_applicable``.
+NOT_APPLICABLE_MARKER: Final = 'not_applicable'
+
+#: Its registration line (``markers`` ini value), so a run under --strict-markers knows it.
+NOT_APPLICABLE_LINE: Final = f'{NOT_APPLICABLE_MARKER}(reason): a skip of this test is NOT_APPLICABLE'
+
+#: The resource markers the tested repo declares (``[tool.lab_commons.tests] resources``,
+#: :mod:`lab_commons.hpc.needsets`): a skip of a test carrying one is ``unavailable``. Bound at configure.
+_RESOURCES: set[str] = set()
+
+#: The longest reason kept: the crash line, not the traceback -- a 3000-red run is triaged from the record,
+#: and a skip or xfail without its reason is an unexplained hole (measured 2026-10-10: 1127 empty skip reasons).
+_WHY_CHARS = 300
+
+#: The crash text pytest-timeout writes; the strict-xpass prefix pytest writes.
+_TIMEOUT: Final = 'Timeout >'
+_STRICT_XPASS: Final = '[XPASS(strict)]'
 
 
 class _Report(Protocol):
@@ -82,20 +109,82 @@ class _Report(Protocol):
     outcome: str
     duration: float
     longrepr: object
-    #: Set by pytest on an xfailed report only -- read only once :func:`_xfailed` said so.
-    wasxfail: str
+    #: The test's keywords: its markers' names among them.
+    keywords: Mapping[str, object]
 
 
-def outcome_of(when: str, outcome: str, *, xfail: bool) -> str | None:
-    """One phase report's contribution to its test's outcome; ``None`` when the phase decides nothing.
+def declared_resources(pyproject: Path) -> frozenset[str]:
+    """The resource markers *pyproject* declares; none when it is absent or declares none."""
+    if not pyproject.is_file():
+        return frozenset()
+    table = tomllib.loads(pyproject.read_text(encoding='utf-8')).get('tool', {}).get('lab_commons', {})
+    return frozenset(table.get('tests', {}).get('resources', []))
 
-    A passing setup or teardown says nothing -- only a passing CALL makes a test ``passed``.
+
+def _cell(status: str, kind: str = '', text: str = '', expected: str = '', why: str = '') -> dict[str, Any]:
+    """A plain test cell (:class:`lab_commons.hpc.testcells.TestCell`'s plain form), spelled by token."""
+    plain: dict[str, Any] = {'status': status}
+    if kind:
+        plain['reason'] = {'kind': kind, 'text': text[:_WHY_CHARS]}
+    if expected:
+        plain['expectation'] = {'status': expected, 'why': (why or 'xfail')[:_WHY_CHARS]}
+    return plain
+
+
+def judged(report: _Report, resources: Collection[str]) -> dict[str, Any] | None:
+    """THE PYTEST MAPPING: one phase report's plain test cell; ``None`` when the phase decides nothing.
+
+    passed call -> ``ok``; failed call -> ``rejected``/assertion; failed setup or teardown -> ``error``; a
+    ``Timeout >`` failure (pytest-timeout) -> ``timeout``; xfail / xpass -> ``rejected`` / ``ok`` under an
+    expectation of ``rejected``. A SKIP is mapped by the MARKER that declares it: a declared resource
+    marker (*resources*) -> ``unavailable``, ``not_applicable`` -> ``not_applicable``; a skip with
+    neither is REFUSED by name -- ``rejected``/xfail_not_skip (XFAIL-NOT-SKIP: a known failure carries
+    its residual, a skip carries nothing). A passing setup or teardown says nothing.
     """
-    if outcome == 'skipped':
-        return 'xfailed' if xfail else 'skipped'
-    if outcome == 'failed':
-        return 'failed' if when == 'call' else 'error'
-    return 'passed' if when == 'call' else None
+    if report.outcome == 'skipped':
+        return _skipped(report, resources)
+    if report.outcome == 'failed':
+        return _failed(report)
+    if report.when != 'call':
+        return None
+    if hasattr(report, 'wasxfail'):  # a non-strict xpass
+        return _cell('ok', expected='rejected', why=str(report.wasxfail or ''))
+    return _cell('ok')
+
+
+def _skipped(report: _Report, resources: Collection[str]) -> dict[str, Any]:
+    """A skipped phase: an xfail, or a skip mapped by the marker declaring it (:func:`judged`)."""
+    if _xfailed(report):
+        why = str(getattr(report, 'wasxfail', '') or '')
+        return _cell('rejected', 'expected', why or _why(report.longrepr), 'rejected', why)
+    reason = _skip_reason(report)
+    if any(name in report.keywords for name in resources):
+        return _cell('unavailable', 'resource', reason)
+    if NOT_APPLICABLE_MARKER in report.keywords:
+        return _cell('not_applicable', 'not_applicable', reason)
+    refused = f'XFAIL-NOT-SKIP: a skip with no resource marker and no not_applicable(...) is refused: {reason}'
+    return _cell('rejected', 'xfail_not_skip', refused)
+
+
+def _failed(report: _Report) -> dict[str, Any]:
+    """A failed phase: a timeout, a strict xpass, a failed call, or a setup/teardown error (:func:`judged`)."""
+    text = str(report.longrepr or '')
+    if _TIMEOUT in text:
+        return _cell('timeout', 'timeout', _why(report.longrepr))
+    if text.startswith(_STRICT_XPASS):
+        return _cell('ok', expected='rejected', why=text.removeprefix(_STRICT_XPASS).strip())
+    if report.when == 'call':
+        return _cell('rejected', 'assertion', _why(report.longrepr))
+    return _cell('error', report.when, _why(report.longrepr))
+
+
+def badness(plain: Mapping[str, Any]) -> int:
+    """0 for a DECIDED miss, 1 for no answer, 2 for an answer as declared -- the worst phase is the test's."""
+    status = str(plain['status'])
+    if status not in DECIDED:
+        return 1
+    expected = (plain.get('expectation') or {}).get('status', 'ok')
+    return 2 if status in (expected, 'not_applicable') else 0
 
 
 class _Item(Protocol):
@@ -129,27 +218,16 @@ def _xfailed(report: _Report) -> bool:
     return report.outcome == 'skipped' and not isinstance(report.longrepr, tuple)
 
 
-#: The outcomes whose reason the stream keeps -- a 3000-red run is triaged from the record, not a re-run, and
-#: a skip or xfail without its reason is an unexplained hole (measured 2026-10-10: 1127 empty skip reasons).
-_REASONED = ('failed', 'error', 'skipped', 'xfailed')
-
-#: The longest reason kept: the crash line, not the traceback.
-_WHY_CHARS = 300
-
-
 def _why(longrepr: object) -> str:
     """The crash line of a failed phase: the repr's last non-empty line (pytest ends it ``path:line: Error``)."""
     lines = [line.strip() for line in str(longrepr).splitlines() if line.strip()]
     return lines[-1][:_WHY_CHARS] if lines else ''
 
 
-def _reason(report: _Report, outcome: str) -> str:
-    """Why a phase ended as it did: a skip's own reason, an xfail's expectation, else the crash line."""
-    if outcome == 'skipped' and isinstance(report.longrepr, tuple):
-        return str(report.longrepr[-1]).removeprefix('Skipped: ')[:_WHY_CHARS]
-    if outcome == 'xfailed':
-        return str(report.wasxfail or _why(report.longrepr))[:_WHY_CHARS]
-    return _why(report.longrepr)
+def _skip_reason(report: _Report) -> str:
+    """A skip's own reason, out of pytest's ``(path, line, reason)``."""
+    longrepr = report.longrepr
+    return str(longrepr[-1]).removeprefix('Skipped: ') if isinstance(longrepr, tuple) else str(longrepr or '')
 
 
 #: The stream this process appends to, BOUND ONCE when the plugin loads -- the RUN's, never a test's.
@@ -175,25 +253,37 @@ def _append(entry: dict[str, Any]) -> None:
         _write(_TARGET, int(_ITEM), entry)
 
 
+class _Configured(Protocol):
+    """What :func:`pytest_configure` reads of pytest's ``Config``."""
+
+    rootpath: Path
+
+    def addinivalue_line(self, name: str, line: str) -> None:
+        """Append *line* to the ini value *name*."""
+
+
+def pytest_configure(config: _Configured) -> None:
+    """Register ``not_applicable`` and bind the tested repo's declared resource markers."""
+    config.addinivalue_line('markers', NOT_APPLICABLE_LINE)
+    _RESOURCES.update(declared_resources(Path(config.rootpath) / 'pyproject.toml'))
+
+
 def pytest_runtest_logstart(nodeid: str) -> None:
     """Append a START line before the test's setup, so an exit before its outcome still names the id it hit."""
     _append({'start': nodeid})
 
 
-def entry_of(report: _Report) -> dict[str, Any] | None:
-    """The stream line one phase report contributes; ``None`` when the phase decides nothing."""
-    outcome = outcome_of(report.when, report.outcome, xfail=_xfailed(report))
-    if outcome is None:
+def entry_of(report: _Report, resources: Collection[str] = ()) -> dict[str, Any] | None:
+    """The stream line one phase report contributes -- its id, seconds and plain test cell; ``None`` for nothing."""
+    plain = judged(report, resources)
+    if plain is None:
         return None
-    entry: dict[str, Any] = {'id': report.nodeid, 'outcome': outcome, 's': round(report.duration, 3)}
-    if outcome in _REASONED:
-        entry['why'] = _reason(report, outcome)
-    return entry
+    return {'id': report.nodeid, 's': round(report.duration, 3), **plain}
 
 
 def pytest_runtest_logreport(report: _Report) -> None:
-    """Append this phase's outcome to the stream at once, so a kill a moment later keeps it."""
-    if (entry := entry_of(report)) is not None:
+    """Append this phase's cell to the stream at once, so a kill a moment later keeps it."""
+    if (entry := entry_of(report, _RESOURCES)) is not None:
         _append(entry)
 
 
@@ -205,18 +295,29 @@ def canonical(node: str, expected: set[str]) -> str:
     return head if at and head in expected else node
 
 
-def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
-    """Fold one item's stream into ``{outcomes, seconds, whys, done, started}``.
+#: How bad each word of a RETIRED stream line (``{"id", "outcome": "passed"|..., "why"}``) was -- a round in
+#: flight across the change; :func:`lab_commons.hpc.records.fold` upgrades its words into cells.
+_RETIRED_BADNESS: Final = {'failed': 0, 'error': 1}
 
-    ``outcomes`` holds only the ids the stream reports (the worst phase wins); ``seconds`` sums their
-    phases; ``whys`` holds the reason each red, skipped or xfailed id's worst phase carried; ``done`` is the
-    closing record, or ``None`` when the item never closed -- then every id it did not report is still owed a run.
-    ``started`` is the last id the plugin STARTED -- the one in flight if the process exited before its outcome.
+
+def _line_badness(line: Mapping[str, Any]) -> int:
+    if 'status' in line:
+        return badness(line)
+    return _RETIRED_BADNESS.get(str(line['outcome']), 2)
+
+
+def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
+    """Fold one item's stream into ``{cells, seconds, done, started}``.
+
+    ``cells`` holds only the ids the stream reports, each its worst phase's line (:func:`badness`; the first
+    of equals): a plain test cell, or -- FORMATS-UPGRADE-ON-READ, a round in flight across the change -- a
+    retired ``{"outcome", "why"}`` line. ``seconds`` sums their phases; ``done`` is the closing record, or
+    ``None`` when the item never closed -- then every id it did not report is still owed a run. ``started`` is
+    the last id the plugin STARTED -- the one in flight if the process exited before its cell.
     """
     expected = set(node_ids)
-    outcomes: dict[str, str] = {}
+    cells: dict[str, dict[str, Any]] = {}
     seconds: dict[str, float] = {}
-    whys: dict[str, str] = {}
     done = None
     started = None
     for raw in text.splitlines():
@@ -233,12 +334,11 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
         node = canonical(line['id'], expected)
         if node not in expected:
             continue
-        outcome = line['outcome']
-        if 'why' in line and (node not in outcomes or _RANK.index(outcome) < _RANK.index(outcomes[node])):
-            whys[node] = line['why']
-        outcomes[node] = min(outcomes.get(node, outcome), outcome, key=_RANK.index)
+        plain = {k: v for k, v in line.items() if k not in ('id', 's', 'item')}
+        if node not in cells or _line_badness(plain) < _line_badness(cells[node]):
+            cells[node] = plain
         seconds[node] = round(seconds.get(node, 0.0) + float(line.get('s', 0.0)), 3)
-    return {'outcomes': outcomes, 'seconds': seconds, 'whys': whys, 'done': done, 'started': started}
+    return {'cells': cells, 'seconds': seconds, 'done': done, 'started': started}
 
 
 #: The header of one item's section in the retired many-file listing (one ``<i>.jsonl`` per item).
