@@ -6,7 +6,7 @@ tree's own venv -- so the code that runs is the one this checkout wrote, whateve
 ``lab_commons`` the tested project happens to pin. It imports nothing from ``lab_commons``.
 
 THE SAME FILE IS THE PYTEST PLUGIN. :func:`run` starts ``pytest -p lab_ci_pytest_item``; the hook below
-appends one JSON line per test phase to the item's stream file the moment pytest reports it, and
+appends one JSON line per test phase to the ROUND's stream file the moment pytest reports it, and
 :func:`run` appends a closing ``done`` line (exit code, wall seconds, peak RSS). A shard Slurm kills for
 time or memory therefore leaves every test it FINISHED on disk; an item without its ``done`` line is
 UNFINISHED and is re-run, never assumed. Measured on a real cluster (a downstream run, 2026-10-09):
@@ -20,6 +20,15 @@ inside its workers -- measured on the same run: ``name="test_unknown_attribute_r
 asks for ``-n 0`` when xdist is installed (an item has one CPU; an xdist worker is a second interpreter
 importing the whole tree again, per file, for nothing), and :func:`canonical` strips a suffix that still
 arrives.
+
+ONE FILE PER ROUND, NOT TWO PER ITEM (``runs/*/streams`` measured 600-1000 files per sha, 2026-10-17; GPFS
+counts files against a quota). Every item of a round appends to ``.lab-ci/<tag>.jsonl``, each line tagged
+``"item": <index>`` and written by ONE ``O_APPEND`` write -- whole lines from many nodes interleave, they do
+not tear. An attempt opens with ``{"item": i, "begin": ...}``, so a restarted item reads its last attempt
+only (:func:`split_streams`); its id list goes to node-local scratch. FORMATS-UPGRADE-ON-READ: a round
+submitted before the change (``.lab-ci/<tag>/<i>.jsonl``, one file per item) is upgraded one way -- its
+manifest by :func:`run` (the new runner appends to the round file), what it already wrote by
+:func:`tagged` (``@@@ <i>.jsonl`` sections) -- and nothing writes that shape any more.
 """
 
 from __future__ import annotations
@@ -36,6 +45,8 @@ from typing import Any, Final, Protocol
 
 __all__ = [
     'IDS_ENV',
+    'ITEM_ENV',
+    'MANY_FILE_HEADER',
     'STREAM_ENV',
     'canonical',
     'entry_of',
@@ -46,10 +57,15 @@ __all__ = [
     'pytest_runtest_logstart',
     'read_stream',
     'run',
+    'split_streams',
+    'tagged',
 ]
 
-#: The environment variable naming the stream file the plugin appends to.
+#: The environment variable naming the round's stream file the plugin appends to.
 STREAM_ENV = 'LAB_CI_STREAM'
+
+#: The environment variable naming the item's index in its round -- every line it appends carries it.
+ITEM_ENV = 'LAB_CI_ITEM'
 
 #: The environment variable naming a JSON list of the node ids to keep -- selection is by id, not by argv.
 IDS_ENV = 'LAB_CI_IDS'
@@ -140,15 +156,23 @@ def _reason(report: _Report, outcome: str) -> str:
 #: Read per append until 2026-10-12, when two tests that set ``LAB_CI_STREAM`` themselves sent their own
 #: outcomes to their own stream and the cluster run recorded them ``missing``.
 _TARGET: Final = os.environ.get(STREAM_ENV)
+_ITEM: Final = os.environ.get(ITEM_ENV)
+
+
+def _write(target: str, item: int, entry: dict[str, Any]) -> None:
+    """Append *entry* tagged with *item* as ONE write: lines of a round's items interleave whole."""
+    line = (json.dumps({'item': item, **entry}) + '\n').encode('utf-8')
+    # os.open, not pathlib: a test that fakes os.name makes Path() spell a Windows path on the cluster
+    fd = os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
 
 
 def _append(entry: dict[str, Any]) -> None:
-    target = _TARGET
-    if not target:
-        return
-    # builtin open, not pathlib: a test that fakes os.name makes Path() spell a Windows path on the cluster
-    with open(target, 'a', encoding='utf-8') as stream:  # noqa: PTH123
-        stream.write(json.dumps(entry) + '\n')
+    if _TARGET and _ITEM is not None:
+        _write(_TARGET, int(_ITEM), entry)
 
 
 def pytest_runtest_logstart(nodeid: str) -> None:
@@ -217,6 +241,53 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
     return {'outcomes': outcomes, 'seconds': seconds, 'whys': whys, 'done': done, 'started': started}
 
 
+#: The header of one item's section in the retired many-file listing (one ``<i>.jsonl`` per item).
+MANY_FILE_HEADER: Final = '@@@ '
+
+
+def tagged(text: str) -> list[dict[str, Any]]:
+    """*text*'s stream lines as tagged entries, the retired ``@@@ <i>.jsonl`` sections upgraded on the way.
+
+    A line that is no JSON object -- the half-written last line of a killed task -- is dropped.
+    """
+    entries: list[dict[str, Any]] = []
+    section: int | None = None
+    for raw in text.splitlines():
+        if raw.startswith(MANY_FILE_HEADER) and raw.endswith('.jsonl'):
+            section = int(raw[len(MANY_FILE_HEADER) : -len('.jsonl')])
+            continue
+        try:
+            line = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(line, dict):
+            continue
+        if 'item' not in line and 'round' not in line:
+            if section is None:
+                continue
+            line = {'item': section, **line}
+        entries.append(line)
+    return entries
+
+
+def split_streams(text: str, tag: str) -> dict[int, str]:
+    """Each item's stream of round *tag* out of one round's *text*: its last attempt's lines.
+
+    A ``{"round": ...}`` header (a kept file, :func:`lab_commons.hpc.records.kept_text`) naming another round
+    makes what follows it no stream of this one.
+    """
+    streams: dict[int, list[str]] = {}
+    ours = True
+    for line in tagged(text):
+        if 'round' in line:
+            ours = line['round'] == tag
+        elif ours and 'begin' in line:
+            streams[int(line['item'])] = []
+        elif ours:
+            streams.setdefault(int(line['item']), []).append(json.dumps(line))
+    return {index: '\n'.join(lines) for index, lines in streams.items()}
+
+
 def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
     """Exit code and the child's peak RSS in MB -- ``wait4`` where the OS has it, else no peak."""
     if sys.platform == 'win32':
@@ -234,24 +305,32 @@ def item_argv(item: dict[str, Any], files: list[str]) -> list[str]:
     return [sys.executable, '-m', 'pytest', '-p', 'no:cacheprovider', '-p', plugin, '-q', *serial, *ceiling, *files]
 
 
-def run(item: dict[str, Any]) -> dict[str, Any]:
-    """Run ``item['ids']`` streaming to ``item['stream']``; the folded stream plus the output's tail."""
-    ids = list(item['ids'])
+def _upgraded(item: dict[str, Any]) -> tuple[Path, int]:
+    """The round file and index of *item*; a manifest of the retired ``<tag>/<i>.jsonl`` shape, upgraded."""
     stream = Path(item['stream'])
+    if 'item' in item:
+        return stream, int(item['item'])
+    return stream.parent.with_suffix('.jsonl'), int(stream.stem)
+
+
+def run(item: dict[str, Any]) -> dict[str, Any]:
+    """Run ``item['ids']`` streaming to its round's file; the folded stream plus the output's tail."""
+    ids = list(item['ids'])
+    stream, index = _upgraded(item)
     stream.parent.mkdir(parents=True, exist_ok=True)
-    stream.unlink(missing_ok=True)
-    chosen = stream.with_suffix('.ids.json')
-    chosen.write_text(json.dumps(ids), encoding='utf-8')
+    target = str(stream.resolve())
+    _write(target, index, {'begin': time.time()})
     files = list(dict.fromkeys(node.split('::', maxsplit=1)[0] for node in ids))
     argv = item_argv(item, files)
-    env = {**os.environ, STREAM_ENV: str(stream.resolve()), IDS_ENV: str(chosen.resolve())}
     start = time.monotonic()
-    with tempfile.TemporaryFile() as out:
+    with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryFile() as out:  # node-local, never GPFS
+        chosen = Path(scratch) / 'ids.json'
+        chosen.write_text(json.dumps(ids), encoding='utf-8')
+        env = {**os.environ, STREAM_ENV: target, ITEM_ENV: str(index), IDS_ENV: str(chosen)}
         proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env)
         rc, peak = _wait(proc)
         out.seek(0)
         tail = out.read().decode('utf-8', 'replace').strip().splitlines()[-20:]
-    done = {'done': rc, 'wall': round(time.monotonic() - start, 3), 'peak_mb': peak}
-    with stream.open('a', encoding='utf-8') as handle:
-        handle.write(json.dumps(done) + '\n')
-    return {**read_stream(stream.read_text(encoding='utf-8'), ids), 'tail': '\n'.join(tail)}
+    _write(target, index, {'done': rc, 'wall': round(time.monotonic() - start, 3), 'peak_mb': peak})
+    mine = split_streams(stream.read_text(encoding='utf-8'), '').get(index, '')
+    return {**read_stream(mine, ids), 'tail': '\n'.join(tail)}
