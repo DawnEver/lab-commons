@@ -7,6 +7,7 @@ runs anything except :func:`pack`, which only READS the caller's repository. Pat
 from __future__ import annotations
 
 import base64
+import hashlib
 import shlex
 import shutil
 from collections.abc import Sequence
@@ -20,6 +21,7 @@ from lab_commons.hpc.needsets import BASE, Vocabulary
 
 __all__ = [
     'BUILD_FAILED',
+    'CACHES',
     'COLLECT_MODULE',
     'ENV',
     'FULL',
@@ -32,6 +34,7 @@ __all__ = [
     'UV_PRUNE',
     'RunSpec',
     'build_script',
+    'cache_dir',
     'collect_command',
     'facts',
     'fetch_script',
@@ -49,6 +52,23 @@ __all__ = [
 ITEM_MODULE: Final = 'lab_ci_pytest_item'
 
 ROOT: Final = '"$HOME"/ci'
+
+#: Every repository's bare cache lives here, one per repository (:func:`cache_dir`).
+CACHES: Final = f'{ROOT}/cache'
+
+
+def cache_dir(repo_url: str) -> str:
+    """The bare cache of *repo_url*: ``~/ci/cache/<owner>-<name>-<sha256(url)[:8]>.git``, one per repository.
+
+    The readable part names the repository; the hash keeps two URLs apart that share it (another host). A
+    cache's ``origin`` is *repo_url* and holds only its heads (:func:`fetch_script`), so a tree's repository
+    identity is its own -- the retired shared ``~/ci/cache.git`` mixed every repository's heads under one
+    ``origin``.
+    """
+    parts = [p for p in repo_url.rstrip('/').removesuffix('.git').replace(':', '/').split('/') if p][-2:]
+    slug = '-'.join(''.join(c if c.isalnum() or c in '._-' else '_' for c in p) for p in parts) or 'repo'
+    return f'{CACHES}/{slug}-{hashlib.sha256(repo_url.encode()).hexdigest()[:8]}.git'
+
 
 #: The line :func:`build_script` prints instead of the facts when the build failed.
 BUILD_FAILED: Final = '@@@ build-failed'
@@ -137,16 +157,22 @@ class RunSpec:
 
 
 def fetch_script(spec: RunSpec) -> str:
-    """Make the cache hold the commit -- remote heads, else a shipped pack indexed and named HERE; have/missing."""
-    sha, url, cache = spec.sha, shlex.quote(spec.repo_url), f'{ROOT}/cache.git'
+    """Make the repository's cache hold the commit -- origin's heads (pruned), else a shipped pack named HERE.
+
+    The cache is the repository's own (:func:`cache_dir`): ``origin`` is set to the spec's URL on every
+    fetch, its heads land in ``refs/remotes/origin/*`` with ``--prune``, and it has no ``refs/heads`` of
+    its own. Prints have/missing.
+    """
+    sha, url, cache = spec.sha, shlex.quote(spec.repo_url), cache_dir(spec.repo_url)
     return '\n'.join(
         [
             'set -eu',
-            f'mkdir -p {ROOT}/trees {ROOT}/packs {ROOT}/bin {ROOT}/runs',
+            f'mkdir -p {ROOT}/trees {ROOT}/packs {ROOT}/bin {ROOT}/runs {CACHES}',
             f'[ -d {cache} ] || git init -q --bare {cache}',
+            f'git -C {cache} remote add origin {url} 2>/dev/null || git -C {cache} remote set-url origin {url}',
             f'have() {{ git -C {cache} cat-file -e {sha}^{{commit}} 2>/dev/null; }}',
-            f'have || git -C {cache} fetch -q {url} "+refs/heads/*:refs/remotes/origin/*"',
-            f'have || git -C {cache} fetch -q {url} {sha} 2>/dev/null || true',
+            f'have || git -C {cache} fetch -q --prune origin "+refs/heads/*:refs/remotes/origin/*"',
+            f'have || git -C {cache} fetch -q origin {sha} 2>/dev/null || true',
             f'P={ROOT}/packs/{sha}.pack',
             (
                 f'have || {{ [ -s "$P" ] && git -C {cache} index-pack --stdin < "$P" > /dev/null'
@@ -223,7 +249,7 @@ def build_script(spec: RunSpec) -> str:
     its own ``flock``): a target shared across different native inputs reuses stale artifacts.
     Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).
     """
-    cache, tree, builds = f'{ROOT}/cache.git', f'{ROOT}/trees/{spec.sha}', spec.builds
+    cache, tree, builds = cache_dir(spec.repo_url), f'{ROOT}/trees/{spec.sha}', spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
     if not builds.env_key or not builds.install:
         msg = 'a build needs the declared install and its env key (lab_commons.hpc.builds.builds_at)'

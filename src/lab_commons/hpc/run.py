@@ -3,7 +3,7 @@
 EVERYTHING LIVES UNDER ``~/ci/`` ON THE CLUSTER, AND NOTHING ELSE IS TOUCHED. A day-to-day checkout in
 ``~/<repo>`` and its venv are someone's working state; a run must neither reinstall nor read them::
 
-    ~/ci/cache.git              bare cache; fetched from the read-only HTTPS remote
+    ~/ci/cache/<repo>.git       one bare cache PER REPOSITORY (shell.cache_dir); origin = its URL, heads pruned
     ~/ci/packs/<sha>.pack       only when the commit is not on the remote (sent over stdin, indexed here)
     ~/ci/runs/<sha>/<part>/state.json  the run of one part: its rounds, outcomes so far and the job in flight
     ~/ci/trees/<sha>/           a worktree of the cache, with its OWN .venv (reused when present)

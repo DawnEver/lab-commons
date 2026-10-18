@@ -34,7 +34,7 @@ from typing import Final
 
 from lab_commons.hpc.builds import cargo_target
 from lab_commons.hpc.cluster import Runner
-from lab_commons.hpc.shell import BUILD_FAILED, ROOT, RunSpec, facts, keyed_build
+from lab_commons.hpc.shell import BUILD_FAILED, ROOT, RunSpec, cache_dir, facts, keyed_build
 from lab_commons.hpc.tree import NotSubmitted, fetch
 
 __all__ = [
@@ -90,7 +90,7 @@ def artifact_path(sha: str, fmt: str = TARBALL) -> str:
 
 def artifact_script(spec: RunSpec, fmt: str = TARBALL) -> str:
     """Build *spec*'s artifact into its one file unless it exists; print ``@@@ facts`` with ``artifact=``."""
-    target, builds = artifact_path(spec.sha, fmt), spec.builds
+    target, builds, cache = artifact_path(spec.sha, fmt), spec.builds, cache_dir(spec.repo_url)
     if not builds.install:
         msg = 'an artifact needs the declared install (lab_commons.hpc.builds.builds_at)'
         raise ValueError(msg)
@@ -113,7 +113,7 @@ def artifact_script(spec: RunSpec, fmt: str = TARBALL) -> str:
         'if [ ! -s "$A" ]; then',
         f'  mkdir -p {ROOT}/artifacts',
         '  S=$(mktemp -d "${TMPDIR:-/tmp}/lab-ci-artifact.XXXXXX"); trap \'rm -rf "$S"\' EXIT',
-        f'  mkdir -p "$S/tree" "$S/pack/tree" && git -C {ROOT}/cache.git archive {spec.sha} | tar -x -C "$S/tree"',
+        f'  mkdir -p "$S/tree" "$S/pack/tree" && git -C {cache} archive {spec.sha} | tar -x -C "$S/tree"',
         '  cd "$S/tree"',
         '  export E="$S/pack/env" UV_CACHE_DIR="$S/uv-cache" UV_LINK_MODE=copy',
         f'  if ! bash -eo pipefail -c {shlex.quote(install)} > "$S/build.log" 2>&1; then',
