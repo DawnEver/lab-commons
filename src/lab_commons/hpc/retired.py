@@ -108,7 +108,7 @@ RETIRED: Final[dict[str, str]] = {
     'heavy-needed': 'parts-needed',
     'publish_verdict': 'lab_commons.dev.verify.post_part (a settled run posts its platform part)',
     # The local verdict ledger was only a runner cache: it is the run cache now, and decides nothing.
-    'verdictledger': 'lab_commons.dev.runcache (the cache) and lab_commons.dev.outcomes (the pytest plugin)',
+    'verdictledger': 'lab_commons.dev.runcache (the cache) and lab_commons.dev.test_outcomes (the pytest plugin)',
     'record_promoted': 'lab_commons.dev.runcache.remember',
     'LEDGER_REL': 'lab_commons.dev.runcache.CACHE_REL',
     'output/verdicts/ledger.jsonl': 'output/runcache/runs.jsonl',
@@ -317,6 +317,9 @@ RETIRED: Final[dict[str, str]] = {
     'NOT_COVERED': "nothing: a handed id is no cell; the run record's `handed` names its part",
     'UNCARRIED': 'nothing: lab_commons.hpc.records.held_cells offers DECIDED cells only',
     'held_outcomes': 'lab_commons.hpc.records.held_cells',
+    'lab_commons.dev.outcomes': 'lab_commons.dev.test_outcomes (a Record of test cells per process)',
+    'read_reasons': 'lab_commons.dev.test_outcomes.read_cells (a reason travels in its cell)',
+    'OutcomeRecorder': 'lab_commons.dev.test_outcomes.CellRecorder',
     'outcome_of(': 'lab_commons.hpc.pytest_item.judged (the one pytest mapping, to a plain test cell)',
 }
 
