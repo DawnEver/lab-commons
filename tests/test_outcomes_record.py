@@ -14,6 +14,7 @@ from lab_commons.outcomes import (
     SUBMITTED,
     Cell,
     Event,
+    Expectation,
     FinalityError,
     Identity,
     Reason,
@@ -190,3 +191,30 @@ def test_a_v1_file_reads_with_attempts_numbered_in_order(tmp_path: Path) -> None
     assert (record.attempts(A), record.attempts(B)) == (2, 1)
     assert record.outcome(B, OOM) is True
     assert record.attempts(B) == 2
+
+
+XFAIL = Expectation(Status.REJECTED, 'issue 12: the solver diverges here')
+
+
+def test_an_outcome_carries_its_expectation_through_the_file(tmp_path: Path) -> None:
+    """The Expectation is part of the task declaration and is written WITH the Cell, in the same event."""
+    path = tmp_path / 'r.jsonl'
+    Record(path).outcome(A, REJ, expectation=XFAIL)
+    Record(path).outcome(B, OK)
+    events = {e.key: e for e in Record(path).replay()}
+    assert events[A.key].expectation == XFAIL
+    assert events[B.key].expectation is None
+    assert json.loads(path.read_text().splitlines()[0])['expectation'] == XFAIL.to_plain()
+
+
+def test_planted_control_only_an_outcome_carries_an_expectation() -> None:
+    with pytest.raises(ValueError, match='expectation'):
+        Event(SUBMITTED, A.key, expectation=XFAIL)
+
+
+def test_a_v2_line_is_upgraded_on_read_a_record_is_live_state(tmp_path: Path) -> None:
+    """A Record is appended to across the change (FORMATS-UPGRADE-ON-READ): a v2 line reads as a v3 one."""
+    path = tmp_path / 'r.jsonl'
+    path.write_text(f'{{"schema":2,"kind":"outcome","key":"{A.key}","attempt":1,"cell":{json.dumps(OK.to_plain())}}}\n')
+    (event,) = Record(path).replay()
+    assert (event.cell, event.expectation, event.attempt) == (OK, None, 1)
