@@ -24,10 +24,12 @@ from lab_commons.box import (
     Demand,
     DuplicateKey,
     Holding,
+    NotAdmitted,
     Refused,
     hand_over,
     hold,
     holdings,
+    not_admitted,
     persist,
     release,
 )
@@ -353,3 +355,20 @@ def test_an_external_seat_is_held_until_released(box: Path) -> None:
     release(row.claim)
     with hold(_demand(seats={'jmag': 1}), 'second', queue_s=1, **{**_ON, 'key': 'x'}):
         assert [r.what for r in holdings()] == ['second']
+
+
+@pytest.mark.usefixtures('box')
+def test_a_queue_wait_that_runs_out_is_not_admitted_and_an_oversize_demand_is_not() -> None:
+    """PLANTED CONTROL: waiting out the queue is CAPACITY (retry later); never fitting is a real refusal."""
+    with (
+        hold(_demand(seats={'matlab': 1}), 'm', queue_s=1, **_ON),
+        pytest.raises(NotAdmitted) as waited,
+        hold(_demand(seats={'matlab': 1}), 'n', queue_s=0.2, **_ON),
+    ):
+        pass
+    assert not_admitted(f'dep --bootstrap exited 1: REFUSED: {waited.value}')
+    with pytest.raises(Refused) as never, hold(_demand(cpu=5), 'big', queue_s=30, **_ON):
+        pass
+    assert not isinstance(never.value, NotAdmitted)
+    assert not not_admitted(str(never.value))
+    assert not not_admitted('dep --bootstrap exited 1: no lock')
