@@ -244,21 +244,16 @@ def _overlays(box: Box) -> list[str]:
     return [line for line in box.logged().splitlines() if '--reinstall-package lab-commons' in line]
 
 
-def test_every_served_venv_runs_the_lab_commons_this_host_deployed(box: Box) -> None:
-    """Not the sha its own pyproject pins. PLANTED CONTROL: lab-commons' own venv gets no overlay."""
+def test_every_served_venv_is_exactly_its_committed_lock(box: Box) -> None:
+    """PIN + FRESHNESS (user ruling 2026-10-17): nothing is installed over a repo's locked venv.
+
+    PLANTED: the served lab-commons moves; no repo's venv is touched, because its producers run the lab-commons
+    its commit was tested with.
+    """
     assert box.run(*DECLARE) == 0
-    overlays = _overlays(box)
-    lab = (box.home / 'src' / 'lab-commons').as_uri()
-    for name in ('alpha', 'beta'):
-        python = box.home / 'src' / name / '.venv' / 'bin' / 'python'
-        line = f'uv pip install --no-config --python {python} --reinstall-package lab-commons lab-commons @ {lab}'
-        assert line in overlays
-    assert len(overlays) == 2, 'lab-commons itself is installed by its own install'
-    assert box.run() == 0
-    assert len(_overlays(box)) == 2, 'an unchanged lab-commons reinstalls nothing'
     (box.home / 'src' / 'lab-commons' / '.git' / 'HEAD_SHA').write_text('b' * 40, encoding='utf-8')
     assert box.run() == 0
-    assert len(_overlays(box)) == 4, 'a lab-commons update is in every served env key'
+    assert _overlays(box) == []
 
 
 def test_a_deployment_that_does_not_serve_lab_commons_is_refused(box: Box, capsys: pytest.CaptureFixture[str]) -> None:
@@ -458,9 +453,9 @@ def _tick(box: Box, name: str, served: list[tuple[list[str], Path, str]]) -> int
 
 
 def test_a_tick_refreshes_the_kit_and_the_repo_before_the_repos_own_forge_serve(box: Box) -> None:
-    """THE PLANTED CONTROL (incident 2026-10-13): a stale repo venv is refreshed by the HOST before its forge.
+    """THE PLANTED CONTROL (incident 2026-10-13): the HOST refreshes the kit, then the repo, before its forge.
 
-    lab-commons moved upstream, so alpha's venv -- holding a kit too old to update itself -- is overlaid first.
+    lab-commons moved upstream; alpha's venv is its committed lock, so nothing is installed over it.
     """
     assert box.run(*DECLARE) == 0
     src = box.home / 'src'
@@ -473,11 +468,8 @@ def test_a_tick_refreshes_the_kit_and_the_repo_before_the_repos_own_forge_serve(
     before = logged[start:]
     kit = before.index(f'git -C {src / "lab-commons"} checkout -q -B trunk')
     repo = before.index(f'git -C {src / "alpha"} checkout -q -B trunk')
-    overlay = before.index(f'--python {src / "alpha" / ".venv" / "bin" / "python"} --reinstall-package lab-commons')
-    assert kit < repo < overlay, 'the kit first, then the repo, then its venv, then its forge'
-    again = len(box.logged())
-    assert _tick(box, 'alpha', []) == 0
-    assert '--reinstall-package' not in box.logged()[again:], 'an unchanged kit reinstalls nothing'
+    assert kit < repo, 'the kit first, then the repo, then its forge'
+    assert '--reinstall-package' not in before, 'a served venv is exactly its lock'
 
 
 def test_a_repo_whose_refresh_fails_is_released_by_name_and_its_forge_never_runs(

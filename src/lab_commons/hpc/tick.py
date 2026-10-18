@@ -49,7 +49,7 @@ def tick(
     Runs from the host's lab-commons checkout, never the repo's venv (incident 2026-10-13: a repo venv
     whose old ``forge serve`` exited 2 every tick could never run the code that would update it). First
     lab-commons follows its declared ref, then *name* follows its own and its venv is rebuilt where its
-    inputs or the served lab-commons HEAD moved (:func:`lab_commons.hpc.deploy_steps.build`). A kit that
+    inputs (its committed lock among them) moved (:func:`lab_commons.hpc.deploy_steps.build`). A kit that
     cannot move is reported and the repo serves with the kit it has; a repo that cannot is RELEASED this
     tick with its reason, exit 2, and is not served. Serving is the host kit's ``forge serve`` in the repo's
     checkout (:func:`~lab_commons.hpc.deploy_spec.host_serve_argv`), never the repo venv's.

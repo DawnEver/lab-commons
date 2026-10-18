@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import lab_commons.launch as _door
-from lab_commons.hpc.builds import Builds, cargo_target, floating_tips, key_of, read_builds
-from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of
+from lab_commons.hpc.builds import Builds, cargo_target, key_of, read_builds
+from lab_commons.hpc.deploy_spec import Deployment, Repo, checkout_of
 from lab_commons.log import emit
 
-__all__ = ['Step', 'Tools', 'build', 'declared', 'overlay_argv', 'update']
+__all__ = ['Step', 'Tools', 'build', 'declared', 'update']
 
 
 @dataclass(frozen=True)
@@ -73,8 +73,8 @@ class Step:
         return done.returncode
 
 
-def _key(step: Step, checkout: Path, paths: Sequence[str], *recipe: str, tips: Mapping[str, str] = {}) -> str:
-    oids = dict(tips)
+def _key(step: Step, checkout: Path, paths: Sequence[str], *recipe: str) -> str:
+    oids = {}
     for path in paths:
         done = step.read([*step.tools.git, '-C', str(checkout), 'rev-parse', '--verify', '-q', f'HEAD:{path}'])
         oids[path] = done.stdout.strip() if done.returncode == 0 else 'absent'
@@ -92,12 +92,14 @@ def _stamped(path: Path, key: str) -> bool:
 
 
 def build(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
-    """Build *repo*'s ``.venv`` and native build, each skipped while its input key is unchanged."""
+    """Build *repo*'s ``.venv`` and native build, each skipped while its input key is unchanged.
+
+    The venv is exactly what the repo's committed lock pins (PIN + FRESHNESS, user ruling 2026-10-17): nothing is
+    installed over it, so the lab-commons a repo's producers import is the one its commit was tested with.
+    """
     checkout = checkout_of(spec, home, repo)
     if step.dry:
         step.change(f'{repo.name}: build .venv with its [tool.lab_commons.hpc] install (e.g. uv sync --extra dev)', [])
-        if repo.name != LAB_COMMONS:
-            step.change(f'{repo.name}: install the served lab-commons checkout over what its own install resolved', [])
         step.change(f'{repo.name}: its native build, when declared, into {checkout / ".lab-native"}', [])
         return 0
     builds = declared(checkout)
@@ -106,9 +108,7 @@ def build(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
         return 2
     env = {'UV_PYTHON': spec.python, 'UV_PYTHON_PREFERENCE': 'only-managed', 'UV_CACHE_DIR': str(home / 'ci/uv-cache')}
     inputs = builds.dependency_inputs or ('pyproject.toml', 'uv.lock')
-    pyproject = checkout / 'pyproject.toml'
-    tips = floating_tips(pyproject.read_text(encoding='utf-8')) if pyproject.is_file() else {}
-    env_key = _key(step, checkout, inputs, builds.install, spec.python, *builds.needs, tips=tips)
+    env_key = _key(step, checkout, inputs, builds.install, spec.python, *builds.needs)
     stamp = checkout / '.venv' / '.lab-deploy-env'
     if _stamped(stamp, env_key):
         emit(f'  {repo.name}: .venv current (key {env_key[:12]})')
@@ -117,43 +117,7 @@ def build(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
             return rc
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(env_key, encoding='utf-8')
-    if repo.name != LAB_COMMONS and (rc := _lab_commons(step, spec, home, checkout, env_key=env_key, env=env)):
-        return rc
     return _native(step, home, checkout, builds, {**env, 'ENV_KEY': env_key}) if builds.native_build else 0
-
-
-def _lab_commons(
-    step: Step, spec: Deployment, home: Path, checkout: Path, *, env_key: str, env: Mapping[str, str]
-) -> int:
-    """Install the host's lab-commons checkout -- the newest of the served ref -- keyed by that checkout's HEAD.
-
-    Nothing pins lab-commons (user ruling 2026-10-17); the repo's own install resolved whatever its git URL's
-    default ref held, and the served ref is the one this host runs. Run from *home* with ``--no-config``:
-    inside the project, uv's sources would resolve the repo's URL again.
-    """
-    lab = checkout_of(spec, home, next(r for r in spec.repos if r.name == LAB_COMMONS))
-    head = step.read([*step.tools.git, '-C', str(lab), 'rev-parse', 'HEAD']).stdout.strip()
-    key = key_of({LAB_COMMONS: head or 'absent'}, env_key)
-    stamp = checkout / '.venv' / '.lab-deploy-lab-commons'
-    if _stamped(stamp, key):
-        emit(f'  {checkout.name}: lab-commons current ({head[:12]})')
-        return 0
-    argv = overlay_argv(step.tools.uv, checkout / '.venv' / 'bin' / 'python', lab)
-    if rc := step.change(f'{checkout.name}: lab-commons {head[:12]} from {lab}', argv, cwd=home, env=env):
-        return rc
-    stamp.write_text(key, encoding='utf-8')
-    return 0
-
-
-def overlay_argv(uv: Sequence[str], python: Path, lab: Path) -> list[str]:
-    """Install the lab-commons checkout *lab* into the venv of *python*, over whatever its own install resolved.
-
-    Run OUTSIDE the project (``--no-config``): inside it, uv's sources would resolve the repo's URL again. The deploy
-    runs it once per served repo, and every cron tick does where the kit moved
-    (:func:`lab_commons.hpc.tick.tick`).
-    """
-    return [*uv, 'pip', 'install', '--no-config', '--python', str(python), '--reinstall-package', LAB_COMMONS,
-            f'{LAB_COMMONS} @ {lab.as_uri()}']  # fmt: skip
 
 
 def _native(step: Step, home: Path, checkout: Path, builds: Builds, env: dict[str, str]) -> int:

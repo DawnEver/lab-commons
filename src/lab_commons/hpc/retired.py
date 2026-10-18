@@ -277,21 +277,22 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.box.admit': 'lab_commons.box.hold (books a claim the one rule admits on the measured room)',
     'lab_commons.box.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
     'demand.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
-    # A lock-consuming door that moves the environment serves whatever a local lock last resolved: UNLOCKED names it.
+    # A lock-consuming door is judged against the COMMITTED lock: the old name described the untracked era.
     'REVERTS': 'UNLOCKED (lab_commons.dev.installdoor.Delivery.UNLOCKED)',
     'RevertingDoorsError': 'lab_commons.dev.installdoor.UnlockedDoorsError',
     'reverting(': 'lab_commons.dev.installdoor.unlocked(',
-    # Dependencies are not pinned (user rulings 2026-10-15/17): no committed lock, no lock age, no scheduled
-    # re-lock. A run says what it resolved instead (its record's resolved environment).
-    'lockcheck': 'nothing: no lock is committed, so no push is refused for one (dependencies float)',
-    'lockupgrade': 'nothing: every bootstrap resolves the newest; no scheduled `uv lock --upgrade`',
-    'Lock-Upgraded': 'nothing: no commit trailer records a lock upgrade',
-    'integrator.lock_max_age_days': 'nothing: delete the key -- no lock is committed, so it has no age',
-    'branchset.update': 'nothing: delete the key -- no lock upgrade branch exists',
-    'update/lock': 'nothing: no lock upgrade branch exists',
-    'requests.lock_upgrade': 'nothing: delete the request -- every bootstrap resolves the newest',
-    'Delivery.LOCKED': 'Delivery.UNLOCKED (a lock-consuming door replaying a local lock serves a stale pin)',
-    'unreproducible(': 'nothing: a request runs at any sha; its record names the resolved environment',
+    # PIN + FRESHNESS (user ruling 2026-10-17): the lock is committed and the developer who pushes keeps it at the
+    # newest resolution (lab_commons.dev.lockcheck). No lock AGE, no scheduled re-lock, no tip folded into a key.
+    'lockupgrade': 'nothing: the `lock` pre-push row refuses a stale lock; the pusher runs `uv lock --upgrade`',
+    'Lock-Upgraded': 'nothing: freshness is judged by resolving, never by a commit trailer',
+    'integrator.lock_max_age_days': 'nothing: delete the key -- a lock is judged by freshness, not age',
+    'branchset.update': 'nothing: delete the key -- no lock upgrade branch exists; the pusher upgrades',
+    'update/lock': 'nothing: no lock upgrade branch exists; the pusher upgrades',
+    'requests.lock_upgrade': 'nothing: delete the request -- the `lock` pre-push row refuses a stale lock',
+    'floating_tips': "lab_commons.hpc.builds.builds_at (the committed lock's hash keys the venv)",
+    'floating_git': "nothing: a git dependency's revision is the lock's (lab_commons.hpc.builds.builds_at)",
+    'remote_tip': "nothing: a git dependency's revision is the lock's (lab_commons.hpc.builds.builds_at)",
+    'overlay_argv': 'nothing: a served venv is exactly its committed lock; nothing is installed over it',
 }
 
 

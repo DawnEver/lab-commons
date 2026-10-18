@@ -23,10 +23,8 @@ IN the tick's environment (cron's PATH, then this account's grant ``setup``, whi
 before its tick) -- or refuse naming that environment; clone or update each checkout; install ``uv`` and
 every declared ``needs`` the tick's PATH
 lacks, or refuse naming it; build each ``.venv`` with the repo's own ``[tool.lab_commons.hpc] install``
-(and its ``native`` build), skipped when the key of its inputs -- the current tip of every floating git
-dependency included -- is unchanged, then install the served lab-commons checkout -- the newest of the
-served ref -- keyed by that checkout's HEAD, so a lab-commons update
-reinstalls it everywhere; warn, naming the recipe, when a repo declares an rclone
+(and its ``native`` build) -- exactly what its committed lock pins, nothing installed over it -- skipped when
+the key of its inputs (the lock's hash among them) is unchanged; warn, naming the recipe, when a repo declares an rclone
 artefact store this account's remote cannot reach (:func:`lab_commons.hpc.rclone.probe`; parts with outputs
 are then not claimed here); replace this tool's marked crontab lines (one per repo, every 5 min, under
 ``flock -n``) and touch no other line; run one tick of each and print it. ``--dry-run`` reads but changes
