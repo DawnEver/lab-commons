@@ -13,6 +13,7 @@ from __future__ import annotations
 from lab_commons.box.demand import (
     GB,
     NOT_ADMITTED,
+    WALL_CEILING_S,
     Capacity,
     Claim,
     Demand,
@@ -50,6 +51,7 @@ __all__ = [
     'INSIDE_ENV',
     'NOT_ADMITTED',
     'POLL_S',
+    'WALL_CEILING_S',
     'Capacity',
     'Claim',
     'Demand',

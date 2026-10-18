@@ -44,7 +44,13 @@ across every process on the box, so two racing admissions cannot both see the sa
 Location (:func:`box_path`): ``$LAB_COMMONS_BOX`` if set, else on Windows
 ``%ProgramData%/lab-commons/box.sqlite`` -- machine-wide, because the box is shared by every
 session of its user (agents, services, terminals) and one manager per MACHINE is the point;
-ProgramData admits a user-created subdirectory without elevation. Elsewhere
+ProgramData admits a user-created subdirectory without elevation.
+
+AN UNTRUSTED ROW PINS NOTHING (motronics SR-20261016-031: a planted claim with a future time pinned every
+seat). Every row this code writes starts now and ends within :data:`~lab_commons.box.demand.WALL_CEILING_S`;
+a row starting in the future or ending past that is reaped on sight, live pid or not. And a ledger file
+another user could write is refused at open (:func:`untrusted`): its rows carry liveness probes the reaper
+RUNS, so a writable ledger would be code execution, not only a pinned seat. Elsewhere
 ``$XDG_STATE_HOME/lab-commons/box.sqlite`` (``~/.local/state`` by default): per-user, since a
 POSIX machine-wide state dir needs root to create; on a single-user box the two coincide.
 """
@@ -54,6 +60,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 import subprocess
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -66,6 +73,7 @@ import lab_commons.launch as _door
 from lab_commons.box.demand import (
     GB,
     NOT_ADMITTED,
+    WALL_CEILING_S,
     Capacity,
     Claim,
     Demand,
@@ -84,7 +92,7 @@ Read = Callable[[Iterable[int]], Reading]
 
 __all__ = [
     'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'box_path', 'hand_over', 'hold',
-    'holdings', 'persist', 'release',
+    'holdings', 'persist', 'release', 'untrusted',
 ]  # fmt: skip
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
@@ -132,9 +140,38 @@ def box_path() -> Path:
     return Path(state) / 'lab-commons' / 'box.sqlite'
 
 
+def untrusted(*, mode: int, uid: int, me: int, link: bool) -> str | None:
+    """Why a ledger path with POSIX *mode*, owner *uid* and *link*-ness is untrusted by user *me*, else None."""
+    if link:
+        return 'is a symlink'
+    if uid != me:
+        return f'is owned by uid {uid}, not this user ({me})'
+    if mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return f'is writable by others (mode {stat.S_IMODE(mode):o})'
+    return None
+
+
+def _refuse_untrusted(path: Path) -> None:
+    """Raise :class:`Refused` when *path* (the ledger or its directory) could be written by another user."""
+    if not path.exists() and not path.is_symlink():
+        return
+    st = path.lstat()
+    link = stat.S_ISLNK(st.st_mode)
+    verdict = (
+        untrusted(mode=st.st_mode, uid=st.st_uid, me=os.geteuid(), link=link)
+        if os.name != 'nt'
+        else ('is a symlink' if link else None)
+    )
+    if verdict is not None:
+        msg = f'box ledger {path} {verdict}: refused -- its rows pin seats and name probes the reaper runs'
+        raise Refused(msg)
+
+
 def _connect() -> sqlite3.Connection:
     path = box_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for one in (path.parent, path):
+        _refuse_untrusted(one)
     con = sqlite3.connect(path, timeout=_LOCK_S, isolation_level=None)
     con.execute('PRAGMA journal_mode=WAL')
     con.executescript(_SCHEMA)
@@ -199,8 +236,18 @@ _REAPABLE: Final = (
 )
 
 
+#: Fixed text: the rows no admission could have written -- a start in the future, an end past the wall ceiling.
+_IMPOSSIBLE: Final = (
+    'DELETE FROM claims WHERE started > ? + ? OR deadline > ? + ? + ?',
+    'DELETE FROM tickets WHERE gives_up > ? + ? + ?',
+)
+
+
 def _reap(con: sqlite3.Connection, now: float) -> None:
     """Delete every claim and ticket whose process is gone or time is up; an external claim when its probe says so."""
+    claims, tickets = _IMPOSSIBLE
+    con.execute(claims, (now, GRACE_S, now, WALL_CEILING_S, GRACE_S))
+    con.execute(tickets, (now, WALL_CEILING_S, GRACE_S))
     probes = dict(con.execute('SELECT id, probe FROM claims WHERE probe IS NOT NULL').fetchall())
     for table, (listing, delete, grace) in zip(('claims', 'tickets'), _REAPABLE, strict=True):
         for row_id, pid, created, end in con.execute(listing, (grace,)).fetchall():
@@ -357,6 +404,9 @@ def hold(
             *queue_s* ran out -- naming what is lacking, its holders and their deadlines.
 
     """
+    if not 0 <= queue_s <= WALL_CEILING_S:
+        msg = f'{what}: queue_s must lie in [0, WALL_CEILING_S={WALL_CEILING_S}], got {queue_s}'
+        raise ValueError(msg)
     if INSIDE_ENV in os.environ and not outside and not any(demand.seats.values()):
         yield Claim(0, float('inf'))  # this tree's enclosing claim already holds it
         return
