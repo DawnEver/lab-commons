@@ -6,11 +6,13 @@ Every OS reading is a fake :class:`Check`; the cache lives in the test's own mac
 from __future__ import annotations
 
 import json
+import runpy
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib.machinery import ModuleSpec
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -251,19 +253,17 @@ def _fake_designer(monkeypatch: pytest.MonkeyPatch, *, writes: bool) -> list[lis
     """``designer.exe -w``: run the smoke script against a fake in-process ``designer`` -- or ignore it, exit 0."""
     calls: list[list[str]] = []
 
-    class App:
-        def VersionString(self, include_sub: bool) -> str:  # noqa: FBT001 -- JMAG's own signature
-            return '25.2.01zp' if include_sub else '25.2zp'
-
-    designer = type(sys)('designer')
-    designer.GetApplication = App  # type: ignore[attr-defined]
+    # JMAG's own API takes the flag positionally: ``VersionString(True)``.
+    app = SimpleNamespace(VersionString=lambda include_sub: '25.2.01zp' if include_sub else '25.2zp')
+    designer = ModuleType('designer')
+    vars(designer).update(GetApplication=lambda: app)
     monkeypatch.setitem(sys.modules, 'designer', designer)
 
     def run(argv: list[str]) -> tuple[bool, str]:
         calls.append(argv)
         assert argv[1:3] == ['-w', '-l'], 'headless, logged, no COM'
         if writes:
-            exec(Path(argv[-1]).read_text('utf-8'), {})  # noqa: S102 -- the generated smoke script
+            runpy.run_path(argv[-1])
         return True, 'exit 0: JMAG-Designer Stopping'
 
     monkeypatch.setattr(toolchecks, '_run', run)
