@@ -176,17 +176,27 @@ def _native(step: Step, home: Path, checkout: Path, builds: Builds, env: dict[st
 
 
 def update(step: Step, spec: Deployment, home: Path, repo: Repo) -> int:
-    """Clone *repo*, or fetch its ref and check it out."""
+    """Clone *repo*, or fetch its ref and check it out; then its submodules at their pinned commits.
+
+    A product consumes its components by path (:mod:`lab_commons.dev.components`), so a checkout
+    without its submodules builds a venv that cannot resolve them.
+    """
     checkout, git = checkout_of(spec, home, repo), step.tools.git
     if not (checkout / '.git').exists():
         argv = [*git, 'clone', '-q', '-b', repo.ref, repo.url, str(checkout)]
-        return step.change(f'git clone -b {repo.ref} {repo.url} {checkout}', argv)
-    remote = f'refs/remotes/origin/{repo.ref}'
-    rc = step.change(
-        f'{repo.name}: git fetch origin {repo.ref}',
-        [*git, '-C', str(checkout), 'fetch', '-q', 'origin', f'+refs/heads/{repo.ref}:{remote}'],
-    )
-    return rc or step.change(
-        f'{repo.name}: git checkout -B {repo.ref} origin/{repo.ref}',
-        [*git, '-C', str(checkout), 'checkout', '-q', '-B', repo.ref, remote],
+        rc = step.change(f'git clone -b {repo.ref} {repo.url} {checkout}', argv)
+    else:
+        remote = f'refs/remotes/origin/{repo.ref}'
+        rc = step.change(
+            f'{repo.name}: git fetch origin {repo.ref}',
+            [*git, '-C', str(checkout), 'fetch', '-q', 'origin', f'+refs/heads/{repo.ref}:{remote}'],
+        ) or step.change(
+            f'{repo.name}: git checkout -B {repo.ref} origin/{repo.ref}',
+            [*git, '-C', str(checkout), 'checkout', '-q', '-B', repo.ref, remote],
+        )
+    if rc or not (checkout / '.gitmodules').is_file():
+        return rc
+    return step.change(
+        f'{repo.name}: git submodule update --init --recursive',
+        [*git, '-C', str(checkout), 'submodule', 'update', '-q', '--init', '--recursive'],
     )
