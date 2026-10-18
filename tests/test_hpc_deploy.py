@@ -360,35 +360,47 @@ def test_the_cron_path_carries_where_slurm_resolved_at_deploy_time(
     assert 'sbatch' in capsys.readouterr().err
 
 
-def test_the_cron_path_puts_first_the_git_the_grant_setup_loads_when_the_tick_path_git_is_too_old(
+def test_the_tick_runs_inside_the_grant_setup_and_its_git_is_proven_there(
     box: Box, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ada 2026-10-17: cron's /usr/bin/git 2.31.1 has no ``merge-tree --write-tree``, so every serve tick failed.
+    """Ada 2026-10-17: the module's git ran only INSIDE its module (``libiconv.so.2``), so a PATH entry for it failed.
 
-    PLANTED CONTROLS: a qualifying tick-PATH git adds nothing to the PATH; no qualifying git refuses the deploy.
+    PLANTED CONTROLS: a git that works only after the setup is accepted when proven under it, and every cron
+    line then runs that setup before its tick; a setup-less environment with an old git is refused, naming the fix.
     """
-    assert box.run(*DECLARE) == 0
-    marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
-    assert all(line.startswith(f'*/5 * * * * PATH={box.home / ".local/bin"}:') for line in marked), marked[0]
-    text = box.machine.read_text(encoding='utf-8')
-    box.machine.write_text(text.replace('[[hpc.grant]]\n', '[[hpc.grant]]\nsetup = ["module load git/2.42"]\n'))
-    loaded = '/opt/git/2.42/bin/git'
-    monkeypatch.setenv('FAKE_SH', f'Lmod noise\n{loaded}\n')
-    answer = box.tools.id[1]
-    sh = replace(box.tools, sh=(sys.executable, answer, 'FAKE_SH', str(box.calls), 'sh'))
-    shbox = replace(box, tools=sh)
-    monkeypatch.setattr(deploy, '_proves', lambda git, _scratch: '' if git == loaded else 'usage: git merge-tree')
-    assert shbox.run() == 0
-    assert 'sh module load git/2.42; command -v git' in box.logged()
-    marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
-    assert all(line.startswith(f'*/5 * * * * PATH={Path(loaded).parent}:') for line in marked), marked[0]
-    monkeypatch.setattr(deploy, '_proves', lambda _git, _scratch: 'usage: git merge-tree')
-    capsys.readouterr()
-    assert shbox.run() == 2
+    setup = 'module load git/2.42'
+    monkeypatch.setattr(deploy, '_proves', lambda git, _scratch: '' if setup in git[-2] else 'usage: git merge-tree')
+    assert box.run(*DECLARE) == 2
     err = capsys.readouterr().err
     assert 'git >= 2.38' in err
-    assert '/x/git' in err
-    assert loaded in err
+    assert 'setup = ["module load' in err
+    assert not box.crontab.exists()
+    text = box.machine.read_text(encoding='utf-8')
+    box.machine.write_text(text.replace('[[hpc.grant]]\n', f'[[hpc.grant]]\nsetup = ["{setup}"]\n'))
+    assert box.run() == 0
+    marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
+    assert marked
+    for line in marked:
+        argv = shlex.split(line.removeprefix('*/5 * * * * ').split(deploy_spec.MARK)[0])
+        assert argv[:2] == ['bash', '-lc'], line
+        assert argv[2].startswith(f'PATH={box.home / ".local/bin"}:'), line
+        assert f'; {setup}; cd ' in argv[2], line
+        assert argv[2].index(setup) < argv[2].index('lab_commons.hpc tick'), line
+
+
+def test_a_setup_with_spaces_semicolons_and_quotes_reaches_bash_verbatim(tmp_path: Path) -> None:
+    """The setup is quoted once into ``bash -lc``; PLANTED CONTROL: no setup leaves the plain command."""
+    lab = deploy_spec.Repo(deploy_spec.LAB_COMMONS, f'{URL}/lab-commons.git', 'trunk')
+    spec = deploy_spec.Deployment('h', 'src', '3.13', (lab,))
+    setup = ("module load git/2.42; export X='a b'", 'echo "$HOME" `id`')
+    command = deploy_spec.tick_command(spec, tmp_path, lab, log=True, setup=setup)
+    argv = shlex.split(command)
+    assert argv[:2] == ['bash', '-lc']
+    assert argv[2].startswith(deploy_spec.tick_environment(tmp_path, (), setup) + '; cd ')
+    assert argv[3:5] == ['>>', str(tmp_path / '.cache' / 'lab-forge-lab-commons.log')]
+    plain = deploy_spec.tick_command(spec, tmp_path, lab, log=False)
+    assert plain.startswith(f'PATH={tmp_path / ".local/bin"}:')
+    assert 'bash -lc' not in plain
 
 
 FAKE_RCLONE: Final = r"""
