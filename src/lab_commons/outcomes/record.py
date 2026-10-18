@@ -36,9 +36,15 @@ __all__ = ['OUTCOME', 'SCHEMA_VERSION', 'SUBMITTED', 'Event', 'FinalityError', '
 #: The event-line format version, written into every line.
 SCHEMA_VERSION: Final = 2
 
+
+def _v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
+    """Schema 1 -> 2: a v1 line is a v2 line without the optional ``attempt``; only the version moves."""
+    return {**raw, 'schema': 2}
+
+
 #: Each older version this build reads, and the step taking it one version on (FORMATS-UPGRADE-ON-READ).
 #: v1 -> v2: v1 lines carry no ``attempt``; :class:`Record` numbers their outcomes 1.. in file order.
-_UPGRADES: Final[dict[int, Any]] = {1: lambda raw: {**raw, 'schema': 2}}
+_UPGRADES: Final[dict[int, Any]] = {1: _v1_to_v2}
 
 #: The two kinds this module gives meaning to; any other kind is a caller's and is only recorded.
 SUBMITTED: Final = 'submitted'
