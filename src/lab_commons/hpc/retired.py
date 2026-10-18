@@ -111,7 +111,9 @@ RETIRED: Final[dict[str, str]] = {
     'verdictledger': 'lab_commons.dev.runcache (the cache) and lab_commons.dev.test_outcomes (the pytest plugin)',
     'record_promoted': 'lab_commons.dev.runcache.remember',
     'LEDGER_REL': 'lab_commons.dev.runcache.CACHE_REL',
-    'output/verdicts/ledger.jsonl': 'output/runcache/runs.jsonl',
+    'output/verdicts/ledger.jsonl': 'output/runcache/record.jsonl',
+    # The run cache is an outcomes Record in its own file (plan A1.5): a retired-code checkout keeps its old file.
+    'runcache/runs.jsonl': 'output/runcache/record.jsonl (lab_commons.dev.runcache.CACHE_REL)',
     # How a cluster env is built is the commit's own declaration, read at --sha.
     'run submit --install': "the commit's [tool.lab_commons.hpc] install, read at --sha",
     'run submit --needs': "the commit's [tool.lab_commons.hpc] needs, read at --sha",
