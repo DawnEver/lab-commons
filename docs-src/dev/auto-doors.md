@@ -10,10 +10,21 @@ pushes.
 | door | does |
 |---|---|
 | `python -m lab_commons.dev.branchset --apply` | Deletes every merged LOCAL branch: never a declared branch, never one with commits origin lacks, never one checked out in any worktree. Re-runs `merge-base --is-ancestor` right before each delete and pins it to that sha. Origin candidates are listed with `git push origin --delete <b>` for a human. |
-| `python -m lab_commons.dev.worktrees [--prune]` | Lists the worktrees. `--prune` removes one only when it is clean (`git status --porcelain` empty), holds no ignored content but regenerable artefacts (caches, `.venv`, `*.egg-info`, `build/`, `target/`, plus `[tool.lab_commons.worktrees] regenerable`), and its HEAD is on a remote branch. Removal is `git worktree remove` without `--force`; an unregistered empty directory is removed with `rmdir`. Anything else is listed with what blocks it. |
+| `python -m lab_commons.dev.worktrees [--prune] [--archive] [--expire-archive]` | Lists the worktrees. `--prune` removes one only when it is clean (`git status --porcelain` empty), holds no ignored content but regenerable artefacts (caches, `.venv`, `*.egg-info`, `build/`, `target/`, plus `[tool.lab_commons.worktrees] regenerable`), and its HEAD is on a remote branch. Removal is `git worktree remove` without `--force`; an unregistered empty directory is removed with `rmdir`. Anything else is listed with what blocks it. By default the door never moves work aside. `--prune --archive` is the opt-in exception (needs `archive` and `archive_days` declared, else it refuses naming the key): a tree blocked ONLY by ignored work, not locked and named by no live process (command line, and cwd where `/proc` publishes it; an unreadable table refuses; on Windows a cwd inside the tree fails the rename), has its regenerable paths deleted, the rest RENAMED into `<archive>/<YYYYMMDD>/<tree>/` beside a `WORKTREE.txt` (HEAD, branch), the move verified, and only then `git worktree remove` without `--force`; any failure keeps the tree, and no branch is deleted. `--expire-archive [--prune]` removes `<archive>/<stamp>/` older than `archive_days` by the stamp NAME, never mtime, purges regenerables from younger ones, and lists a name that is not a stamp without deleting it. Every run warns when `ceiling_roots` hold `file_ceiling` files, counted by a walk that stops there. |
 | `python -m lab_commons.dev.stoprun --pid PID [--repo PATH] [--dry-run]` | Stops one identified run and its subtree, children first, never an ancestor or a sibling. A run is identified by its command line: the built-in signatures (verify, a gate runner, pytest) plus regexes in `[tool.lab_commons.stoprun] signatures`. Any other pid is refused (exit 3). |
 
 The raw verbs (`git branch -D`, `git worktree remove --force`, `rm -rf`, `taskkill`) stay unallowed.
+
+The default still never moves work because a move is only safe when the door can verify every step before the
+removal, and it can only do that against a destination the repo declared. Declared once, in the main checkout:
+
+```toml
+[tool.lab_commons.worktrees]
+archive = "output/worktree-archive"   # opt-in; relative to the main checkout, no default
+archive_days = 14                     # required with archive
+file_ceiling = 200000                 # optional; requires ceiling_roots
+ceiling_roots = ["output"]
+```
 
 ## One table, two clients
 

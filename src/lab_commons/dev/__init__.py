@@ -330,7 +330,9 @@ docstring rather than being copied here -- and the NEXT module to arrive must sp
 * :mod:`lab_commons.dev.branchprune` -- MERGED-BRANCHES-PRUNED: every serving host deletes merged idle origin
   branches when the repo opts in, lists them when it does not, and alarms unmerged stale ones.
 * :mod:`lab_commons.dev.autodoors` -- AUTO-MODE-RUNS-THE-DOORS: one door table, rendered for Claude and Codex.
-* :mod:`lab_commons.dev.worktrees` -- the local worktree door: remove only clean, pushed trees; refuse the rest.
+* :mod:`lab_commons.dev.worktrees` -- the local worktree door: remove only clean, pushed trees; refuse the rest
+  unless ``--archive`` (opt-in) moves their ignored work into the declared archive first.
+* :mod:`lab_commons.dev.worktreearchive` -- that archive's declaration, liveness read, stamp retention and file ceiling.
 * :mod:`lab_commons.dev.stoprun` -- the stop-own-run door: one identifiable gate/verify/serve tree, children first.
 * :mod:`lab_commons.dev.servelock` -- one ``forge serve`` per host: a non-blocking lock, and stopped-producer notes.
 * :mod:`lab_commons.dev.servetask` -- the ONE ``lab-forge-serve`` Scheduled Task: its windowless definition and log.
