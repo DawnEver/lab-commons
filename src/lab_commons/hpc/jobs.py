@@ -1,8 +1,8 @@
 """A job file's batch over every grant it spans: submit, status, gather, retry -- one record, many grants.
 
 ONE SUBMISSION, ONE RECORD. ``submit`` spans the items (:func:`lab_commons.hpc.span.span`), makes sure each
-chosen grant has the job's tree (*ensure*; ``[job] sha`` builds it with ``run build``'s fetch and build, an
-env reused by its key), submits one array per grant and writes ``<job>.submission.json``::
+chosen grant has the job's artifact (*ensure*; ``[job] sha`` builds that commit's one file,
+:mod:`lab_commons.hpc.artifact`), submits one array per grant and writes ``<job>.submission.json``::
 
     {"stamp": ..., "placements": [{"grant", "stamp", "account", "targets", "items": [start, stop], "run_dir",
                                    "job_ids", "shards", "plan"}, ...],
@@ -10,6 +10,10 @@ env reused by its key), submits one array per grant and writes ``<job>.submissio
 
 ``status``/``gather`` walk the placements and merge them into one result, item indices back in the batch's
 order. A grant whose login hosts all fail to answer is NAMED, never read as empty.
+
+A JOB HAS A FILE BUDGET (``[policy] file_budget``): ``gather`` counts each placement's run directory on the
+shared home and names every one over it -- the job fails. A run an earlier worker wrote (one results file
+per shard) is upgraded on read and named as such; its file count was that worker's, so it is not judged.
 
 A DEAD GRANT'S SLICE IS RE-PLACED BY THE RETRY RULE. ``retry`` re-submits what has no results file and is
 not active -- on a grant that answers, its own shards, as before. On a grant that does not answer nothing is
@@ -22,19 +26,20 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
-from lab_commons.hpc.cluster import Runner, Unreachable, gather, probe, shard_states, submit
+from lab_commons.hpc.artifact import enter_lines, require
+from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, shard_states, submit
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.run import ACTIVE
-from lab_commons.hpc.shell import ENV
 from lab_commons.hpc.span import Placement, span
 
 __all__ = [
     'Ensure',
+    'Gathered',
     'Reach',
     'built_config',
     'gather_job',
@@ -50,19 +55,32 @@ __all__ = [
 #: A runner for one grant -- ``ssh`` to its login hosts in a CLI, a fake in a test.
 type Reach = Callable[[Grant], Runner]
 
-#: Make *grant*'s home hold the job's tree and env; raise ``RuntimeError`` (with why) when it cannot.
+#: Make *grant*'s home hold the job's artifact; raise ``RuntimeError`` (with why) when it cannot.
 type Ensure = Callable[[Grant], None]
 
 
 def built_config(config: Config) -> Config:
-    """With ``[job] sha``, the job runs in ``~/ci/trees/<sha>`` with its env sourced first; else *config* as is."""
+    """With ``[job] sha``, every task first unpacks and enters that commit's artifact; else *config* as is.
+
+    Raises:
+        lab_commons.hpc.artifact.ArtifactRefused: ``[job] artifact`` is not a format, or one not built yet.
+        ValueError: a ``workdir`` beside ``sha`` -- the artifact is where the job runs -- or in a test run tree.
+
+    """
     job = config.job
+    if '/ci/trees/' in f'/{job.workdir.lstrip("~")}':
+        msg = (
+            f'[job] workdir = {job.workdir!r} is a test run tree, retired for jobs: declare [job] sha and '
+            'repo_url and the job runs from that commit artifact, one file (lab_commons.hpc.artifact)'
+        )
+        raise ValueError(msg)
     if not job.sha:
         return config
+    require(job.artifact)
     if job.workdir != '~':
-        msg = f'[job] sha names the tree (~/ci/trees/{job.sha}); drop [job] workdir = {job.workdir!r}'
+        msg = f'[job] sha runs the job in its artifact; drop [job] workdir = {job.workdir!r}'
         raise ValueError(msg)
-    return replace(config, job=replace(job, workdir=f'~/ci/trees/{job.sha}', setup=(ENV, *job.setup)))
+    return replace(config, job=replace(job, setup=(*enter_lines(job.sha, job.artifact), *job.setup)))
 
 
 def _answering(grants: tuple[Grant, ...], reach: Reach) -> list[tuple[Grant, Any]]:
@@ -204,19 +222,40 @@ def status_job(record: dict[str, Any], machine: Machine, reach: Reach) -> list[s
     return status_lines(shard_counts(record, machine, reach))
 
 
-def gather_job(record: dict[str, Any], machine: Machine, reach: Reach) -> tuple[list[dict[str, Any]], int, list[str]]:
-    """Every item result returned so far, in batch order; the shards returned; the grants that did not answer."""
-    merged, returned, silent = [], 0, []
+@dataclass(frozen=True)
+class Gathered:
+    """What :func:`gather_job` read: item results in batch order, and what the caller must name."""
+
+    results: list[dict[str, Any]]
+    #: Shards returned, over every placement that answered.
+    returned: int
+    #: Grants that did not answer: their shards are not in :attr:`results`.
+    silent: list[str]
+    #: One line per run directory holding more files than ``[policy] file_budget``: the job FAILS.
+    over: list[str]
+    #: Run directories an earlier worker wrote, read through the upgrade and not judged by the budget.
+    earlier: list[str]
+
+
+def gather_job(record: dict[str, Any], machine: Machine, reach: Reach, *, budget: int) -> Gathered:
+    """Every placement's returned results, merged, with its run directory's files counted against *budget*."""
+    merged, returned, silent, over, earlier = [], 0, [], [], []
     for placement in record['placements']:
+        run, where = reach(_grant_of(placement, machine)), placement['run_dir']
         try:
-            results = gather(reach(_grant_of(placement, machine)), placement['run_dir'])
+            results = gather(run, where)
+            files, upgraded = files_of(run, where)
         except Unreachable:
             silent.append(placement['grant'])
             continue
+        if upgraded:
+            earlier.append(f'{placement["grant"]}: {where}')
+        elif files > budget:
+            over.append(f'{placement["grant"]}: {where} holds {files} files, over file_budget = {budget}')
         returned += len(results)
         offset = placement['items'][0]
         merged += [{**r, 'index': offset + r['index']} for shard in results.values() for r in shard]
-    return sorted(merged, key=lambda r: r['index']), returned, silent
+    return Gathered(sorted(merged, key=lambda r: r['index']), returned, silent, over, earlier)
 
 
 def retry_job(

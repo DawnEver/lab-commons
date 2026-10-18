@@ -1,6 +1,6 @@
 """A commit's TREE on the cluster: fetch it into ``~/ci/trees/<sha>`` and build its env there.
 
-The first half of :func:`lab_commons.hpc.run.submit_run` and the whole of ``run build``. A step that stops
+The first half of :func:`lab_commons.hpc.run.submit_run`: a test run needs the whole tree. A step that stops
 before any job is queued raises :class:`NotSubmitted` -- no test ran, so it is not a red run.
 """
 
@@ -24,7 +24,7 @@ from lab_commons.hpc.shell import (
     parse_times,
 )
 
-__all__ = ['NotSubmitted', 'build_run']
+__all__ = ['NotSubmitted', 'build_run', 'fetch']
 
 
 class NotSubmitted(RuntimeError):
@@ -34,21 +34,17 @@ class NotSubmitted(RuntimeError):
     """
 
 
-def build_run(spec: RunSpec, run: Runner, where: str) -> dict[str, Any]:
-    """Fetch *spec*'s commit into ``~/ci/trees/<sha>`` and build its env there; its facts, plus ``prep`` times.
+def fetch(spec: RunSpec, run: Runner, where: str) -> None:
+    """Check *where*'s login-node needs, then make its bare cache hold *spec*'s commit (shipping a pack if asked).
 
-    The first half of :func:`submit_run` and the whole of ``run build``: nothing is collected or submitted
-    and no run state is written, so a job file (:mod:`lab_commons.hpc.config`) whose ``workdir`` is the
-    tree and whose ``setup`` is :data:`~lab_commons.hpc.shell.ENV` runs ANY entry in the env a test run uses.
-    *where* names the login node in a refusal.
+    The shared first step of a test run's tree (:func:`build_run`) and a job's artifact
+    (:func:`lab_commons.hpc.artifact.build_artifact`).
     """
     said = run(needs_script(spec), None).splitlines()
     lacking = [line.removeprefix('@@@ missing ') for line in said if line.startswith('@@@ missing ')]
     if lacking:
         msg = f'{where} lacks {", ".join(lacking)} on its login node; nothing was fetched or built'
         raise NotSubmitted(msg)
-
-    shipping = time.monotonic()
     if run(fetch_script(spec), None).strip().splitlines()[-1:] != ['have']:
         if spec.pack_from is None:
             msg = f'commit {spec.sha} is not on {spec.repo_url}; pass a local repository to pack it from'
@@ -58,6 +54,16 @@ def build_run(spec: RunSpec, run: Runner, where: str) -> dict[str, Any]:
             msg = f'commit {spec.sha} is still missing on {where} after the pack was indexed'
             raise NotSubmitted(msg)
 
+
+def build_run(spec: RunSpec, run: Runner, where: str) -> dict[str, Any]:
+    """Fetch *spec*'s commit into ``~/ci/trees/<sha>`` and build its env there; its facts, plus ``prep`` times.
+
+    The first half of :func:`lab_commons.hpc.run.submit_run`: a TEST run needs the whole tree. A job needs
+    only a runnable artifact, never this tree (:mod:`lab_commons.hpc.artifact`). *where* names the login
+    node in a refusal.
+    """
+    shipping = time.monotonic()
+    fetch(spec, run, where)
     here = Path(__file__).parent
     run(f'cat > {ROOT}/bin/{COLLECT_MODULE}.py', (here / 'collect.py').read_text(encoding='utf-8'))
     shipped = round(time.monotonic() - shipping)

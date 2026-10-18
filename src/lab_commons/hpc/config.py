@@ -97,6 +97,9 @@ class Policy:
     stall_minutes: float = 30.0
     #: How often ``run gather --wait`` re-reads the cluster.
     poll_seconds: float = 120.0
+    #: The most files one job's run directory may hold on the shared home, judged at gather (a file is an HPC
+    #: resource: the home's quota counts files). A run is its manifest, its script and its one results file.
+    file_budget: int = 10
 
     def __post_init__(self) -> None:
         """A window that is empty or inverted cannot place a single shard."""
@@ -106,6 +109,7 @@ class Policy:
             or self.max_array < 1
             or self.stall_minutes <= 0
             or self.poll_seconds <= 0
+            or self.file_budget < 1
         ):
             msg = f'an unusable policy: {self}'
             raise ValueError(msg)
@@ -121,12 +125,14 @@ class JobSpec:
     entry: str = ''
     items: str = ''
     python: str = 'python'
-    #: A commit to run at: each grant's home gets ``~/ci/trees/<sha>`` and its env (``run build``) -- the workdir.
+    #: A commit to run at: each grant's home gets the commit's ONE artifact file (:mod:`lab_commons.hpc.artifact`).
     sha: str = ''
     #: Where that commit is fetched from (read-only HTTPS); required with ``sha``.
     repo_url: str = ''
     #: Every item reruns to the same result, so a short task may be moved (``[hpc.paging]``); declared, never guessed.
     rerun_safe: bool = False
+    #: The artifact format a job at ``sha`` runs from (:data:`lab_commons.hpc.artifact.FORMATS`).
+    artifact: str = 'tarball'
 
     def __post_init__(self) -> None:
         """A commit names its remote."""

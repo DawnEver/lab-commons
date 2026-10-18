@@ -10,9 +10,9 @@ change once (``pending: <why>`` while no login host answers), and gathers once n
 
 ``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
 returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
-takes none. ``run build --sha <sha> --repo-url <url>`` is ``run submit``'s fetch and build alone: it
-prints the ``workdir``/``setup`` a job file names to run ANY entry over its items in that commit's tree and
-env (``submit -c``), and collects, submits and records nothing. ``run gather --sha <sha> -o <dir>`` is
+takes none. ``run build --sha <sha> --repo-url <url> [--artifact tarball]`` builds that commit's ONE
+artifact file (:mod:`lab_commons.hpc.artifact`) and prints the ``[job]`` lines that run ANY entry over a job
+file's items from it (``submit -c``); it collects, submits and records nothing. ``run gather --sha <sha> -o <dir>`` is
 one short call -- where the run is and exit :data:`PENDING`, or the record written to
 ``<dir>/run-<sha>-<part>-<req>.json.gz`` (exit 1 if any id is red, lost or missing); ``--wait``
 blocks until the record. All three RUN ON THE CLUSTER LOGIN NODE with its own shell
@@ -45,6 +45,7 @@ from typing import Any, Final
 from lab_commons.compute import learned
 from lab_commons.hpc import deploy, tick
 from lab_commons.hpc.allocate import allocate, resolve
+from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
 from lab_commons.hpc.config import Config, load_config
@@ -65,8 +66,8 @@ from lab_commons.hpc.jobs import (
 from lab_commons.hpc.needsets import BASE, vocabulary_at
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import submit_run
-from lab_commons.hpc.shell import ENV, FULL, INCREMENTAL, ROOT, RunSpec
-from lab_commons.hpc.tree import NotSubmitted, build_run
+from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
+from lab_commons.hpc.tree import NotSubmitted
 from lab_commons.hpc.watch import settle
 from lab_commons.log import emit
 
@@ -112,30 +113,34 @@ def _save_record(config: Config, record: dict[str, Any]) -> None:
 
 
 def _ensure(config: Config, repo: Path) -> Ensure | None:
-    """``[job] sha``: each chosen grant gets the commit's tree and env, as ``run build`` makes them."""
+    """``[job] sha``: each chosen grant gets the commit's one artifact file, as ``run build`` makes it."""
     job = config.job
     if not job.sha:
         return None
     spec = RunSpec(sha=job.sha, repo_url=job.repo_url, pack_from=repo, builds=builds_at(repo, job.sha, python=''))
 
     def ensure(grant: Grant) -> None:
-        build_run(spec, runner_for(grant, BUILD_TIMEOUT), grant.name)
+        build_artifact(spec, runner_for(grant, BUILD_TIMEOUT), grant.name, job.artifact)
 
     return ensure
 
 
-def _gather(record: dict[str, Any], machine: Machine, reach: Reach, output: Path | None) -> int:
-    """Every placement's results merged in batch order; a silent grant named, never read as empty."""
-    flat, returned, silent = gather_job(record, machine, reach)
+def _gather(record: dict[str, Any], machine: Machine, reach: Reach, output: Path | None, budget: int) -> int:
+    """Every placement's results merged in batch order; a silent grant named; a run over its file budget FAILS."""
+    got = gather_job(record, machine, reach, budget=budget)
     shards = sum(p['shards'] for p in record['placements'])
-    failed = sum(not r['ok'] for r in flat)
-    _out(f'{returned}/{shards} shards returned, {len(flat)} items, {failed} item errors')
-    for name in silent:
+    failed = sum(not r['ok'] for r in got.results)
+    _out(f'{got.returned}/{shards} shards returned, {len(got.results)} items, {failed} item errors')
+    for name in got.silent:
         _out(f'{name}: did not answer; its shards are not in this result (retry re-places them)')
+    for line in got.earlier:
+        _out(f'{line}: written by an earlier worker, one file per shard; read through the upgrade')
+    for line in got.over:
+        _out(f'OVER FILE BUDGET {line}')
     if output is not None:
-        output.write_text(json.dumps(flat), encoding='utf-8')
+        output.write_text(json.dumps(got.results), encoding='utf-8')
         _out(f'written {output}')
-    return 0
+    return 1 if got.over else 0
 
 
 def _gather_when_settled(
@@ -154,7 +159,7 @@ def _gather_when_settled(
             _out(summary)
             last = summary
         if settled(found):
-            return _gather(record, machine, reach, output)
+            return _gather(record, machine, reach, output, config.policy.file_budget)
         _sleep(config.policy.poll_seconds)
 
 
@@ -185,7 +190,7 @@ def _jobs(
     if verb == 'gather':
         if wait:
             return _gather_when_settled(config, record, machine, reach, output)
-        return _gather(record, machine, reach, output)
+        return _gather(record, machine, reach, output, config.policy.file_budget)
     for line in retry_job(config, _items(config), record, machine, reach, ensure=_ensure(config, repo)):
         _out(line)
     _save_record(config, record)
@@ -244,14 +249,15 @@ def _run_build(args: argparse.Namespace, _machine: Machine, _config: Config) -> 
         return 2
     spec = RunSpec(sha=args.sha, repo_url=args.repo_url, python=args.python, pack_from=args.repo, builds=builds)
     try:
-        built = build_run(spec, submitter()(None), 'this login node')
-    except NotSubmitted as why:
+        built = build_artifact(spec, submitter()(None), 'this login node', args.artifact)
+    except (NotSubmitted, ArtifactRefused) as why:
         emit(f'run build inconclusive: {why}', err=True)
         return _NOT_SUBMITTED
-    tree = f'{ROOT}/trees/{args.sha}'.replace('"$HOME"', '~')
-    _out(f'built {args.sha} (env {built["env"]}); a job file runs any entry there with:')
-    _out(f'workdir = "{tree}"')
-    _out(f'setup = ["{ENV}"]')
+    _out(f'built {built}; a job file runs any entry from it with:')
+    _out('[job]')
+    _out(f'sha = "{args.sha}"')
+    _out(f'repo_url = "{args.repo_url}"')
+    _out(f'artifact = "{args.artifact}"')
     return 0
 
 
@@ -304,6 +310,7 @@ def _parser() -> argparse.ArgumentParser:
         help='local repository, READ only: its declaration at --sha; a pack if the remote lacks it',
     )
     group.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
+    group.add_argument('--artifact', choices=sorted(FORMATS), default=TARBALL, help='run build: the artifact format')
     return parser
 
 
