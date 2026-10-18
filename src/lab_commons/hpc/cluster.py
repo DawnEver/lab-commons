@@ -35,7 +35,8 @@ from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
 from lab_commons.hpc.worker import ITEM, RESULTS, SHARD
 from lab_commons.log import log
-from lab_commons.outcomes.record import Event
+from lab_commons.outcomes import Status
+from lab_commons.outcomes.record import OUTCOME, Event
 
 __all__ = [
     'BUILD_TIMEOUT',
@@ -385,15 +386,19 @@ def _returned(text: str) -> dict[int, list[dict[str, Any]]]:
     items: dict[int, dict[str, Any]] = {}
     codes: dict[int, int] = {}
     for event in events:
-        if event.kind == ITEM:
-            items[int(event.key)] = dict(event.data)
+        if event.kind == OUTCOME and event.cell is not None:
+            ok = event.cell.status is Status.OK
+            why = '' if event.cell.reason is None else event.cell.reason.text
+            items[int(event.key)] = {**event.data, 'ok': ok, 'status': event.cell.status.value, 'error': why}
+        elif event.kind == ITEM:  # a pre-Cell worker's line (FORMATS-UPGRADE-ON-READ)
+            items[int(event.key)] = {**event.data, 'status': 'ok' if event.data['ok'] else 'error'}
         elif event.kind == SHARD:
             codes[int(event.key)] = int(event.data['code'])
     returned: dict[int, list[dict[str, Any]]] = {shard: [] for shard, code in codes.items() if code == 0}
     for index in sorted(items):
         data = items[index]
         if data['shard'] in returned:
-            result = {'index': index, 'ok': data['ok']}
+            result = {'index': index, 'ok': data['ok'], 'status': data['status']}
             result |= {'value': data['value']} if data['ok'] else {'error': data['error']}
             returned[data['shard']].append(result)
     return returned
@@ -404,7 +409,7 @@ def _upgraded(text: str) -> dict[int, list[dict[str, Any]]]:
     results = {}
     for line in filter(None, (raw.strip() for raw in text.splitlines())):
         record = json.loads(line)
-        results[int(record['shard'])] = record['results']
+        results[int(record['shard'])] = [{**r, 'status': 'ok' if r['ok'] else 'error'} for r in record['results']]
     return results
 
 
