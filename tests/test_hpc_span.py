@@ -16,10 +16,11 @@ from lab_commons.hpc import jobs
 from lab_commons.hpc.cluster import Unreachable
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine, Session
-from lab_commons.hpc.jobs import built_config, gather_job, retry_job, status_job, submit_job
-from lab_commons.hpc.plan import files_needed, plan_on
+from lab_commons.hpc.jobs import Gathered, built_config, gather_job, retry_job, status_job, submit_job
+from lab_commons.hpc.plan import FILES_PER_RUN, plan_on
 from lab_commons.hpc.slurm import parse_inodes, parse_snapshot
 from lab_commons.hpc.span import span, split
+from lab_commons.outcomes.record import Event
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n@@@ shared\n'
@@ -67,21 +68,21 @@ def test_a_spread_never_runs_more_at_once_than_the_session_cap() -> None:
 
 
 def test_the_file_quota_is_a_resource_a_grant_is_refused_on() -> None:
-    assert parse_inodes('/dev/x 2000000 1999990 10 100% /home') == 10
+    assert parse_inodes('/dev/x 2000000 1999997 3 100% /home') == 3
     assert parse_inodes('') is None
-    full = _snap('/dev/x 2000000 1999990 10 100% /home')
+    full = _snap('/dev/x 2000000 1999997 3 100% /home')
     with pytest.raises(ValueError, match='free inodes'):
         plan_on(NEAR, full, 200, Cost(seconds=60), session=None, policy=Policy())
     placements = span(2000, BIG, [(NEAR, full), (FAR, _snap())], session=None, policy=Policy())
     assert [p.grant for p in placements] == [FAR]
-    assert files_needed(placements[0].plan) == 5 + 2 * len(placements[0].plan.shards)
+    assert FILES_PER_RUN == 4, 'a run directory, its manifest, its script and its ONE results file, at any width'
 
 
 class _Login:
-    """One grant's login node: answers the probe, ``sbatch``, ``sacct`` and the results listing."""
+    """One grant's login node: answers the probe, ``sbatch``, ``sacct``, the results read and the file count."""
 
     def __init__(self, name: str, *, up: bool = True) -> None:
-        self.name, self.up, self.jobs, self.results = name, up, 0, ''
+        self.name, self.up, self.jobs, self.results, self.files = name, up, 0, '', '3'
         self.stdin: dict[str, str] = {}
 
     def __call__(self, command: str, stdin: str | None = None) -> str:
@@ -95,9 +96,22 @@ class _Login:
         if 'sbatch' in command:
             self.jobs += 1
             return f'{self.jobs}{len(self.name)}\n'
-        if 'results/*.json' in command:
-            return self.results
+        if 'results.jsonl' in command:
+            return self.results + EARLIER
+        if 'find ' in command:
+            return self.files
         return ''
+
+
+_OK = {'code': 0, 'tail': []}
+
+#: What the login node prints between the results file and an earlier worker's per-shard files.
+EARLIER = chr(10) + '@@@ earlier-layout' + chr(10)
+
+
+def _lines(*events: tuple[str, str, dict]) -> str:
+    """Results-file lines in the worker's own format (one :class:`~lab_commons.outcomes.record.Event` each)."""
+    return ''.join(json.dumps(Event(kind, key, data=data).to_plain()) + chr(10) for kind, key, data in events)
 
 
 def _reach(logins: dict[str, _Login]) -> object:
@@ -153,14 +167,14 @@ def test_gather_merges_the_slices_back_into_batch_order_and_names_a_silent_grant
     reach = _reach(logins)
     record = submit_job(_config(tmp_path), list(range(2000)), machine, reach, stamp='t0')
     cut = record['placements'][1]['items'][0]
-    logins['near'].results = json.dumps({'shard': 0, 'results': [{'index': 0, 'ok': True, 'value': 'n'}]})
-    logins['far'].results = json.dumps({'shard': 0, 'results': [{'index': 0, 'ok': True, 'value': 'f'}]})
-    flat, returned, silent = gather_job(record, machine, reach)
-    assert [(r['index'], r['value']) for r in flat] == [(0, 'n'), (cut, 'f')]
-    assert (returned, silent) == (2, [])
+    logins['near'].results = _lines(('item', '0', {'shard': 0, 'ok': True, 'value': 'n'}), ('shard', '0', _OK))
+    logins['far'].results = _lines(('item', '0', {'shard': 0, 'ok': True, 'value': 'f'}), ('shard', '0', _OK))
+    got = gather_job(record, machine, reach, budget=10)
+    assert [(r['index'], r['value']) for r in got.results] == [(0, 'n'), (cut, 'f')]
+    assert (got.returned, got.silent, got.over) == (2, [], [])
     logins['far'].up = False
-    flat, returned, silent = gather_job(record, machine, reach)
-    assert (len(flat), silent) == (1, [FAR.name])
+    got = gather_job(record, machine, reach, budget=10)
+    assert (len(got.results), got.silent) == (1, [FAR.name])
     assert status_job(record, machine, reach)[1] == f'{FAR.name}: did not answer'
 
 
@@ -181,15 +195,19 @@ def test_a_dead_grants_slice_is_re_placed_on_the_grants_still_answering(tmp_path
     assert manifest['items'] == items[dead['items'][0] : dead['items'][1]]
 
 
-def test_a_commit_names_the_tree_and_its_env() -> None:
+def test_a_commit_runs_from_its_artifact_never_a_tree() -> None:
     config = Config(job=JobSpec(entry='m:f', sha='a' * 40, repo_url='https://x/r.git', setup=('echo',)))
     job = built_config(config).job
-    assert job.workdir == f'~/ci/trees/{"a" * 40}'
-    assert job.setup == ('. .lab-ci/env.sh', 'echo')
+    assert job.workdir == '~', 'no checkout: the task enters the unpacked artifact'
+    assert job.setup[-1] == 'echo'
+    assert any(f'ci/artifacts/{"a" * 40}.tar.gz' in line for line in job.setup)
+    assert not any('ci/trees' in line for line in job.setup)
     with pytest.raises(ValueError, match='come together'):
         JobSpec(sha='a' * 40)
     with pytest.raises(ValueError, match='drop \\[job\\] workdir'):
         built_config(Config(job=JobSpec(workdir='~/p', sha='a' * 40, repo_url='https://x/r.git')))
+    with pytest.raises(ValueError, match='test run tree, retired for jobs'):
+        built_config(Config(job=JobSpec(workdir=f'~/ci/trees/{"a" * 40}')))
 
 
 def test_a_one_grant_record_is_refused_by_its_retired_name(tmp_path: Path) -> None:
@@ -230,9 +248,9 @@ def _wait_cli(monkeypatch: pytest.MonkeyPatch, polls: list[object]) -> tuple[lis
             raise answer
         return answer
 
-    def gather(*_a: object) -> tuple[list[dict], int, list[str]]:
+    def gather(*_a: object, **_k: object) -> Gathered:
         gathered.append(1)
-        return [], 2, []
+        return Gathered([], 2, [], [], [])
 
     monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=None, grants=(NEAR,)))
     monkeypatch.setattr(cli, 'runner_for', lambda _g, *_a: None)

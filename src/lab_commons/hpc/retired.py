@@ -297,6 +297,12 @@ RETIRED: Final[dict[str, str]] = {
     'overlay_argv': 'nothing: a served venv is exactly its committed lock; nothing is installed over it',
     # ONE concurrency mechanism (user ruling 2026-10-18): an in-flight run holds a seat on the box ledger.
     'claim_path': 'lab_commons.dev.inflight.seat / leader_run (the leader holds a seat on lab_commons.box)',
+    # An HPC job ships ONE file and leaves a few (plan 2026-10-17): one artifact per sha, one results file per run.
+    'files_needed': 'lab_commons.hpc.plan.FILES_PER_RUN (one results file per run: its width adds no file)',
+    'FILES_PER_SHARD': 'lab_commons.hpc.plan.FILES_PER_RUN (one results file per run: its width adds no file)',
+    'occupied_trees': 'lab_commons.dev.retentionplan.occupied_shas (a test run tree or a job run directory)',
+    '--output=logs/': 'nothing: a task writes to node-local $TMPDIR; its tail is kept in results.jsonl',
+    'reuse that tree and env': 'run build builds the commit artifact, one file (lab_commons.hpc.artifact)',
 }
 
 

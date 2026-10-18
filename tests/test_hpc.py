@@ -14,12 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.hpc.cluster import _completed, gather, render_script, shard_states, submit
+from lab_commons.hpc.cluster import _completed, render_script, shard_states, submit
 from lab_commons.hpc.config import Cluster, Config, Cost, JobSpec, Limits, Policy, load_config
 from lab_commons.hpc.plan import free_slots, make_plan, quota_slots
 from lab_commons.hpc.slurm import parse_minutes, parse_records, parse_snapshot, parse_tres
-from lab_commons.hpc.worker import main as worker_main
-from lab_commons.hpc.worker import run_shard
 from lab_commons.width import fits
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
@@ -214,27 +212,6 @@ def test_the_script_keeps_home_expandable(tmp_path: Path) -> None:
 def test_states_expand_pending_ranges_and_a_resubmit_supersedes() -> None:
     fake = FakeCluster({'-j 1 ': '1_0|COMPLETED\n1_1|FAILED\n1_[2-3%4]|PENDING\n', '-j 2 ': '2_1|RUNNING\n'})
     assert shard_states(fake, ['1', '2']) == {0: 'COMPLETED', 1: 'RUNNING', 2: 'PENDING', 3: 'PENDING'}
-
-
-def test_gather_reads_one_line_per_shard() -> None:
-    line = json.dumps({'shard': 3, 'results': [{'index': 9, 'ok': True, 'value': 1}]})
-    assert gather(FakeCluster({'results': line + '\n\n'}), '~/r') == {3: [{'index': 9, 'ok': True, 'value': 1}]}
-
-
-def test_an_item_failure_is_recorded_and_the_shard_continues() -> None:
-    manifest = {'entry': 'unused:unused', 'items': [1, 0, 2], 'shards': [[0, 3]]}
-    record = run_shard(manifest, 0, entry=lambda x: 6 // x)
-    assert [r['ok'] for r in record['results']] == [True, False, True]
-    assert 'ZeroDivisionError' in record['results'][1]['error']
-
-
-def test_the_worker_writes_its_shard_file(tmp_path: Path) -> None:
-    manifest = tmp_path / 'manifest.json'
-    manifest.write_text(json.dumps({'entry': 'math:sqrt', 'items': [4, 9, -1], 'shards': [[0, 2], [2, 3]]}))
-    assert worker_main([str(manifest), '1']) == 0
-    record = json.loads((tmp_path / 'results' / '1.json').read_text(encoding='utf-8'))
-    assert record['shard'] == 1
-    assert record['results'][0]['ok'] is False
 
 
 def test_config_round_trip_and_typos_are_refused(tmp_path: Path) -> None:

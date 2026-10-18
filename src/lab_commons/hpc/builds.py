@@ -7,6 +7,7 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     needs = ["cargo", "cc"]                                 # login-node commands beyond git and uv
     dependency_inputs = ["pyproject.toml", "uv.lock"]      # what the venv is a function of
     source_roots = ["src"]                                  # put on PYTHONPATH from each sha's tree
+    artifact_paths = ["cases"]                              # what a job reads beside them (lab_commons.hpc.artifact)
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
     timeout_s = { incremental = 300, full = 3000 }          # pytest --timeout per run scope (absent: the repo's own)
 
@@ -72,6 +73,8 @@ class Builds:
     native_key: str = ''
     #: ``{scope: seconds}`` handed to pytest as ``--timeout``; a scope absent here keeps the repo's own default.
     timeout_s: dict[str, int] = field(default_factory=dict)
+    #: Repository paths a job's artifact carries beside the source roots (:mod:`lab_commons.hpc.artifact`).
+    artifact_paths: tuple[str, ...] = ()
 
 
 def read_builds(text: str) -> Builds:
@@ -83,6 +86,7 @@ def read_builds(text: str) -> Builds:
         needs=tuple(raw.get('needs', ())),
         dependency_inputs=tuple(raw.get('dependency_inputs', ())),
         source_roots=tuple(raw.get('source_roots', ())),
+        artifact_paths=tuple(raw.get('artifact_paths', ())),
         native_inputs=tuple(native.get('inputs', ())),
         native_build=str(native.get('build', '')),
         timeout_s=dict(raw.get('timeout_s', {})),

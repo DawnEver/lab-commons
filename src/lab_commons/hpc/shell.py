@@ -29,12 +29,14 @@ __all__ = [
     'PREP_LOG',
     'ROOT',
     'TIME',
+    'UV_PRUNE',
     'RunSpec',
     'build_script',
     'collect_command',
     'facts',
     'fetch_script',
     'group_items',
+    'keyed_build',
     'needs_script',
     'nothing_collected',
     'pack',
@@ -57,8 +59,12 @@ PREP_LOG: Final = '.lab-ci/prep.log'
 #: The prefix of a ``<step>=<seconds>s`` timing line -- printed AND appended to :data:`PREP_LOG`.
 TIME: Final = '@@@ time'
 
-#: uv's persistent cache, shared by every key (concurrency-safe by its own lock).
+#: uv's cache, shared by every key (concurrency-safe by its own lock).
 _UV_CACHE: Final = f'{ROOT}/uv-cache'
+
+#: Ends every env build: the cache keeps only what was built from source, never a resident copy of the
+#: downloads (a file is an HPC resource; the uv cache measured 43-48 k files per account, 2026-10-17).
+UV_PRUNE: Final = 'uv cache prune --ci -q'
 
 #: Lines of the build log a refusal quotes.
 _LOG_TAIL: Final = 40
@@ -161,7 +167,7 @@ def needs_script(spec: RunSpec) -> str:
     return f'for c in {wanted}; do command -v "$c" > /dev/null 2>&1 || echo "@@@ missing $c"; done; true'
 
 
-def _step(directory: str, log: str, build: str) -> list[str]:
+def keyed_build(directory: str, log: str, build: str) -> list[str]:
     """Shell lines building *directory* once with *build* (its own ``bash -e``), under a lock, log kept at *log*."""
     return [
         f'D={directory}; L={log}',
@@ -236,7 +242,11 @@ def build_script(spec: RunSpec) -> str:
         f'export E={env} UV_CACHE_DIR={_UV_CACHE} UV_LINK_MODE=hardlink',
         *_timed(
             'env',
-            _step('"$E"', env_log, '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, builds.install])),
+            keyed_build(
+                '"$E"',
+                env_log,
+                '\n'.join([f'uv venv -q --allow-existing{python} "$E"', activate, builds.install, UV_PRUNE]),
+            ),
         ),
         f'[ -x "$E/bin/python" ] || {{ echo "{BUILD_FAILED} no bin/python in $E after the build"; exit 0; }}',
     ]
@@ -246,7 +256,7 @@ def build_script(spec: RunSpec) -> str:
         cargo = f'export CARGO_TARGET_DIR="$HOME"/{cargo_target(builds.native_key)}\nmkdir -p "$CARGO_TARGET_DIR"'
         cargo += '\nexec 8> "$CARGO_TARGET_DIR.lock"; flock 8'
         build = f'{activate}\nexport LAB_CI_NATIVE="$N"\n{cargo}\n{builds.native_build}'
-        lines += [f'export N={native}', *_timed('native', _step('"$N"', f'{native}.log', build))]
+        lines += [f'export N={native}', *_timed('native', keyed_build('"$N"', f'{native}.log', build))]
         path.append(native)
     pythonpath = ':'.join([*path, f'{ROOT}/bin']).replace('"$HOME"', '$HOME')
     lines += [
