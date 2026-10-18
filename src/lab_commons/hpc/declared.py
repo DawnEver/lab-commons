@@ -45,6 +45,7 @@ KNOWN_TABLES: Final = frozenset(
         'branchset',
         'carry',
         'ci',
+        'components',
         'dep',
         'doors',
         'forge',
