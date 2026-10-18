@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.hpc.declared import kit_tables
+from lab_commons.hpc.declared import InvalidDeclaration, kit_tables
 
 __all__ = [
     'FULL',
@@ -90,13 +90,13 @@ def read_builds(text: str) -> Builds:
     bad = {k: v for k, v in builds.timeout_s.items() if k not in SCOPES or not isinstance(v, int) or v <= 0}
     if bad:
         msg = f'[tool.lab_commons.hpc] timeout_s {bad!r}: keys are scopes {SCOPES}, values positive whole seconds'
-        raise ValueError(msg)
+        raise InvalidDeclaration(msg)
     if builds.dependency_inputs and not builds.source_roots:
         msg = '[tool.lab_commons.hpc] dependency_inputs needs source_roots: a shared venv holds no sha source'
-        raise ValueError(msg)
+        raise InvalidDeclaration(msg)
     if bool(builds.native_inputs) != bool(builds.native_build):
         msg = '[tool.lab_commons.hpc] native needs both inputs and build'
-        raise ValueError(msg)
+        raise InvalidDeclaration(msg)
     return builds
 
 

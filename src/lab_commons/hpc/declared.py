@@ -33,7 +33,15 @@ from typing import Any, Final
 import lab_commons.launch as _door
 from lab_commons.hpc.retired import RETIRED
 
-__all__ = ['KNOWN_TABLES', 'OutdatedKit', 'RetiredTable', 'kit_tables', 'pyproject_at']
+__all__ = [
+    'KNOWN_TABLES',
+    'REFUSALS',
+    'InvalidDeclaration',
+    'OutdatedKit',
+    'RetiredTable',
+    'kit_tables',
+    'pyproject_at',
+]
 
 _GIT: Final = shutil.which('git') or 'git'
 
@@ -71,6 +79,14 @@ class OutdatedKit(ValueError):
 
 class RetiredTable(ValueError):
     """A declaration names a table this kit retired: the declaration is older than its reader."""
+
+
+class InvalidDeclaration(ValueError):
+    """A declaration this kit reads and refuses: its fields contradict each other or the kit's domain."""
+
+
+#: Every refusal of a repo's own declaration: a per-repo step reports the repo and skips it, never crashes.
+REFUSALS: Final = (RetiredTable, OutdatedKit, InvalidDeclaration)
 
 
 def kit_tables(text: str) -> dict[str, Any]:

@@ -17,7 +17,7 @@ from typing import Any
 
 import lab_commons.launch as _door
 from lab_commons.config import config_path
-from lab_commons.hpc.declared import OutdatedKit, RetiredTable
+from lab_commons.hpc.declared import REFUSALS
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of, host_serve_argv, load
 from lab_commons.hpc.deploy_steps import Step, Tools, build, update
 from lab_commons.log import emit
@@ -31,7 +31,7 @@ def _refresh(step: Step, spec: Deployment, home: Path, repo: Repo) -> str:
         return f'its checkout update exited {rc}'
     try:
         rc = build(step, spec, home, repo)
-    except (RetiredTable, OutdatedKit) as why:
+    except REFUSALS as why:
         return str(why)
     return f'its venv build exited {rc}' if rc else ''
 
