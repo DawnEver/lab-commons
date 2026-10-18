@@ -175,7 +175,7 @@ def _submit_round(
     pending = [pending[i] for i in order]
     plan = _rewalled(plan, shards, [seconds[i] for i in order], policy, state.get('min_minutes', 0.0))
     ceiling = {'timeout_s': state['timeout_s']} if state.get('timeout_s') else {}
-    items = [{'ids': group, 'stream': f'.lab-ci/{tag}/{i}.jsonl', **ceiling} for i, group in enumerate(pending)]
+    items = [{'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, **ceiling} for i, group in enumerate(pending)]
     setup = (ENV,)
     sha = state['sha']
     job = JobSpec(

@@ -32,6 +32,9 @@ RETIRED: Final[dict[str, str]] = {
     # Files are an HPC resource: retention runs every serve tick, and a tree goes once its sha is not in flight.
     'every_hours': 'nothing: retention runs every serve tick (lab_commons.dev.retention)',
     'tree-unreferenced': 'tree-not-in-flight (lab_commons.dev.retentionplan.in_flight)',
+    # A round streams into ONE file, kept as one file per run (HPC one-file plan, phase 5, 2026-10-18).
+    'pack_streams': 'lab_commons.hpc.records.kept_text (the round file, its retired shape upgraded on read)',
+    'KEPT_STREAMS': 'lab_commons.hpc.records.stream_sources (``runs/<sha>/streams.jsonl``)',
     # A request is a job on the part path: admitted by its declared need-set and run (lab-commons 2026-10-13).
     'claims requests yet': 'lab_commons.dev.forgerequest (admitted by its declared need-set, claimed and run)',
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
