@@ -34,6 +34,7 @@ __all__ = [
     'femm_find',
     'file_version',
     'jmag_find',
+    'jmag_headless',
     'matlab_find',
     'matlab_version',
     'node_find',
@@ -230,9 +231,8 @@ def simba_smoke(_path: Path) -> tuple[bool, str]:
     return _run([sys.executable, '-c', SIMBA_SMOKE])
 
 
-#: JMAG's COM servers: the designer (its executable and version) and the scheduler (reachable = smoke).
+#: JMAG's COM registration -- read only to FIND the designer's executable; the probe never dispatches it.
 JMAG_DESIGNER: Final = 'designer.Application'
-JMAG_SCHEDULER: Final = 'scheduler.JobApplication'
 
 
 def jmag_find() -> tuple[str, Path] | None:
@@ -250,19 +250,45 @@ def jmag_find() -> tuple[str, Path] | None:
     return ('registry', Path(exe)) if Path(exe).is_file() else None
 
 
+#: Run inside Designer's own python by ``designer.exe -w`` (no window, no COM): the in-process Application
+#: writes its version string (``25.2.01zp``) to the file ``{out!r}`` names, so the file IS the verdict --
+#: Designer exits 0 even when its script raised.
+JMAG_SMOKE: Final = (
+    'import designer\n'
+    'version = designer.GetApplication().VersionString(True)\n'
+    'with open({out!r}, "w", encoding="utf-8") as f:\n'
+    '    f.write(version)\n'
+)
+
+#: The last headless reading per executable, so one probe's version and smoke share one Designer start.
+_JMAG_READ: dict[Path, tuple[str | None, str]] = {}
+
+
+def jmag_headless(path: Path) -> tuple[str | None, str]:
+    """``designer.exe -w -l <log> <script>``: ``(the version the tool wrote, or None; what happened)``."""
+    with tempfile.TemporaryDirectory(prefix='lab-commons-jmag-smoke-') as scratch:
+        out, script = Path(scratch) / 'version.txt', Path(scratch) / 'smoke.py'
+        script.write_text(JMAG_SMOKE.format(out=str(out)), encoding='utf-8')
+        _exit, detail = _run([str(path), '-w', '-l', str(Path(scratch) / 'designer.log'), str(script)])
+        version = out.read_text(encoding='utf-8').strip() if out.is_file() else ''
+    if not version:
+        return None, f'{detail}; the script wrote no version file'
+    return version, f'{detail}; wrote version {version}'
+
+
 def jmag_version(path: Path) -> tuple[str, str] | None:
-    """The designer executable's file version."""
+    """The version Designer itself reports, headless; else the executable's file version (the smoke says why)."""
+    _JMAG_READ[path] = read = jmag_headless(path)
+    if read[0] is not None:
+        return 'designer -w', read[0]
     found = file_version(path)
     return ('file version', found) if found else None
 
 
-#: The scheduler answering a COM dispatch is the reachability JMAG's job runs need.
-JMAG_SMOKE: Final = f'import win32com.client\nwin32com.client.Dispatch({JMAG_SCHEDULER!r})\n'
-
-
-def jmag_smoke(_path: Path) -> tuple[bool, str]:
-    """The scheduler reachable over COM, in a child of this interpreter."""
-    return _run([sys.executable, '-c', JMAG_SMOKE])
+def jmag_smoke(path: Path) -> tuple[bool, str]:
+    """Designer ran a script headless and it wrote its version -- the route a JMAG bundle runs by."""
+    version, detail = _JMAG_READ.pop(path, None) or jmag_headless(path)
+    return version is not None, detail
 
 
 def node_find(*, which: Callable[[str], str | None] = shutil.which) -> tuple[str, Path] | None:
