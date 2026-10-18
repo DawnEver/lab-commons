@@ -13,9 +13,11 @@ deadline. A row whose launcher is gone (pid absent, or its creation stamp differ
 pid) or whose deadline passed by more than :data:`GRACE_S` is reaped by the next admission, so
 no crash leaves memory booked.
 
-A WAITER HOLDS NOTHING. It takes a FIFO ticket that orders it in the queue and counts for
-nothing in the room. Queueing is STRICT FIFO: only the oldest live
-ticket may be admitted, so a large demand is never starved by a stream of small ones. The price
+A WAITER HOLDS NOTHING. It takes a FIFO ticket, carrying its demand, that orders it in the queue and
+counts for nothing in the room. Queueing is STRICT FIFO AMONG CONTENDERS: a ticket is admitted only when
+no earlier live ticket wants a resource it wants (cores, memory, or the same seat), so a large demand is
+never starved by a stream of small ones. A demand wanting nothing the queue ahead waits on -- a seats-only
+environment check, say -- takes nothing any earlier waiter is waiting for, so it passes them. The price
 is head-of-line blocking, and it is bounded on both sides, which is why EVERY WAIT ENDS: the head
 waits at most until the holders' deadlines (each claim ends by then), and every waiter gives up
 at its own ``queue_s`` -- a required argument -- and its ticket is reaped with it.
@@ -115,7 +117,7 @@ CREATE TABLE IF NOT EXISTS claims (
     kept INTEGER NOT NULL DEFAULT 0, probe TEXT);
 CREATE TABLE IF NOT EXISTS tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
-    gives_up REAL NOT NULL, what TEXT NOT NULL);
+    gives_up REAL NOT NULL, what TEXT NOT NULL, cpu INTEGER, mem_bytes INTEGER, seats TEXT);
 """
 
 
@@ -136,15 +138,20 @@ def _connect() -> sqlite3.Connection:
     con = sqlite3.connect(path, timeout=_LOCK_S, isolation_level=None)
     con.execute('PRAGMA journal_mode=WAL')
     con.executescript(_SCHEMA)
-    columns = {row[1] for row in con.execute('PRAGMA table_info(claims)')}
-    for name, spelled in _ADDED:
-        if name not in columns:  # a ledger file written before the column existed: the schema moves forward
-            con.execute(f'ALTER TABLE claims ADD COLUMN {spelled}')
+    for table, added in _ADDED.items():
+        columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
+        for name, spelled in added:
+            if name not in columns:  # a ledger file written before the column existed: the schema moves forward
+                con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
     return con
 
 
-#: Columns added to ``claims`` after the file format was first written: (name, its fixed definition).
-_ADDED: Final = (('kept', 'kept INTEGER NOT NULL DEFAULT 0'), ('probe', 'probe TEXT'))
+#: Columns added after the file format was first written, per table: (name, its fixed definition).
+#: A ticket's demand is NULL on a ticket written before it was declared: such a ticket contends for everything.
+_ADDED: Final = {
+    'claims': (('kept', 'kept INTEGER NOT NULL DEFAULT 0'), ('probe', 'probe TEXT')),
+    'tickets': (('cpu', 'cpu INTEGER'), ('mem_bytes', 'mem_bytes INTEGER'), ('seats', 'seats TEXT')),
+}
 
 
 @contextmanager
@@ -261,6 +268,19 @@ def _vector_of(held: Holding) -> Resources:
     return Resources({'cpu': held.cpu, 'mem_gb': held.mem_bytes / GB, **held.seats})
 
 
+def _contends(demand: Demand, ahead: tuple[int | None, int | None, str | None]) -> bool:
+    """Whether an earlier ticket asking *ahead* wants any resource *demand* does; an undeclared one wants all."""
+    cpu, mem_bytes, seats = ahead
+    if cpu is None or mem_bytes is None or seats is None:
+        return True
+    wanted = json.loads(seats)
+    return bool(
+        (cpu and demand.cpu)
+        or (mem_bytes and demand.mem_bytes)
+        or any(amount and wanted.get(name) for name, amount in demand.seats.items())
+    )
+
+
 def _try(
     con: sqlite3.Connection,
     ticket: int,
@@ -285,12 +305,13 @@ def _try(
             f'{what}: key {tag[0]!r} is held by the external claim {earlier[0]!r}, still unresolved -- release it first'
         )
         raise DuplicateKey(msg)
-    head = con.execute('SELECT id, what FROM tickets ORDER BY id LIMIT 1').fetchone()
+    ahead = con.execute('SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,))
+    head = next((row[0] for row in ahead if _contends(demand, row[1:])), None)
     refusal = _decide(capacity, _read(con), reading, demand, what)
     if refusal is not None:
         return refusal
-    if head is not None and head[0] != ticket:
-        return f'queued behind {head[1]!r}, which came first (strict FIFO)'
+    if head is not None:
+        return f'queued behind {head!r}, which came first and wants what it wants (strict FIFO)'
     deadline = now + demand.wall_s
     pid = os.getpid()
     cursor = con.execute(
@@ -353,8 +374,8 @@ def hold(
         with _immediate(con):
             ticket = int(
                 con.execute(
-                    'INSERT INTO tickets (pid, created, gives_up, what) VALUES (?,?,?,?)',
-                    (pid, creation_stamp(pid), gives_up, what),
+                    'INSERT INTO tickets (pid, created, gives_up, what, cpu, mem_bytes, seats) VALUES (?,?,?,?,?,?,?)',
+                    (pid, creation_stamp(pid), gives_up, what, demand.cpu, demand.mem_bytes, _seats(demand)),
                 ).lastrowid
                 or 0
             )
@@ -403,3 +424,7 @@ def _wait(
             msg = f'{what}: {NOT_ADMITTED} -- no room within the queue limit -- {outcome}'
             raise NotAdmitted(msg)
         time.sleep(min(poll_s, left))
+
+
+def _seats(demand: Demand) -> str:
+    return json.dumps(dict(demand.seats))

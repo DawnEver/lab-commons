@@ -122,10 +122,13 @@ def test_a_wait_never_exceeds_queue_s_and_names_the_holder() -> None:
         assert time.monotonic() - start < 1.0 + 1.0
 
 
-def _ticket(path: Path, pid: int) -> None:
+def _ticket(path: Path, pid: int, demand: Demand | None = None) -> None:
+    """A waiter's ticket; with no *demand* it is a ticket written before tickets declared one: it contends for all."""
+    asked = (None, None, None) if demand is None else (demand.cpu, demand.mem_bytes, json.dumps(dict(demand.seats)))
     with sqlite3.connect(path) as con:
         con.execute(
-            'INSERT INTO tickets (pid, created, gives_up, what) VALUES (?, NULL, ?, ?)', (pid, time.time() + 600, 'w')
+            'INSERT INTO tickets (pid, created, gives_up, what, cpu, mem_bytes, seats) VALUES (?, NULL, ?, ?, ?, ?, ?)',
+            (pid, time.time() + 600, 'w', *asked),
         )
 
 
@@ -372,3 +375,42 @@ def test_a_queue_wait_that_runs_out_is_not_admitted_and_an_oversize_demand_is_no
     assert not isinstance(never.value, NotAdmitted)
     assert not not_admitted(str(never.value))
     assert not not_admitted('dep --bootstrap exited 1: no lock')
+
+
+def test_a_demand_that_contends_for_nothing_ahead_passes_the_queue(box: Path) -> None:
+    """PLANTED (live 2026-10-17): a zero-cpu env check queued behind a CPU-heavy verify and was refused."""
+    _ticket(box, os.getpid(), _demand(cpu=4))
+    with hold(_demand(cpu=0, mem_gb=0.0, seats={'env-x': 1}), 'dep:x', queue_s=0.2, **_ON):
+        assert [row.what for row in holdings()] == ['dep:x']
+
+
+def test_two_cpu_contenders_keep_fifo_order(box: Path) -> None:
+    """PLANTED CONTROL: a later cpu demand never passes an earlier one, however small -- no starvation."""
+    _ticket(box, os.getpid(), _demand(cpu=4))
+    with (
+        pytest.raises(NotAdmitted, match='queued behind'),
+        hold(_demand(cpu=1), 'late', queue_s=0.2, **_ON),
+    ):
+        pass
+
+
+def test_a_seat_demand_queues_behind_an_earlier_claim_for_the_same_seat(box: Path) -> None:
+    """PLANTED CONTROL: contention is per resource; a seat is one."""
+    _ticket(box, os.getpid(), _demand(cpu=0, mem_gb=0.0, seats={'jmag': 1}))
+    with (
+        pytest.raises(NotAdmitted, match='queued behind'),
+        hold(_demand(cpu=0, mem_gb=0.0, seats={'jmag': 1}), 'late', queue_s=0.2, **_ON),
+    ):
+        pass
+    with hold(_demand(cpu=0, mem_gb=0.0, seats={'env-y': 1}), 'other-seat', queue_s=0.2, **_ON):
+        pass
+
+
+def test_a_ticket_that_declares_no_demand_contends_for_everything(box: Path) -> None:
+    """A ticket written before tickets declared their demand is ordered ahead of every later one, as before."""
+    _ticket(box, os.getpid())
+    with (
+        pytest.raises(NotAdmitted),
+        hold(_demand(cpu=0, mem_gb=0.0, seats={'env-x': 1}), 'dep:x', queue_s=0.2, **_ON),
+    ):
+        pass
