@@ -52,11 +52,9 @@ MIB: Final = 1024**2
 
 __all__ = [
     'FILES_PER_RUN',
-    'FILES_PER_SHARD',
     'MIB',
     'Plan',
     'allocate',
-    'files_needed',
     'free_slots',
     'grantable_gb',
     'headroom',
@@ -256,16 +254,9 @@ def headroom(snapshot: Snapshot) -> int:
     return max(0, math.floor(cap))
 
 
-#: The files a submitted array adds to the home: its run directory, ``logs/``, ``results/``, manifest, script.
-FILES_PER_RUN: Final = 5
-
-#: And each array task: its log and its results file.
-FILES_PER_SHARD: Final = 2
-
-
-def files_needed(plan: Plan) -> int:
-    """The inodes *plan* adds to the home when submitted -- the file-count quota is a resource like the CPUs."""
-    return FILES_PER_RUN + FILES_PER_SHARD * len(plan.shards)
+#: The inodes a submitted array adds to the home, whatever its width: its run directory, manifest, script and
+#: the one results file every task appends to (:mod:`lab_commons.hpc.worker`); a task's output stays node-local.
+FILES_PER_RUN: Final = 4
 
 
 def plan_on(
@@ -282,7 +273,7 @@ def plan_on(
     """*grant*'s plan for *n_items* on its headroom, stamped with the session tag and the grant's set-up.
 
     Refused (``ValueError``, naming the account and why) when the account has no CPU headroom for one item, no
-    partition can hold the work, or the home has fewer free inodes than the array writes (:func:`files_needed`).
+    partition can hold the work, or the home has fewer free inodes than the array writes (:data:`FILES_PER_RUN`).
     """
     room = headroom(snapshot)
     if room < cost.cpus:
@@ -306,8 +297,8 @@ def plan_on(
     except ValueError as refused:
         msg = f'{grant.name}: {refused}'
         raise ValueError(msg) from refused
-    if snapshot.inodes_free is not None and files_needed(plan) > snapshot.inodes_free:
-        msg = f'{grant.name}: the home has {snapshot.inodes_free} free inodes, the array writes {files_needed(plan)}'
+    if snapshot.inodes_free is not None and snapshot.inodes_free < FILES_PER_RUN:
+        msg = f'{grant.name}: the home has {snapshot.inodes_free} free inodes, the array writes {FILES_PER_RUN}'
         raise ValueError(msg)
     return replace(plan, comment=COMMENT_PREFIX + session.name if session else '', setup=grant.setup)
 

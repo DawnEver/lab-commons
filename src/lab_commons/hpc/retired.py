@@ -295,6 +295,12 @@ RETIRED: Final[dict[str, str]] = {
     'floating_git': "nothing: a git dependency's revision is the lock's (lab_commons.hpc.builds.builds_at)",
     'remote_tip': "nothing: a git dependency's revision is the lock's (lab_commons.hpc.builds.builds_at)",
     'overlay_argv': 'nothing: a served venv is exactly its committed lock; nothing is installed over it',
+    # An HPC job ships ONE file and leaves a few (plan 2026-10-17): one artifact per sha, one results file per run.
+    'files_needed': 'lab_commons.hpc.plan.FILES_PER_RUN (one results file per run: its width adds no file)',
+    'FILES_PER_SHARD': 'lab_commons.hpc.plan.FILES_PER_RUN (one results file per run: its width adds no file)',
+    'occupied_trees': 'lab_commons.dev.retentionplan.occupied_shas (a test run tree or a job run directory)',
+    '--output=logs/': 'nothing: a task writes to node-local $TMPDIR; its tail is kept in results.jsonl',
+    'reuse that tree and env': 'run build builds the commit artifact, one file (lab_commons.hpc.artifact)',
 }
 
 

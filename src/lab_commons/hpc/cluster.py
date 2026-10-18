@@ -8,9 +8,11 @@ where a commit's run is, and what the cluster can take, is read from the forge. 
 cluster as ``cat > path`` on stdin, so a run needs no ``scp`` and no shared filesystem with the caller
 -- and a test drives every function below with a fake runner and no cluster.
 
-THE RUN DIRECTORY IS THE RECORD. ``<workdir>/.lab-hpc/<name>-<stamp>/`` holds the manifest (items and
-shard ranges), the array script, one result file per shard and one log per task. Re-running a failed
-shard re-reads the same manifest; nothing about a run lives only in the caller's memory.
+THE RUN DIRECTORY IS THE RECORD, AND IT IS THREE FILES (:func:`run_home`): the manifest (items and shard
+ranges), the array script and the ONE results file every task appends to (:mod:`lab_commons.hpc.worker`). A
+task's output goes to node-local ``$TMPDIR`` and only its tail reaches the results file. Re-running a failed
+shard re-reads the same manifest; nothing about a run lives only in the caller's memory. A run written by an
+earlier worker (a results file per shard) still gathers: :func:`gather` upgrades it on read.
 """
 
 from __future__ import annotations
@@ -26,12 +28,14 @@ from datetime import datetime
 from typing import Any, Final
 
 import lab_commons.launch as _door
-from lab_commons.hpc.config import Config
+from lab_commons.hpc.config import Config, JobSpec
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.phases import Clock
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
+from lab_commons.hpc.worker import ITEM, RESULTS, SHARD
 from lab_commons.log import log
+from lab_commons.outcomes.record import Event
 
 __all__ = [
     'BUILD_TIMEOUT',
@@ -41,10 +45,12 @@ __all__ = [
     'Submission',
     'Unreachable',
     'failover_runner',
+    'files_of',
     'gather',
     'local_runner',
     'probe',
     'render_script',
+    'run_home',
     'runner_for',
     'shard_clock',
     'shard_states',
@@ -207,9 +213,10 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         f'--gres=gpu:{plan.gpus}' if plan.gpus else '',
         f'--time={plan.minutes}',
         f'--comment={plan.comment}' if plan.comment else '',
-        # Relative to the submit directory (the run directory, see submit): Slurm never expands a ``~``.
-        '--output=logs/%A_%a.out',
+        # A task's output is node-local (below); Slurm writes no file of its own on the shared home.
+        '--output=/dev/null',
     ]
+    worker = f'{config.job.python} -m lab_commons.hpc.worker'
     lines = ['#!/bin/bash', *(f'#SBATCH {d}' for d in directives if d), 'set -eo pipefail']
     lines += [*plan.setup, f'cd {_sh_path(config.job.workdir)}', *config.job.setup]
     lines += [
@@ -217,9 +224,26 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
             'export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK" OPENBLAS_NUM_THREADS="$SLURM_CPUS_PER_TASK" '
             'MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"'
         ),
-        f'exec {config.job.python} -m lab_commons.hpc.worker {_sh_path(run_dir)}/manifest.json "$SLURM_ARRAY_TASK_ID"',
+        f'M={_sh_path(run_dir)}/manifest.json',
+        'LOG="${TMPDIR:-/tmp}/lab-hpc-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}.log"',
+        'code=0',
+        f'{worker} "$M" "$SLURM_ARRAY_TASK_ID" > "$LOG" 2>&1 || code=$?',
+        # The worker is the env's own lab_commons: one without --close leaves no close line, so its shard is
+        # simply not returned. The task's exit stays the worker's either way.
+        f'{worker} --close "$M" "$SLURM_ARRAY_TASK_ID" "$code" "$LOG" || true',
+        'rm -f "$LOG"',
+        'exit "$code"',
     ]
     return '\n'.join(lines) + '\n'
+
+
+def run_home(job: JobSpec) -> str:
+    """Where a job's run directories live: ``~/ci/jobs/<sha>`` for a job at a commit, else ``<workdir>/.lab-hpc``.
+
+    A commit's jobs carry the sha in their submit directory, which ``squeue %Z`` reports, so retention reads
+    which artifact a queued or running job needs (:mod:`lab_commons.dev.retentionplan`).
+    """
+    return f'~/ci/jobs/{job.sha}' if job.sha else f'{job.workdir.rstrip("/")}/.lab-hpc'
 
 
 @dataclass(frozen=True)
@@ -257,11 +281,11 @@ def submit(
     *only* resubmits chosen shard indices of an EXISTING run: the manifest and script are reused as
     written, so a retry runs exactly what the first attempt ran.
     """
-    run_dir = f'{config.job.workdir.rstrip("/")}/.lab-hpc/{config.job.name}-{stamp}'
+    run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
     if only is None:
         manifest = {'entry': config.job.entry, 'items': items, 'shards': [list(s) for s in plan.shards]}
-        run(f'mkdir -p {quoted}/logs {quoted}/results && cat > {quoted}/manifest.json', json.dumps(manifest))
+        run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
         run(f'cat > {quoted}/job.sh', render_script(plan, config, run_dir))
     indices = list(range(len(plan.shards))) if only is None else sorted(only)
     if not indices:
@@ -328,12 +352,64 @@ def shard_states(run: Runner, job_ids: Sequence[str]) -> dict[int, str]:
     return {shard: clock.state for shard, clock in shard_clock(run, job_ids).items()}
 
 
+#: Separates the results file from an earlier worker's per-shard files in :func:`gather`'s one read.
+_EARLIER: Final = '@@@ earlier-layout'
+
+
 def gather(run: Runner, run_dir: str) -> dict[int, list[dict[str, Any]]]:
-    """Every shard result file written so far, keyed by shard index."""
+    """Every RETURNED shard's item results, keyed by shard index -- read from the run's one results file.
+
+    A run an earlier worker wrote holds one ``results/<shard>.json`` per shard instead; it is read the same
+    way (FORMATS-UPGRADE-ON-READ: jobs still running across the change must gather), never written.
+    """
     quoted = _sh_path(run_dir)
-    out = run(f'for f in {quoted}/results/*.json; do [ -e "$f" ] && cat "$f" && echo; done; true', None)
+    out = run(
+        f'cat {quoted}/{RESULTS} 2>/dev/null; printf "\\n{_EARLIER}\\n"; '
+        f'for f in {quoted}/results/*.json; do [ -e "$f" ] && cat "$f" && echo; done; true',
+        None,
+    )
+    current, _, earlier = out.partition(f'\n{_EARLIER}\n')
+    return {**_upgraded(earlier), **_returned(current)}
+
+
+def _returned(text: str) -> dict[int, list[dict[str, Any]]]:
+    """The results file's returned shards: each closed with exit 0, with the latest line of each of its items."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    events = []
+    for number, line in enumerate(lines, start=1):
+        try:
+            events.append(Event.from_plain(json.loads(line)))
+        except ValueError:
+            if number < len(lines):
+                raise  # only the last line may be a killed writer's torn tail
+    items: dict[int, dict[str, Any]] = {}
+    codes: dict[int, int] = {}
+    for event in events:
+        if event.kind == ITEM:
+            items[int(event.key)] = dict(event.data)
+        elif event.kind == SHARD:
+            codes[int(event.key)] = int(event.data['code'])
+    returned: dict[int, list[dict[str, Any]]] = {shard: [] for shard, code in codes.items() if code == 0}
+    for index in sorted(items):
+        data = items[index]
+        if data['shard'] in returned:
+            result = {'index': index, 'ok': data['ok']}
+            result |= {'value': data['value']} if data['ok'] else {'error': data['error']}
+            returned[data['shard']].append(result)
+    return returned
+
+
+def _upgraded(text: str) -> dict[int, list[dict[str, Any]]]:
+    """An earlier worker's per-shard files, one ``{shard, results}`` object per line, read one way."""
     results = {}
-    for line in filter(None, (raw.strip() for raw in out.splitlines())):
+    for line in filter(None, (raw.strip() for raw in text.splitlines())):
         record = json.loads(line)
         results[int(record['shard'])] = record['results']
     return results
+
+
+def files_of(run: Runner, run_dir: str) -> tuple[int, bool]:
+    """How many files *run_dir* holds, and whether an earlier worker wrote it (a ``results/`` directory)."""
+    quoted = _sh_path(run_dir)
+    out = run(f'find {quoted} -type f | wc -l; [ -d {quoted}/results ] && echo earlier; true', None).split()
+    return (int(out[0]) if out else 0), 'earlier' in out[1:]
