@@ -283,7 +283,7 @@ RETIRED: Final[dict[str, str]] = {
     'reverting(': 'lab_commons.dev.installdoor.unlocked(',
     # PIN + FRESHNESS (user ruling 2026-10-17): the lock is committed and the developer who pushes keeps it at the
     # newest resolution (lab_commons.dev.lockcheck). No lock AGE, no scheduled re-lock, no tip folded into a key.
-    'lockupgrade': 'nothing: the `lock` pre-push row refuses a stale lock; the pusher runs `uv lock --upgrade`',
+    'lockupgrade': 'nothing: the `lock` pre-push row refuses a stale lock; the pusher runs `dep --lock-upgrade`',
     'Lock-Upgraded': 'nothing: freshness is judged by resolving, never by a commit trailer',
     'integrator.lock_max_age_days': 'nothing: delete the key -- a lock is judged by freshness, not age',
     'branchset.update': 'nothing: delete the key -- no lock upgrade branch exists; the pusher upgrades',
