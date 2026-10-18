@@ -1,7 +1,10 @@
 """THE EXECUTOR -- runs a graph's units; the one local implementation runs each IN-PROCESS (D16, D18, D19).
 
 ONE INTERFACE (:class:`Executor`: ``run(graph) -> {name: Outcome}``), ONE LOCAL IMPLEMENTATION
-(:class:`LocalExecutor`). For each unit, in graph order:
+(:class:`LocalExecutor`). Every READY unit -- its upstream all decided -- starts at once on its own thread, and the
+BOX LEDGER is the only bound: a unit whose declared demand the ledger cannot admit now waits in its queue (FIFO
+among contenders), so a vendor's seats, not a pool size, cap how many of its units overlap. Outcomes come back
+in graph order. For each unit:
 
 1. an upstream that did not produce a result -> the unit is SKIPPED, naming it (a failure stops its dependants);
 2. its inputs resolve (a file, or an upstream result's output) and give the unit hash;
@@ -17,14 +20,20 @@ INTENT BEFORE ACTION (D19). A run is journaled (``<journal>/<unit hash>.json``) 
 the entry's *work* directory is keyed by the unit hash and kept until the result is stored. A process that
 dies mid-run therefore leaves the journal entry and the work directory; the next run of the same unit finds
 both and RESUMES -- the entry sees its own checkpoint in *work* -- and says so (:attr:`Outcome.resumed`).
+
+ONE HASH RUNS ONCE: a ready unit whose hash is already running waits for it and is then a cache hit. AN
+INTERRUPT (or any BaseException out of an entry) stops scheduling, releases every claim this run holds, and
+re-raises; an entry already running is not killed -- its journal entry stays, so the next run resumes it.
 """
 
 from __future__ import annotations
 
 import json
 import pkgutil
+import queue
 import shutil
 import socket
+import threading
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -33,8 +42,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, Protocol
 
-from lab_commons.box.demand import Refused
+from lab_commons.box.demand import Claim, Refused
 from lab_commons.box.ledger import hold as box_hold
+from lab_commons.box.ledger import release
 from lab_commons.compute.graph import Graph
 from lab_commons.compute.presence import Presence
 from lab_commons.compute.store import Nondeterministic, Record, Result, ResultStore, result_hash
@@ -175,19 +185,59 @@ class LocalExecutor:
     def run(self, graph: Graph) -> dict[str, Outcome]:
         """Every unit's :class:`Outcome`, in graph order (the module docstring)."""
         done: dict[str, Outcome] = {}
-        for name in graph.order():
-            done[name] = self._one(name, graph.units[name], done)
-        return done
+        waiting = list(graph.order())
+        running: dict[str, str] = {}  # unit hash -> name
+        finished: queue.SimpleQueue[tuple[str, Outcome | BaseException]] = queue.SimpleQueue()
+        self._claims: set[Claim] = set()
+        self._cancel = threading.Event()
+        try:
+            while waiting or running:
+                for name in [n for n in waiting if graph.units[n].upstream <= done.keys()]:
+                    unit = graph.units[name]
+                    early = self._decide(unit, done)
+                    if isinstance(early, Outcome):
+                        done[name] = early
+                    elif early[0] not in running:
+                        running[early[0]] = name
+                        threading.Thread(target=self._worker, args=(name, unit, *early, finished), daemon=True).start()
+                    else:
+                        continue  # the same hash is running: decide again once it is stored
+                    waiting.remove(name)
+                if running:
+                    name, outcome = _next(finished)
+                    del running[outcome.unit_hash]
+                    done[name] = outcome
+        except BaseException:
+            self._cancel.set()
+            for claim in list(self._claims):
+                release(claim)
+            raise
+        return {name: done[name] for name in graph.order()}
 
-    def _one(self, name: str, unit: Unit, done: Mapping[str, Outcome]) -> Outcome:
+    def _decide(self, unit: Unit, done: Mapping[str, Outcome]) -> Outcome | tuple[str, dict[str, Path]]:
+        """SKIPPED or CACHED without running anything, else the unit hash and resolved files to place."""
         blocked = sorted(u for u in unit.upstream if done[u].state not in _PRODUCED)
         if blocked:
             return Outcome(SKIPPED, why=f'upstream {", ".join(f"{u} {done[u].state}" for u in blocked)}')
         files = {key: _resolve(value, done) for key, value in unit.inputs.items() if isinstance(value, Path | Output)}
         unit_hash = unit.unit_hash(files)
         held = self.store.get(unit_hash)
-        if held is not None:
-            return Outcome(CACHED, unit_hash, held)
+        return Outcome(CACHED, unit_hash, held) if held is not None else (unit_hash, files)
+
+    def _worker(
+        self,
+        name: str,
+        unit: Unit,
+        unit_hash: str,
+        files: Mapping[str, Path],
+        finished: queue.SimpleQueue[tuple[str, Outcome | BaseException]],
+    ) -> None:
+        try:
+            finished.put((name, self._place(name, unit, unit_hash, files)))
+        except BaseException as stopped:  # noqa: BLE001 -- handed to run(), which re-raises it in the caller
+            finished.put((name, stopped))
+
+    def _place(self, name: str, unit: Unit, unit_hash: str, files: Mapping[str, Path]) -> Outcome:
         absent = self.present(unit.engine)
         action = PLACEMENT[self.where, not absent]
         if action == RUN:
@@ -208,7 +258,12 @@ class LocalExecutor:
         started = _now()
         durable_write(intent, json.dumps({'name': name, 'host': self.host, 'started': started}).encode())
         inputs = {key: files.get(key, value) for key, value in unit.inputs.items()}
-        with self.hold(unit.demand, f'unit {name}', self.queue_s, key=unit_hash):
+        with self.hold(unit.demand, f'unit {name}', self.queue_s, key=unit_hash) as claim:
+            if isinstance(claim, Claim):
+                self._claims.add(claim)
+            if self._cancel.is_set():
+                msg = f'{name}: the run was interrupted before it started'
+                raise Refused(msg)
             try:
                 _entry(unit.entry)(inputs, work)
             except Exception as failed:  # noqa: BLE001 -- a failed unit fails BY NAME, whatever raised
@@ -245,6 +300,18 @@ class LocalExecutor:
     def _forget(intent: Path, work: Path) -> None:
         shutil.rmtree(work, ignore_errors=True)
         intent.unlink(missing_ok=True)
+
+
+def _next(finished: queue.SimpleQueue[tuple[str, Outcome | BaseException]]) -> tuple[str, Outcome]:
+    """The next finished unit, re-raising what escaped its entry; polled, so an interrupt reaches the caller."""
+    while True:
+        try:
+            name, outcome = finished.get(timeout=0.2)
+        except queue.Empty:
+            continue
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return name, outcome
 
 
 def _resolve(value: Path | Output, done: Mapping[str, Outcome]) -> Path:
