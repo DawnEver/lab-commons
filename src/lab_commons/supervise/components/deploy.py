@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from lab_commons.supervise.component import ActionContext, CheckContext, Component, Handler
-from lab_commons.supervise.deploy import Outcome, Plan
+from lab_commons.supervise.deploy import PhaseResult, Plan
 from lab_commons.supervise.deploy import deploy as run_deploy
 from lab_commons.supervise.deploy import rollback as run_rollback
 from lab_commons.supervise.policy import now
@@ -230,7 +230,7 @@ class Deploy(Component):
         return run_rollback(plan, ctx, known[-1], transport=self.transport or scheme_transport).ok
 
 
-def _settle(ctx: ActionContext, plan: Plan, outcome: Outcome) -> bool:
+def _settle(ctx: ActionContext, plan: Plan, outcome: PhaseResult) -> bool:
     """Record a deployment's outcome and say whether the target is serving.
 
     THE OUTCOME IS THE ONLY SOURCE. It carries both releases -- what was TRIED and what ENDED UP

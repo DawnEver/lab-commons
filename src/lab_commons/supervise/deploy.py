@@ -26,12 +26,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.outcomes import Status
 from lab_commons.supervise.component import ActionContext
 from lab_commons.supervise.process.base import Ran
 from lab_commons.supervise.release import Snapshot
 from lab_commons.supervise.transport import OK_CEILING, OK_FLOOR, Transport, fetch_json
 
-__all__ = ['CANDIDATE', 'Outcome', 'Plan', 'activate', 'deploy', 'fetch', 'preflight', 'probe', 'rollback', 'verify']
+__all__ = [
+    'CANDIDATE',
+    'PhaseResult',
+    'Plan',
+    'activate',
+    'deploy',
+    'fetch',
+    'preflight',
+    'probe',
+    'rollback',
+    'verify',
+]
 
 #: Where a candidate is built and started. Outside the target's tree so a failed candidate can be
 #: removed without touching anything the live service reads, and under ``/var/tmp`` rather than
@@ -143,7 +155,7 @@ class Plan:
 
 
 @dataclass(frozen=True)
-class Outcome:
+class PhaseResult:
     """What a phase did.
 
     Attributes:
@@ -160,6 +172,11 @@ class Outcome:
     detail: str = ''
     commits: dict[str, str] | None = None
     tried: dict[str, str] | None = None
+
+    @property
+    def status(self) -> Status:
+        """The phase in the one vocabulary: ``OK``, or ``ERROR`` -- RETRYABLE, since the breaker retries it."""
+        return Status.OK if self.ok else Status.ERROR
 
 
 def _git(plan: Plan, ctx: ActionContext, repo: str, args: list[str], timeout: int = 120) -> Ran:
@@ -179,7 +196,7 @@ def _git(plan: Plan, ctx: ActionContext, repo: str, args: list[str], timeout: in
     return ctx.manager.run_capped(['git', '-C', plan.repositories[repo], *args], memory_max='256M', timeout=timeout)
 
 
-def fetch(plan: Plan, ctx: ActionContext, *, branch: str = 'main') -> Outcome:
+def fetch(plan: Plan, ctx: ActionContext, *, branch: str = 'main') -> PhaseResult:
     """Fetch every repository and read the commits the remote now holds.
 
     Args:
@@ -194,15 +211,15 @@ def fetch(plan: Plan, ctx: ActionContext, *, branch: str = 'main') -> Outcome:
     commits: dict[str, str] = {}
     for name in plan.repositories:
         if not _git(plan, ctx, name, ['fetch', 'origin', '--quiet'], timeout=300).ok:
-            return Outcome(ok=False, detail=f'{name}: fetch failed')
+            return PhaseResult(ok=False, detail=f'{name}: fetch failed')
         head = _git(plan, ctx, name, ['rev-parse', f'origin/{branch}'])
         if not head.ok:
-            return Outcome(ok=False, detail=f'{name}: origin/{branch} does not resolve')
+            return PhaseResult(ok=False, detail=f'{name}: origin/{branch} does not resolve')
         commits[name] = head.out.strip()
-    return Outcome(ok=True, commits=commits)
+    return PhaseResult(ok=True, commits=commits)
 
 
-def probe(urls: Sequence[str], transport: Transport, timeout: float = 5.0) -> Outcome:
+def probe(urls: Sequence[str], transport: Transport, timeout: float = 5.0) -> PhaseResult:
     """Ask a running candidate the questions that decide whether it may go live.
 
     Args:
@@ -217,13 +234,15 @@ def probe(urls: Sequence[str], transport: Transport, timeout: float = 5.0) -> Ou
     for url in urls:
         status, body, detail = fetch_json(transport, url, timeout)
         if not OK_FLOOR <= status < OK_CEILING:
-            return Outcome(ok=False, detail=f'{url} answered {status or "nothing"}: {detail}')
+            return PhaseResult(ok=False, detail=f'{url} answered {status or "nothing"}: {detail}')
         if body is None:
-            return Outcome(ok=False, detail=f'{url} answered {status} but not with JSON')
-    return Outcome(ok=True)
+            return PhaseResult(ok=False, detail=f'{url} answered {status} but not with JSON')
+    return PhaseResult(ok=True)
 
 
-def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transport: Transport, port: int) -> Outcome:
+def preflight(
+    plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transport: Transport, port: int
+) -> PhaseResult:
     """Build and start a candidate, ask it the configured questions, and tear it down.
 
     NOTHING HERE TOUCHES THE LIVE TARGET. The candidate gets its own worktree, its own environment
@@ -246,7 +265,7 @@ def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transp
     if not _git(
         plan, ctx, plan.main, ['worktree', 'add', '--detach', '--force', str(candidate), commits[plan.main]]
     ).ok:
-        return Outcome(ok=False, detail='the candidate worktree could not be created')
+        return PhaseResult(ok=False, detail='the candidate worktree could not be created')
     try:
         home.mkdir(parents=True, exist_ok=True)
         if plan.venv:
@@ -260,12 +279,12 @@ def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transp
                 ['sh', '-c', plan.venv], memory_max=plan.ceiling, timeout=600, cwd=str(candidate)
             )
             if not made.ok:
-                return Outcome(ok=False, detail=f'the candidate environment was not built: {made.detail()}')
+                return PhaseResult(ok=False, detail=f'the candidate environment was not built: {made.detail()}')
         built = ctx.manager.run_capped(
             ['sh', '-c', plan.install], memory_max=plan.ceiling, timeout=900, cwd=str(candidate)
         )
         if not built.ok:
-            return Outcome(ok=False, detail=f'installing the candidate failed: {built.detail()}')
+            return PhaseResult(ok=False, detail=f'installing the candidate failed: {built.detail()}')
         if plan.prepare:
             wires = {
                 'python': str(candidate / '.venv' / 'bin' / 'python'),
@@ -278,7 +297,7 @@ def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transp
                 ['sh', '-c', plan.prepare.format(**wires)], memory_max=plan.ceiling, timeout=300, cwd=str(candidate)
             )
             if not wired.ok:
-                return Outcome(ok=False, detail=f'wiring the candidate failed: {wired.detail()}')
+                return PhaseResult(ok=False, detail=f'wiring the candidate failed: {wired.detail()}')
         command = plan.run.format(
             python=str(candidate / '.venv' / 'bin' / 'python'),
             home=str(home),
@@ -290,7 +309,7 @@ def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transp
             ['sh', '-c', command], memory_max=plan.ceiling, name='lab-supervise-candidate', cwd=str(candidate)
         )
         if not started.ok:
-            return Outcome(ok=False, detail=f'the candidate would not start: {started.detail()}')
+            return PhaseResult(ok=False, detail=f'the candidate would not start: {started.detail()}')
         try:
             return _wait_for_probe(plan, transport, port)
         finally:
@@ -299,7 +318,7 @@ def preflight(plan: Plan, ctx: ActionContext, commits: dict[str, str], *, transp
         _teardown(plan, ctx, candidate)
 
 
-def _wait_for_probe(plan: Plan, transport: Transport, port: int) -> Outcome:
+def _wait_for_probe(plan: Plan, transport: Transport, port: int) -> PhaseResult:
     """Poll the candidate's probes until they answer or the ceiling expires.
 
     Args:
@@ -312,7 +331,7 @@ def _wait_for_probe(plan: Plan, transport: Transport, port: int) -> Outcome:
 
     """
     deadline = time.monotonic() + max(20, plan.health_timeout // 2)
-    outcome = Outcome(ok=False, detail='the candidate was never asked anything')
+    outcome = PhaseResult(ok=False, detail='the candidate was never asked anything')
     while time.monotonic() < deadline:
         outcome = probe([url.format(port=port) for url in plan.probe], transport)
         if outcome.ok:
@@ -334,7 +353,7 @@ def _teardown(plan: Plan, ctx: ActionContext, candidate: Path) -> None:
     _git(plan, ctx, plan.main, ['worktree', 'prune'])
 
 
-def activate(plan: Plan, ctx: ActionContext, commits: dict[str, str]) -> Outcome:
+def activate(plan: Plan, ctx: ActionContext, commits: dict[str, str]) -> PhaseResult:
     """Move every repository to the release, install it, and restart the service.
 
     Args:
@@ -348,15 +367,15 @@ def activate(plan: Plan, ctx: ActionContext, commits: dict[str, str]) -> Outcome
     """
     for name, wanted in commits.items():
         if not _git(plan, ctx, name, ['merge', '--ff-only', 'origin/main']).ok:
-            return Outcome(ok=False, detail=f'{name}: could not fast-forward to {wanted[:8]}')
+            return PhaseResult(ok=False, detail=f'{name}: could not fast-forward to {wanted[:8]}')
         if not _git(plan, ctx, name, ['merge-base', '--is-ancestor', wanted, 'HEAD']).ok:
-            return Outcome(ok=False, detail=f'{name}: HEAD is not {wanted[:8]} after the merge')
+            return PhaseResult(ok=False, detail=f'{name}: HEAD is not {wanted[:8]} after the merge')
     if plan.install:
         installed = ctx.manager.run_capped(
             ['sh', '-c', plan.install], memory_max=plan.ceiling, timeout=900, cwd=str(ctx.project)
         )
         if not installed.ok:
-            return Outcome(ok=False, detail=f'reinstalling failed: {installed.detail()}')
+            return PhaseResult(ok=False, detail=f'reinstalling failed: {installed.detail()}')
     if plan.provision:
         # THE DEPLOYMENT'S OWN DEFINITION HAS TO ARRIVE WITH THE RELEASE, AND ONLY HERE.
         #
@@ -375,14 +394,14 @@ def activate(plan: Plan, ctx: ActionContext, commits: dict[str, str]) -> Outcome
             ['sh', '-c', plan.provision], memory_max=plan.ceiling, timeout=300, cwd=str(ctx.project)
         )
         if not provisioned.ok:
-            return Outcome(ok=False, detail=f'provisioning the host failed: {provisioned.detail()}')
+            return PhaseResult(ok=False, detail=f'provisioning the host failed: {provisioned.detail()}')
     restarted = ctx.manager.restart(plan.unit)
     if not restarted.ok:
-        return Outcome(ok=False, detail=f'restarting {plan.unit} failed: {restarted.detail()}')
-    return Outcome(ok=True)
+        return PhaseResult(ok=False, detail=f'restarting {plan.unit} failed: {restarted.detail()}')
+    return PhaseResult(ok=True)
 
 
-def verify(plan: Plan, commits: dict[str, str], *, transport: Transport) -> Outcome:
+def verify(plan: Plan, commits: dict[str, str], *, transport: Transport) -> PhaseResult:
     """Wait for the live target to answer health, and to say it is running the release.
 
     Args:
@@ -401,13 +420,13 @@ def verify(plan: Plan, commits: dict[str, str], *, transport: Transport) -> Outc
         if OK_FLOOR <= status < OK_CEILING and isinstance(body, dict) and body.get('status') == 'healthy':
             reported = str(body.get('commit', ''))
             if reported.startswith(commits.get(plan.main, '')[:8]):
-                return Outcome(ok=True, detail=f'running {reported}')
+                return PhaseResult(ok=True, detail=f'running {reported}')
             detail = f'reported {reported or "no commit"}, expected {commits.get(plan.main, "")[:8]}'
         time.sleep(2)
-    return Outcome(ok=False, detail=detail)
+    return PhaseResult(ok=False, detail=detail)
 
 
-def rollback(plan: Plan, ctx: ActionContext, snapshot: Snapshot, *, transport: Transport) -> Outcome:
+def rollback(plan: Plan, ctx: ActionContext, snapshot: Snapshot, *, transport: Transport) -> PhaseResult:
     """Put every repository back at a verified snapshot and prove the service came back.
 
     Args:
@@ -428,7 +447,7 @@ def rollback(plan: Plan, ctx: ActionContext, snapshot: Snapshot, *, transport: T
             commits[name] = sha
     for name, sha in commits.items():
         if not _git(plan, ctx, name, ['reset', '--hard', sha]).ok:
-            return Outcome(ok=False, detail=f'{name}: could not reset to {sha[:8]}')
+            return PhaseResult(ok=False, detail=f'{name}: could not reset to {sha[:8]}')
     if plan.install:
         # THE REINSTALL'S OUTCOME IS CHECKED HERE TOO. `activate` aborts on a failed install; this
         # path ran the same command and threw the result away, so a rollback whose reinstall failed
@@ -439,10 +458,10 @@ def rollback(plan: Plan, ctx: ActionContext, snapshot: Snapshot, *, transport: T
             ['sh', '-c', plan.install], memory_max=plan.ceiling, timeout=900, cwd=str(ctx.project)
         )
         if not reinstalled.ok:
-            return Outcome(ok=False, detail=f'the rollback could not reinstall: {reinstalled.detail()}')
+            return PhaseResult(ok=False, detail=f'the rollback could not reinstall: {reinstalled.detail()}')
     restarted = ctx.manager.restart(plan.unit)
     if not restarted.ok:
-        return Outcome(ok=False, detail=f'restarting {plan.unit} failed: {restarted.detail()}')
+        return PhaseResult(ok=False, detail=f'restarting {plan.unit} failed: {restarted.detail()}')
     return verify(plan, commits, transport=transport)
 
 
@@ -453,7 +472,7 @@ def deploy(
     *,
     transport: Transport,
     port: int,
-) -> Outcome:
+) -> PhaseResult:
     """Run the whole sequence for whatever the remote now holds.
 
     EVERY FAILURE AFTER ACTIVATION ROLLS BACK, and the rollback is verified rather than assumed.
@@ -475,19 +494,19 @@ def deploy(
     """
     incomplete = plan.missing()
     if incomplete:
-        return Outcome(ok=False, detail=f'the deploy plan is incomplete, missing: {", ".join(incomplete)}')
+        return PhaseResult(ok=False, detail=f'the deploy plan is incomplete, missing: {", ".join(incomplete)}')
     fetched = fetch(plan, ctx)
     if not fetched.ok or fetched.commits is None:
         return fetched
     commits = fetched.commits
     proven = preflight(plan, ctx, commits, transport=transport, port=port)
     if not proven.ok:
-        return Outcome(ok=False, detail=f'the candidate was refused: {proven.detail}', tried=commits)
+        return PhaseResult(ok=False, detail=f'the candidate was refused: {proven.detail}', tried=commits)
     if not activate(plan, ctx, commits).ok:
         return _recover(plan, ctx, previous, 'activation failed', transport=transport, tried=commits)
     live = verify(plan, commits, transport=transport)
     if live.ok:
-        return Outcome(ok=True, detail=live.detail, commits=commits, tried=commits)
+        return PhaseResult(ok=True, detail=live.detail, commits=commits, tried=commits)
     return _recover(
         plan, ctx, previous, f'the release came up wrong: {live.detail}', transport=transport, tried=commits
     )
@@ -501,7 +520,7 @@ def _recover(
     *,
     transport: Transport,
     tried: dict[str, str],
-) -> Outcome:
+) -> PhaseResult:
     """Roll back to the last verified snapshot, or report that there is nothing to roll back to.
 
     Args:
@@ -517,13 +536,15 @@ def _recover(
 
     """
     if previous is None:
-        return Outcome(ok=False, detail=f'{because}, and there is no verified snapshot to roll back to', tried=tried)
+        return PhaseResult(
+            ok=False, detail=f'{because}, and there is no verified snapshot to roll back to', tried=tried
+        )
     back = rollback(plan, ctx, previous, transport=transport)
     if back.ok:
-        return Outcome(
+        return PhaseResult(
             ok=False,
             detail=f'{because}; rolled back to {previous.main[:8]} and it is serving',
             commits={'main': previous.main},
             tried=tried,
         )
-    return Outcome(ok=False, detail=f'{because}; THE ROLLBACK ALSO FAILED: {back.detail}', tried=tried)
+    return PhaseResult(ok=False, detail=f'{because}; THE ROLLBACK ALSO FAILED: {back.detail}', tried=tried)

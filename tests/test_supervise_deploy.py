@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from lab_commons.outcomes import Status
+from lab_commons.supervise import deploy as deploy_module
 from lab_commons.supervise.alert import Transport
 from lab_commons.supervise.component import ActionContext, CheckContext, Registry
 from lab_commons.supervise.components.deploy import Deploy, _settle
-from lab_commons.supervise.deploy import Outcome, Plan, activate, fetch, preflight, probe, verify
+from lab_commons.supervise.deploy import PhaseResult, Plan, activate, fetch, preflight, probe, verify
 from lab_commons.supervise.deploy import deploy as run_deploy
 from lab_commons.supervise.process.base import Ran
 from lab_commons.supervise.release import Snapshot, failure_streak, history, record_success
@@ -435,7 +437,7 @@ def test_a_rolled_back_release_is_counted_as_a_failure_of_the_release_it_tried()
     was wiped with it. A release could fail on every cycle forever and `release_failing` -- the
     escalation that says "this has now failed five times" while still retrying -- could never fire.
 
-    `Outcome.tried` exists for exactly this and says so in its own docstring: "recording the old
+    `PhaseResult.tried` exists for exactly this and says so in its own docstring: "recording the old
     release as the failure would make the circuit breaker count the wrong thing and never reach
     its threshold." The intent was written down and never read.
     """
@@ -443,7 +445,7 @@ def test_a_rolled_back_release_is_counted_as_a_failure_of_the_release_it_tried()
     ctx = _ctx(_Scripted(), _plan_config())
     ctx.state = state
     plan = Plan.from_config(_plan_config(), _PROJECT)
-    rolled_back = Outcome(ok=True, detail='rolled back', commits={'main': 'old12345'}, tried={'main': 'new12345'})
+    rolled_back = PhaseResult(ok=True, detail='rolled back', commits={'main': 'old12345'}, tried={'main': 'new12345'})
     assert _settle(ctx, plan, rolled_back) is True, 'the target is serving something verified'
     assert failure_streak(state, Snapshot(main='new12345', libs='', at='')) == 1
 
@@ -459,7 +461,7 @@ def test_a_rollback_does_not_re_add_the_release_it_restored() -> None:
     ctx = _ctx(_Scripted(), _plan_config())
     ctx.state = state
     plan = Plan.from_config(_plan_config(), _PROJECT)
-    rolled_back = Outcome(ok=True, detail='rolled back', commits={'main': 'old12345'}, tried={'main': 'new12345'})
+    rolled_back = PhaseResult(ok=True, detail='rolled back', commits={'main': 'old12345'}, tried={'main': 'new12345'})
     _settle(ctx, plan, rolled_back)
     assert [one.at for one in history(state)] == ['2026-01-01T00:00:00+00:00']
 
@@ -511,3 +513,14 @@ def test_a_readable_remote_says_nothing_about_being_readable() -> None:
     manager = _Scripted({'origin/main': Ran(code=0, out='same1234\n'), 'HEAD': Ran(code=0, out='same1234\n')})
     kinds = [one.kind for one in Deploy().check(_ctx_with(manager)).anomalies]
     assert 'remote_unreadable' not in kinds
+
+
+def test_a_phase_result_reads_in_the_one_status_vocabulary() -> None:
+    """Plan A1.6: a deploy phase speaks lab_commons.outcomes; a failure is RETRYABLE (the breaker counts it)."""
+    assert PhaseResult(ok=True).status is Status.OK
+    assert PhaseResult(ok=False, detail='x').status is Status.ERROR
+
+
+def test_the_generic_name_is_gone_from_deploy() -> None:
+    assert 'PhaseResult' in deploy_module.__all__
+    assert not hasattr(deploy_module, 'Outcome')
