@@ -2,12 +2,16 @@
 
 One event per line: ``submitted``, ``outcome`` (carrying a :class:`Cell`), or a caller's own kind.
 Each append is flushed and fsynced before :meth:`Record.append` returns, so an event that returned is
-on disk. Idempotence, so a retried writer does not double-count: an outcome whose cell equals the
-identity's current cell, or any other event equal to one already recorded, writes nothing.
+on disk. Idempotence protects against REPLAYING THE SAME EVENT, not against a new attempt that
+happens to produce the same result: every outcome carries an ``attempt`` (1, 2, ... per identity;
+:meth:`Record.outcome` defaults it to the next one), so a re-append of an attempt already recorded
+with the same cell writes nothing, while a new attempt is always recorded and counted. Any other
+event equal to one already recorded also writes nothing.
 
-FINALITY: per identity the first DECIDED outcome is final. A later outcome that differs from it --
-another decision or a RETRYABLE one -- is refused with :class:`FinalityError`; a RETRYABLE outcome is
-superseded by whatever comes next.
+FINALITY: per identity the first DECIDED outcome is final. A later outcome with the same cell writes
+nothing, whatever its attempt; one that differs -- another decision or a RETRYABLE one -- is refused
+with :class:`FinalityError`. A RETRYABLE outcome is superseded by whatever comes next. Re-appending a
+recorded attempt with a DIFFERENT cell, or skipping an attempt number, is refused with ``ValueError``.
 
 ONE WRITER PER FILE. The views are built from the file at open and from this object's own appends; a
 second writer's appends are not seen until the record is reopened.
@@ -18,7 +22,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -30,10 +34,11 @@ from lab_commons.outcomes.status import Status
 __all__ = ['OUTCOME', 'SCHEMA_VERSION', 'SUBMITTED', 'Event', 'FinalityError', 'Record', 'UnknownSchema']
 
 #: The event-line format version, written into every line.
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 
 #: Each older version this build reads, and the step taking it one version on (FORMATS-UPGRADE-ON-READ).
-_UPGRADES: Final[dict[int, Any]] = {}
+#: v1 -> v2: v1 lines carry no ``attempt``; :class:`Record` numbers their outcomes 1.. in file order.
+_UPGRADES: Final[dict[int, Any]] = {1: lambda raw: {**raw, 'schema': 2}}
 
 #: The two kinds this module gives meaning to; any other kind is a caller's and is only recorded.
 SUBMITTED: Final = 'submitted'
@@ -50,17 +55,24 @@ class UnknownSchema(ValueError):
 
 @dataclass(frozen=True)
 class Event:
-    """One line: its *kind*, the identity *key*, the *cell* of an outcome, and caller *data*."""
+    """One line: its *kind*, the identity *key*, the *cell* and *attempt* of an outcome, and caller *data*.
+
+    An outcome's *attempt* may be None only until a :class:`Record` numbers it.
+    """
 
     kind: str
     key: str
     cell: Cell | None = None
     data: Mapping[str, Any] = field(default_factory=dict)
+    attempt: int | None = None
 
     def __post_init__(self) -> None:
         """An outcome carries a cell, and nothing else does."""
         if (self.kind == OUTCOME) != (self.cell is not None):
             msg = f'a {self.kind!r} event {"needs" if self.kind == OUTCOME else "carries no"} cell'
+            raise ValueError(msg)
+        if self.attempt is not None and (self.cell is None or self.attempt < 1):
+            msg = f'a {self.kind!r} event cannot carry attempt {self.attempt!r}'
             raise ValueError(msg)
 
     def to_plain(self) -> dict[str, Any]:
@@ -68,6 +80,8 @@ class Event:
         plain: dict[str, Any] = {'schema': SCHEMA_VERSION, 'kind': self.kind, 'key': self.key}
         if self.cell is not None:
             plain['cell'] = self.cell.to_plain()
+        if self.attempt is not None:
+            plain['attempt'] = self.attempt
         if self.data:
             plain['data'] = dict(self.data)
         return plain
@@ -82,7 +96,13 @@ class Event:
             msg = f'event schema {raw.get("schema")!r} is not {SCHEMA_VERSION} and has no upgrade'
             raise UnknownSchema(msg)
         cell = raw.get('cell')
-        return cls(raw['kind'], raw['key'], None if cell is None else Cell.from_plain(cell), raw.get('data', {}))
+        return cls(
+            raw['kind'],
+            raw['key'],
+            None if cell is None else Cell.from_plain(cell),
+            raw.get('data', {}),
+            raw.get('attempt'),
+        )
 
 
 def _key(identity: Identity | str) -> str:
@@ -101,28 +121,53 @@ class Record:
         self._torn = read.torn
         self._submitted: dict[str, None] = {}
         self._latest: dict[str, Cell] = {}
-        for event in self._events:
-            self._apply(event)
+        self._attempts: dict[str, list[Cell]] = {}
+        events, self._events = self._events, []
+        for event in events:
+            numbered = self._numbered(event)
+            self._events.append(numbered)
+            self._apply(numbered)
+
+    def _numbered(self, event: Event) -> Event:
+        """*event*, an un-numbered outcome given the identity's next attempt (v1 lines, default calls)."""
+        if event.cell is None or event.attempt is not None:
+            return event
+        return replace(event, attempt=self.attempts(event.key) + 1)
 
     def _apply(self, event: Event) -> None:
         self._submitted.setdefault(event.key)
         if event.cell is not None:
             self._latest[event.key] = event.cell
+            self._attempts.setdefault(event.key, []).append(event.cell)
 
     def _admit(self, event: Event) -> bool:
-        """False for a repeat; raise for an outcome conflicting with a final decision."""
+        """False for a repeat; raise for an outcome conflicting with a final decision or its attempt."""
         if event.cell is None:
             return event not in self._events
         current = self._latest.get(event.key)
-        if current == event.cell:
-            return False
         if current is not None and current.status.decided:
+            if current == event.cell:
+                return False
             msg = f'{event.key}: {current.status.name} is final; refusing {event.cell.status.name}'
             raise FinalityError(msg)
+        recorded = self._attempts.get(event.key, [])
+        attempt = event.attempt or len(recorded) + 1
+        if attempt <= len(recorded):
+            if recorded[attempt - 1] == event.cell:
+                return False
+            msg = f'{event.key}: attempt {event.attempt} is recorded with a different cell'
+            raise ValueError(msg)
+        if attempt != len(recorded) + 1:
+            msg = f'{event.key}: attempt {event.attempt} skips past {len(recorded)} recorded'
+            raise ValueError(msg)
         return True
 
     def append(self, event: Event) -> bool:
-        """Write *event* durably; False when an equal event is already recorded (nothing written)."""
+        """Write *event* durably; False when it is already recorded (nothing written).
+
+        An outcome with no attempt is numbered as the identity's next attempt.
+        """
+        event = self._numbered(event)
         if not self._admit(event):
             return False
         line = (json.dumps(event.to_plain(), sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
@@ -143,9 +188,22 @@ class Record:
         """Record that a task was submitted."""
         return self.append(Event(SUBMITTED, _key(identity), data=data or {}))
 
-    def outcome(self, identity: Identity | str, cell: Cell, data: Mapping[str, Any] | None = None) -> bool:
-        """Record a task's outcome, subject to finality."""
-        return self.append(Event(OUTCOME, _key(identity), cell, data or {}))
+    def outcome(
+        self,
+        identity: Identity | str,
+        cell: Cell,
+        data: Mapping[str, Any] | None = None,
+        attempt: int | None = None,
+    ) -> bool:
+        """Record *attempt* of a task's outcome (default: the next one), subject to finality.
+
+        Pass the attempt explicitly to make a re-append of the same event idempotent.
+        """
+        return self.append(Event(OUTCOME, _key(identity), cell, data or {}, attempt))
+
+    def attempts(self, identity: Identity | str) -> int:
+        """How many outcome attempts are recorded for *identity*."""
+        return len(self._attempts.get(_key(identity), []))
 
     def replay(self) -> Iterator[Event]:
         """Every event, in the order it was recorded."""

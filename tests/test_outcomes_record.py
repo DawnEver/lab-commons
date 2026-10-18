@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def test_replay_yields_events_in_order_including_caller_kinds(tmp_path: Path) ->
     expected = [
         Event(SUBMITTED, A.key, data={'host': 'n1'}),
         Event('started', A.key, data={'pid': 7}),
-        Event(OUTCOME, A.key, OK),
+        Event(OUTCOME, A.key, OK, attempt=1),
     ]
     assert list(record.replay()) == expected
     assert list(Record(path).replay()) == expected
@@ -108,7 +109,7 @@ def test_a_torn_tail_is_cut_before_the_next_append(tmp_path: Path) -> None:
         handle.write(b'{"schema":1,"kin')
     record = Record(path)
     record.outcome(B, OK)
-    assert list(Record(path).replay()) == [Event(OUTCOME, A.key, OK), Event(OUTCOME, B.key, OK)]
+    assert list(Record(path).replay()) == [Event(OUTCOME, A.key, OK, attempt=1), Event(OUTCOME, B.key, OK, attempt=1)]
 
 
 def test_an_older_schema_is_upgraded_on_read_and_an_unknown_one_refused(
@@ -118,7 +119,7 @@ def test_an_older_schema_is_upgraded_on_read_and_an_unknown_one_refused(
     plain = {'schema': 0, 'kind': SUBMITTED, 'id': A.key}
     with pytest.raises(UnknownSchema):
         Event.from_plain(plain)
-    upgrades = {0: lambda raw: {'schema': 1, 'kind': raw['kind'], 'key': raw['id']}}
+    upgrades = {0: lambda raw: {'schema': record_module.SCHEMA_VERSION, 'kind': raw['kind'], 'key': raw['id']}}
     monkeypatch.setattr(record_module, '_UPGRADES', upgrades)
     assert Event.from_plain(plain) == Event(SUBMITTED, A.key)
     with pytest.raises(UnknownSchema):
@@ -130,3 +131,62 @@ def test_an_outcome_needs_a_cell_and_nothing_else_carries_one() -> None:
         Event(OUTCOME, A.key)
     with pytest.raises(ValueError, match='cell'):
         Event(SUBMITTED, A.key, OK)
+
+
+def test_two_identical_retryable_attempts_count_two(tmp_path: Path) -> None:
+    """Planted control: the old cell-equality rule wrote the second OOM nowhere and counted 1."""
+    path = tmp_path / 'r.jsonl'
+    record = Record(path)
+    assert record.outcome(A, OOM) is True
+    assert record.outcome(A, OOM) is True
+    assert record.attempts(A) == 2
+    assert Record(path).attempts(A) == 2
+    assert [e.attempt for e in Record(path).replay()] == [1, 2]
+
+
+def test_replaying_the_same_attempt_twice_counts_one(tmp_path: Path) -> None:
+    path = tmp_path / 'r.jsonl'
+    record = Record(path)
+    assert record.outcome(A, OOM, attempt=1) is True
+    assert record.outcome(A, OOM, attempt=1) is False
+    assert Record(path).outcome(A, OOM, attempt=1) is False, 'a reopened record knows the attempt'
+    assert record.attempts(A) == 1
+    assert len(path.read_bytes().splitlines()) == 1
+
+
+def test_a_recorded_attempt_with_another_cell_or_a_skipped_attempt_is_refused(tmp_path: Path) -> None:
+    record = Record(tmp_path / 'r.jsonl')
+    record.outcome(A, OOM, attempt=1)
+    with pytest.raises(ValueError, match='attempt 1'):
+        record.outcome(A, Cell(Status.TIMEOUT, reason=Reason('wall')), attempt=1)
+    with pytest.raises(ValueError, match='skips'):
+        record.outcome(A, OOM, attempt=3)
+    assert record.attempts(A) == 1
+
+
+def test_decided_finality_is_unchanged_by_attempts(tmp_path: Path) -> None:
+    record = Record(tmp_path / 'r.jsonl')
+    record.outcome(A, OOM)
+    record.outcome(A, REJ)
+    assert record.outcome(A, REJ) is False, 'an identical DECIDED re-append is a no-op'
+    assert record.outcome(A, REJ, attempt=2) is False
+    with pytest.raises(FinalityError, match='final'):
+        record.outcome(A, OOM)
+    assert record.attempts(A) == 2
+
+
+def test_a_v1_file_reads_with_attempts_numbered_in_order(tmp_path: Path) -> None:
+    path = tmp_path / 'r.jsonl'
+    oom, ok = json.dumps(OOM.to_plain()), json.dumps(OK.to_plain())
+    lines = [
+        f'{{"schema":1,"kind":"submitted","key":"{A.key}"}}',
+        f'{{"schema":1,"kind":"outcome","key":"{A.key}","cell":{oom}}}',
+        f'{{"schema":1,"kind":"outcome","key":"{A.key}","cell":{ok}}}',
+        f'{{"schema":1,"kind":"outcome","key":"{B.key}","cell":{oom}}}',
+    ]
+    path.write_text(''.join(line + '\n' for line in lines))
+    record = Record(path)
+    assert [e.attempt for e in record.replay()] == [None, 1, 2, 1]
+    assert (record.attempts(A), record.attempts(B)) == (2, 1)
+    assert record.outcome(B, OOM) is True
+    assert record.attempts(B) == 2
