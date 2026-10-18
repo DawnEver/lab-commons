@@ -32,6 +32,8 @@ RETIRED: Final[dict[str, str]] = {
     # Files are an HPC resource: retention runs every serve tick, and a tree goes once its sha is not in flight.
     'every_hours': 'nothing: retention runs every serve tick (lab_commons.dev.retention)',
     'tree-unreferenced': 'tree-not-in-flight (lab_commons.dev.retentionplan.in_flight)',
+    # Outcome is the task-result word lab_commons.outcomes owns (plan A1.8, 2026-10-18).
+    'retention.Outcome': 'lab_commons.dev.retention.Freed',
     # A request is a job on the part path: admitted by its declared need-set and run (lab-commons 2026-10-13).
     'claims requests yet': 'lab_commons.dev.forgerequest (admitted by its declared need-set, claimed and run)',
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
