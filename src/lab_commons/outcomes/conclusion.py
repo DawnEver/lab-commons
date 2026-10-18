@@ -20,9 +20,15 @@ __all__ = ['Conclusion']
 class Conclusion(enum.Enum):
     """The aggregate over a selection of task outcomes."""
 
-    PASS = enum.auto()
-    FAIL = enum.auto()
-    INCONCLUSIVE = enum.auto()
+    #: The values are the persisted spellings (verdict logs, run caches, forge statuses).
+    INCONCLUSIVE = 'inconclusive'
+    PASS = 'pass'  # noqa: S105 -- a conclusion, not a credential
+    FAIL = 'fail'
+
+    @property
+    def settled(self) -> bool:
+        """Whether the selection PROVED an answer, as opposed to being unable to say."""
+        return self is not Conclusion.INCONCLUSIVE
 
     @classmethod
     def over(cls, selection: Iterable[tuple[Cell | Status, Expectation | None]]) -> Conclusion:

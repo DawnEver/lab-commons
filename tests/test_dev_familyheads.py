@@ -22,6 +22,7 @@ from lab_commons.dev.familyheads import (
 )
 from lab_commons.dev.platformparts import BASE, part_context
 from lab_commons.dev.producer import PRODUCING_VAR
+from lab_commons.outcomes import Conclusion
 
 _OLD, _NEW = 'a' * 40, 'b' * 40
 _URL = 'https://gitea.example.org/Team/lab-commons.git'
@@ -114,5 +115,5 @@ def test_verify_refuses_a_stale_environment_before_anything_runs(monkeypatch, tm
     monkeypatch.setattr(familyheads, 'installed_family', lambda: (Installed('lab-commons', _URL, 'HEAD', _OLD),))
     monkeypatch.setattr(familyheads, '_ls_remote', lambda _u, _r: _NEW)
     monkeypatch.setenv('LAB_COMMONS_RESOURCE_DIR', str(tmp_path))
-    assert verify.main([]) == verify.EXIT_CODES[verify.Outcome.INCONCLUSIVE]
+    assert verify.main([]) == verify.EXIT_CODES[Conclusion.INCONCLUSIVE]
     assert 'STALE' in capsys.readouterr().err

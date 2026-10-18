@@ -37,6 +37,7 @@ RETIRED: Final[dict[str, str]] = {
     'box.Outcome': 'lab_commons.box.ProcessEnd (its .status maps a kill onto lab_commons.outcomes.Status)',
     'deploy.Outcome': 'lab_commons.supervise.deploy.PhaseResult (its .status reads OK or ERROR)',
     'execute.Outcome': 'lab_commons.compute.execute.Settled',
+    'verdict.Outcome': 'lab_commons.outcomes.Conclusion (same tokens: pass, fail, inconclusive)',
     # A request is a job on the part path: admitted by its declared need-set and run (lab-commons 2026-10-13).
     'claims requests yet': 'lab_commons.dev.forgerequest (admitted by its declared need-set, claimed and run)',
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
@@ -277,7 +278,7 @@ RETIRED: Final[dict[str, str]] = {
     'PRODUCE_WALL_S': 'lab_commons.compute.learned.BOX_WALL_S (the wall the box enforces)',
     # The box's decision is a RECORD, never a sentinel exit code a child could also choose (SR-20261015-002).
     'lab_commons.box.REFUSED': 'lab_commons.box.read_ended (the --outcome record: a Refused when nothing ran)',
-    'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: an Outcome whose killed is true)',
+    'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: a ProcessEnd whose killed is true)',
     'free_cores(': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
     'available_mem_gb': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
     # ONE fit rule (compute.admission.admit) decides on the MEASURED room; the ledger HOLDS a claim (D2, D3).
