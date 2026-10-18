@@ -1,6 +1,7 @@
 """An append-only JSONL record of what happened to each identified task.
 
-One event per line: ``submitted``, ``outcome`` (carrying a :class:`Cell`), or a caller's own kind.
+One event per line: ``submitted``, ``outcome`` (carrying a :class:`Cell`, and the task's declared
+:class:`~lab_commons.outcomes.Expectation` when it declares one), or a caller's own kind.
 Each append is flushed and fsynced before :meth:`Record.append` returns, so an event that returned is
 on disk. Idempotence protects against REPLAYING THE SAME EVENT, not against a new attempt that
 happens to produce the same result: every outcome carries an ``attempt`` (1, 2, ... per identity;
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.outcomes.cell import Cell
+from lab_commons.outcomes.expectation import Expectation
 from lab_commons.outcomes.identity import Identity
 from lab_commons.outcomes.jsonl import read_jsonl
 from lab_commons.outcomes.status import Status
@@ -34,7 +36,7 @@ from lab_commons.outcomes.status import Status
 __all__ = ['OUTCOME', 'SCHEMA_VERSION', 'SUBMITTED', 'Event', 'FinalityError', 'Record', 'UnknownSchema']
 
 #: The event-line format version, written into every line.
-SCHEMA_VERSION: Final = 2
+SCHEMA_VERSION: Final = 3
 
 
 def _v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -42,9 +44,16 @@ def _v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
     return {**raw, 'schema': 2}
 
 
-#: Each older version this build reads, and the step taking it one version on (FORMATS-UPGRADE-ON-READ).
+def _v2_to_v3(raw: dict[str, Any]) -> dict[str, Any]:
+    """Schema 2 -> 3: a v2 line is a v3 line without the optional ``expectation``; only the version moves."""
+    return {**raw, 'schema': 3}
+
+
+#: Each older version this build reads, and the step taking it one version on (FORMATS-UPGRADE-ON-READ:
+#: a Record is LIVE state, appended to across a change).
 #: v1 -> v2: v1 lines carry no ``attempt``; :class:`Record` numbers their outcomes 1.. in file order.
-_UPGRADES: Final[dict[int, Any]] = {1: _v1_to_v2}
+#: v2 -> v3: v2 outcomes carry no ``expectation``; they declared none.
+_UPGRADES: Final[dict[int, Any]] = {1: _v1_to_v2, 2: _v2_to_v3}
 
 #: The two kinds this module gives meaning to; any other kind is a caller's and is only recorded.
 SUBMITTED: Final = 'submitted'
@@ -61,9 +70,10 @@ class UnknownSchema(ValueError):
 
 @dataclass(frozen=True)
 class Event:
-    """One line: its *kind*, the identity *key*, the *cell* and *attempt* of an outcome, and caller *data*.
+    """One line: its *kind*, the identity *key*, an outcome's *cell*, *attempt* and *expectation*, and caller *data*.
 
-    An outcome's *attempt* may be None only until a :class:`Record` numbers it.
+    An outcome's *attempt* may be None only until a :class:`Record` numbers it; its *expectation* is None
+    when the task declares none (it is expected ``OK``).
     """
 
     kind: str
@@ -71,6 +81,7 @@ class Event:
     cell: Cell | None = None
     data: Mapping[str, Any] = field(default_factory=dict)
     attempt: int | None = None
+    expectation: Expectation | None = None
 
     def __post_init__(self) -> None:
         """An outcome carries a cell, and nothing else does."""
@@ -80,6 +91,9 @@ class Event:
         if self.attempt is not None and (self.cell is None or self.attempt < 1):
             msg = f'a {self.kind!r} event cannot carry attempt {self.attempt!r}'
             raise ValueError(msg)
+        if self.expectation is not None and self.cell is None:
+            msg = f'a {self.kind!r} event cannot carry an expectation: only an outcome is judged against one'
+            raise ValueError(msg)
 
     def to_plain(self) -> dict[str, Any]:
         """The JSON-ready line, schema first."""
@@ -88,6 +102,8 @@ class Event:
             plain['cell'] = self.cell.to_plain()
         if self.attempt is not None:
             plain['attempt'] = self.attempt
+        if self.expectation is not None:
+            plain['expectation'] = self.expectation.to_plain()
         if self.data:
             plain['data'] = dict(self.data)
         return plain
@@ -102,12 +118,14 @@ class Event:
             msg = f'event schema {raw.get("schema")!r} is not {SCHEMA_VERSION} and has no upgrade'
             raise UnknownSchema(msg)
         cell = raw.get('cell')
+        expectation = raw.get('expectation')
         return cls(
             raw['kind'],
             raw['key'],
             None if cell is None else Cell.from_plain(cell),
             raw.get('data', {}),
             raw.get('attempt'),
+            None if expectation is None else Expectation.from_plain(expectation),
         )
 
 
@@ -200,12 +218,13 @@ class Record:
         cell: Cell,
         data: Mapping[str, Any] | None = None,
         attempt: int | None = None,
+        expectation: Expectation | None = None,
     ) -> bool:
-        """Record *attempt* of a task's outcome (default: the next one), subject to finality.
+        """Record *attempt* of a task's outcome (default: the next one) under its *expectation*, subject to finality.
 
         Pass the attempt explicitly to make a re-append of the same event idempotent.
         """
-        return self.append(Event(OUTCOME, _key(identity), cell, data or {}, attempt))
+        return self.append(Event(OUTCOME, _key(identity), cell, data or {}, attempt, expectation))
 
     def attempts(self, identity: Identity | str) -> int:
         """How many outcome attempts are recorded for *identity*."""

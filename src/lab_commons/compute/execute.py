@@ -1,9 +1,9 @@
 """THE EXECUTOR -- runs a graph's units; the one local implementation runs each IN-PROCESS (D16, D18, D19).
 
-ONE INTERFACE (:class:`Executor`: ``run(graph) -> {name: Outcome}``), ONE LOCAL IMPLEMENTATION
+ONE INTERFACE (:class:`Executor`: ``run(graph) -> {name: Settled}``), ONE LOCAL IMPLEMENTATION
 (:class:`LocalExecutor`). Every READY unit -- its upstream all decided -- starts at once on its own thread, and the
 BOX LEDGER is the only bound: a unit whose declared demand the ledger cannot admit now waits in its queue (FIFO
-among contenders), so a vendor's seats, not a pool size, cap how many of its units overlap. Outcomes come back
+among contenders), so a vendor's seats, not a pool size, cap how many of its units overlap. Settled units come back
 in graph order. For each unit:
 
 1. an upstream that did not produce a result -> the unit is SKIPPED, naming it (a failure stops its dependants);
@@ -19,7 +19,7 @@ in graph order. For each unit:
 INTENT BEFORE ACTION (D19). A run is journaled (``<journal>/<unit hash>.json``) before the entry is called and
 the entry's *work* directory is keyed by the unit hash and kept until the result is stored. A process that
 dies mid-run therefore leaves the journal entry and the work directory; the next run of the same unit finds
-both and RESUMES -- the entry sees its own checkpoint in *work* -- and says so (:attr:`Outcome.resumed`).
+both and RESUMES -- the entry sees its own checkpoint in *work* -- and says so (:attr:`Settled.resumed`).
 
 ONE HASH RUNS ONCE: a ready unit whose hash is already running waits for it and is then a cache hit. AN
 INTERRUPT (or any BaseException out of an entry) stops scheduling, releases every claim this run holds, and
@@ -63,7 +63,7 @@ __all__ = [
     'Hold',
     'LocalExecutor',
     'Offer',
-    'Outcome',
+    'Settled',
     'Where',
     'presence_check',
 ]
@@ -104,7 +104,7 @@ PLACEMENT: Final[Mapping[tuple[Where, bool], str]] = {
 
 
 @dataclass(frozen=True)
-class Outcome:
+class Settled:
     """What became of one unit: its state, its result when it has one, why, and the Job when offered."""
 
     state: str
@@ -118,7 +118,7 @@ class Outcome:
 class Executor(Protocol):
     """Runs a graph."""
 
-    def run(self, graph: Graph) -> dict[str, Outcome]:
+    def run(self, graph: Graph) -> dict[str, Settled]:
         """Every unit's outcome, by name."""
 
 
@@ -182,12 +182,12 @@ class LocalExecutor:
         """The unit hashes journaled as running and not yet stored: what a crash left to resume."""
         return tuple(sorted(p.stem for p in self.journal.glob('*.json')))
 
-    def run(self, graph: Graph) -> dict[str, Outcome]:
-        """Every unit's :class:`Outcome`, in graph order (the module docstring)."""
-        done: dict[str, Outcome] = {}
+    def run(self, graph: Graph) -> dict[str, Settled]:
+        """Every unit's :class:`Settled`, in graph order (the module docstring)."""
+        done: dict[str, Settled] = {}
         waiting = list(graph.order())
         running: dict[str, str] = {}  # unit hash -> name
-        finished: queue.SimpleQueue[tuple[str, Outcome | BaseException]] = queue.SimpleQueue()
+        finished: queue.SimpleQueue[tuple[str, Settled | BaseException]] = queue.SimpleQueue()
         self._claims: set[Claim] = set()
         self._cancel = threading.Event()
         try:
@@ -195,7 +195,7 @@ class LocalExecutor:
                 for name in [n for n in waiting if graph.units[n].upstream <= done.keys()]:
                     unit = graph.units[name]
                     early = self._decide(unit, done)
-                    if isinstance(early, Outcome):
+                    if isinstance(early, Settled):
                         done[name] = early
                     elif early[0] not in running:
                         running[early[0]] = name
@@ -214,15 +214,15 @@ class LocalExecutor:
             raise
         return {name: done[name] for name in graph.order()}
 
-    def _decide(self, unit: Unit, done: Mapping[str, Outcome]) -> Outcome | tuple[str, dict[str, Path]]:
+    def _decide(self, unit: Unit, done: Mapping[str, Settled]) -> Settled | tuple[str, dict[str, Path]]:
         """SKIPPED or CACHED without running anything, else the unit hash and resolved files to place."""
         blocked = sorted(u for u in unit.upstream if done[u].state not in _PRODUCED)
         if blocked:
-            return Outcome(SKIPPED, why=f'upstream {", ".join(f"{u} {done[u].state}" for u in blocked)}')
+            return Settled(SKIPPED, why=f'upstream {", ".join(f"{u} {done[u].state}" for u in blocked)}')
         files = {key: _resolve(value, done) for key, value in unit.inputs.items() if isinstance(value, Path | Output)}
         unit_hash = unit.unit_hash(files)
         held = self.store.get(unit_hash)
-        return Outcome(CACHED, unit_hash, held) if held is not None else (unit_hash, files)
+        return Settled(CACHED, unit_hash, held) if held is not None else (unit_hash, files)
 
     def _worker(
         self,
@@ -230,14 +230,14 @@ class LocalExecutor:
         unit: Unit,
         unit_hash: str,
         files: Mapping[str, Path],
-        finished: queue.SimpleQueue[tuple[str, Outcome | BaseException]],
+        finished: queue.SimpleQueue[tuple[str, Settled | BaseException]],
     ) -> None:
         try:
             finished.put((name, self._place(name, unit, unit_hash, files)))
         except BaseException as stopped:  # noqa: BLE001 -- handed to run(), which re-raises it in the caller
             finished.put((name, stopped))
 
-    def _place(self, name: str, unit: Unit, unit_hash: str, files: Mapping[str, Path]) -> Outcome:
+    def _place(self, name: str, unit: Unit, unit_hash: str, files: Mapping[str, Path]) -> Settled:
         absent = self.present(unit.engine)
         action = PLACEMENT[self.where, not absent]
         if action == RUN:
@@ -246,11 +246,11 @@ class LocalExecutor:
             except Refused as refused:
                 absent, action = str(refused), PLACEMENT[self.where, False]
         if action == OFFER and self.offer is not None and not unit.engine.local_only:
-            return Outcome(OFFERED, unit_hash, why=absent, job=self.offer(unit, unit_hash, files))
+            return Settled(OFFERED, unit_hash, why=absent, job=self.offer(unit, unit_hash, files))
         local = ' (a dirty tree is local-only: it cannot be offered)' if action == OFFER else ''
-        return Outcome(REFUSED, unit_hash, why=f'{name}: {absent or "--where " + self.where}{local}')
+        return Settled(REFUSED, unit_hash, why=f'{name}: {absent or "--where " + self.where}{local}')
 
-    def _run(self, name: str, unit: Unit, unit_hash: str, files: Mapping[str, Path]) -> Outcome:
+    def _run(self, name: str, unit: Unit, unit_hash: str, files: Mapping[str, Path]) -> Settled:
         intent = self.journal / f'{unit_hash}.json'
         work = self.journal / 'work' / unit_hash
         resumed = intent.is_file()
@@ -268,11 +268,11 @@ class LocalExecutor:
                 _entry(unit.entry)(inputs, work)
             except Exception as failed:  # noqa: BLE001 -- a failed unit fails BY NAME, whatever raised
                 self._forget(intent, work)
-                return Outcome(FAILED, unit_hash, why=f'{name}: {type(failed).__name__}: {failed}')
+                return Settled(FAILED, unit_hash, why=f'{name}: {type(failed).__name__}: {failed}')
         missing = [o for o in unit.outputs if not (work / o).exists()]
         if missing:
             self._forget(intent, work)
-            return Outcome(FAILED, unit_hash, why=f'{name}: declared outputs not written: {missing}')
+            return Settled(FAILED, unit_hash, why=f'{name}: declared outputs not written: {missing}')
         staged = self.store.staging()
         for out in unit.outputs:
             (shutil.copytree if (work / out).is_dir() else shutil.copyfile)(work / out, staged / out)
@@ -292,9 +292,9 @@ class LocalExecutor:
             result = self.store.put(staged, record)
         except Nondeterministic as alarm:
             self._forget(intent, work)
-            return Outcome(FAILED, unit_hash, why=f'{name}: {alarm}')
+            return Settled(FAILED, unit_hash, why=f'{name}: {alarm}')
         self._forget(intent, work)
-        return Outcome(RAN, unit_hash, result, resumed=resumed)
+        return Settled(RAN, unit_hash, result, resumed=resumed)
 
     @staticmethod
     def _forget(intent: Path, work: Path) -> None:
@@ -302,7 +302,7 @@ class LocalExecutor:
         intent.unlink(missing_ok=True)
 
 
-def _next(finished: queue.SimpleQueue[tuple[str, Outcome | BaseException]]) -> tuple[str, Outcome]:
+def _next(finished: queue.SimpleQueue[tuple[str, Settled | BaseException]]) -> tuple[str, Settled]:
     """The next finished unit, re-raising what escaped its entry; polled, so an interrupt reaches the caller."""
     while True:
         try:
@@ -314,7 +314,7 @@ def _next(finished: queue.SimpleQueue[tuple[str, Outcome | BaseException]]) -> t
         return name, outcome
 
 
-def _resolve(value: Path | Output, done: Mapping[str, Outcome]) -> Path:
+def _resolve(value: Path | Output, done: Mapping[str, Settled]) -> Path:
     if isinstance(value, Path):
         return value
     result = done[value.unit].result

@@ -27,10 +27,11 @@ from typing import Final
 import lab_commons.launch as _door
 from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.config import section
+from lab_commons.outcomes import Status
 from lab_commons.proc import system_memory
 
 __all__ = [
-    'GB', 'NOT_ADMITTED', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'NotAdmitted', 'Outcome',
+    'GB', 'NOT_ADMITTED', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'NotAdmitted', 'ProcessEnd',
     'Refused', 'declared_seats', 'not_admitted', 'read_ended', 'seat_supply', 'write_ended',
 ]  # fmt: skip
 
@@ -203,7 +204,7 @@ class Holding:
 
 
 @dataclass(frozen=True)
-class Outcome:
+class ProcessEnd:
     """How an enforced run ended and what it measured -- the caller's to learn from.
 
     ``reason`` is ``exit`` (the child ended on its own), ``memory`` (the limit was hit and the tree
@@ -227,21 +228,30 @@ class Outcome:
         """The box ended the tree (``memory`` or ``wall``); ``exit`` is the child's own ending."""
         return self.reason != 'exit'
 
+    @property
+    def status(self) -> Status | None:
+        """The box's own verdict in the one vocabulary: a kill is RETRYABLE; ``exit`` carries none of its own."""
+        return _KILLED_AS.get(self.reason)
 
-def write_ended(path: Path, ended: Outcome | Refused) -> None:
-    """Record how a box run ended at *path*, atomically: ``{"outcome": {...}}`` or ``{"refused": "<why>"}``.
+
+#: How a box kill reads in :class:`~lab_commons.outcomes.Status` (plan A1.7).
+_KILLED_AS: Final[Mapping[str, Status]] = {'memory': Status.OUT_OF_MEMORY, 'wall': Status.TIMEOUT}
+
+
+def write_ended(path: Path, ended: ProcessEnd | Refused) -> None:
+    """Record how a box run ended at *path*, atomically: ``{"ended": {...}}`` or ``{"refused": "<why>"}``.
 
     THE RECORD, NEVER THE EXIT CODE, carries the box's decision: the CLI exits with the child's own code,
     and a child may exit with any number, so no code can mean "the box refused" or "the box killed it".
     """
-    record = {'refused': str(ended)} if isinstance(ended, Refused) else {'outcome': asdict(ended)}
+    record = {'refused': str(ended)} if isinstance(ended, Refused) else {'ended': asdict(ended)}
     staged = path.with_name(f'{path.name}.{os.getpid()}.tmp')
     staged.write_text(json.dumps(record), encoding='utf-8')
     staged.replace(path)
 
 
-def read_ended(path: Path) -> Outcome | Refused | None:
-    """How the box run recorded at *path* ended: an :class:`Outcome`, a :class:`Refused`, or ``None``.
+def read_ended(path: Path) -> ProcessEnd | Refused | None:
+    """How the box run recorded at *path* ended: an :class:`ProcessEnd`, a :class:`Refused`, or ``None``.
 
     A :class:`Refused` never ran. ``None`` is NO RECORD: the box itself died before it could write one
     (it crashed), which is neither a refusal nor anything the child did.
@@ -250,4 +260,4 @@ def read_ended(path: Path) -> Outcome | Refused | None:
         record = json.loads(path.read_text(encoding='utf-8'))
     except FileNotFoundError:
         return None
-    return Refused(record['refused']) if 'refused' in record else Outcome(**record['outcome'])
+    return Refused(record['refused']) if 'refused' in record else ProcessEnd(**record['ended'])

@@ -29,3 +29,9 @@ def test_any_decided_mismatch_gives_fail_even_beside_a_retryable() -> None:
 def test_cells_and_not_applicable() -> None:
     cells = [(Cell(Status.OK), None), (Cell(Status.NOT_APPLICABLE, reason=Reason('no_capability')), None)]
     assert Conclusion.over(cells) is Conclusion.PASS
+
+
+def test_the_persisted_spellings_and_settledness_are_the_conclusions_own() -> None:
+    """Plan A1.4: the dev verdict's three states ARE Conclusion; their stored tokens are unchanged."""
+    assert [c.value for c in Conclusion] == ['inconclusive', 'pass', 'fail']
+    assert [c.settled for c in Conclusion] == [False, True, True]

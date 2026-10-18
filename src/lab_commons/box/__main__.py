@@ -2,7 +2,7 @@
 
 Every limit is REQUIRED, exactly as :class:`~lab_commons.box.Demand` has no defaults: a missing one
 is an argparse refusal, never a number nobody chose. So is ``--outcome``: the box's decision is the
-record written there (:func:`~lab_commons.box.write_ended`) -- the :class:`~lab_commons.box.Outcome`, or the
+record written there (:func:`~lab_commons.box.write_ended`) -- the :class:`~lab_commons.box.ProcessEnd`, or the
 refusal when nothing ran -- and NEVER the exit code. The exit code is the child's own, and a child may
 exit with any number, so a sentinel code would misread a child that happened to choose it. On a refusal
 the code is nonzero and means nothing: read the record. Both streams stay the child's.
