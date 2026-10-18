@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import Demand, Outcome
+from lab_commons.box.demand import Demand, ProcessEnd
 from lab_commons.proc import working_set_bytes
 
 if sys.platform != 'win32':
@@ -155,7 +155,7 @@ def refusal() -> str | None:
 
 def contain(
     argv: Sequence[str], demand: Demand, cwd: str | None, env: Mapping[str, str] | None, tag: tuple[str, str | None]
-) -> Outcome:
+) -> ProcessEnd:
     """Run *argv* enforced to *demand* (the caller checked :func:`refusal`); the group dies with the run."""
     systemd_run = _systemd_run()
     command = list(argv) if systemd_run is None else scope_argv(systemd_run, _here(), argv, demand)
@@ -177,7 +177,7 @@ def contain(
         why = 'memory'  # a SIGKILL the launcher did not send is the scope's OOM killer
     usage = _children_usage()
     enforcer = 'slurm' if watch else 'systemd-scope'
-    return Outcome(child.returncode, why, max(peak, usage[0]), usage[1], time.monotonic() - start, enforcer, *tag)
+    return ProcessEnd(child.returncode, why, max(peak, usage[0]), usage[1], time.monotonic() - start, enforcer, *tag)
 
 
 def _group_resident(pgid: int) -> int:

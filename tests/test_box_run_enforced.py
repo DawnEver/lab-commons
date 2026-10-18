@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from _box_fake import quiet
 
-from lab_commons.box import BOX_ENV, GB, Capacity, Demand, Outcome, Refused, holdings, read_ended, run
+from lab_commons.box import BOX_ENV, GB, Capacity, Demand, ProcessEnd, Refused, holdings, read_ended, run
 from lab_commons.box.__main__ import main
 from lab_commons.box._linux import refusal
 from lab_commons.proc import pid_alive
@@ -38,8 +38,8 @@ def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-def _run(code: str, *, mem_mb: int = 200, wall_s: int = 30) -> Outcome | None:
-    """The enforced Outcome, or ``None`` once the refusal this machine owes has been observed."""
+def _run(code: str, *, mem_mb: int = 200, wall_s: int = 30) -> ProcessEnd | None:
+    """The enforced ProcessEnd, or ``None`` once the refusal this machine owes has been observed."""
     demand = Demand(cpu=1, mem_gb=mem_mb * _MB / GB, wall_s=wall_s, seats={})
     argv = [sys.executable, '-c', code]
     if not ENFORCES:
@@ -126,7 +126,7 @@ def test_killing_the_launcher_kills_the_tree(tmp_path: Path) -> None:
     assert _gone(pid)
 
 
-def _cli(record: Path, child: str) -> tuple[int, Outcome | Refused | None]:
+def _cli(record: Path, child: str) -> tuple[int, ProcessEnd | Refused | None]:
     argv = ['run', '--cpu', '1', '--mem-gb', '0.2', '--wall', '2', '--queue-s', '5', '--key', 'cli']
     code = main([*argv, '--outcome', str(record), '--', sys.executable, '-c', child])
     assert holdings() == []
@@ -136,7 +136,7 @@ def _cli(record: Path, child: str) -> tuple[int, Outcome | Refused | None]:
 def test_the_cli_records_a_walled_child_killed_and_a_refusal_where_nothing_enforces(tmp_path: Path) -> None:
     _code, ended = _cli(tmp_path / 'outcome.json', 'import time; time.sleep(60)')
     if ENFORCES:
-        assert isinstance(ended, Outcome)
+        assert isinstance(ended, ProcessEnd)
         assert (ended.reason, ended.killed) == ('wall', True)
     else:
         assert isinstance(ended, Refused)
@@ -152,7 +152,7 @@ def test_a_child_exiting_a_former_box_sentinel_is_recorded_as_its_own_exit(tmp_p
     code, ended = _cli(tmp_path / 'outcome.json', f'import sys; sys.exit({own})')
     if ENFORCES:
         assert code == own
-        assert isinstance(ended, Outcome)
+        assert isinstance(ended, ProcessEnd)
         assert (ended.returncode, ended.reason, ended.killed) == (own, 'exit', False)
     else:
         assert isinstance(ended, Refused), 'where nothing enforces, the record says refused whatever the code'

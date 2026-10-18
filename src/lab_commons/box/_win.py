@@ -27,7 +27,7 @@ from ctypes import wintypes
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import Demand, Outcome
+from lab_commons.box.demand import Demand, ProcessEnd
 
 __all__ = ['contain']
 
@@ -214,7 +214,7 @@ def _measure(k32: ctypes.WinDLL, job: int) -> tuple[int, float]:
 
 def contain(
     argv: Sequence[str], demand: Demand, cwd: str | None, env: Mapping[str, str] | None, tag: tuple[str, str | None]
-) -> Outcome:
+) -> ProcessEnd:
     """Run *argv* inside a job sized to *demand*; wait, enforce, measure, and close the job."""
     k32 = _k32()
     job, port = _job(k32, demand)
@@ -228,7 +228,7 @@ def contain(
         reason = _supervise(k32, job, port, child, start + demand.wall_s)
         peak, cpu_s = _measure(k32, job)
         returncode = child.returncode if child.returncode is not None else child.wait()
-        return Outcome(returncode, reason, peak, cpu_s, time.monotonic() - start, 'job-object', *tag)
+        return ProcessEnd(returncode, reason, peak, cpu_s, time.monotonic() - start, 'job-object', *tag)
     finally:
         k32.CloseHandle(wintypes.HANDLE(job))
         k32.CloseHandle(wintypes.HANDLE(port))
