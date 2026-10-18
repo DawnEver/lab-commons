@@ -22,6 +22,7 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Final
 
 import lab_commons.launch as _door
 from lab_commons.box.machine import own_reserve, provided, reserve_table
@@ -29,8 +30,8 @@ from lab_commons.config import section
 from lab_commons.proc import system_memory
 
 __all__ = [
-    'GB', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'Outcome', 'Refused', 'declared_seats',
-    'read_ended', 'seat_supply', 'write_ended',
+    'GB', 'NOT_ADMITTED', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'NotAdmitted', 'Outcome',
+    'Refused', 'declared_seats', 'not_admitted', 'read_ended', 'seat_supply', 'write_ended',
 ]  # fmt: skip
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
@@ -39,6 +40,19 @@ GB = 2**30
 
 class Refused(RuntimeError):
     """Admission said no: the message names the dimension short, its holders and their deadlines."""
+
+
+#: The words every CAPACITY refusal carries, so its text still classifies after crossing a process boundary.
+NOT_ADMITTED: Final = 'not admitted'
+
+
+class NotAdmitted(Refused):
+    """CAPACITY, not a verdict: the queue ran out while others held the room. Nothing ran; retry later."""
+
+
+def not_admitted(text: str) -> bool:
+    """Whether *text* (a refusal, or a log quoting one) is a capacity refusal -- the one classification."""
+    return NOT_ADMITTED in text
 
 
 class DuplicateKey(Refused):

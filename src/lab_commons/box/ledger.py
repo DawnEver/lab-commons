@@ -61,7 +61,17 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import GB, Capacity, Claim, Demand, DuplicateKey, Holding, Refused
+from lab_commons.box.demand import (
+    GB,
+    NOT_ADMITTED,
+    Capacity,
+    Claim,
+    Demand,
+    DuplicateKey,
+    Holding,
+    NotAdmitted,
+    Refused,
+)
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.admission import admit
 from lab_commons.compute.model import Job, Resources, Supply
@@ -390,6 +400,6 @@ def _wait(
             return outcome
         left = gives_up - time.time()
         if left <= 0:
-            msg = f'{what}: no room within the queue limit -- {outcome}'
-            raise Refused(msg)
+            msg = f'{what}: {NOT_ADMITTED} -- no room within the queue limit -- {outcome}'
+            raise NotAdmitted(msg)
         time.sleep(min(poll_s, left))
