@@ -34,6 +34,7 @@ __all__ = [
     'render_grant',
     'tick_command',
     'tick_dirs',
+    'tick_environment',
 ]
 
 #: Every crontab line this tool owns ends with this comment plus the repo's name.
@@ -148,10 +149,10 @@ def parse_repo(text: str) -> Repo:
     return Repo(name, url, ref)
 
 
-def cron_lines(spec: Deployment, home: Path, *, slurm: Sequence[str] = (), git: str = '') -> list[str]:
+def cron_lines(spec: Deployment, home: Path, *, slurm: Sequence[str] = (), setup: Sequence[str] = ()) -> list[str]:
     """One marked line per served repo: every 5 min, ``flock -n`` so a host never overlaps itself."""
     return [
-        f'*/5 * * * * {tick_command(spec, home, repo, log=True, slurm=slurm, git=git)} {MARK}{repo.name}'
+        f'*/5 * * * * {tick_command(spec, home, repo, log=True, slurm=slurm, setup=setup)} {MARK}{repo.name}'
         for repo in spec.repos
     ]
 
@@ -164,33 +165,44 @@ def merge_crontab(current: str, lines: Sequence[str]) -> str:
 
 
 def tick_command(
-    spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: Sequence[str] = (), git: str = ''
+    spec: Deployment, home: Path, repo: Repo, *, log: bool, slurm: Sequence[str] = (), setup: Sequence[str] = ()
 ) -> str:
-    """The shell command of one tick of *repo*: cron PATH, ``flock -n``, the HOST's ``hpc tick <repo>``.
+    """The shell command of one tick of *repo*: :func:`tick_environment`, ``flock -n``, the HOST's ``hpc tick``.
 
     It runs from the lab-commons checkout's venv, never the repo's: the host refreshes the repo (and
     itself), then serves it with its own kit (:func:`host_serve_argv`), so a stale repo venv blocks nothing.
+    With a grant *setup* the whole tick runs in ONE ``bash -lc`` (``module`` is a login-shell function), so
+    every tool it loads runs inside the environment that loaded it -- a module's binary does not run outside
+    it (Ada 2026-10-17: git 2.42 alone wants ``libiconv.so.2``).
     """
-    path = ':'.join(tick_dirs(home, slurm, git=git))
     cache = home / '.cache'
     lab = next(one for one in spec.repos if one.name == LAB_COMMONS)
     command = (
-        f'PATH={path}; cd {shlex.quote(str(checkout_of(spec, home, lab)))} && '
+        f'{tick_environment(home, slurm, setup)}; cd {shlex.quote(str(checkout_of(spec, home, lab)))} && '
         f'flock -n {shlex.quote(str(cache / f"lab-forge-{repo.name}.lock"))} '
         f'{_VENV_PYTHON} -m lab_commons.hpc tick {shlex.quote(repo.name)}'
     )
+    command = f'bash -lc {shlex.quote(command)}' if setup else command
     return command + (f' >> {shlex.quote(str(cache / f"lab-forge-{repo.name}.log"))} 2>&1' if log else '')
 
 
-def tick_dirs(home: Path, slurm: Sequence[str] = (), *, git: str = '') -> list[str]:
+def tick_environment(home: Path, slurm: Sequence[str] = (), setup: Sequence[str] = ()) -> str:
+    """The shell prefix that makes a tick's environment: cron's PATH (:func:`tick_dirs`), then the grant *setup*.
+
+    The ONE definition of that environment: the cron line runs it, and the deploy proves the tick's git in it.
+    """
+    return '; '.join([f'PATH={":".join(tick_dirs(home, slurm))}', *setup])
+
+
+def tick_dirs(home: Path, slurm: Sequence[str] = ()) -> list[str]:
     """The directories of a tick's PATH, in order: cron's own PATH is not the login shell's.
 
     *slurm* is where ``sbatch``, ``sacct`` and ``squeue`` resolved when the deploy ran -- a site install
-    (``/opt/slurm/<version>/bin``) that cron's PATH never names. *git*, when set, is the directory of the
-    qualifying git the grant's ``setup`` loaded; it goes FIRST, ahead of the system git it must shadow.
+    (``/opt/slurm/<version>/bin``) that cron's PATH never names. A tool the grant's ``setup`` loads is never
+    named here: it runs inside that setup (:func:`tick_environment`).
     """
     base = [str(home / '.local/bin'), str(home / '.cargo/bin'), '/usr/local/bin', '/usr/bin', '/bin']
-    return [*([git] if git else []), *base, *(d for d in dict.fromkeys(slurm) if d not in base)]
+    return [*base, *(d for d in dict.fromkeys(slurm) if d not in base)]
 
 
 def checkout_of(spec: Deployment, home: Path, repo: Repo) -> Path:
