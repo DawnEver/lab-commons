@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -54,8 +54,11 @@ class Cost:
 
     def __post_init__(self) -> None:
         """Refuse a negative or NaN measurement."""
-        for name in ('wall_s', 'cpu_s', 'peak_memory_bytes'):
-            value = getattr(self, name)
+        for name, value in (
+            ('wall_s', self.wall_s),
+            ('cpu_s', self.cpu_s),
+            ('peak_memory_bytes', self.peak_memory_bytes),
+        ):
             if value is not None and not value >= 0:
                 msg = f'cost {name}={value!r} is negative or NaN'
                 raise ValueError(msg)
@@ -71,44 +74,84 @@ def _number(name: str, value: object) -> float | int:
     return value
 
 
-@dataclass(frozen=True)
 class Cell:
-    """One task's outcome. See the module docstring for the invariants it enforces."""
+    """One task's outcome. See the module docstring for the invariants it enforces.
 
-    status: Status
-    values: Mapping[str, float | int] = field(default_factory=dict)
-    reason: Reason | None = None
-    evidence: Evidence = Evidence.OBSERVED
-    cost: Cost | None = None
+    Immutable: every part is a read-only property and ``values`` is a read-only mapping. Equality compares
+    every part, and the hash agrees with it.
+    """
 
-    def __post_init__(self) -> None:
+    __slots__ = ('_cost', '_evidence', '_reason', '_status', '_values')
+
+    def __init__(
+        self,
+        status: Status,
+        values: Mapping[str, float | int] | None = None,
+        reason: Reason | None = None,
+        evidence: Evidence = Evidence.OBSERVED,
+        cost: Cost | None = None,
+    ) -> None:
         """Enforce the invariants and freeze the values."""
-        if not isinstance(self.status, Status):
-            msg = f'status {self.status!r} is not a Status'
+        if not isinstance(status, Status):
+            msg = f'status {status!r} is not a Status'
             raise TypeError(msg)
-        values = {str(k): _number(str(k), v) for k, v in dict(self.values).items()}
-        if values and self.status not in _CARRIES_VALUES:
-            msg = f'a {self.status.name} cell carries no values (only OK and PARTIAL do): {sorted(values)}'
+        frozen = {str(k): _number(str(k), v) for k, v in dict(values or {}).items()}
+        if frozen and status not in _CARRIES_VALUES:
+            msg = f'a {status.name} cell carries no values (only OK and PARTIAL do): {sorted(frozen)}'
             raise ValueError(msg)
-        if self.reason is None and self.status not in _NEEDS_NO_REASON:
-            msg = f'a {self.status.name} cell owes a reason'
+        if reason is None and status not in _NEEDS_NO_REASON:
+            msg = f'a {status.name} cell owes a reason'
             raise ValueError(msg)
-        object.__setattr__(self, 'values', MappingProxyType(values))
-        object.__setattr__(self, 'evidence', Evidence(self.evidence))
+        self._status = status
+        self._values: Mapping[str, float | int] = MappingProxyType(frozen)
+        self._reason = reason
+        self._evidence = Evidence(evidence)
+        self._cost = cost
+
+    @property
+    def status(self) -> Status:
+        """The outcome's status."""
+        return self._status
+
+    @property
+    def values(self) -> Mapping[str, float | int]:
+        """The reported values, read-only; empty unless ``OK`` or ``PARTIAL``."""
+        return self._values
+
+    @property
+    def reason(self) -> Reason | None:
+        """Why the cell is not ``OK``, or ``None``."""
+        return self._reason
+
+    @property
+    def evidence(self) -> Evidence:
+        """How the outcome is known."""
+        return self._evidence
+
+    @property
+    def cost(self) -> Cost | None:
+        """What the task consumed, or ``None``."""
+        return self._cost
+
+    def _parts(self) -> tuple[object, ...]:
+        return (self._status, frozenset(self._values.items()), self._reason, self._evidence, self._cost)
 
     def __eq__(self, other: object) -> bool:
         """Equal on every part; values compare as plain mappings."""
         if not isinstance(other, Cell):
             return NotImplemented
-        return (self.status, dict(self.values), self.reason, self.evidence, self.cost) == (
-            other.status,
-            dict(other.values),
-            other.reason,
-            other.evidence,
-            other.cost,
-        )
+        return self._parts() == other._parts()
 
-    __hash__ = None  # type: ignore[assignment]
+    def __hash__(self) -> int:
+        """The hash of every part, consistent with :meth:`__eq__`."""
+        return hash(self._parts())
+
+    def __repr__(self) -> str:
+        """Every part, by name."""
+        return (
+            f'Cell({self._status!r}, values={dict(self._values)!r}, reason={self._reason!r}, '
+            f'evidence={self._evidence!r}, cost={self._cost!r})'
+        )
 
     def to_plain(self) -> dict[str, Any]:
         """The JSON-ready form: statuses and evidence by token, absent parts omitted."""
@@ -118,7 +161,7 @@ class Cell:
         if self.reason is not None:
             plain['reason'] = {'kind': self.reason.kind, 'text': self.reason.text}
         if self.cost is not None:
-            plain['cost'] = {k: v for k, v in vars(self.cost).items() if v is not None}
+            plain['cost'] = {k: v for k, v in asdict(self.cost).items() if v is not None}
         return plain
 
     @classmethod

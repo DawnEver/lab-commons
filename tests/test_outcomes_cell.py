@@ -76,3 +76,11 @@ def test_a_cell_is_immutable() -> None:
     cell = Cell(Status.OK, values={'a': 1.0})
     with pytest.raises(TypeError):
         cell.values['a'] = 2.0  # type: ignore[index]
+
+
+def test_equal_cells_hash_equal() -> None:
+    a = Cell(Status.OK, values={'a': 1.0}, cost=Cost(wall_s=1.0))
+    b = Cell(Status.OK, values={'a': 1.0}, cost=Cost(wall_s=1.0))
+    assert a == b
+    assert hash(a) == hash(b)
+    assert len({a, b, Cell(Status.OK, values={'a': 2.0})}) == 2
