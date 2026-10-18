@@ -47,7 +47,7 @@ def test_a_test_that_redirects_the_stream_variable_still_reports_to_the_run(
     )
     monkeypatch.setenv('PYTHONPATH', str(Path(pytest_item.__file__).parent))
     monkeypatch.chdir(tmp_path)
-    done = pytest_item.run({'ids': ['test_inner.py::test_redirects'], 'stream': str(tmp_path / 'run.jsonl')})
+    done = pytest_item.run({'ids': ['test_inner.py::test_redirects'], 'stream': str(tmp_path / 'run.jsonl'), 'item': 0})
     assert done['outcomes'] == {'test_inner.py::test_redirects': 'passed'}, done['tail']
 
 

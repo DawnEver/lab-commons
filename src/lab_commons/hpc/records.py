@@ -5,27 +5,27 @@ from __future__ import annotations
 import gzip
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
 from lab_commons.compute.learned import Measured, Run
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
-from lab_commons.hpc.pytest_item import read_stream
+from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, read_stream, split_streams, tagged
 from lab_commons.hpc.shell import ROOT
 
 __all__ = [
-    'KEPT_STREAMS',
     'files_made',
     'fold',
     'held_outcomes',
     'job_measured',
-    'pack_streams',
+    'kept_text',
     'read_record',
     'read_streams',
     'record_name',
     'record_of',
     'run_shas',
+    'split_streams',
     'stream_sources',
     'summary',
     'write_record',
@@ -145,41 +145,54 @@ def _killed_after(
     return spent
 
 
-#: Where an unfinished run's streams are KEPT once retention removes its tree: ``runs/<sha>/<KEPT>/<tag>.txt``.
-KEPT_STREAMS: Final = 'streams'
-
-_LISTING: Final = '@@@ '
-
-
 def stream_sources(sha: str, tag: str) -> tuple[str, str]:
-    """The streams of *sha*'s round *tag*: its tree's ``.lab-ci/<tag>``, else the ONE file retention packed.
+    """The ONE stream file of *sha*'s round *tag* in its tree, and the ONE file retention keeps per run.
 
     A superseded run's finished shards are carried (:func:`held_outcomes`) long after its tree is garbage, so
-    retention packs the round's item streams into one file beside the run state (:func:`pack_streams`) before
-    the tree goes (:mod:`lab_commons.dev.retentionplan`): a file is an HPC resource, and the directory it
-    replaces held two files per shard.
+    retention keeps the round's stream beside the run state (:func:`kept_text`) before the tree goes
+    (:mod:`lab_commons.dev.retentionplan`): a file is an HPC resource.
     """
-    return f'{ROOT}/trees/{sha}/.lab-ci/{tag}', f'{ROOT}/runs/{sha}/{KEPT_STREAMS}/{tag}.txt'
+    return f'{ROOT}/trees/{sha}/.lab-ci/{tag}.jsonl', f'{ROOT}/runs/{sha}/streams.jsonl'
 
 
-def pack_streams(directory: Path) -> str:
-    """*directory*'s item streams (``<index>.jsonl``) as the one listing :func:`read_streams` parses."""
-    texts = ((p.name, p.read_text(encoding='utf-8')) for p in sorted(directory.glob('*.jsonl')))
-    return ''.join(f'{_LISTING}{name}\n{text}' + ('' if text.endswith('\n') else '\n') for name, text in texts)
+def _retired(live: str, kept: str, tag: str) -> tuple[str, str]:
+    """Where the many-file shape put a round's streams: a directory per round, and a kept directory per run."""
+    return live.removesuffix('.jsonl'), f'{kept.removesuffix(".jsonl")}/{tag}.txt'
 
 
-def read_streams(run: Runner, tree: str, kept: str) -> dict[int, str]:
-    """Every item stream of a round -- from its *tree* directory while it exists, else the *kept* pack."""
-    listing = f'for f in *.jsonl; do [ -e "$f" ] && echo "{_LISTING}$f" && cat "$f"; done'
-    out = run(f'if cd {tree} 2>/dev/null; then {listing}; else cat {kept} 2>/dev/null; fi; true', None)
-    streams: dict[int, list[str]] = {}
-    current: list[str] = []
-    for line in out.splitlines():
-        if line.startswith(_LISTING) and line.endswith('.jsonl'):
-            current = streams.setdefault(int(line[len(_LISTING) : -6]), [])
-        else:
-            current.append(line)
-    return {index: '\n'.join(lines) for index, lines in streams.items()}
+def kept_text(live: Path) -> str:
+    """What retention keeps of the round streaming to *live*: a ``round`` header and its tagged lines.
+
+    The round's retired directory beside *live* (a round in flight across the change) is upgraded into it;
+    a retired kept file ``<tag>.txt`` passed as *live* is upgraded alone. Empty when nothing was streamed.
+    """
+    tag = live.stem
+    texts = [live.read_text(encoding='utf-8')] if live.is_file() else []
+    if (old := live.with_suffix('')).is_dir():
+        texts[:0] = [
+            f'{MANY_FILE_HEADER}{p.name}\n{p.read_text(encoding="utf-8")}\n' for p in sorted(old.glob('*.jsonl'))
+        ]
+    lines = [json.dumps(line) for text in texts for line in tagged(text) if 'round' not in line]
+    return '\n'.join([json.dumps({'round': tag}), *lines]) + '\n' if lines else ''
+
+
+def read_streams(run: Runner, live: str, kept: str) -> dict[int, str]:
+    """Every item stream of a round in one command: its tree's file while the tree exists, else the kept file.
+
+    FORMATS-UPGRADE-ON-READ: a round in flight across the change also has its retired directory read, and a
+    run kept before it its retired ``streams/<tag>.txt``; both are upgraded by :func:`tagged`.
+    """
+    tag = PurePosixPath(live).stem
+    old_live, old_kept = _retired(live, kept, tag)
+    listing = (
+        f'for f in {old_live}/*.jsonl; do [ -e "$f" ] && echo "{MANY_FILE_HEADER}${{f##*/}}" && cat "$f" && echo; done'
+    )
+    out = run(
+        f'if [ -e {live} ] || [ -d {old_live} ]; then {listing}; cat {live} 2>/dev/null; '
+        f'elif [ -e {kept} ]; then cat {kept}; else cat {old_kept} 2>/dev/null; fi; true',
+        None,
+    )
+    return split_streams(out, tag)
 
 
 def summary(record: dict[str, Any]) -> str:
