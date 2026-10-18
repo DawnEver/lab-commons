@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib.machinery import ModuleSpec
 from pathlib import Path
 
 import pytest
 
+from lab_commons.compute import toolchecks
 from lab_commons.compute.presence import (
     TTL,
     Evidence,
@@ -243,3 +245,45 @@ def test_simba_is_found_where_its_python_api_imports() -> None:
         raise ModuleNotFoundError(msg)
 
     assert simba_find(find=missing_parent) is None, 'no aesim package at all is absent, never an error'
+
+
+def _fake_designer(monkeypatch: pytest.MonkeyPatch, *, writes: bool) -> list[list[str]]:
+    """``designer.exe -w``: run the smoke script against a fake in-process ``designer`` -- or ignore it, exit 0."""
+    calls: list[list[str]] = []
+
+    class App:
+        def VersionString(self, include_sub: bool) -> str:  # noqa: FBT001 -- JMAG's own signature
+            return '25.2.01zp' if include_sub else '25.2zp'
+
+    designer = type(sys)('designer')
+    designer.GetApplication = App  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, 'designer', designer)
+
+    def run(argv: list[str]) -> tuple[bool, str]:
+        calls.append(argv)
+        assert argv[1:3] == ['-w', '-l'], 'headless, logged, no COM'
+        if writes:
+            exec(Path(argv[-1]).read_text('utf-8'), {})  # noqa: S102 -- the generated smoke script
+        return True, 'exit 0: JMAG-Designer Stopping'
+
+    monkeypatch.setattr(toolchecks, '_run', run)
+    monkeypatch.setattr(toolchecks, 'file_version', lambda _p: '25.2.1.0')
+    return calls
+
+
+def test_jmag_is_present_at_the_version_designer_writes_headless(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PLANTED CONTROL: the script ran inside Designer and wrote ``25.2.01zp``, which meets the floor 25.2."""
+    calls = _fake_designer(monkeypatch, writes=True)
+    one = probe(
+        'jmag', replace(CHECKS['jmag'], find=lambda: ('registry', EXE)), Requirement('25.2', 'designer.exe -w'), now=NOW
+    )
+    assert one.present, one.evidence
+    assert one.version == '25.2.01zp'
+    assert len(calls) == 1, 'version and smoke share one Designer start'
+
+
+def test_jmag_exiting_0_without_the_version_file_is_absent_with_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_designer(monkeypatch, writes=False)
+    one = probe('jmag', replace(CHECKS['jmag'], find=lambda: ('registry', EXE)), None, now=NOW)
+    assert not one.present
+    assert one.evidence[-1].value == 'FAILED: exit 0: JMAG-Designer Stopping; the script wrote no version file'
