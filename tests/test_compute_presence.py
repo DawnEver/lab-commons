@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import runpy
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib.machinery import ModuleSpec
@@ -255,8 +256,12 @@ def _fake_designer(monkeypatch: pytest.MonkeyPatch, *, writes: bool) -> list[lis
 
     # JMAG's own API takes the flag positionally: ``VersionString(True)``.
     app = SimpleNamespace(VersionString=lambda include_sub: '25.2.01zp' if include_sub else '25.2zp')
-    designer = ModuleType('designer')
-    vars(designer).update(GetApplication=lambda: app)
+
+    class Designer(ModuleType):
+        GetApplication: Callable[[], SimpleNamespace]
+
+    designer = Designer('designer')
+    designer.GetApplication = lambda: app
     monkeypatch.setitem(sys.modules, 'designer', designer)
 
     def run(argv: list[str]) -> tuple[bool, str]:
