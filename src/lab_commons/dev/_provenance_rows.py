@@ -226,8 +226,8 @@ PROVENANCE: Final[dict[str, tuple[str, ...]]] = {
     'hostrefresh': ('original',),
     # ORIGINAL: the clean-only removal door is new; it encodes a consumer's incident, not its code.
     'worktrees': ('original',),
-    # The archive half: a consumer's unmerged hand-written archiver and its output cleaner's archive age class.
-    'worktreearchive': ('supersedes', 'scripts/repo/worktree_archive.py'),
+    # The archive half: a consumer output cleaner's archive age class and its file ceiling.
+    'worktreearchive': ('supersedes', 'scripts/clean/_plan.py'),
     # ORIGINAL: the scan was lab-commons' own test helper, which is in-kit and so not provenance; no
     # consumer held a copy, which is why each published one had no guard at all.
     'privatemarkers': ('original',),
