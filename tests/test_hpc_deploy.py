@@ -172,6 +172,22 @@ def test_a_repo_declaring_a_retired_table_is_refused_alone_and_the_others_are_se
     assert calls.count('lab-forge-alpha.lock') == 2
 
 
+def test_a_repo_whose_hpc_declaration_is_invalid_is_refused_alone_and_the_others_are_served(
+    box: Box, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The 2026-10-18 Ada incident: ``read_builds`` refused one repo's table inside ``[tools]``; the deploy crashed."""
+    assert box.run(*DECLARE) == 0
+    beta = box.home / 'src' / 'beta' / 'pyproject.toml'
+    _write(beta, '[tool.lab_commons.hpc]\ninstall = "uv sync"\ndependency_inputs = ["uv.lock"]\n')
+    capsys.readouterr()
+    assert box.run() == 2, 'a refused repo still fails the deploy -- after the others are served'
+    marked = [line for line in box.crontab.read_text(encoding='utf-8').splitlines() if deploy_spec.MARK in line]
+    served = {line.rsplit(deploy_spec.MARK, 1)[1] for line in marked}
+    assert served == {'lab-commons', 'alpha'}, 'the planted control keeps its line; the refused one loses its own'
+    assert 'dependency_inputs needs source_roots' in capsys.readouterr().err
+    assert [repo for repo, _subject, _body in box.alarms] == [f'{URL}/beta.git']
+
+
 def test_the_declaration_is_stored_once_and_a_disagreeing_one_is_refused(
     box: Box, capsys: pytest.CaptureFixture[str]
 ) -> None:

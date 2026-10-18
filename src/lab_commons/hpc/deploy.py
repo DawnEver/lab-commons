@@ -33,8 +33,9 @@ nothing; ``--remove`` deletes the marked lines only. No credential is ever print
 A REFUSAL BELONGS TO THE REPO THAT EARNED IT (incident 2026-10-13: one repo still declaring a retired
 ``[tool.lab_commons.<table>]`` stopped the whole deploy at ``[tools]``, so the host served none of three).
 From ``[checkouts]`` on, every per-repo step handles each repo on its own: a repo whose step fails, whose
-need cannot be installed, or whose declaration is refused (``RetiredTable``, ``OutdatedKit`` of
-:mod:`lab_commons.hpc.declared`) is reported with its reason and skipped by every later step -- it gets no
+need cannot be installed, or whose declaration is refused (``REFUSALS`` of :mod:`lab_commons.hpc.declared`:
+``RetiredTable``, ``OutdatedKit``, ``InvalidDeclaration``) is reported with its reason and skipped by every
+later step -- it gets no
 crontab line, and the line it had is removed, so a broken line never runs. The deploy finishes for the
 others, then exits 2 naming each refused repo and raising one forge ``run`` alarm per repo (through
 :mod:`lab_commons.dev.forgealarm` in a subprocess: :mod:`lab_commons.hpc` imports no dev code).
@@ -55,7 +56,7 @@ from typing import Final
 
 import lab_commons.launch as _door
 from lab_commons.config import config_path
-from lab_commons.hpc.declared import OutdatedKit, RetiredTable
+from lab_commons.hpc.declared import REFUSALS
 from lab_commons.hpc.deploy_account import ApiCheck, auth_check, credentials, grant
 from lab_commons.hpc.deploy_checks import MERGE_TREE_GIT, merge_tree_refusal, tool_plan
 from lab_commons.hpc.deploy_spec import (
@@ -172,7 +173,7 @@ def _each(step: Step, spec: Deployment, home: Path, title: str, act: Callable[..
     for repo in _healthy(spec, refused):
         try:
             rc = act(step, spec, home, repo)
-        except (RetiredTable, OutdatedKit) as why:
+        except REFUSALS as why:
             _refuse(refused, repo, str(why))
             continue
         if rc:
@@ -237,7 +238,7 @@ def _tools(step: Step, spec: Deployment, home: Path, slurm: Sequence[str], refus
     for repo in _healthy(spec, refused):
         try:
             needs[repo.name] = () if step.dry else declared(checkout_of(spec, home, repo)).needs
-        except (RetiredTable, OutdatedKit) as why:
+        except REFUSALS as why:
             _refuse(refused, repo, str(why))
     path = os.pathsep.join(tick_dirs(home, slurm))
     wanted = [need for each in needs.values() for need in each]
