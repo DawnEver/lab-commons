@@ -38,6 +38,8 @@ RETIRED: Final[dict[str, str]] = {
     'deploy.Outcome': 'lab_commons.supervise.deploy.PhaseResult (its .status reads OK or ERROR)',
     'execute.Outcome': 'lab_commons.compute.execute.Settled',
     'verdict.Outcome': 'lab_commons.outcomes.Conclusion (same tokens: pass, fail, inconclusive)',
+    'forgestatus.Status': 'lab_commons.dev.forgestatus.CommitStatus (a forge commit-status record, not a task result)',
+    'forgestatus import Status': 'from lab_commons.dev.forgestatus import CommitStatus',
     # A request is a job on the part path: admitted by its declared need-set and run (lab-commons 2026-10-13).
     'claims requests yet': 'lab_commons.dev.forgerequest (admitted by its declared need-set, claimed and run)',
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
