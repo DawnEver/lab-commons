@@ -230,6 +230,8 @@ RETIRED: Final[dict[str, str]] = {
     'Reservation(': 'nothing: nothing is reserved (lab_commons.compute.admission.admit)',
     '[reserve] delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
     '--delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
+    # A local verify posts no part: only the producer forge serve spawned does (VERDICTS-FROM-THE-FORGE, 2026-10-18).
+    '--no-status': 'nothing: a local verify never posts; only the producer forge serve spawned posts its part',
     'card.delegates': 'lab_commons.dev.forgehosts.card_owners (a card is vouched for by its forge-recorded author)',
     # A tool is present when found, at the declared version, smoke-tested and not failed since (D21, 2026-10-16).
     'TOOL_PROBES': 'lab_commons.compute.toolchecks.CHECKS (find, version and smoke per tool)',
