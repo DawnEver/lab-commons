@@ -19,6 +19,10 @@ _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # An env is stale against the commit's OWN lock, never a dependency's remote tip (PIN + FRESHNESS, 2026-10-17).
+    'familyheads': 'lab_commons.dev.lockpins (installed git commits against the checkout uv.lock)',
+    'family_freshness': 'lab_commons.dev.lockpins.lock_freshness',
+    'family-heads.json': 'nothing: the lock check is local and caches no forge head',
     # A session branch is protected for what it IS -- never by a directory or a host; its one writer is git's own
     # one-checkout-per-branch and fast-forward rules (user rulings 2026-10-13/14; lab_commons.dev.sessionbranch).
     'INTEGRATION-LIVES-IN-THE-MAIN-CHECKOUT': 'ONE-WRITER-PER-SESSION-BRANCH and INTEGRATION-IS-MERGES-ONLY',
