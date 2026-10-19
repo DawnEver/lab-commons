@@ -14,7 +14,7 @@ from typing import Any
 
 from lab_commons.compute import learned
 from lab_commons.compute.learned import OOM_GROWTH, Measured
-from lab_commons.hpc.cluster import Runner, probe, shard_clock, throttle
+from lab_commons.hpc.cluster import Runner, probe, throttle
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import needs_of
@@ -22,6 +22,7 @@ from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import live_throttle
 from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of, stream_sources
 from lab_commons.hpc.run import ACTIVE, RETRIES, load_state, save_state, shares_home, submit_round
+from lab_commons.hpc.sacct import shard_clock
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.testcells import TestCell
 from lab_commons.outcomes import Cell, Reason, Status
