@@ -120,10 +120,14 @@ def _place(
 ) -> list[dict[str, Any]]:
     """Span *items* (the batch's ``[offset, ...)``) over *grants*, ensure each tree, submit; their records.
 
-    A grant whose tree cannot be made is dropped and the span recomputed without it.
+    A grant whose tree cannot be made is dropped and the span recomputed without it; when none is left,
+    the refusal names each grant's failure, never an empty machine.
     """
-    usable = list(grants)
+    usable, why = list(grants), []
     while True:
+        if not usable:
+            msg = 'no grant can take this work: ' + '; '.join(why)
+            raise ValueError(msg)
         placements = span(
             len(items),
             config.cost,
@@ -139,8 +143,9 @@ def _place(
                 continue
             try:
                 ensure(placement.grant)
-            except (RuntimeError, Unreachable):
+            except (RuntimeError, Unreachable) as refused:
                 failed.append(placement.grant)
+                why.append(str(refused))
         if not failed:
             break
         usable = [g for g in usable if g not in failed]
