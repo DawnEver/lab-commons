@@ -36,8 +36,15 @@ RETIRED: Final[dict[str, str]] = {
     'integrator.host': 'nothing: no host owns integration; any host raises its prompts as one forge issue per row',
     'forge promote': 'python -m lab_commons.dev.integrate promote <sha>, then a plain push of the trunk',
     'forgepromote': 'lab_commons.dev.integrate',
-    # GitHub is a read-only mirror (user ruling 2026-10-19): its PRs are carried to the forge, never reported on there.
-    'forgeintegration import venues': 'lab_commons.dev.forgemirror, from [tool.lab_commons.integrator] mirror',
+    # All maintenance happens on gitea; GitHub is ONLY a push mirror (user ruling 2026-10-19): nothing reads,
+    # carries, comments on or closes a GitHub PR, and auto-merge is gitea-only.
+    'forgeintegration import venues': 'nothing: PRs are opened and merged on gitea; GitHub is only a push mirror',
+    'forgemirror': 'nothing: GitHub is only a push mirror; open the PR on gitea (lab_commons.dev.forgemerge)',
+    'GITHUB-PRS-ARRIVE-ON-THE-FORGE': 'nothing: GitHub is only a push mirror; PRs are opened on gitea',
+    'integrator.mirror': 'nothing: GitHub is only a push mirror (gitea Settings > Mirror settings, branch-set.md)',
+    'Marker.MIRROR': 'nothing: no comment is written on a GitHub PR; GitHub is only a push mirror',
+    'mirror_step': 'nothing: forge serve and forge integration read gitea PRs only; GitHub is only a push mirror',
+    'pr/gh-': 'pr/<name> on gitea (the declared ephemeral namespace); GitHub is only a push mirror',
     # Files are an HPC resource: retention runs every serve tick, and a tree goes once its sha is not in flight.
     'every_hours': 'nothing: retention runs every serve tick (lab_commons.dev.retention)',
     'tree-unreferenced': 'tree-not-in-flight (lab_commons.dev.retentionplan.in_flight)',
