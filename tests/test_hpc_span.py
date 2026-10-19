@@ -162,6 +162,27 @@ def test_a_grant_whose_tree_cannot_be_built_is_dropped_and_the_rest_take_the_bat
     assert [(p['grant'], p['items']) for p in record['placements']] == [(NEAR.name, [0, 2000])]
 
 
+def test_when_no_grant_can_build_the_refusal_names_each_build_failure(tmp_path: Path) -> None:
+    """A build failure on every grant is named, never reported as an empty machine.
+
+    2026-10-19 (motronics T3 at ae1cf8ef77): every artifact build failed on a missing submodule, each
+    grant was dropped, and submit said "this machine holds no grant" -- the build error was lost.
+    """
+    machine, logins = _cluster()
+
+    def ensure(grant: Grant) -> None:
+        msg = f'the artifact failed to build on {grant.name}'
+        raise RuntimeError(msg)
+
+    with pytest.raises(ValueError, match='failed to build on') as refused:
+        submit_job(
+            _config(tmp_path), list(range(2000)), machine, lambda g: logins[g.hosts[0]], stamp='t0', ensure=ensure
+        )
+    assert 'holds no grant' not in str(refused.value)
+    assert NEAR.name in str(refused.value)
+    assert FAR.name in str(refused.value)
+
+
 def test_gather_merges_the_slices_back_into_batch_order_and_names_a_silent_grant(tmp_path: Path) -> None:
     machine, logins = _cluster()
     reach = _reach(logins)
