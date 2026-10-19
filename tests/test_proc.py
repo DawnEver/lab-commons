@@ -12,7 +12,9 @@ injecting the table rather than mocking the function under test.
 """
 
 import os
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -132,13 +134,45 @@ class TestKill:
         order: list[int] = []
         monkeypatch.setattr('lab_commons.proc.process_tree', lambda _pid: frozenset({10, 11, 12}))
         monkeypatch.setattr('lab_commons.proc.kill_pid', lambda pid: (order.append(pid), True)[1])
+        monkeypatch.setattr('lab_commons.proc.pid_alive', lambda _pid: False)
         assert kill_process_tree(10) == frozenset({10, 11, 12})
         assert order[-1] == 10, 'the root must be killed LAST'
 
     def test_reports_only_what_it_confirmed(self, monkeypatch) -> None:
         monkeypatch.setattr('lab_commons.proc.process_tree', lambda _pid: frozenset({10, 11}))
         monkeypatch.setattr('lab_commons.proc.kill_pid', lambda pid: pid == 11)
+        monkeypatch.setattr('lab_commons.proc.pid_alive', lambda _pid: False)
         assert kill_process_tree(10) == frozenset({11})
+
+    def test_a_survivor_past_the_ceiling_is_not_confirmed(self, monkeypatch) -> None:
+        # PLANTED CONTROL: a pid that ignores its kill must not be reported as reaped.
+        monkeypatch.setattr('lab_commons.proc.process_tree', lambda _pid: frozenset({10, 11, 12}))
+        monkeypatch.setattr('lab_commons.proc.kill_pid', lambda _pid: True)
+        monkeypatch.setattr('lab_commons.proc.pid_alive', lambda pid: pid == 11)
+        started = time.monotonic()
+        assert kill_process_tree(10, ceiling_s=0.2) == frozenset({10, 12})
+        assert time.monotonic() - started < 5, 'the wait must honour its ceiling'
+
+    def test_every_returned_pid_is_gone_on_return(self) -> None:
+        # A SIGKILL is asynchronous: measured on Ada, the grandchild was still running right after
+        # the old return. Confirmed means GONE, observed at the moment the function returns.
+        grandchild = 'import time; time.sleep(120)'
+        parent = (
+            'import subprocess, sys, time; '
+            f'c = subprocess.Popen([sys.executable, "-c", {grandchild!r}]); '
+            'print(c.pid, flush=True); time.sleep(120)'
+        )
+        proc = subprocess.Popen([sys.executable, '-c', parent], stdout=subprocess.PIPE, text=True)
+        try:
+            child = int(proc.stdout.readline())
+            confirmed = kill_process_tree(proc.pid)
+            alive = {pid for pid in (proc.pid, child) if pid_alive(pid)}
+            assert {proc.pid, child} <= confirmed
+            assert alive == set(), f'pids still alive on return: {sorted(alive)}'
+        finally:
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()
 
 
 class TestTheDarwinBackend:
