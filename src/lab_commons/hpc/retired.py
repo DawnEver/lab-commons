@@ -68,7 +68,7 @@ RETIRED: Final[dict[str, str]] = {
     'lab_commons.hpc verdict': 'python -m lab_commons.hpc run submit|gather (a run, not a verdict)',
     'lab_commons.hpc.verdict': 'lab_commons.hpc.run',
     'submit_verdict': 'lab_commons.hpc.run.submit_run',
-    'gather_verdict': 'lab_commons.hpc.run.gather_run',
+    'gather_verdict': 'lab_commons.hpc.gather.gather_run',
     'VerdictSpec': 'lab_commons.hpc.shell.RunSpec',
     'record-linux': 'python -m lab_commons.dev.platformparts post <run-record> (platform and scope come from it)',
     'platformparts record': (
