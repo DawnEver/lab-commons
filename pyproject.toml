@@ -129,7 +129,7 @@ always_run = true
 [tool.lab_commons.branchset]
 # ONE-BRANCH-PER-SESSION: the trunk and the integration branch are the long-lived ones; a lane merges and is deleted.
 trunk = 'main'
-sessions = ['integrate/main']
+sessions = ['integrate/main', 'feat/serve-withholds-a-resource']  # feat/serve-withholds-a-resource: [serve] withhold (motronics request 2026-10-19); deleted once merged
 # User ruling 2026-10-13 ("origin should not carry this junk"): every serving host (idempotently) deletes
 # merged undeclared origin branches idle >= grace_hours (lab_commons.dev.branchprune).
 prune_merged = true
