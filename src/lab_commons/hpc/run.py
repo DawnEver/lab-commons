@@ -33,8 +33,9 @@ priced at no less than the time it was given (:meth:`lab_commons.compute.learned
 only what is still unfinished after that is ``INFRA``. An item that closed without reporting an id
 recorded it ``PENDING``: never reported.
 
-AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory,
-HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
+AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory for
+the files of the KILLED items only (:func:`_grown`; a file that then finishes is back at its peak), HELD TO
+the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
 counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
 halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
 (:func:`lab_commons.hpc.records.fold`). A round that NO GRANT CAN TAKE settles at once: its ids are
@@ -42,11 +43,12 @@ halves the killed items, so they end. A lone test still killed at the ceiling is
 
 THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
 minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next run reads them
-back (``history``), so an item's time is its file's overhead plus its ids' durations, the array's
-memory is the worst measured peak times ``policy.safety``, and ``cost`` is the fallback only for a file
-never measured -- named in the plan as ``unmeasured``. EVERY FOLDED ROUND is learned
-(:mod:`lab_commons.compute.learned`), not only the record: measured 2026-10-13 on Ada, nine downstream runs
-were each superseded before their record, so none was learned and every round 0 planned blind.
+back (``history``), so an item's time is its file's overhead plus its ids' durations, an item's memory
+is its own files' worst measured peak times ``policy.safety`` -- items grouped by memory class, one array
+per class (:func:`_submit_round`) -- and ``cost`` is the fallback only for a file never measured -- named
+in the plan as ``unmeasured``. EVERY FOLDED ROUND is learned (:mod:`lab_commons.compute.learned`), not only
+the record: measured 2026-10-13 on Ada, nine downstream runs were each superseded before their record, so
+none was learned and every round 0 planned blind.
 """
 
 from __future__ import annotations
@@ -60,7 +62,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.learned import OOM_GROWTH, Measured
-from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit
+from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
@@ -156,50 +158,100 @@ def _submit_round(
     cost: Cost,
     policy: Policy,
 ) -> None:
-    """Plan and submit round ``len(state['rounds'])`` of *pending* among the grants of *snapshots*."""
+    """Plan and submit round ``len(state['rounds'])`` of *pending* among the grants of *snapshots*.
+
+    EACH ITEM ASKS ITS OWN MEMORY (:meth:`Measured.item_gb`: its files' learned peaks times the safety, times
+    this run's growth of a file whose item was OOM-killed), held to the most any grant gives. A Slurm array
+    asks one memory for all its tasks, so items are grouped by memory class (:func:`learned.memory_band`) and
+    each class is its own array of one manifest (:func:`submit_bands`). The heaviest class picks the grant;
+    the others plan on it, since the tree lives in its home.
+    """
     tag = f'{state["stamp"]}-r{len(state["rounds"])}'
     measured = Measured.of(state['measured'])
-    seconds, unmeasured = measured.estimate(pending, cost)
-    wanted = measured.mem_gb(pending, cost, policy) * state['oom']
+    grown = state.get('grown', {})
     grantable = grantable_gb(snapshots)
-    mem_gb = wanted if grantable is None else min(wanted, grantable)
-    grant, plan = allocate(
-        len(pending),
-        replace(cost, mem_gb=mem_gb),
-        snapshots,
-        session=machine.session,
-        policy=policy,
-        seconds=seconds,
-        paging=machine.paging,
-        rerun_safe=True,  # a forge test part reruns to the same verdict
-        min_minutes=state.get('min_minutes', 0.0),
-    )
-    if not state['rounds'] and plan.room == 0:
-        learned.record_ask(state['repo'], learned.SLURM, needs_of(state['platform']), mem_gb, safety=policy.safety)
-        msg = (
-            f'{grant.name} has no headroom now for one task of {cost.cpus} CPU and {mem_gb:.1f} GB beside what '
-            "the account's own jobs hold; nothing was submitted, so a host with room takes it"
+    asks = [measured.item_gb(ids, cost, policy, grown) for ids in pending]
+    held = [ask if grantable is None else min(ask, grantable) for ask in asks]
+    classes: dict[int, list[int]] = {}
+    for index, gb in enumerate(held):
+        classes.setdefault(learned.memory_band(gb), []).append(index)
+    min_minutes = state.get('min_minutes', 0.0)
+    chosen: Grant | None = None
+    order: list[int] = []
+    plans: list[Plan] = []
+    bands: list[dict[str, Any]] = []
+    unmeasured: set[str] = set()
+    for key in sorted(classes, reverse=True):
+        members = classes[key]
+        group = [pending[i] for i in members]
+        seconds, guessed = measured.estimate(group, cost)
+        mem_gb = max(held[i] for i in members)
+        options = snapshots if chosen is None else [(g, s) for g, s in snapshots if g == chosen]
+        chosen, plan = allocate(
+            len(group),
+            replace(cost, mem_gb=mem_gb),
+            options,
+            session=machine.session,
+            policy=policy,
+            seconds=seconds,
+            paging=machine.paging,
+            rerun_safe=True,  # a forge test part reruns to the same verdict
+            min_minutes=min_minutes,
         )
-        raise NoRoom(msg)
-    order, shards = balance(seconds, plan.shards)
+        if not state['rounds'] and plan.room == 0:
+            needs = needs_of(state['platform'])
+            learned.record_ask(state['repo'], learned.SLURM, needs, mem_gb, safety=policy.safety)
+            msg = (
+                f'{chosen.name} has no headroom now for one task of {cost.cpus} CPU and {mem_gb:.1f} GB beside what '
+                "the account's own jobs hold; nothing was submitted, so a host with room takes it"
+            )
+            raise NoRoom(msg)
+        local, shards = balance(seconds, plan.shards)
+        plan = _rewalled(plan, shards, [seconds[i] for i in local], policy, min_minutes)
+        base, first = len(order), sum(len(p.shards) for p in plans)
+        order += [members[i] for i in local]
+        plans.append(replace(plan, shards=tuple((a + base, b + base) for a, b in plan.shards)))
+        at_ceiling = None if grantable is None else max(asks[i] for i in members) >= grantable
+        bands.append(
+            {
+                'shards': [first, first + len(plan.shards)],
+                'mem_mb': plan.mem_mb,
+                'minutes': plan.minutes,
+                'throttle': plan.throttle,
+                'at_ceiling': at_ceiling,
+            }
+        )
+        unmeasured |= set(guessed)
+    assert chosen is not None  # noqa: S101 -- pending is never empty here
     pending = [pending[i] for i in order]
-    plan = _rewalled(plan, shards, [seconds[i] for i in order], policy, state.get('min_minutes', 0.0))
     ceiling = {'timeout_s': state['timeout_s']} if state.get('timeout_s') else {}
     items = [{'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, **ceiling} for i, group in enumerate(pending)]
-    setup = (ENV,)
     sha = state['sha']
     job = JobSpec(
-        name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=setup, entry=f'{ITEM_MODULE}:run'
+        name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=(ENV,), entry=f'{ITEM_MODULE}:run'
     )
-    sub = submit(runners[grant.account], plan, Config(job=job, cost=cost, policy=policy), items, stamp=tag)
-    state['rounds'].append({**_plan_record(plan, grant, sub.job_id, sub.run_dir), 'unmeasured': unmeasured})
+    config = Config(job=job, cost=cost, policy=policy)
+    run_dir, job_ids = submit_bands(runners[chosen.account], plans, config, items, stamp=tag)
+    for band, job_id in zip(bands, job_ids, strict=True):
+        band['job_id'] = job_id
+    whole = replace(
+        plans[0],
+        shards=tuple(s for p in plans for s in p.shards),
+        minutes=max(p.minutes for p in plans),
+        mem_mb=max(p.mem_mb for p in plans),
+        throttle=sum(p.throttle for p in plans),
+        makespan_minutes=max(p.makespan_minutes for p in plans),
+    )
+    record = {**_plan_record(whole, chosen, job_ids, run_dir), 'bands': bands, 'unmeasured': sorted(unmeasured)}
+    state['rounds'].append(record)
     state['current'] = {
-        'account': grant.account,
+        'account': chosen.account,
         'tag': tag,
         'items': items,
-        'job_id': sub.job_id,
-        'shards': sub.shards,
-        'at_ceiling': None if grantable is None else wanted >= grantable,  # None: no grant states a ceiling
+        'job_ids': job_ids,
+        'shards': len(whole.shards),
+        'bands': bands,
+        'ceiling': grantable is not None,  # an OOM round is not counted against RETRIES while a ceiling exists
     }
 
 
@@ -280,11 +332,13 @@ def submit_run(
         'cells': cells,
         'measured': Measured.of(history or {}).record(),
         'rounds': [],
-        'oom': 1,
+        'grown': {},  # file -> this run's memory growth after its item was OOM-killed
         'carried': {node: held[1] for node, held in taken.items()},
     }
     files = group_items([node for node in ids if node not in handed and node not in taken])
-    pending = Measured.of(state['measured']).pack(files, cost, item_seconds(policy))
+    measured = Measured.of(state['measured'])
+    band = lambda ids: learned.memory_band(measured.item_gb(ids, cost, policy))  # noqa: E731 -- one key
+    pending = measured.pack(files, cost, item_seconds(policy), band)
     if not pending:  # every id was carried or handed: the record needs no job
         state['record'] = record_of(state, grant.slurm_account)
         _save(run, state)
@@ -341,18 +395,20 @@ def gather_run(
     current = state['current']
     account = tuple(current['account'])
     run = runners[account]
-    clocks = shard_clock(run, [current['job_id']])
+    clocks = shard_clock(run, current['job_ids'])
     states = {shard: clock.state for shard, clock in clocks.items()}
     if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
         return None
     measured = Measured.of(state['measured'])
     streams = read_streams(run, *stream_sources(sha, current['tag']))
     planned = state['rounds'][-1]
-    wall = planned['minutes'] * 60
+    band_of = {n: band for band in current['bands'] for n in range(*band['shards'])}
     walls = [
-        clocks[n].elapsed if n in clocks and clocks[n].elapsed > 0 else wall for n in range(len(planned['shards']))
+        clocks[n].elapsed if n in clocks and clocks[n].elapsed > 0 else band_of[n]['minutes'] * 60
+        for n in range(len(planned['shards']))
     ]
-    oomed = [i for n, (a, b) in enumerate(planned['shards']) if states.get(n) == 'OUT_OF_MEMORY' for i in range(a, b)]
+    shard_of = {i: n for n, (a, b) in enumerate(planned['shards']) for i in range(a, b)}
+    oomed = [i for i, n in shard_of.items() if states.get(n) == 'OUT_OF_MEMORY']
     pending, killed, busy = fold(
         current['items'],
         streams,
@@ -360,7 +416,7 @@ def gather_run(
         measured,
         shards=planned['shards'],
         walls=walls,
-        alone=dict.fromkeys(oomed, planned['mem_mb']) if current.get('at_ceiling') else {},
+        alone={i: band_of[shard_of[i]]['mem_mb'] for i in oomed if band_of[shard_of[i]]['at_ceiling']},
     )
     planned['clock'] = round_clock(clocks, busy)
     planned['walls_s'] = walls
@@ -368,11 +424,10 @@ def gather_run(
     learned.learn({'repo': state['repo'], **state['measured']})
     timed_out = 'TIMEOUT' in states.values()
     oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
-    if oom:
-        state['oom'] *= OOM_GROWTH
+    state['grown'] = _grown(current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom)
     if timed_out:
         state['min_minutes'] = 2 * planned['minutes']
-    if pending and (len(state['rounds']) <= RETRIES or (oom and current.get('at_ceiling') is not None)):
+    if pending and (len(state['rounds']) <= RETRIES or (oom and current['ceiling'])):
         grant = next(g for g in machine.grants if g.account == account)
         snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
         try:
@@ -400,5 +455,37 @@ def gather_run(
     return record
 
 
-def _plan_record(plan: Plan, grant: Grant, job_id: str, run_dir: str) -> dict[str, Any]:
-    return {**asdict(plan), 'grant': grant.name, 'job_id': job_id, 'run_dir': run_dir}
+def _grown(
+    items: list[dict[str, Any]],
+    cells: Mapping[str, Any],
+    shard_of: Mapping[int, int],
+    states: Mapping[int, str],
+    grown: Mapping[str, float],
+    *,
+    oom: bool,
+) -> dict[str, float]:
+    """The run's memory growth per FILE after a round: a KILLED item's files grow, a finished one's reset.
+
+    In a round that ran out of memory, an item left unfinished in a shard that did not time out was killed,
+    and each of its files asks
+    :data:`OOM_GROWTH` times more next round, never every later item (Ada 2026-10-19: one heavy file's kill
+    doubled every task of the part). A file whose item finished every id outside an
+    OUT_OF_MEMORY shard is back at its measured peak (:meth:`Measured.learn` keeps it): its growth is dropped.
+    """
+    after = dict(grown)
+    killed: set[str] = set()  # a file grows ONCE a round, however many of its items were killed
+    for index, item in enumerate(items):
+        files = {node.split('::', maxsplit=1)[0] for node in item['ids']}
+        shard = states.get(shard_of[index], '')
+        if all(node in cells for node in item['ids']) and shard != 'OUT_OF_MEMORY':
+            for name in files:
+                after.pop(name, None)
+        elif oom and shard != 'TIMEOUT':
+            killed |= files
+    for name in killed:
+        after[name] = after.get(name, 1.0) * OOM_GROWTH
+    return after
+
+
+def _plan_record(plan: Plan, grant: Grant, job_ids: list[str], run_dir: str) -> dict[str, Any]:
+    return {**asdict(plan), 'grant': grant.name, 'job_ids': job_ids, 'run_dir': run_dir}

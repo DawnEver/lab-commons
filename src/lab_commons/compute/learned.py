@@ -6,7 +6,8 @@ kinds of fact, both written by finished runs -- a box run (:mod:`lab_commons.dev
 Slurm run (:mod:`lab_commons.hpc.run`) alike -- and never by hand:
 
 * PER TEST (:class:`Measured`) -- what prices a shard and a worker: seconds per node id, floors, per-file
-  overheads and per-file peak RSS. :meth:`Measured.pack` cuts a Slurm array from it;
+  overheads and per-file peak RSS. :meth:`Measured.pack` cuts a Slurm array from it, grouping files by memory class;
+  :meth:`Measured.item_gb` is one item's memory;
   :meth:`Measured.worker_gb` is the memory one worker needs -- a Slurm task's request and a box
   selection's claim (:func:`lab_commons.dev.verifybox.selection_mem_gb`).
 * PER JOB (:class:`Run`), keyed by ``(producer, need-set)`` -- the job's peak memory, cpu-seconds and wall
@@ -83,6 +84,7 @@ __all__ = [
     'learn_peaks',
     'learn_record',
     'learned',
+    'memory_band',
     'part_files',
     'record_ask',
     'record_run',
@@ -209,25 +211,52 @@ class Measured:
             unmeasured += guessed
         return seconds, sorted(set(unmeasured))
 
-    def pack(self, files: Sequence[Sequence[str]], cost: Cost, budget: float) -> list[list[str]]:
-        """Whole files, consecutive, joined into items of up to *budget* estimated seconds -- one process each.
+    def pack(
+        self,
+        files: Sequence[Sequence[str]],
+        cost: Cost,
+        budget: float,
+        band: Callable[[Sequence[str]], int] | None = None,
+    ) -> list[list[str]]:
+        """Whole files, joined into items of up to *budget* estimated seconds -- one process each.
 
         A file is never split (its ids, and any xdist ``@group`` among them, stay in one process); a file
         over *budget* is an item alone. Measured 2026-10-10: 4316 one-file items paid 9.5 h of start-up for
         6.0 h of tests.
+
+        With *band* (a file's memory class, :func:`memory_band`), files are grouped by it -- collection order
+        kept within a band -- and only files of ONE band share an item, so one heavy file never sizes the light
+        files beside it. Measured 2026-10-19 (Ada): every task of a part asked 12-47 GB on one core because the
+        array's memory was its heaviest file's.
         """
         by = self._by_file()
+        ordered = sorted(files, key=band) if band is not None else list(files)
         items: list[list[str]] = []
-        for ids in files:
-            if items and self._seconds([*items[-1], *ids], cost, by)[0] <= budget:
+        last = None
+        for ids in ordered:
+            key = band(ids) if band is not None else None
+            if items and key == last and self._seconds([*items[-1], *ids], cost, by)[0] <= budget:
                 items[-1] = [*items[-1], *ids]
             else:
                 items.append(list(ids))
+            last = key
         return items
 
-    def mem_gb(self, items: Sequence[Sequence[str]], cost: Cost, policy: Policy) -> float:
-        """One Slurm task's memory: :meth:`worker_gb` over these items' files, floored at ``cost.mem_gb``."""
-        return self.worker_gb([n for ids in items for n in ids], prior_gb=cost.mem_gb, safety=policy.safety)
+    def item_gb(
+        self, ids: Iterable[str], cost: Cost, policy: Policy, grown: Mapping[str, float] | None = None
+    ) -> float:
+        """ONE ITEM's memory: each of its files' :meth:`worker_gb` times its OOM growth in this run, the worst.
+
+        *grown* is the multiplier a run applied to a file whose item was OOM-killed (:mod:`lab_commons.hpc.run`);
+        a file absent from it asks its learned peak times the safety, never under ``cost.mem_gb`` -- never a
+        repo-wide constant, never an inherited maximum.
+        """
+        growth = grown or {}
+        files = {_file(n) for n in ids}
+        return max(
+            (self.worker_gb([f], prior_gb=cost.mem_gb, safety=policy.safety) * growth.get(f, 1.0) for f in files),
+            default=cost.mem_gb,
+        )
 
     def prior_mb(self, name: str) -> float | None:
         """The PRIOR peak of an unmeasured file *name* (D5): its measured siblings' median, else the table's.
@@ -255,6 +284,11 @@ class Measured:
         files = {_file(n) for n in nodes}
         peaks = [self.peaks_mb[f] if f in self.peaks_mb else (self.prior_mb(f) or 0.0) for f in files]
         return task_gb(max(peaks, default=0.0) / _MB_PER_GB, prior_gb=prior_gb, safety=safety)
+
+
+def memory_band(gb: float) -> int:
+    """The memory class of an ask of *gb*: its power of two (1, 2, 4 ... GB), what :meth:`Measured.pack` groups by."""
+    return math.ceil(math.log2(gb)) if gb > 1 else 0
 
 
 def task_gb(peak_gb: float, *, prior_gb: float, safety: float) -> float:
