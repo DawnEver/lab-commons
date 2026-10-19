@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from lab_commons.outcomes import Status
 from lab_commons.supervise import deploy as deploy_module
@@ -523,4 +526,5 @@ def test_a_phase_result_reads_in_the_one_status_vocabulary() -> None:
 
 def test_the_generic_name_is_gone_from_deploy() -> None:
     assert 'PhaseResult' in deploy_module.__all__
-    assert not hasattr(deploy_module, 'Outcome')
+    with pytest.raises(AttributeError):
+        _ = importlib.import_module(deploy_module.__name__).Outcome

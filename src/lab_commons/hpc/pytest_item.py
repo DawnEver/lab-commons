@@ -111,6 +111,16 @@ class _Report(Protocol):
     longrepr: object
     #: The test's keywords: its markers' names among them.
     keywords: Mapping[str, object]
+    #: The xfail's reason -- pytest sets it ONLY on an xfail's or xpass's report (:func:`_wasxfail`).
+    wasxfail: object
+
+
+def _wasxfail(report: _Report) -> str | None:
+    """The report's xfail reason; ``None`` when pytest set none, its absence being an AttributeError."""
+    try:
+        return str(report.wasxfail or '')
+    except AttributeError:
+        return None
 
 
 def declared_resources(pyproject: Path) -> frozenset[str]:
@@ -147,15 +157,16 @@ def judged(report: _Report, resources: Collection[str]) -> dict[str, Any] | None
         return _failed(report)
     if report.when != 'call':
         return None
-    if hasattr(report, 'wasxfail'):  # a non-strict xpass
-        return _cell('ok', expected='rejected', why=str(report.wasxfail or ''))
+    why = _wasxfail(report)
+    if why is not None:  # a non-strict xpass
+        return _cell('ok', expected='rejected', why=why)
     return _cell('ok')
 
 
 def _skipped(report: _Report, resources: Collection[str]) -> dict[str, Any]:
     """A skipped phase: an xfail, or a skip mapped by the marker declaring it (:func:`judged`)."""
     if _xfailed(report):
-        why = str(getattr(report, 'wasxfail', '') or '')
+        why = _wasxfail(report) or ''
         return _cell('rejected', 'expected', why or _why(report.longrepr), 'rejected', why)
     reason = _skip_reason(report)
     if any(name in report.keywords for name in resources):

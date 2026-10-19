@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sqlite3
 import sys
 from collections.abc import Mapping
@@ -227,4 +228,5 @@ def test_a_process_end_maps_its_kill_onto_the_one_status_vocabulary(reason: str,
 
 def test_the_generic_name_is_gone_from_the_box() -> None:
     assert 'ProcessEnd' in box_package.__all__
-    assert not hasattr(box_package, 'Outcome')
+    with pytest.raises(AttributeError):
+        _ = importlib.import_module(box_package.__name__).Outcome
