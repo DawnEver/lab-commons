@@ -53,7 +53,7 @@ ADOPTION = HookAdoption(
     remedies={
         'BARE-TEST-INVOCATION': Remedy('verdict-entry-point', '.venv/Scripts/python.exe -m lab_commons.dev.verify'),
         'PUSH-NO-VERIFY': Remedy('verdict-entry-point', '.venv/Scripts/python.exe -m lab_commons.dev.verify'),
-        'GIT-NETWORK-VERB': Remedy('retry-wrapper', 'sh {root}/scripts/hooks/with-retry.sh push'),
+        'NETWORK-VERB': Remedy('retry-wrapper', 'sh {root}/scripts/hooks/with-retry.sh push'),
         'RAW-PROCESS-KILL': Remedy('process-tree-killer', '.venv/Scripts/python.exe -m lab_commons.dev.stop --pid N'),
     },
 )
@@ -194,6 +194,12 @@ def test_every_registry_row_behaves_through_the_real_engine(rules: Path) -> None
         agent = 'scan-agent' if rule.scope == 'subagent' else None
         for command in rule.refuses:
             checked += 1
+            if rule.when == 'live-run':
+                # No run is live in a scan tree: the row must stay SILENT (its live half is test_dev_liverun's).
+                decided = agenthooks.decide(command, rules)
+                if decided is not None and decided.startswith(f'{rule.id}:'):
+                    wrong.append(f'{rule.id}: fired with no live run on {command!r}')
+                continue
             if agenthooks.decide(command, rules, agent_id=agent) is None:
                 wrong.append(f'{rule.id}: the engine ALLOWED a command the row says it refuses: {command!r}')
             outside = agenthooks.decide(command, rules) if agent else None
@@ -277,7 +283,7 @@ def two_repos(tmp_path: Path) -> tuple[Path, Path, Path]:
             'BARE-TEST-INVOCATION': Remedy('verdict-entry-point', SESSION_DOOR),
             'PUSH-NO-VERIFY': Remedy('verdict-entry-point', SESSION_DOOR),
         },
-        declared_absent=frozenset({'GIT-NETWORK-VERB', 'RAW-PROCESS-KILL'}),
+        declared_absent=frozenset({'NETWORK-VERB', 'RAW-PROCESS-KILL'}),
     )
     rules = hooks / 'deny-rules.json'
     rules.write_text(render(adoption), encoding='utf-8')
@@ -366,7 +372,7 @@ def test_a_subagent_push_is_refused_and_the_main_session_keeps_its_own_door(rule
     assert 'hand the commit SHA back' in inside
     outside = agenthooks.decide('git push origin HEAD', rules)
     assert outside is not None
-    assert outside.startswith('GIT-NETWORK-VERB:'), 'the main session lost its own (retry) door'
+    assert outside.startswith('NETWORK-VERB:'), 'the main session lost its own (retry) door'
 
 
 def test_a_subagent_is_refused_through_the_powershell_tool_too(rules: Path) -> None:

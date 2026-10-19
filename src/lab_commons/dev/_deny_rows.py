@@ -56,13 +56,23 @@ from __future__ import annotations
 from lab_commons.dev._deny_forge_rows import FORGE_WRITE_ROWS, VENV_PYTHONS
 from lab_commons.dev._deny_grep_row import RECURSIVE_GREP
 from lab_commons.dev._deny_interpreter_row import BARE_INTERPRETER
+from lab_commons.dev._deny_liverun_row import LIVE_RUN
 from lab_commons.dev._deny_report_row import REPORTS_LIVE_IN_MEMORY
 from lab_commons.dev._deny_subagent_row import SUBAGENT_NO_PUSH
 from lab_commons.dev._deny_worktree_row import BASE_IS_EXPLICIT_ALLOW, BASE_IS_EXPLICIT_PATTERN, WORKTREES_STAY_INSIDE
-from lab_commons.dev.netverb import NETWORK_VERBS
+from lab_commons.dev.netverb import GIT_NETWORK_VERBS, UV_NETWORK_VERBS
 from lab_commons.dev.worktreeplace import WORKTREES_REL
 
+_GIT_VERBS = '|'.join(verb for verb in GIT_NETWORK_VERBS if verb != 'submodule')
+_UV_VERBS = '|'.join(verb for verb in UV_NETWORK_VERBS if verb != 'pip')
+#: The shell spelling of :func:`lab_commons.dev.netverb.is_network_verb`, derived from its verb lists.
+NETWORK_VERB_PATTERN = (
+    rf'(?:git(?:\s+-[Cc]\s+\S+)*\s+(?:{_GIT_VERBS}|submodule\s+update)'
+    rf'|uv\s+(?:{_UV_VERBS}|pip\s+(?:install|sync|compile)))\b'
+)
+
 DENY_ROWS: tuple[dict[str, object], ...] = (
+    LIVE_RUN,
     SUBAGENT_NO_PUSH,
     {
         'id': 'BARE-TEST-INVOCATION',
@@ -128,27 +138,6 @@ DENY_ROWS: tuple[dict[str, object], ...] = (
             'git commit -F - -- src/thing.py',
             'git commit -m "amend the ledger prose"',
             'git log -1 --format=%h',
-        ),
-    },
-    {
-        'id': 'GIT-NETWORK-VERB',
-        'pattern': rf'\bgit\s+(?:{"|".join(NETWORK_VERBS)})\b',
-        'matches': 'command',
-        'hazard': 'one transient forge failure on a network verb reads as '
-        '"blocked"; the wrapper retries, then diagnoses.',
-        'remedy': 'Re-issue through the retry wrapper: {remedy}',
-        'needs': 'retry-wrapper',
-        'refuses': (
-            'git push origin HEAD',
-            'git fetch --all',
-            'git pull --rebase',
-            'git ls-remote origin',
-            'git clone https://example.invalid/x.git',
-        ),
-        'permits': (
-            'git status',
-            'git log --oneline -5',
-            'git commit -m "mention a push in prose"',
         ),
     },
     {
@@ -220,6 +209,37 @@ DENY_ROWS: tuple[dict[str, object], ...] = (
         'permits': (
             'sh scripts/hooks/with-retry.sh push origin HEAD',
             'git commit --no-verify -m "x"',
+        ),
+    },
+    {
+        'id': 'NETWORK-VERB',
+        # Every verb `lab_commons.dev.netverb.is_network_verb` recognises, git's `-C`/`-c` options included.
+        'pattern': NETWORK_VERB_PATTERN,
+        'matches': 'command',
+        'hazard': 'one transient forge failure on a network verb reads as '
+        '"blocked"; the wrapper retries, then diagnoses.',
+        'remedy': 'Re-issue through the retry wrapper: {remedy}',
+        'needs': 'retry-wrapper',
+        'refuses': (
+            'git push origin HEAD',
+            'git fetch --all',
+            'git pull --rebase',
+            'git ls-remote origin',
+            'git clone https://example.invalid/x.git',
+            'git -C .claude/worktrees/x fetch origin',
+            'git -c protocol.file.allow=always submodule update --init --recursive',
+            'uv lock --upgrade',
+            'uv sync --frozen',
+            'uv pip install requests',
+        ),
+        'permits': (
+            'git status',
+            'git log --oneline -5',
+            'git commit -m "mention a push in prose"',
+            'git submodule status',
+            'git -C x log -- fetch',
+            'uv pip list',
+            'uv --version',
         ),
     },
     {

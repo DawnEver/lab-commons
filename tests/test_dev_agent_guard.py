@@ -31,7 +31,7 @@ pytestmark = pytest.mark.node
 ADOPTION = HookAdoption(
     app_name='planted',
     remedies={'BARE-TEST-INVOCATION': Remedy('verdict-entry-point', 'python -m lab_commons.dev.verify')},
-    declared_absent=frozenset({'GIT-NETWORK-VERB', 'PUSH-NO-VERIFY', 'RAW-PROCESS-KILL'}),
+    declared_absent=frozenset({'NETWORK-VERB', 'PUSH-NO-VERIFY', 'RAW-PROCESS-KILL'}),
 )
 
 

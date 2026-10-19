@@ -211,7 +211,6 @@ def test_a_scoped_row_binds_only_its_own_scope() -> None:
     [
         'sh scripts/hooks/with-retry.sh push origin main',
         'sh C:/w/sib/scripts/hooks/with-retry.sh push origin integrate/main',
-        'git -C ../sib push origin main',
         'git -C ../sib merge --ff-only lane/x',
     ],
 )

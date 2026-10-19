@@ -32,6 +32,9 @@ RETIRED: Final[dict[str, str]] = {
     # one-checkout-per-branch and fast-forward rules (user rulings 2026-10-13/14; lab_commons.dev.sessionbranch).
     'INTEGRATION-LIVES-IN-THE-MAIN-CHECKOUT': 'ONE-WRITER-PER-SESSION-BRANCH and INTEGRATION-IS-MERGES-ONLY',
     'PUSH-FROM-ITS-OWN-BRANCH': 'PUBLISH-IS-THE-LOCAL-REF (lab_commons.dev.sessionbranch, at pre-push)',
+    # The deny row covers every network verb (git and uv), read off one predicate (2026-10-19).
+    'GIT-NETWORK-VERB': 'NETWORK-VERB (git and uv network verbs; lab_commons.dev.netverb.is_network_verb)',
+    'netverb.NETWORK_VERBS': 'lab_commons.dev.netverb.GIT_NETWORK_VERBS and UV_NETWORK_VERBS',
     'integrationhome': 'lab_commons.dev.sessionbranch (pre-push) and lab_commons.dev.integrate (no working tree)',
     'integration-home': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',
     'push-from-its-own-branch': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',

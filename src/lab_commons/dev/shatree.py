@@ -96,8 +96,8 @@ def open_tree(
     tree = tree_path(root, sha, context)
     if not (tree / '.git').exists():
         _step(run, [_GIT, '-C', str(root), 'worktree', 'add', '--detach', str(tree), sha], 'git worktree add')
-    if (tree / '.gitmodules').is_file():  # a commit's tree INCLUDES its submodules at their pinned commits
-        _step(run, [_GIT, '-C', str(tree), 'submodule', 'update', '-q', '--init', '--recursive'], 'submodules')
+    # A commit's tree INCLUDES its submodules at their pinned commits: `dep --bootstrap` initialises them first,
+    # through the network door and with a local-path submodule's transport opened (_dep_network.init_submodules).
     _step(run, [python, '-m', 'lab_commons.dev.dep', '--bootstrap', str(tree)], 'dep --bootstrap')
     try:
         return Tree(tree, checkout_interpreter(tree, os_name=current_os_name()))

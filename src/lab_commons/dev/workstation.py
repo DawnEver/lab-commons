@@ -59,7 +59,8 @@ from lab_commons.config import config_path, section
 from lab_commons.dev import servetask
 from lab_commons.dev._machinefile import diff, merged
 from lab_commons.dev.forgealarm import RUN, Alarm, sound
-from lab_commons.dev.hostrefresh import Moved, follow, read, refresh, sync_venv, venv_python
+from lab_commons.dev.hostrefresh import Moved, follow, network, read, refresh, sync_venv, venv_python
+from lab_commons.dev.netverb import run_network_verb
 from lab_commons.dev.servelock import default_lock, held
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, host_serve_argv
 from lab_commons.hpc.deploy_steps import Step, Tools
@@ -178,7 +179,7 @@ def _credentials(programs: Programs, urls: Mapping[str, str]) -> list[str]:
     denied = []
     for name, url in urls.items():
         argv = [*programs.git, '-c', 'credential.interactive=never', 'ls-remote', '-q', url, 'HEAD']
-        rc = read(argv, _NO_PROMPT).returncode
+        rc = run_network_verb(argv, env={**os.environ, **_NO_PROMPT}).returncode
         emit(f'  {name}: {"ok" if rc == 0 else f"refused (exit {rc})"}')
         if rc:
             denied.append(name)
@@ -187,8 +188,10 @@ def _credentials(programs: Programs, urls: Mapping[str, str]) -> list[str]:
 
 def _checkout(step: Step, programs: Programs, checkout: Path, *, url: str, ref: str) -> Moved:
     if not (checkout / '.git').exists():
-        clone = [*programs.git, 'clone', '-q', '-b', ref, url, str(checkout)]
-        return Moved(step.change(f'{checkout.name}: git clone -b {ref} {url} {checkout}', clone))
+        what = f'{checkout.name}: git clone -b {ref} {url} {checkout}'
+        if step.dry:
+            return Moved(step.change(what, []))
+        return network(step, what, [*programs.git, 'clone', '-q', '-b', ref, url, str(checkout)])
     return follow(step, programs.git, checkout)
 
 
