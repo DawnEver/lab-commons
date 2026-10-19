@@ -19,6 +19,8 @@ _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # A unit lives in the VALUE, never the NAME (user ruling 2026-10-19): the box wait is a pint duration.
+    '--lock-wait-s': '--lock-wait "<duration>" (a time quantity such as "30 s"; a bare number is refused)',
     # A model API key is one scheme: its provider's host, username api-key[-<task>] (user ruling 2026-10-19).
     'pr-review.anthropic.lab-commons': "api.anthropic.com's pr-review task key (lab_commons.credentials.api_key)",
     # The offer sentence judges nothing; it lives beside the request it names (user ruling 2026-10-19 #8).
