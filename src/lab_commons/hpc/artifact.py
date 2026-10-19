@@ -16,7 +16,8 @@ is a fact of its compute nodes:
   only singularity 3.8.5 as a module, so an image buys nothing a tarball does not and costs a second build.
 
 THE BUILD LEAVES ONE FILE. It runs on the login node in a scratch directory under ``$TMPDIR`` that is
-removed when it ends: the commit is exported there (``git archive``, never a worktree), its env built there
+removed when it ends: the commit is exported there (``git archive``, never a worktree) WITH every submodule at
+the commit it pins (a path dependency may point into one), its env built there
 with uv's cache there too (no resident build cache), and the members packed. Only a native build stays
 keyed in ``~/ci/native/<key>`` (with its ``cargo-target``), as for a test run: a Rust rebuild costs minutes,
 and retention removes it once unreferenced. An artifact that exists is reused as is: a commit's artifact is
@@ -35,7 +36,7 @@ from typing import Final
 
 from lab_commons.hpc.builds import cargo_target
 from lab_commons.hpc.cluster import Runner
-from lab_commons.hpc.shell import BUILD_FAILED, ROOT, RunSpec, cache_dir, facts, keyed_build
+from lab_commons.hpc.shell import BUILD_FAILED, ROOT, RunSpec, cache_dir, export_submodules_script, facts, keyed_build
 from lab_commons.hpc.tree import NotSubmitted, fetch
 
 __all__ = [
@@ -116,6 +117,7 @@ def artifact_script(spec: RunSpec, fmt: str = TARBALL) -> str:
         '  S=$(mktemp -d "${TMPDIR:-/tmp}/lab-ci-artifact.XXXXXX"); trap \'rm -rf "$S"\' EXIT',
         f'  mkdir -p "$S/tree" "$S/pack/tree" && git -C {cache} archive {spec.sha} | tar -x -C "$S/tree"',
         '  cd "$S/tree"',
+        *export_submodules_script(spec.repo_url, cache, spec.sha),
         '  export E="$S/pack/env" UV_CACHE_DIR="$S/uv-cache" UV_LINK_MODE=copy',
         f'  if ! bash -eo pipefail -c {shlex.quote(install)} > "$S/build.log" 2>&1; then',
         f'    echo "{BUILD_FAILED} env"; tail -n {_LOG_TAIL} "$S/build.log"; exit 0',
