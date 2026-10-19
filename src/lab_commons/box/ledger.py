@@ -30,6 +30,11 @@ deadline passes, or its LIVENESS PROBE (an argv run by the reaper once its clien
 anything else dead) says the job is gone. Without the probe a dead job's claim held the box until its
 deadline (the open defect "an external claim outlives its dead job").
 
+A CLAIM MAY BE TAKEN BY ONE PROCESS AND RUN BY ANOTHER: :func:`take` admits it at once (no wait) and keeps
+it with the taker -- a scheduler deciding to start a run -- and the run it spawns :func:`adopted` it: the row
+moves to the run's pid with no second admission, so a run its scheduler admitted is never refused by the same
+box a moment later, and it is released when the run ends (or reaped with whichever process holds it).
+
 AN EXTERNAL CLAIM'S KEY IS EXCLUSIVE: while a persisted claim under *key* lives, a new :func:`hold` under
 the same key is refused at once with :class:`~lab_commons.box.demand.DuplicateKey` -- a study whose earlier
 job is unresolved is not submitted twice. Each :class:`~lab_commons.box.demand.Holding` carries its ``id``,
@@ -83,8 +88,8 @@ from lab_commons.liveness import creation_stamp, still_the_same_process
 Read = Callable[[Iterable[int]], Reading]
 
 __all__ = [
-    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'box_path', 'hand_over', 'hold',
-    'holdings', 'persist', 'release',
+    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'adopted', 'box_path', 'hand_over', 'hold',
+    'holdings', 'persist', 'release', 'take',
 ]  # fmt: skip
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
@@ -399,6 +404,38 @@ def hold(
         finally:
             with _immediate(con):
                 con.execute('DELETE FROM claims WHERE id = ? AND kept = 0', (claim.id,))
+
+
+def take(demand: Demand, what: str, *, key: str, capacity: Capacity | None = None, read: Read = Reading.now) -> Claim:
+    """Admit *demand* NOW (one look, no wait) and keep the claim past this call, for a run that :func:`adopted` it.
+
+    The claim lives with this process until the run adopts it, :func:`release` drops it, or this process dies.
+
+    Raises:
+        NotAdmitted: the measured room does not admit it now -- nothing is held.
+
+    """
+    with hold(demand, what, 0.0, key=key, capacity=capacity, read=read) as claim:
+        _update(claim, 'UPDATE claims SET kept = 1 WHERE id = ?')
+    return claim
+
+
+@contextmanager
+def adopted(claim_id: int) -> Iterator[None]:
+    """Hold the claim another process :func:`take`-s for the ``with`` body: no second admission, released after.
+
+    Raises:
+        Refused: no claim *claim_id* is on this box's ledger (released, or reaped with its taker).
+
+    """
+    if all(one.id != claim_id for one in holdings()):
+        msg = f'claim {claim_id} is not on this box ledger -- nothing to adopt'
+        raise Refused(msg)
+    hand_over(Claim(claim_id, 0.0), os.getpid())
+    try:
+        yield
+    finally:
+        release(Claim(claim_id, 0.0))
 
 
 def _wait(

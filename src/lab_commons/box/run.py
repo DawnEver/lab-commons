@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lab_commons.box import _linux, _win
 from lab_commons.box.demand import Capacity, Demand, ProcessEnd, Refused
-from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, hold
+from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, adopted, hold
 from lab_commons.box.supply import Reading
 
 __all__ = ['BLAS_THREAD_VARS', 'command', 'run']
@@ -62,8 +62,12 @@ def run(
     env: Mapping[str, str] | None = None,
     capacity: Capacity | None = None,
     read: Read = Reading.now,
+    claim: int = 0,
 ) -> ProcessEnd:
     """Admit *demand* (waiting at most *queue_s*), run *argv* enforced to it, release, report.
+
+    A nonzero *claim* is a ledger row the caller already :func:`~lab_commons.box.ledger.take`-s at exactly
+    *demand*: the run ADOPTS it (:func:`~lab_commons.box.ledger.adopted`) and is never admitted a second time.
 
     *key* is the caller's opaque identity of WHAT runs (a test id, a case+solver+mesh+analysis) and
     *fingerprint* its hash of the code the run depends on. The box never parses either: both go on the
@@ -84,7 +88,12 @@ def run(
     cores = str(demand.cpu)
     pools = dict.fromkeys(BLAS_THREAD_VARS, cores)
     inside = {**(os.environ if env is None else env), **pools, INSIDE_ENV: key, CPU_ENV: cores}
-    with hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint):
+    held = (
+        adopted(claim)
+        if claim
+        else hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint)
+    )
+    with held:
         return contain(argv, demand, cwd, inside, (key, fingerprint))
 
 
@@ -98,6 +107,7 @@ def command(
     outcome: Path,
     fingerprint: str | None = None,
     capacity: Capacity | None = None,
+    claim: int = 0,
 ) -> list[str]:
     """*argv* spelled as ``python -m lab_commons.box run ... -- argv``: the CLI that runs it enforced to *demand*.
 
@@ -107,10 +117,11 @@ def command(
 
     *capacity* is the size the caller sized *demand* against, handed to the child (``--capacity``) so it holds
     against that ONE reading and never re-derives a size from its own cwd or machine file; ``None`` lets the
-    child read this box (:meth:`Capacity.read`).
+    child read this box (:meth:`Capacity.read`). A nonzero *claim* (``--claim``) is the row the child adopts.
     """
     seats = [f'--seat={name}={count}' for name, count in sorted(demand.seats.items()) if count]
     marks = ['--fingerprint', fingerprint] if fingerprint else []
+    marks += ['--claim', str(claim)] if claim else []
     marks += ['--capacity', json.dumps(asdict(capacity), sort_keys=True)] if capacity is not None else []
     limits = ['--cpu', str(demand.cpu), '--mem-gb', f'{demand.mem_gb:g}', '--wall', str(demand.wall_s)]
     return [
