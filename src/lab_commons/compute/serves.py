@@ -41,22 +41,36 @@ class Serves:
     """The parts one host claims, by its declared rule."""
 
     parts: str = EVERY
+    #: Resources this host keeps for its own workload (``[serve] withhold = ["jmag"]``, user ruling 2026-10-19:
+    #: the box's JMAG seats run a long campaign, so it claims no part needing JMAG and every other part).
+    withholds: frozenset[str] = frozenset()
 
     @classmethod
     def of(cls, table: Mapping[str, Any]) -> Serves:
-        """The ``parts`` key of the machine file's ``[serve]`` table; an unknown rule is refused naming the rules."""
+        """The ``parts`` and ``withhold`` keys of the machine file's ``[serve]`` table; a bad value is refused."""
         parts = table.get('parts', EVERY)
         if parts not in _RULES:
             msg = f'[{SERVE_TABLE}] parts = {parts!r}; the rules are {list(_RULES)}'
             raise ValueError(msg)
-        return cls(parts)
+        withhold = table.get('withhold', [])
+        if not isinstance(withhold, list) or not all(isinstance(one, str) for one in withhold):
+            msg = f'[{SERVE_TABLE}] withhold must be a list of resource names, got {withhold!r}'
+            raise ValueError(msg)
+        return cls(parts, frozenset(withhold))
 
     def skips(self, needs: Collection[str]) -> str:
         """Why this host does not claim a part needing *needs*, ``''`` when it claims it."""
         if self.parts == NEEDS_A_RESOURCE and not needs:
             return f'{SKIPPED_HERE}: {self.text()} -- it needs no resource, so any host produces it'
+        if kept := sorted(self.withholds.intersection(needs)):
+            return (
+                f'{SKIPPED_HERE}: {self.text()} -- it needs {", ".join(kept)}, which this host keeps for its own work'
+            )
         return ''
 
     def text(self) -> str:
         """How a human reads it: ``only parts needing a resource (`[serve] parts = "needs-a-resource"`)``."""
-        return f'{_RULES[self.parts]} (`[{SERVE_TABLE}] parts = "{self.parts}"`)'
+        rule = f'{_RULES[self.parts]} (`[{SERVE_TABLE}] parts = "{self.parts}"`)'
+        if self.withholds:
+            rule += f', none needing {", ".join(sorted(self.withholds))} (`[{SERVE_TABLE}] withhold`)'
+        return rule
