@@ -36,6 +36,8 @@ RETIRED: Final[dict[str, str]] = {
     'integrator.host': 'nothing: no host owns integration; any host raises its prompts as one forge issue per row',
     'forge promote': 'python -m lab_commons.dev.integrate promote <sha>, then a plain push of the trunk',
     'forgepromote': 'lab_commons.dev.integrate',
+    # GitHub is a read-only mirror (user ruling 2026-10-19): its PRs are carried to the forge, never reported on there.
+    'forgeintegration import venues': 'lab_commons.dev.forgemirror, from [tool.lab_commons.integrator] mirror',
     # Files are an HPC resource: retention runs every serve tick, and a tree goes once its sha is not in flight.
     'every_hours': 'nothing: retention runs every serve tick (lab_commons.dev.retention)',
     'tree-unreferenced': 'tree-not-in-flight (lab_commons.dev.retentionplan.in_flight)',
