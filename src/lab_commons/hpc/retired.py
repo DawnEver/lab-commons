@@ -260,6 +260,9 @@ RETIRED: Final[dict[str, str]] = {
     # A box host's supply is its one ledger (lab_commons.box): what it admits is what the box enforces.
     'learned_hold': 'lab_commons.compute.learned.box_demand (admitted at, and enforced at, one declared demand)',
     'learned_demand': 'lab_commons.compute.learned.cluster_demand, or box_demand for a box part',
+    # An unmeasured box part is priced as its selection, never a repo-wide prior (2026-10-19: 6 GB for 1 test).
+    'part_prior': 'lab_commons.compute.learned.selection_gb (the files of the part, at the ids it is handed)',
+    'PART_PEAKS': 'lab_commons.compute.learned.PART_FILES (the files a part ran; their peaks are per file)',
     'box_reserve': 'lab_commons.box.Capacity.read (the box capacity after its [reserve] margins)',
     'seat_running': 'lab_commons.box.holdings (every claim on the box ledger, already in the supply)',
     'given_back': 'nothing: the supply is the box ledger, so no measured use is given back',
