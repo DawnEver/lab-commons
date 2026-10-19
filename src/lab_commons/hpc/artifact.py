@@ -11,8 +11,9 @@ is a fact of its compute nodes:
 
 * ``tarball`` -- one gzip tar, unpacked into node-local ``$TMPDIR`` at task start (node scratch is outside the
   home's file quota). Needs only ``tar`` on the node.
-* ``image`` -- one Apptainer/Singularity image or squashfs mounted read-only. REFUSED, with its reason, until
-  the compute nodes are probed for ``apptainer``/``singularity``/``squashfuse`` and the size of ``$TMPDIR``.
+* ``image`` -- an Apptainer/Singularity image. REFUSED BY NAME, for good (user ruling 2026-10-19, HPC phase 6
+  closed): ``uv sync --frozen`` from the committed lock already makes the env reproducible, and Ada offers
+  only singularity 3.8.5 as a module, so an image buys nothing a tarball does not and costs a second build.
 
 THE BUILD LEAVES ONE FILE. It runs on the login node in a scratch directory under ``$TMPDIR`` that is
 removed when it ends: the commit is exported there (``git archive``, never a worktree), its env built there
@@ -52,18 +53,18 @@ __all__ = [
 TARBALL: Final = 'tarball'
 IMAGE: Final = 'image'
 
-#: Each artifact format and why it cannot be built yet; an empty reason means it can.
+#: Each artifact format and why it is refused; an empty reason means it is built.
 FORMATS: Final[dict[str, str]] = {
     TARBALL: '',
     IMAGE: (
-        'an image artifact (.sif or squashfs) is not built until the compute nodes are probed: whether '
-        '`apptainer`/`singularity` or `squashfuse` exists there, and how large node-local $TMPDIR is '
+        'an image artifact is not built (HPC phase 6 closed, 2026-10-19): uv sync --frozen from the committed '
+        'lock already makes the env reproducible, and Ada offers only singularity 3.8.5 as a module '
         '(docs-src/dev/hpc.md, artifacts); use artifact = "tarball"'
     ),
 }
 
 #: Each format's file suffix.
-_SUFFIX: Final = {TARBALL: 'tar.gz', IMAGE: 'sif'}
+_SUFFIX: Final = {TARBALL: 'tar.gz'}
 
 #: Lines of the build log a refusal quotes.
 _LOG_TAIL: Final = 40
@@ -74,7 +75,7 @@ class ArtifactRefused(ValueError):
 
 
 def require(fmt: str) -> None:
-    """Refuse *fmt* when it is not a format, or one :data:`FORMATS` cannot build yet."""
+    """Refuse *fmt* when it is not a format, or one :data:`FORMATS` refuses."""
     if fmt not in FORMATS:
         msg = f'artifact = {fmt!r} is not a format; the formats are {", ".join(sorted(FORMATS))}'
         raise ArtifactRefused(msg)

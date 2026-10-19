@@ -19,6 +19,9 @@ _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # The offer sentence judges nothing; it lives beside the request it names (user ruling 2026-10-19 #8).
+    'verify.offer_line': 'lab_commons.dev.forgerequest.offer_line',
+    'verify import offer_line': 'from lab_commons.dev.forgerequest import offer_line',
     # An env is stale against the commit's OWN lock, never a dependency's remote tip (PIN + FRESHNESS, 2026-10-17).
     'familyheads': 'lab_commons.dev.lockpins (installed git commits against the checkout uv.lock)',
     'family_freshness': 'lab_commons.dev.lockpins.lock_freshness',
