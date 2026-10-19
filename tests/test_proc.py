@@ -19,10 +19,10 @@ import time
 import pytest
 
 from lab_commons._proc_darwin import parse_ps_rows, parse_vm_stat
+from lab_commons._proc_linux import stat_start_time
 from lab_commons.liveness import creation_stamp
 from lab_commons.proc import (
     SystemMemory,
-    _stat_start_time,
     descendants,
     kill_pid,
     kill_process_tree,
@@ -162,7 +162,7 @@ class TestKill:
             f'c = subprocess.Popen([sys.executable, "-c", {grandchild!r}]); '
             'print(c.pid, flush=True); time.sleep(120)'
         )
-        proc = subprocess.Popen([sys.executable, '-c', parent], stdout=subprocess.PIPE, text=True)
+        proc = subprocess.Popen([sys.executable, '-c', parent], stdout=subprocess.PIPE, text=True, encoding='utf-8')
         try:
             child = int(proc.stdout.readline())
             confirmed = kill_process_tree(proc.pid)
@@ -204,8 +204,8 @@ class TestTheDarwinBackend:
 
 def test_a_linux_stat_line_yields_its_start_time_even_with_a_paren_in_the_name() -> None:
     fields = ' '.join(str(n) for n in range(3, 53))  # field 3 (state) onward; starttime is field 22
-    assert _stat_start_time(f'4242 (odd) name)) {fields}') == 22
-    assert _stat_start_time('garbage') is None
+    assert stat_start_time(f'4242 (odd) name)) {fields}') == 22
+    assert stat_start_time('garbage') is None
 
 
 def test_this_process_has_a_creation_stamp_wherever_the_kernel_offers_one() -> None:
