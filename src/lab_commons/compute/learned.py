@@ -68,8 +68,7 @@ __all__ = [
     'CLUSTER_PRIOR',
     'LOCAL',
     'OOM_GROWTH',
-    'PART_PEAKS',
-    'PART_PEAKS_KEPT',
+    'PART_FILES',
     'PART_WIDTH',
     'SLURM',
     'Measured',
@@ -78,16 +77,18 @@ __all__ = [
     'cluster_demand',
     'demand',
     'directory',
+    'fit_width',
     'folded',
     'learn',
     'learn_peaks',
     'learn_record',
     'learned',
-    'part_prior',
+    'part_files',
     'record_ask',
     'record_run',
     'request_demand',
     'run_of',
+    'selection_gb',
     'task_gb',
     'worker_gb',
 ]
@@ -161,11 +162,11 @@ class Measured:
     def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float) -> None:
         """An item killed after *spent* seconds: its first unfinished id ran for what the rest does not explain.
 
-        Pytest runs an item's ids in the order given, so the first id without an outcome is the one the
+        Pytest runs an item's ids in the order given, so the first id without a cell is the one the
         kill interrupted. It took at least *spent* minus the finished ids' durations and the files' known
         overheads; that is its FLOOR. The ids after it never started and keep their estimate.
         """
-        rest = [n for n in ids if n not in folded['outcomes']]
+        rest = [n for n in ids if n not in folded['cells']]
         if not rest or spent <= 0:
             return
         files = dict.fromkeys(_file(n) for n in ids)
@@ -334,13 +335,12 @@ def learn_record(repo: str, name: str, record: Mapping[str, Any]) -> Path:
     """
     table = learned(repo)
     merged = {key: {**table.get(key, {}), **facts} for key, facts in Measured.of(dict(record)).record().items()}
-    parts = {key: list(peaks) for key, peaks in table.get(PART_PEAKS, {}).items()}
-    peak = max((float(mb) for mb in (record.get('peaks_mb') or {}).values()), default=0.0) / _MB_PER_GB
-    if peak > 0 and record.get('platform'):
-        key = _key(LOCAL, needs_of(str(record['platform'])))
-        parts[key] = [*parts.get(key, []), peak][-PART_PEAKS_KEPT:]
+    parts = dict(table.get(PART_FILES, {}))
+    files = sorted({_file(n) for n in (record.get('durations') or {})} | set(record.get('peaks_mb') or {}))
+    if files and record.get('platform'):
+        parts[_key(LOCAL, needs_of(str(record['platform'])))] = files
     folded_now = sorted({*table.get('folded', ()), name})
-    return _write(repo, {**table, **merged, PART_PEAKS: parts, 'folded': folded_now})
+    return _write(repo, {**table, **merged, PART_FILES: parts, 'folded': folded_now})
 
 
 def learn(record: dict[str, Any]) -> Path:
@@ -415,11 +415,8 @@ SLURM: Final = 'slurm'
 #: How far a box part's declared memory sits above the peak it measured: the box kills the tree AT the declaration.
 BOX_HEADROOM: Final = 1.5
 
-#: The table key of the part peaks folded from every host's forge records (:func:`learn_record`), per need-set.
-PART_PEAKS: Final = 'part_peaks_gb'
-
-#: How many of a need-set's latest forge part peaks are kept for :func:`part_prior`'s median.
-PART_PEAKS_KEPT: Final = 20
+#: The table key of each need-set's test FILES, as its latest forge record ran them (:func:`learn_record`).
+PART_FILES: Final = 'part_files'
 
 #: The workers an UNMEASURED box part runs at most: its declared cores, and the pytest ``-n`` it then runs.
 PART_WIDTH: Final = 4
@@ -450,42 +447,55 @@ def cluster_demand(
     return ask
 
 
-def part_prior(repo_url: str, needs: Iterable[str], *, workers: int, cost: Cost | None = None) -> Run:
-    """What an UNMEASURED box part is taken to hold (D5): never the whole box.
+def part_files(repo_url: str, needs: Iterable[str]) -> tuple[str, ...]:
+    """The test files the need-set's part ran in its latest forge record (:func:`learn_record`); ``()`` if none."""
+    return tuple(learned(repo_url).get(PART_FILES, {}).get(_key(LOCAL, needs), ()))
 
-    The median of *repo_url*'s parts measured on THIS host (every ``(local, need-set)`` run: cores kept busy
-    and its whole tree's peak); else the median of the part peaks every host's forge records carry for this
-    need-set (:func:`learn_record`), else *cost*'s per-task floor (:class:`~lab_commons.hpc.config.Cost`). Those
-    two are ONE WORKER's peak (one task's worst file), and the part runs *workers* of them in one tree: it is
-    taken to hold ``workers`` cores and ``workers`` times that peak. Once the part runs, its own measurement
-    replaces this (:func:`box_demand`).
+
+def selection_gb(repo: str, files: Iterable[str], workers: int, *, whole_gb: float = 0.0) -> float:
+    """THE ONE SELECTION ARITHMETIC: the memory a tree of *workers* pytest workers over *files* declares.
+
+    Each worker at :func:`worker_gb` -- the worst file's learned peak times :data:`BOX_HEADROOM`, an unmeasured
+    file at its siblings' median, never under :class:`~lab_commons.hpc.config.Cost`'s per-task floor (the
+    runner a worker carries) -- and never under a measured *whole_gb* tree peak times the headroom. A verify
+    selection (:func:`lab_commons.dev.verifybox.selection_mem_gb`) and an unmeasured box part
+    (:func:`box_demand`) both read it, so a part of ONE cheap test asks one floor, not a repo-wide constant.
     """
-    table = learned(repo_url)
-    local = [Run(**one) for key, one in table.get('runs', {}).items() if key.startswith(f'{LOCAL}|')]
-    if local:
-        cores = statistics.median(one.demand()['cpu'] for one in local)
-        return Run(statistics.median(one.peak_mem_gb for one in local), cpu_s=cores, wall_s=1.0)
-    hosts = table.get(PART_PEAKS, {}).get(_key(LOCAL, needs), [])
-    worker = statistics.median(hosts) if hosts else (cost or Cost()).mem_gb
-    return Run(workers * worker, cpu_s=float(workers), wall_s=1.0)
+    per = worker_gb(repo, files, prior_gb=Cost().mem_gb, safety=BOX_HEADROOM)
+    return round(max(max(1, workers) * per, whole_gb * BOX_HEADROOM), 3)
 
 
-def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:
+def fit_width(cap: int, *, cpu: float, mem_gb: float, per_gb: float) -> int:
+    """THE ONE WIDTH RULE: *cap* workers, narrowed to the FREE *cpu* and *mem_gb* at *per_gb* each, never under one.
+
+    One worker that does not fit is still one: its claim waits for the room, never priced under a worker. A
+    box part (:func:`box_demand`) and a verify selection (:func:`lab_commons.dev.verifybox.selection_workers`)
+    both read it, and the pytest ``-n`` each runs IS this number (declared == used).
+    """
+    held = math.floor(mem_gb / per_gb) if per_gb > 0 else cap
+    return max(1, min(cap, math.floor(cpu), held))
+
+
+def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: float, ids: int | None = None) -> Demand:
     """What a box part DECLARES to the box -- admitted at it, and killed past it (:func:`lab_commons.box.run`).
 
-    The cores its last ``(local, need-set)`` run kept busy and its whole tree's peak times :data:`BOX_HEADROOM`;
-    unmeasured, :func:`part_prior` at :data:`PART_WIDTH` workers (capped at the box). The cores ARE the workers
-    its producer runs (:func:`lab_commons.dev.verifybox.claimed_width`), so memory scales with them: past the
-    box's *mem_gb* the cores narrow in proportion -- a peak a kill grew (:func:`record_run`) is never a part
-    refused forever. One seat of each need.
+    *cpu* and *mem_gb* are the box's FREE room now. One worker's price: measured, its last ``(local, need-set)``
+    run's whole-tree peak times :data:`BOX_HEADROOM` over the cores it kept busy; unmeasured, its SELECTION's
+    (:func:`selection_gb` of the files its need-set's latest forge record ran, :func:`part_files`). Its width is
+    :func:`fit_width` of the cores it kept busy, else one per id it is handed (*ids*, as the commit's posted
+    parts count them; ``None`` unknown) up to :data:`PART_WIDTH`. The cores ARE the workers its producer runs
+    (:func:`lab_commons.dev.verifybox.claimed_width`) and the memory is that width at the worker's price, so a
+    part on a memory-starved box runs narrower instead of never being admitted. One seat of each need.
     """
-    width = max(1, min(PART_WIDTH, math.floor(cpu)))
-    run = run_of(repo_url, LOCAL, needs) or part_prior(repo_url, needs, workers=width)
-    cores = max(1, min(math.floor(cpu), int(run.demand(needs)['cpu'])))
-    memory = run.peak_mem_gb * BOX_HEADROOM
-    if memory > mem_gb:
-        cores = max(1, math.floor(cores * mem_gb / memory))
-    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(min(memory, mem_gb), 1.0)})
+    run = run_of(repo_url, LOCAL, needs)
+    if run is None:
+        cap = PART_WIDTH if ids is None else max(1, min(PART_WIDTH, ids))
+        per = selection_gb(repo_url, part_files(repo_url, needs), 1)
+    else:
+        cap = max(1, int(run.demand(needs)['cpu']))
+        per = run.peak_mem_gb * BOX_HEADROOM / cap
+    cores = fit_width(cap, cpu=cpu, mem_gb=mem_gb, per_gb=per)
+    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(round(cores * per, 3), 1.0)})
 
 
 def request_demand(repo_url: str, producer: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:

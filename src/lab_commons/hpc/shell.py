@@ -7,6 +7,7 @@ runs anything except :func:`pack`, which only READS the caller's repository. Pat
 from __future__ import annotations
 
 import base64
+import hashlib
 import shlex
 import shutil
 from collections.abc import Sequence
@@ -20,6 +21,7 @@ from lab_commons.hpc.needsets import BASE, Vocabulary
 
 __all__ = [
     'BUILD_FAILED',
+    'CACHES',
     'COLLECT_MODULE',
     'ENV',
     'FULL',
@@ -32,6 +34,7 @@ __all__ = [
     'UV_PRUNE',
     'RunSpec',
     'build_script',
+    'cache_dir',
     'collect_command',
     'facts',
     'fetch_script',
@@ -43,12 +46,30 @@ __all__ = [
     'parse_collection_errors',
     'parse_ids',
     'parse_times',
+    'submodules_script',
 ]
 
 #: The item runner's name on the cluster -- unique, so it can shadow nothing in the tested project.
 ITEM_MODULE: Final = 'lab_ci_pytest_item'
 
 ROOT: Final = '"$HOME"/ci'
+
+#: Every repository's bare cache lives here, one per repository (:func:`cache_dir`).
+CACHES: Final = f'{ROOT}/cache'
+
+
+def cache_dir(repo_url: str) -> str:
+    """The bare cache of *repo_url*: ``~/ci/cache/<owner>-<name>-<sha256(url)[:8]>.git``, one per repository.
+
+    The readable part names the repository; the hash keeps two URLs apart that share it (another host). A
+    cache's ``origin`` is *repo_url* and holds only its heads (:func:`fetch_script`), so a tree's repository
+    identity is its own -- the retired shared ``~/ci/cache.git`` mixed every repository's heads under one
+    ``origin``.
+    """
+    parts = [p for p in repo_url.rstrip('/').removesuffix('.git').replace(':', '/').split('/') if p][-2:]
+    slug = '-'.join(''.join(c if c.isalnum() or c in '._-' else '_' for c in p) for p in parts) or 'repo'
+    return f'{CACHES}/{slug}-{hashlib.sha256(repo_url.encode()).hexdigest()[:8]}.git'
+
 
 #: The line :func:`build_script` prints instead of the facts when the build failed.
 BUILD_FAILED: Final = '@@@ build-failed'
@@ -137,16 +158,22 @@ class RunSpec:
 
 
 def fetch_script(spec: RunSpec) -> str:
-    """Make the cache hold the commit -- remote heads, else a shipped pack indexed and named HERE; have/missing."""
-    sha, url, cache = spec.sha, shlex.quote(spec.repo_url), f'{ROOT}/cache.git'
+    """Make the repository's cache hold the commit -- origin's heads (pruned), else a shipped pack named HERE.
+
+    The cache is the repository's own (:func:`cache_dir`): ``origin`` is set to the spec's URL on every
+    fetch, its heads land in ``refs/remotes/origin/*`` with ``--prune``, and it has no ``refs/heads`` of
+    its own. Prints have/missing.
+    """
+    sha, url, cache = spec.sha, shlex.quote(spec.repo_url), cache_dir(spec.repo_url)
     return '\n'.join(
         [
             'set -eu',
-            f'mkdir -p {ROOT}/trees {ROOT}/packs {ROOT}/bin {ROOT}/runs',
+            f'mkdir -p {ROOT}/trees {ROOT}/packs {ROOT}/bin {ROOT}/runs {CACHES}',
             f'[ -d {cache} ] || git init -q --bare {cache}',
+            f'git -C {cache} remote add origin {url} 2>/dev/null || git -C {cache} remote set-url origin {url}',
             f'have() {{ git -C {cache} cat-file -e {sha}^{{commit}} 2>/dev/null; }}',
-            f'have || git -C {cache} fetch -q {url} "+refs/heads/*:refs/remotes/origin/*"',
-            f'have || git -C {cache} fetch -q {url} {sha} 2>/dev/null || true',
+            f'have || git -C {cache} fetch -q --prune origin "+refs/heads/*:refs/remotes/origin/*"',
+            f'have || git -C {cache} fetch -q origin {sha} 2>/dev/null || true',
             f'P={ROOT}/packs/{sha}.pack',
             (
                 f'have || {{ [ -s "$P" ] && git -C {cache} index-pack --stdin < "$P" > /dev/null'
@@ -155,6 +182,54 @@ def fetch_script(spec: RunSpec) -> str:
             'if have; then echo have; else echo missing; fi',
         ]
     )
+
+
+#: The shell twin of :func:`cache_dir` for a URL only the tree knows (a submodule's), plus the URL resolver and
+#: the recursive checkout :func:`submodules_script` calls. ``lc_cache`` must name what ``cache_dir`` names.
+_SUBMODULE_FUNCTIONS: Final = r"""lc_cache() { local s=${1%/}; s=${s%.git}; s=${s//:/\/}
+  local n=${s##*/}; s=${s%/*}; local o=${s##*/}
+  printf '%s/%s-%s-%s.git\n' "CACHES" "$(printf %s "$o" | tr -c 'A-Za-z0-9._-' _)" \
+    "$(printf %s "$n" | tr -c 'A-Za-z0-9._-' _)" "$(printf %s "$1" | sha256sum | cut -c1-8)"; }
+lc_url() { local b=${1%/} u=$2
+  case $u in ./*|../*) ;; *) echo "$u"; return;; esac
+  while :; do case $u in ./*) u=${u#./};; ../*) u=${u#../}; b=${b%/*};; *) break;; esac; done
+  echo "$b/$u"; }
+lc_has() { git -C "$1" rev-parse -q --verify "$2^{commit}" > /dev/null; }
+lc_subs() { local dir=$1 parent=$2 key path name url sha c
+  [ -f "$dir/.gitmodules" ] || return 0
+  while read -r key path; do
+    name=${key#submodule.}; name=${name%.path}
+    url=$(lc_url "$parent" "$(git config -f "$dir/.gitmodules" --get "submodule.$name.url")")
+    sha=$(git -C "$dir" ls-tree HEAD -- "$path" | awk '$2 == "commit" {print $3}')
+    [ -n "$sha" ] || continue
+    c=$(lc_cache "$url")
+    [ -d "$c" ] || git init -q --bare "$c"
+    git -C "$c" remote add origin "$url" 2>/dev/null || git -C "$c" remote set-url origin "$url"
+    lc_has "$c" "$sha" || git -C "$c" fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*' || true
+    lc_has "$c" "$sha" || git -C "$c" fetch -q origin "$sha" 2>/dev/null || true
+    lc_has "$c" "$sha" || { echo "BUILD_FAILED submodule $path at $sha is not in $url"; return 1; }
+    git -C "$c" update-ref "refs/lab-ci/$sha" "$sha"
+    if [ -e "$dir/$path/.git" ]; then git -C "$dir/$path" checkout -q --detach "$sha"
+    else rmdir "$dir/$path" 2>/dev/null || true; git -C "$c" worktree add -q --detach "$dir/$path" "$sha"; fi
+    lc_subs "$dir/$path" "$url" || return 1
+  done < <(git config -f "$dir/.gitmodules" --get-regexp '^submodule\..*\.path$' || true); }""".replace(
+    'CACHES', CACHES.replace('"', '')
+).replace('BUILD_FAILED', BUILD_FAILED)
+
+
+def submodules_script(repo_url: str) -> list[str]:
+    """Check out every submodule the tree's commit records, recursively, each a worktree of ITS OWN bare cache.
+
+    A commit's tree INCLUDES its submodules at their pinned commits: without them a test reading a submodule's
+    data fails as if the code were broken, and an install with a path dependency into one cannot build at all.
+    Each submodule's URL comes from the commit's ``.gitmodules``, a relative one resolved against its parent's
+    URL as git resolves it; its objects live in ``~/ci/cache`` under the name :func:`cache_dir` gives that URL
+    (fetched over the same ``origin`` credentials as the repository's own), its pinned commit is held by a
+    ``refs/lab-ci/<sha>`` ref, and its checkout is a detached worktree at its path -- nothing is written into
+    another repository's cache, and a reused tree is re-pointed, never re-cloned. A pinned commit no fetch
+    reaches prints :data:`BUILD_FAILED` and stops the build.
+    """
+    return [_SUBMODULE_FUNCTIONS, f'lc_subs "$PWD" {shlex.quote(repo_url)} || exit 0']
 
 
 def needs_script(spec: RunSpec) -> str:
@@ -223,7 +298,7 @@ def build_script(spec: RunSpec) -> str:
     its own ``flock``): a target shared across different native inputs reuses stale artifacts.
     Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).
     """
-    cache, tree, builds = f'{ROOT}/cache.git', f'{ROOT}/trees/{spec.sha}', spec.builds
+    cache, tree, builds = cache_dir(spec.repo_url), f'{ROOT}/trees/{spec.sha}', spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
     if not builds.env_key or not builds.install:
         msg = 'a build needs the declared install and its env key (lab_commons.hpc.builds.builds_at)'
@@ -235,9 +310,7 @@ def build_script(spec: RunSpec) -> str:
         f'cat > {ROOT}/bin/{ITEM_MODULE}.py',
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
-        # a commit's tree INCLUDES its submodules at their pinned commits; without them the tests
-        # that read a submodule's data fail as if the code were broken (1240 ids, measured 2026-10-10)
-        '[ ! -f .gitmodules ] || git submodule update -q --init --recursive',
+        *submodules_script(spec.repo_url),
         'mkdir -p .lab-ci',
         f'export E={env} UV_CACHE_DIR={_UV_CACHE} UV_LINK_MODE=hardlink',
         *_timed(

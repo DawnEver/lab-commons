@@ -5,6 +5,7 @@ The entries are this module's own functions, named ``<module>:<function>`` exact
 
 from __future__ import annotations
 
+import importlib
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from test_compute_store import Shared
 from lab_commons.box import BOX_ENV, Capacity
 from lab_commons.box.demand import Demand
 from lab_commons.box.ledger import hold, holdings
+from lab_commons.compute import execute as execute_module
 from lab_commons.compute.execute import (
     CACHED,
     FAILED,
@@ -333,3 +335,10 @@ def test_an_interrupt_releases_every_claim(tmp_path: Path, monkeypatch: pytest.M
         ex.run(Graph({'i': unit('interrupted'), 'n': unit('nap', tag='n')}))
     assert 'n' not in SPANS  # PLANTED: the sibling was still running when run() returned
     assert holdings() == []  # THE CHECK: its claim is released anyway
+
+
+def test_what_became_of_a_unit_is_named_settled_and_the_generic_name_is_gone() -> None:
+    """Outcome is the task-result word lab_commons.outcomes owns (plan A1.10); a unit's end state is Settled."""
+    assert 'Settled' in execute_module.__all__
+    with pytest.raises(AttributeError):
+        _ = importlib.import_module(execute_module.__name__).Outcome

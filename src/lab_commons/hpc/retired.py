@@ -13,12 +13,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Final
 
-__all__ = ['RETIRED', 'refusal', 'refuse_retired_keys']
+__all__ = ['RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys']
 
 _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev/githooks/base.toml)'
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # An env is stale against the commit's OWN lock, never a dependency's remote tip (PIN + FRESHNESS, 2026-10-17).
+    'familyheads': 'lab_commons.dev.lockpins (installed git commits against the checkout uv.lock)',
+    'family_freshness': 'lab_commons.dev.lockpins.lock_freshness',
+    'family-heads.json': 'nothing: the lock check is local and caches no forge head',
     # A session branch is protected for what it IS -- never by a directory or a host; its one writer is git's own
     # one-checkout-per-branch and fast-forward rules (user rulings 2026-10-13/14; lab_commons.dev.sessionbranch).
     'INTEGRATION-LIVES-IN-THE-MAIN-CHECKOUT': 'ONE-WRITER-PER-SESSION-BRANCH and INTEGRATION-IS-MERGES-ONLY',
@@ -32,6 +36,17 @@ RETIRED: Final[dict[str, str]] = {
     # Files are an HPC resource: retention runs every serve tick, and a tree goes once its sha is not in flight.
     'every_hours': 'nothing: retention runs every serve tick (lab_commons.dev.retention)',
     'tree-unreferenced': 'tree-not-in-flight (lab_commons.dev.retentionplan.in_flight)',
+    # Outcome is the task-result word lab_commons.outcomes owns (plan A1.8, 2026-10-18).
+    'retention.Outcome': 'lab_commons.dev.retention.Freed',
+    'box.Outcome': 'lab_commons.box.ProcessEnd (its .status maps a kill onto lab_commons.outcomes.Status)',
+    'deploy.Outcome': 'lab_commons.supervise.deploy.PhaseResult (its .status reads OK or ERROR)',
+    'execute.Outcome': 'lab_commons.compute.execute.Settled',
+    'verdict.Outcome': 'lab_commons.outcomes.Conclusion (same tokens: pass, fail, inconclusive)',
+    'forgestatus.Status': 'lab_commons.dev.forgestatus.CommitStatus (a forge commit-status record, not a task result)',
+    'forgestatus import Status': 'from lab_commons.dev.forgestatus import CommitStatus',
+    # A round streams into ONE file, kept as one file per run (HPC one-file plan, phase 5, 2026-10-18).
+    'pack_streams': 'lab_commons.hpc.records.kept_text (the round file, its retired shape upgraded on read)',
+    'KEPT_STREAMS': 'lab_commons.hpc.records.stream_sources (``runs/<sha>/streams.jsonl``)',
     # A request is a job on the part path: admitted by its declared need-set and run (lab-commons 2026-10-13).
     'claims requests yet': 'lab_commons.dev.forgerequest (admitted by its declared need-set, claimed and run)',
     # Nobody runs the gate to push: the forge produces the verdict once per sha (rule rows, 2026-10-11).
@@ -97,10 +112,12 @@ RETIRED: Final[dict[str, str]] = {
     'heavy-needed': 'parts-needed',
     'publish_verdict': 'lab_commons.dev.verify.post_part (a settled run posts its platform part)',
     # The local verdict ledger was only a runner cache: it is the run cache now, and decides nothing.
-    'verdictledger': 'lab_commons.dev.runcache (the cache) and lab_commons.dev.outcomes (the pytest plugin)',
+    'verdictledger': 'lab_commons.dev.runcache (the cache) and lab_commons.dev.test_outcomes (the pytest plugin)',
     'record_promoted': 'lab_commons.dev.runcache.remember',
     'LEDGER_REL': 'lab_commons.dev.runcache.CACHE_REL',
-    'output/verdicts/ledger.jsonl': 'output/runcache/runs.jsonl',
+    'output/verdicts/ledger.jsonl': 'output/runcache/record.jsonl',
+    # The run cache is an outcomes Record in its own file (plan A1.5): a retired-code checkout keeps its old file.
+    'runcache/runs.jsonl': 'output/runcache/record.jsonl (lab_commons.dev.runcache.CACHE_REL)',
     # How a cluster env is built is the commit's own declaration, read at --sha.
     'run submit --install': "the commit's [tool.lab_commons.hpc] install, read at --sha",
     'run submit --needs': "the commit's [tool.lab_commons.hpc] needs, read at --sha",
@@ -247,6 +264,9 @@ RETIRED: Final[dict[str, str]] = {
     # A box host's supply is its one ledger (lab_commons.box): what it admits is what the box enforces.
     'learned_hold': 'lab_commons.compute.learned.box_demand (admitted at, and enforced at, one declared demand)',
     'learned_demand': 'lab_commons.compute.learned.cluster_demand, or box_demand for a box part',
+    # An unmeasured box part is priced as its selection, never a repo-wide prior (2026-10-19: 6 GB for 1 test).
+    'part_prior': 'lab_commons.compute.learned.selection_gb (the files of the part, at the ids it is handed)',
+    'PART_PEAKS': 'lab_commons.compute.learned.PART_FILES (the files a part ran; their peaks are per file)',
     'box_reserve': 'lab_commons.box.Capacity.read (the box capacity after its [reserve] margins)',
     'seat_running': 'lab_commons.box.holdings (every claim on the box ledger, already in the supply)',
     'given_back': 'nothing: the supply is the box ledger, so no measured use is given back',
@@ -272,7 +292,7 @@ RETIRED: Final[dict[str, str]] = {
     'PRODUCE_WALL_S': 'lab_commons.compute.learned.BOX_WALL_S (the wall the box enforces)',
     # The box's decision is a RECORD, never a sentinel exit code a child could also choose (SR-20261015-002).
     'lab_commons.box.REFUSED': 'lab_commons.box.read_ended (the --outcome record: a Refused when nothing ran)',
-    'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: an Outcome whose killed is true)',
+    'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: a ProcessEnd whose killed is true)',
     'free_cores(': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
     'available_mem_gb': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
     # ONE fit rule (compute.admission.admit) decides on the MEASURED room; the ledger HOLDS a claim (D2, D3).
@@ -303,6 +323,30 @@ RETIRED: Final[dict[str, str]] = {
     'occupied_trees': 'lab_commons.dev.retentionplan.occupied_shas (a test run tree or a job run directory)',
     '--output=logs/': 'nothing: a task writes to node-local $TMPDIR; its tail is kept in results.jsonl',
     'reuse that tree and env': 'run build builds the commit artifact, one file (lab_commons.hpc.artifact)',
+    # A test's result is an outcomes Cell under its Expectation (plan A1.1/A1.2, user rulings 2026-10-18).
+    'not-covered': "nothing: a handed id is no cell; the run record's `handed` names its part",
+    'NOT_COVERED': "nothing: a handed id is no cell; the run record's `handed` names its part",
+    'UNCARRIED': 'nothing: lab_commons.hpc.records.held_cells offers DECIDED cells only',
+    'held_outcomes': 'lab_commons.hpc.records.held_cells',
+    'lab_commons.dev.outcomes': 'lab_commons.dev.test_outcomes (a Record of test cells per process)',
+    'read_reasons': 'lab_commons.dev.test_outcomes.read_cells (a reason travels in its cell)',
+    'OutcomeRecorder': 'lab_commons.dev.test_outcomes.CellRecorder',
+    'outcome_of(': 'lab_commons.hpc.pytest_item.judged (the one pytest mapping, to a plain test cell)',
+}
+
+#: THE RETIRED PER-TEST WORDS, and only for LIVE state -- a cluster run's ``state.json`` and the stream of a
+#: round in flight across the change (FORMATS-UPGRADE-ON-READ): each word -> ``(status word, reason kind)`` it
+#: now reads as (:func:`lab_commons.hpc.testcells.upgraded`; a status word is ``TestCell.word``'s spelling).
+#: ``None``: a handed id, which is no cell. A regenerable artefact in these words is refused, never upgraded.
+TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {
+    'passed': ('ok', ''),
+    'failed': ('rejected', 'assertion'),
+    'error': ('error', 'error'),
+    'skipped': ('not_applicable', 'skipped'),
+    'xfailed': ('rejected/expected-rejected', 'expected'),
+    'lost': ('infra', 'lost'),
+    'missing': ('pending', ''),
+    'not-covered': None,
 }
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import os
 import sqlite3
 import sys
 from collections.abc import Mapping
@@ -10,22 +12,27 @@ from pathlib import Path
 import pytest
 from _box_fake import quiet
 
+from lab_commons import box as box_package
 from lab_commons.box import (
     BOX_ENV,
     CPU_ENV,
     Capacity,
     Demand,
-    Outcome,
+    NotAdmitted,
+    ProcessEnd,
     Refused,
     command,
     hold,
+    holdings,
     read_ended,
     run,
+    take,
     write_ended,
 )
 from lab_commons.box.__main__ import _parser, main
 from lab_commons.box._linux import in_slurm_job, manager, scope_argv
 from lab_commons.box.run import _ENFORCERS, BLAS_THREAD_VARS
+from lab_commons.outcomes import Status
 
 
 @pytest.mark.parametrize('missing', ['--cpu', '--mem-gb', '--wall', '--queue-s', '--key', '--outcome'])
@@ -62,10 +69,10 @@ def test_the_cli_refuses_a_missing_command() -> None:
 
 
 def test_the_record_reads_back_an_outcome_a_refusal_or_nothing(tmp_path: Path) -> None:
-    """One reader: the Outcome as written, a Refused naming why, and ``None`` for a box that left no record."""
+    """One reader: the ProcessEnd as written, a Refused naming why, and ``None`` for a box that left no record."""
     path = tmp_path / 'outcome.json'
     assert read_ended(path) is None, 'no record: the box crashed'
-    killed = Outcome(-9, 'memory', 7, 1.5, 2.0, 'job-object', 'k', 'f')
+    killed = ProcessEnd(-9, 'memory', 7, 1.5, 2.0, 'job-object', 'k', 'f')
     write_ended(path, killed)
     assert read_ended(path) == killed
     assert killed.killed
@@ -157,9 +164,9 @@ def test_the_child_holds_against_the_capacity_its_caller_sized_the_demand_by(mon
     assert _parser().parse_args(argv[3:]).capacity == size
     held: list[Capacity | None] = []
 
-    def fake_run(*_args: object, capacity: Capacity | None = None, **_kw: object) -> Outcome:
+    def fake_run(*_args: object, capacity: Capacity | None = None, **_kw: object) -> ProcessEnd:
         held.append(capacity)
-        return Outcome(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+        return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
 
     monkeypatch.setattr('lab_commons.box.__main__.run', fake_run)
     monkeypatch.setattr('lab_commons.box.__main__.write_ended', lambda *_a: None)
@@ -177,9 +184,9 @@ def test_the_child_is_told_the_cores_it_was_admitted_at(monkeypatch: pytest.Monk
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
     seen: list[Mapping[str, str] | None] = []
 
-    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> Outcome:
+    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> ProcessEnd:
         seen.append(env)
-        return Outcome(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+        return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
 
     monkeypatch.setitem(_ENFORCERS, sys.platform, fake)
     size = Capacity(cpu=12.0, mem_bytes=2**34, seats={})
@@ -202,9 +209,9 @@ def test_the_childs_thread_pools_are_sized_to_the_claim(monkeypatch: pytest.Monk
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
     seen: list[Mapping[str, str] | None] = []
 
-    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> Outcome:
+    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> ProcessEnd:
         seen.append(env)
-        return Outcome(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+        return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
 
     monkeypatch.setitem(_ENFORCERS, sys.platform, fake)
     size = Capacity(cpu=32.0, mem_bytes=2**34, seats={})
@@ -212,3 +219,49 @@ def test_the_childs_thread_pools_are_sized_to_the_claim(monkeypatch: pytest.Monk
     run(['tool'], demand, 'w', 1, key='k', env={'OPENBLAS_NUM_THREADS': '32'}, capacity=size, read=quiet(size))
     assert seen[0] is not None
     assert {name: seen[0][name] for name in BLAS_THREAD_VARS} == dict.fromkeys(BLAS_THREAD_VARS, '2')
+
+
+@pytest.mark.parametrize(
+    ('reason', 'status'), [('memory', Status.OUT_OF_MEMORY), ('wall', Status.TIMEOUT), ('exit', None)]
+)
+def test_a_process_end_maps_its_kill_onto_the_one_status_vocabulary(reason: str, status: Status | None) -> None:
+    """Plan A1.7: a box kill is a RETRYABLE status of lab_commons.outcomes; a normal exit carries none of its own."""
+    ended = ProcessEnd(0 if reason == 'exit' else -9, reason, 0, 0.0, 0.0, 'fake', 'k', None)
+    assert ended.status is status
+
+
+def test_the_generic_name_is_gone_from_the_box() -> None:
+    assert 'ProcessEnd' in box_package.__all__
+    with pytest.raises(AttributeError):
+        _ = importlib.import_module(box_package.__name__).Outcome
+
+
+def test_a_run_handed_its_callers_claim_adopts_it_and_is_never_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ONE ADMISSION: the caller took the claim (:func:`take`), the run adopts it -- the box does not decide twice.
+
+    PLANTED CONTROL: on the same full box a fresh admission IS refused, so the adopted run proves no second look.
+    """
+    monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
+    size = Capacity(cpu=2.0, mem_bytes=2 * 2**30, seats={})
+    demand = Demand(cpu=1, mem_gb=1.5, wall_s=60, seats={})
+    taken = take(demand, 'tests/x@sha', capacity=size, read=quiet(size), key='tests/x')
+    with pytest.raises(NotAdmitted):
+        take(demand, 'tests/y@sha', capacity=size, read=quiet(size), key='tests/y')
+    during: list[list[tuple[int, int]]] = []
+
+    def fake(*_args: object) -> ProcessEnd:
+        with sqlite3.connect(tmp_path / 'box.sqlite') as con:
+            during.append(con.execute('SELECT id, pid FROM claims').fetchall())
+        return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+
+    monkeypatch.setitem(_ENFORCERS, sys.platform, fake)
+    ended = run(['tool'], demand, 'w', 0, key='tests/x', claim=taken.id, capacity=size, read=quiet(size))
+    assert ended.returncode == 0
+    assert during == [[(taken.id, os.getpid())]], 'the one claim, held by the run, and no second row'
+    assert holdings() == [], 'released when the run ends'
+    with pytest.raises(Refused, match='not on this box'):
+        run(['tool'], demand, 'w', 0, key='tests/x', claim=taken.id, capacity=size, read=quiet(size))
+    argv = command(['tool'], demand, 0.0, key='k', what='w', outcome=Path('o.json'), claim=taken.id)
+    assert _parser().parse_args(argv[3:]).claim == taken.id

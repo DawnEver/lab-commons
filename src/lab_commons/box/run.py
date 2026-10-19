@@ -5,7 +5,7 @@ was admitted for cannot use more -- the memory is a hard limit on the whole proc
 hard rate cap, and the wall clock ends the tree. The row is released when the tree is gone, so a
 claim is never idle-but-held and a held claim is never exceeded.
 
-ENFORCERS, per platform (:attr:`Outcome.enforcer` names which one held the run):
+ENFORCERS, per platform (:attr:`ProcessEnd.enforcer` names which one held the run):
 
 * Windows -- a Job Object (:mod:`lab_commons.box._win`).
 * Linux -- a transient systemd scope (:mod:`lab_commons.box._linux`); inside a Slurm job's cgroup
@@ -14,7 +14,7 @@ ENFORCERS, per platform (:attr:`Outcome.enforcer` names which one held the run):
 * macOS -- refused.
 
 LEARNING IS THE CALLER'S. The box knows nothing of repos or producers and must not import
-:mod:`lab_commons.compute`; the caller records :class:`Outcome`'s measurements (``record_run``), and a
+:mod:`lab_commons.compute`; the caller records :class:`ProcessEnd`'s measurements (``record_run``), and a
 ``memory`` outcome is the caller's cue to grow the next demand.
 """
 
@@ -28,8 +28,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from lab_commons.box import _linux, _win
-from lab_commons.box.demand import Capacity, Demand, Outcome, Refused
-from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, hold
+from lab_commons.box.demand import Capacity, Demand, ProcessEnd, Refused
+from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, adopted, hold
 from lab_commons.box.supply import Reading
 
 __all__ = ['BLAS_THREAD_VARS', 'command', 'run']
@@ -45,8 +45,8 @@ BLAS_THREAD_VARS: tuple[str, ...] = (
     'NUMEXPR_NUM_THREADS',
 )
 
-#: One backend per platform that has one: ``contain(argv, demand, cwd, env, (key, fingerprint)) -> Outcome``.
-Contain = Callable[[Sequence[str], Demand, str | None, Mapping[str, str] | None, tuple[str, str | None]], Outcome]
+#: One backend per platform that has one: ``contain(argv, demand, cwd, env, (key, fingerprint)) -> ProcessEnd``.
+Contain = Callable[[Sequence[str], Demand, str | None, Mapping[str, str] | None, tuple[str, str | None]], ProcessEnd]
 _ENFORCERS: dict[str, Contain] = {'win32': _win.contain, 'linux': _linux.contain}
 
 
@@ -62,12 +62,16 @@ def run(
     env: Mapping[str, str] | None = None,
     capacity: Capacity | None = None,
     read: Read = Reading.now,
-) -> Outcome:
+    claim: int = 0,
+) -> ProcessEnd:
     """Admit *demand* (waiting at most *queue_s*), run *argv* enforced to it, release, report.
+
+    A nonzero *claim* is a ledger row the caller already :func:`~lab_commons.box.ledger.take`-s at exactly
+    *demand*: the run ADOPTS it (:func:`~lab_commons.box.ledger.adopted`) and is never admitted a second time.
 
     *key* is the caller's opaque identity of WHAT runs (a test id, a case+solver+mesh+analysis) and
     *fingerprint* its hash of the code the run depends on. The box never parses either: both go on the
-    ledger row and come back on the :class:`Outcome`, so the caller can learn per key (same key and
+    ledger row and come back on the :class:`ProcessEnd`, so the caller can learn per key (same key and
     fingerprint: a strong reference; another fingerprint: a weak one; a killed run: a lower bound).
 
     Raises:
@@ -84,7 +88,12 @@ def run(
     cores = str(demand.cpu)
     pools = dict.fromkeys(BLAS_THREAD_VARS, cores)
     inside = {**(os.environ if env is None else env), **pools, INSIDE_ENV: key, CPU_ENV: cores}
-    with hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint):
+    held = (
+        adopted(claim)
+        if claim
+        else hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint)
+    )
+    with held:
         return contain(argv, demand, cwd, inside, (key, fingerprint))
 
 
@@ -98,6 +107,7 @@ def command(
     outcome: Path,
     fingerprint: str | None = None,
     capacity: Capacity | None = None,
+    claim: int = 0,
 ) -> list[str]:
     """*argv* spelled as ``python -m lab_commons.box run ... -- argv``: the CLI that runs it enforced to *demand*.
 
@@ -107,10 +117,11 @@ def command(
 
     *capacity* is the size the caller sized *demand* against, handed to the child (``--capacity``) so it holds
     against that ONE reading and never re-derives a size from its own cwd or machine file; ``None`` lets the
-    child read this box (:meth:`Capacity.read`).
+    child read this box (:meth:`Capacity.read`). A nonzero *claim* (``--claim``) is the row the child adopts.
     """
     seats = [f'--seat={name}={count}' for name, count in sorted(demand.seats.items()) if count]
     marks = ['--fingerprint', fingerprint] if fingerprint else []
+    marks += ['--claim', str(claim)] if claim else []
     marks += ['--capacity', json.dumps(asdict(capacity), sort_keys=True)] if capacity is not None else []
     limits = ['--cpu', str(demand.cpu), '--mem-gb', f'{demand.mem_gb:g}', '--wall', str(demand.wall_s)]
     return [

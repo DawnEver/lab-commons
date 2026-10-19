@@ -76,6 +76,7 @@ open(sys.argv[3], 'w', encoding='utf-8').write(done.stdout)
 """
 
 
+@pytest.mark.not_applicable
 @pytest.mark.skipif(not _ON_WINDOWS, reason='a console window exists only on Windows')
 def test_a_windowless_parents_child_and_its_plain_grandchild_have_no_window(tmp_path: Path) -> None:
     """MEASURED: a windowless parent's child and that child's plain grandchild both have no window.

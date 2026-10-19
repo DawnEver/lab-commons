@@ -20,6 +20,7 @@ TIER_ONE = (
     'lab_commons.hpc',
     'lab_commons.launch',
     'lab_commons.log',
+    'lab_commons.outcomes',
     'lab_commons.resources',
     'lab_commons.width',
 )

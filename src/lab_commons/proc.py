@@ -35,13 +35,14 @@ import ctypes
 import os
 import signal
 import sys
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
-from lab_commons import _proc_darwin
+from lab_commons import _proc_darwin, _proc_linux
 
 __all__ = [
+    'KILL_EXIT_CEILING_S',
     'SystemMemory',
     'descendants',
     'kill_pid',
@@ -62,8 +63,13 @@ __all__ = [
 _KILL_SIGNAL = signal.SIGTERM if os.name == 'nt' else signal.SIGKILL
 
 _STILL_ACTIVE = 259
-#: A ``/proc/meminfo`` or ``/proc/<pid>/status`` line in kB is exactly ``<value> kB`` -- two tokens.
-_KB_LINE_TOKENS = 2
+
+#: How long :func:`kill_process_tree` waits for a signalled pid to be GONE before reporting it as a
+#: survivor. A kill is ASYNCHRONOUS on POSIX: MEASURED 2026-10-19 on an Ada compute node, a SIGKILLed
+#: grandchild was still ``R (running)``, reparented to pid 1, right after the call returned, and
+#: gone by 0.5 s. Ten seconds is twenty times that and still bounded.
+KILL_EXIT_CEILING_S = 10.0
+_KILL_EXIT_POLL_S = 0.02
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _TH32CS_SNAPPROCESS = 0x00000002
@@ -150,10 +156,8 @@ def system_memory() -> SystemMemory | None:
     """
     if os.name == 'nt':
         return _system_memory_windows()
-    if sys.platform == 'darwin':
-        reading = _proc_darwin.memory()
-        return None if reading is None else SystemMemory(total_bytes=reading[0], available_bytes=reading[1])
-    return _system_memory_procfs()
+    reading = _proc_darwin.memory() if sys.platform == 'darwin' else _proc_linux.memory()
+    return None if reading is None else SystemMemory(total_bytes=reading[0], available_bytes=reading[1])
 
 
 def _system_memory_windows() -> SystemMemory | None:
@@ -175,31 +179,6 @@ def _system_memory_windows() -> SystemMemory | None:
     if not ok or status.ullTotalPhys <= 0:
         return None
     return SystemMemory(total_bytes=int(status.ullTotalPhys), available_bytes=int(status.ullAvailPhys))
-
-
-def _system_memory_procfs() -> SystemMemory | None:
-    """``/proc/meminfo`` on Linux. ``MemAvailable``, NOT ``MemFree``.
-
-    ``MemFree`` excludes the page cache, which the kernel hands back on demand, so a healthy Linux
-    box with a warm cache reports single-digit ``MemFree`` and would size every pool to one worker.
-    ``MemAvailable`` is the kernel's own estimate of what a new allocation can actually get, and a
-    kernel too old to publish it is reported UNREADABLE rather than approximated -- the fallback
-    would be exactly the silent-degradation shape this module exists to avoid.
-    """
-    try:
-        text = Path('/proc/meminfo').read_text(encoding='utf-8')
-    except OSError:
-        return None
-    fields: dict[str, int] = {}
-    for line in text.splitlines():
-        key, _, rest = line.partition(':')
-        parts = rest.split()
-        if len(parts) == _KB_LINE_TOKENS and parts[1] == 'kB':
-            fields[key.strip()] = int(parts[0]) * 1024
-    total, available = fields.get('MemTotal'), fields.get('MemAvailable')
-    if total is None or available is None or total <= 0:
-        return None
-    return SystemMemory(total_bytes=total, available_bytes=available)
 
 
 class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):  # noqa: N801 -- mirrors the psapi struct name
@@ -232,7 +211,7 @@ def working_set_bytes(pid: int) -> int | None:
     if pid <= 0:
         return None
     if os.name != 'nt':
-        return _proc_darwin.rss_bytes(pid) if sys.platform == 'darwin' else _working_set_bytes_procfs(pid)
+        return (_proc_darwin if sys.platform == 'darwin' else _proc_linux).rss_bytes(pid)
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
@@ -249,21 +228,6 @@ def working_set_bytes(pid: int) -> int | None:
         return int(counters.WorkingSetSize)
     finally:
         kernel32.CloseHandle(handle)
-
-
-def _working_set_bytes_procfs(pid: int) -> int | None:
-    """``VmRSS`` from ``/proc/<pid>/status`` -- the POSIX half, so the ceiling is enforceable there too."""
-    try:
-        text = Path(f'/proc/{pid}/status').read_text(encoding='utf-8')
-    except OSError:
-        return None
-    for line in text.splitlines():
-        key, _, rest = line.partition(':')
-        if key.strip() == 'VmRSS':
-            parts = rest.split()
-            if len(parts) == _KB_LINE_TOKENS and parts[1] == 'kB':
-                return int(parts[0]) * 1024
-    return None
 
 
 # --------------------------------------------------------------------------------------------
@@ -301,7 +265,7 @@ def pid_alive(pid: int) -> bool:  # noqa: PLR0911 -- one return per platform bra
         os.kill(pid, 0)
     except OSError:
         return False
-    return True
+    return not _proc_linux.is_zombie(pid)
 
 
 def _processentry32w() -> type[ctypes.Structure]:
@@ -332,7 +296,7 @@ def _process_rows() -> dict[int, tuple[str, int]] | None:
     if sys.platform == 'darwin':
         return _proc_darwin.process_rows()
     if os.name != 'nt':
-        return _process_rows_procfs()
+        return _proc_linux.process_rows()
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
@@ -353,42 +317,6 @@ def _process_rows() -> dict[int, tuple[str, int]] | None:
     return rows or None
 
 
-def _process_rows_procfs() -> dict[int, tuple[str, int]] | None:
-    root = Path('/proc')
-    if not root.is_dir():
-        return None
-    rows: dict[int, tuple[str, int]] = {}
-    for child in root.iterdir():
-        if not child.name.isdigit():
-            continue
-        try:
-            fields = dict(
-                line.split(':', 1)
-                for line in (child / 'status').read_text(encoding='utf-8').splitlines()
-                if ':' in line
-            )
-        except OSError:
-            continue
-        name, ppid = fields.get('Name', '').strip(), fields.get('PPid', '').strip()
-        if ppid.isdigit():
-            rows[int(child.name)] = (name, int(ppid))
-    return rows or None
-
-
-#: ``starttime`` is field 22 of ``/proc/<pid>/stat``; counted after the ``)`` closing the name (field 2),
-#: whose next field is 3, it sits at index 19.
-_STARTTIME_AFTER_NAME = 22 - 3
-
-
-def _stat_start_time(text: str) -> int | None:
-    """``starttime`` from one ``/proc/<pid>/stat`` line, split after the LAST ``)`` since a name may hold one."""
-    _, paren, rest = text.rpartition(')')
-    fields = rest.split()
-    if not paren or len(fields) <= _STARTTIME_AFTER_NAME or not fields[_STARTTIME_AFTER_NAME].isdigit():
-        return None
-    return int(fields[_STARTTIME_AFTER_NAME])
-
-
 def _creation_time(pid: int) -> int | None:
     """The process's creation FILETIME, or ``None`` when it cannot be read.
 
@@ -404,10 +332,7 @@ def _creation_time(pid: int) -> int | None:
     than the process it replaced -- so a reused pid is refuted there too. macOS: ``None``.
     """
     if sys.platform.startswith('linux'):
-        try:
-            return _stat_start_time(Path(f'/proc/{pid}/stat').read_text(encoding='utf-8'))
-        except OSError:
-            return None
+        return _proc_linux.start_time(pid)
     if os.name != 'nt':
         return None
     kernel32 = _kernel32()
@@ -528,8 +453,8 @@ def kill_pid(pid: int) -> bool:
     return True
 
 
-def kill_process_tree(pid: int) -> frozenset[int]:
-    """Force-kill *pid* and every descendant. Returns the pids actually confirmed killed.
+def kill_process_tree(pid: int, *, ceiling_s: float = KILL_EXIT_CEILING_S) -> frozenset[int]:
+    """Force-kill *pid* and every descendant. Returns the pids confirmed killed AND GONE.
 
     DESCENDANTS BEFORE THE ROOT. Killing the root first is what leaves survivors: children are not
     reaped by their parent's death, they are merely orphaned, and once orphaned nothing links them
@@ -537,11 +462,31 @@ def kill_process_tree(pid: int) -> frozenset[int]:
     ``triangle.exe`` child running at a full core with an unresolvable parent, which is precisely
     how 39 of them accumulated over two days.
 
+    A SIGNAL SENT IS NOT A PROCESS ENDED. On POSIX ``SIGKILL`` is delivered asynchronously (see
+    :data:`KILL_EXIT_CEILING_S`), and ``TerminateProcess`` is asynchronous too, so after signalling
+    this WAITS, bounded by *ceiling_s*, until :func:`pid_alive` says every signalled pid is gone.
+
     Returns:
-        Only the pids :func:`kill_pid` CONFIRMED it terminated, so the count is an observation of a
-        cleanup that happened rather than the size of the tree we intended to end.
+        Only the pids :func:`kill_pid` signalled AND that were observed gone within *ceiling_s*. A
+        survivor past the ceiling is OMITTED -- never raised, because every caller is a best-effort
+        cleanup that must not raise into a verdict path -- so a caller detects one as a pid of
+        :func:`process_tree` missing from this set. The set is an observation of a cleanup that
+        happened rather than the size of the tree we intended to end.
 
     """
     tree = process_tree(pid)
     ordered = sorted(tree - {pid}) + ([pid] if pid in tree else [])
-    return frozenset(member for member in ordered if kill_pid(member))
+    signalled = frozenset(member for member in ordered if kill_pid(member))
+    return signalled - _survivors(signalled, ceiling_s)
+
+
+def _survivors(pids: frozenset[int], ceiling_s: float) -> frozenset[int]:
+    """The pids of *pids* still alive after polling up to *ceiling_s*; empty as soon as all are gone."""
+    deadline = time.monotonic() + ceiling_s
+    pending = pids
+    while pending:
+        pending = frozenset(p for p in pending if pid_alive(p))
+        if not pending or time.monotonic() >= deadline:
+            break
+        time.sleep(_KILL_EXIT_POLL_S)
+    return pending

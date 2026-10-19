@@ -201,7 +201,7 @@ def test_a_reading_taken_against_an_exact_pin_is_upgraded_on_read_and_re_probed(
     assert not cached(checks={'jmag': fake.check()}, state=state, now=later)['jmag'].present
 
 
-@pytest.mark.parametrize('tool', ['femm', 'jmag', 'matlab', 'node', 'simba'])
+@pytest.mark.parametrize('tool', ['codex', 'femm', 'jmag', 'matlab', 'node', 'simba'])
 def test_every_vendor_tool_has_a_check(tool: str) -> None:
     assert tool in CHECKS
 
