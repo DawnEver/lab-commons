@@ -46,6 +46,7 @@ __all__ = [
     'parse_collection_errors',
     'parse_ids',
     'parse_times',
+    'submodules_script',
 ]
 
 #: The item runner's name on the cluster -- unique, so it can shadow nothing in the tested project.
@@ -183,6 +184,54 @@ def fetch_script(spec: RunSpec) -> str:
     )
 
 
+#: The shell twin of :func:`cache_dir` for a URL only the tree knows (a submodule's), plus the URL resolver and
+#: the recursive checkout :func:`submodules_script` calls. ``lc_cache`` must name what ``cache_dir`` names.
+_SUBMODULE_FUNCTIONS: Final = r"""lc_cache() { local s=${1%/}; s=${s%.git}; s=${s//:/\/}
+  local n=${s##*/}; s=${s%/*}; local o=${s##*/}
+  printf '%s/%s-%s-%s.git\n' "CACHES" "$(printf %s "$o" | tr -c 'A-Za-z0-9._-' _)" \
+    "$(printf %s "$n" | tr -c 'A-Za-z0-9._-' _)" "$(printf %s "$1" | sha256sum | cut -c1-8)"; }
+lc_url() { local b=${1%/} u=$2
+  case $u in ./*|../*) ;; *) echo "$u"; return;; esac
+  while :; do case $u in ./*) u=${u#./};; ../*) u=${u#../}; b=${b%/*};; *) break;; esac; done
+  echo "$b/$u"; }
+lc_has() { git -C "$1" rev-parse -q --verify "$2^{commit}" > /dev/null; }
+lc_subs() { local dir=$1 parent=$2 key path name url sha c
+  [ -f "$dir/.gitmodules" ] || return 0
+  while read -r key path; do
+    name=${key#submodule.}; name=${name%.path}
+    url=$(lc_url "$parent" "$(git config -f "$dir/.gitmodules" --get "submodule.$name.url")")
+    sha=$(git -C "$dir" ls-tree HEAD -- "$path" | awk '$2 == "commit" {print $3}')
+    [ -n "$sha" ] || continue
+    c=$(lc_cache "$url")
+    [ -d "$c" ] || git init -q --bare "$c"
+    git -C "$c" remote add origin "$url" 2>/dev/null || git -C "$c" remote set-url origin "$url"
+    lc_has "$c" "$sha" || git -C "$c" fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*' || true
+    lc_has "$c" "$sha" || git -C "$c" fetch -q origin "$sha" 2>/dev/null || true
+    lc_has "$c" "$sha" || { echo "BUILD_FAILED submodule $path at $sha is not in $url"; return 1; }
+    git -C "$c" update-ref "refs/lab-ci/$sha" "$sha"
+    if [ -e "$dir/$path/.git" ]; then git -C "$dir/$path" checkout -q --detach "$sha"
+    else rmdir "$dir/$path" 2>/dev/null || true; git -C "$c" worktree add -q --detach "$dir/$path" "$sha"; fi
+    lc_subs "$dir/$path" "$url" || return 1
+  done < <(git config -f "$dir/.gitmodules" --get-regexp '^submodule\..*\.path$' || true); }""".replace(
+    'CACHES', CACHES.replace('"', '')
+).replace('BUILD_FAILED', BUILD_FAILED)
+
+
+def submodules_script(repo_url: str) -> list[str]:
+    """Check out every submodule the tree's commit records, recursively, each a worktree of ITS OWN bare cache.
+
+    A commit's tree INCLUDES its submodules at their pinned commits: without them a test reading a submodule's
+    data fails as if the code were broken, and an install with a path dependency into one cannot build at all.
+    Each submodule's URL comes from the commit's ``.gitmodules``, a relative one resolved against its parent's
+    URL as git resolves it; its objects live in ``~/ci/cache`` under the name :func:`cache_dir` gives that URL
+    (fetched over the same ``origin`` credentials as the repository's own), its pinned commit is held by a
+    ``refs/lab-ci/<sha>`` ref, and its checkout is a detached worktree at its path -- nothing is written into
+    another repository's cache, and a reused tree is re-pointed, never re-cloned. A pinned commit no fetch
+    reaches prints :data:`BUILD_FAILED` and stops the build.
+    """
+    return [_SUBMODULE_FUNCTIONS, f'lc_subs "$PWD" {shlex.quote(repo_url)} || exit 0']
+
+
 def needs_script(spec: RunSpec) -> str:
     """Print ``@@@ missing <command>`` for each prerequisite the login node lacks: :data:`NEEDS` and the declared needs.
 
@@ -261,9 +310,7 @@ def build_script(spec: RunSpec) -> str:
         f'cat > {ROOT}/bin/{ITEM_MODULE}.py',
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
-        # a commit's tree INCLUDES its submodules at their pinned commits; without them the tests
-        # that read a submodule's data fail as if the code were broken (1240 ids, measured 2026-10-10)
-        '[ ! -f .gitmodules ] || git submodule update -q --init --recursive',
+        *submodules_script(spec.repo_url),
         'mkdir -p .lab-ci',
         f'export E={env} UV_CACHE_DIR={_UV_CACHE} UV_LINK_MODE=hardlink',
         *_timed(
