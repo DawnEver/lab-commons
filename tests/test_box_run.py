@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sqlite3
 import sys
 from collections.abc import Mapping
@@ -17,12 +18,15 @@ from lab_commons.box import (
     CPU_ENV,
     Capacity,
     Demand,
+    NotAdmitted,
     ProcessEnd,
     Refused,
     command,
     hold,
+    holdings,
     read_ended,
     run,
+    take,
     write_ended,
 )
 from lab_commons.box.__main__ import _parser, main
@@ -230,3 +234,34 @@ def test_the_generic_name_is_gone_from_the_box() -> None:
     assert 'ProcessEnd' in box_package.__all__
     with pytest.raises(AttributeError):
         _ = importlib.import_module(box_package.__name__).Outcome
+
+
+def test_a_run_handed_its_callers_claim_adopts_it_and_is_never_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ONE ADMISSION: the caller took the claim (:func:`take`), the run adopts it -- the box does not decide twice.
+
+    PLANTED CONTROL: on the same full box a fresh admission IS refused, so the adopted run proves no second look.
+    """
+    monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
+    size = Capacity(cpu=2.0, mem_bytes=2 * 2**30, seats={})
+    demand = Demand(cpu=1, mem_gb=1.5, wall_s=60, seats={})
+    taken = take(demand, 'tests/x@sha', capacity=size, read=quiet(size), key='tests/x')
+    with pytest.raises(NotAdmitted):
+        take(demand, 'tests/y@sha', capacity=size, read=quiet(size), key='tests/y')
+    during: list[list[tuple[int, int]]] = []
+
+    def fake(*_args: object) -> ProcessEnd:
+        with sqlite3.connect(tmp_path / 'box.sqlite') as con:
+            during.append(con.execute('SELECT id, pid FROM claims').fetchall())
+        return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
+
+    monkeypatch.setitem(_ENFORCERS, sys.platform, fake)
+    ended = run(['tool'], demand, 'w', 0, key='tests/x', claim=taken.id, capacity=size, read=quiet(size))
+    assert ended.returncode == 0
+    assert during == [[(taken.id, os.getpid())]], 'the one claim, held by the run, and no second row'
+    assert holdings() == [], 'released when the run ends'
+    with pytest.raises(Refused, match='not on this box'):
+        run(['tool'], demand, 'w', 0, key='tests/x', claim=taken.id, capacity=size, read=quiet(size))
+    argv = command(['tool'], demand, 0.0, key='k', what='w', outcome=Path('o.json'), claim=taken.id)
+    assert _parser().parse_args(argv[3:]).claim == taken.id

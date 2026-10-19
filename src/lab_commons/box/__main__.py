@@ -54,6 +54,9 @@ def _parser() -> argparse.ArgumentParser:
     verb.add_argument(
         '--capacity', type=_capacity, default=None, help="the caller's box size, JSON (default: read this box)"
     )
+    verb.add_argument(
+        '--claim', type=int, default=0, help='a ledger row the caller already took: adopt it, admit nothing again'
+    )
     verb.add_argument('argv', nargs=argparse.REMAINDER, help='-- then the command')
     return parser
 
@@ -75,6 +78,7 @@ def main(args: Sequence[str] | None = None) -> int:
             key=ns.key,
             fingerprint=ns.fingerprint,
             capacity=ns.capacity,
+            claim=ns.claim,
         )
     except Refused as refused:
         write_ended(ns.outcome, refused)
