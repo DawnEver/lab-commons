@@ -156,18 +156,19 @@ def where(sha: str, part: str, machine: Machine, connect: Callable[[Grant], Runn
     state, home = load_state(sha, part, machine, runners)
     if 'record' in state:
         last = state['rounds'][-1]
-        return Progress(sha=sha, job_id=last['job_id'], shards=len(last['shards']), finished=True)
+        return Progress(sha=sha, job_id=','.join(last['job_ids']), shards=len(last['shards']), finished=True)
     current = state['current']
+    job_id = ','.join(current['job_ids'])  # one array per memory class of the round (lab_commons.hpc.run)
     try:
-        queue = home(_QUEUE.format(job=current['job_id']), None)
+        queue = home(_QUEUE.format(job=job_id), None)
     except RuntimeError as exc:
         if _FORGOTTEN not in str(exc):
             raise
-        return Progress(sha=sha, job_id=current['job_id'], shards=current['shards'], finished=True)
+        return Progress(sha=sha, job_id=job_id, shards=current['shards'], finished=True)
     pending, running, reasons, partitions, minutes = parse_queue(queue)
     progress = Progress(
         sha=sha,
-        job_id=current['job_id'],
+        job_id=job_id,
         shards=current['shards'],
         pending=pending,
         running=running,
