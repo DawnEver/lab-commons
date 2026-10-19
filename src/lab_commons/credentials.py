@@ -12,11 +12,14 @@ that nobody is watching, so both are switched off in the child whatever the call
 absent secret is refused naming why.
 
 A MODEL API KEY is one more such secret, under its provider's endpoint host (``api.anthropic.com``), and
-its username says WHICH key of that host it is: ``api-key`` the default, ``api-key-<task>`` the key ONE
-task owns (user ruling 2026-10-19: each task gets its own AI API key). :func:`api_key` reads it; a task key
-that is not stored is refused by its username and never falls back to the default -- a task with a
-dedicated key must not spend another's. The tasks are declared (:data:`API_KEY_TASKS`) so a misspelt one
-is refused rather than stored where nothing reads. ``ai_lab.auth login <provider> [--task T]`` stores them.
+its username says WHICH key of that host it is, by ONE rule (:func:`key_username`): ``api-key`` /
+``api-key-N`` are the default keys, ``api-key-<task>`` / ``api-key-<task>-N`` the keys ONE task owns (user
+rulings 2026-10-19: each task gets its own AI API key, and every task takes several). Slot 1 is the key a
+caller uses; slots 2, 3... are its backups, read in order up to the first gap (:func:`api_keys`). A task
+reads ITS OWN slots only -- never another task's, never the default's; a task with no slot 1 is refused by
+that username. The tasks are declared (:data:`API_KEY_TASKS`) and never a number, so a task cannot collide
+with a slot, and a misspelt one is refused rather than stored where nothing reads.
+``ai_lab.auth login <provider> [--task T] [-s N]`` stores them.
 """
 
 from __future__ import annotations
@@ -37,16 +40,17 @@ __all__ = [
     'API_KEY_USERNAME',
     'NoCredential',
     'api_key',
+    'api_keys',
     'credential_for',
+    'key_username',
     'store_credential',
-    'task_username',
 ]
 
 #: The username of a provider host's DEFAULT model API key.
 API_KEY_USERNAME: Final = 'api-key'
 
-#: The tasks that own a dedicated model API key, each stored as ``api-key-<task>``. Never a number:
-#: ``api-key-<N>`` is an account's Nth fallback slot (``ai_lab.client``).
+#: The tasks that own dedicated model API keys, stored as ``api-key-<task>[-N]``. Never a number:
+#: ``api-key-<N>`` is the default's Nth slot.
 API_KEY_TASKS: Final = frozenset(
     {
         'pr-review',  # lab_commons.dev.forgereview, the advisory PR reviewer (Anthropic)
@@ -98,21 +102,43 @@ def credential_for(
     raise NoCredential(_why_no_credential(host if username is None else f'{username}@{host}', done))
 
 
-def task_username(task: str | None) -> str:
-    """The credential-store username of *task*'s own model API key; ``None`` is the host's default key."""
-    if task is None:
-        return API_KEY_USERNAME
-    if task not in API_KEY_TASKS:
+def key_username(task: str | None = None, slot: int = 1) -> str:
+    """The username of key *slot* of *task* (``None``: the host's default keys) -- the scheme's one rule."""
+    if slot < 1:
+        msg = f'a key slot is 1 or more, not {slot}'
+        raise ValueError(msg)
+    if task is not None and task not in API_KEY_TASKS:
         msg = f'{task!r} is not a declared API-key task; the tasks are {sorted(API_KEY_TASKS)}'
         raise ValueError(msg)
-    return f'{API_KEY_USERNAME}-{task}'
+    stem = API_KEY_USERNAME if task is None else f'{API_KEY_USERNAME}-{task}'
+    return stem if slot == 1 else f'{stem}-{slot}'
 
 
 def api_key(
-    host: str, *, task: str | None = None, cwd: Path | None = None, env: Mapping[str, str] | None = None
+    host: str,
+    *,
+    task: str | None = None,
+    slot: int = 1,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> str:
-    """The model API key stored for ``https://<host>``: *task*'s own, else the default; never another's."""
-    return credential_for(host, username=task_username(task), cwd=cwd, env=env)[1]
+    """Key *slot* of *task* (else the default) stored for ``https://<host>``; never another task's."""
+    return credential_for(host, username=key_username(task, slot), cwd=cwd, env=env)[1]
+
+
+def api_keys(
+    host: str, *, task: str | None = None, cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> tuple[str, ...]:
+    """*task*'s (else the default's) keys for ``https://<host>`` in slot order, up to the first gap.
+
+    Slot 1 missing is refused by its username: a caller with only backups has no key to start on.
+    """
+    keys = [api_key(host, task=task, cwd=cwd, env=env)]
+    while True:
+        try:
+            keys.append(api_key(host, task=task, slot=len(keys) + 1, cwd=cwd, env=env))
+        except NoCredential:
+            return tuple(keys)
 
 
 def store_credential(
