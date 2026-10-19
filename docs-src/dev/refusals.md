@@ -46,7 +46,7 @@ When a command targets another repo, the engine adds one header line naming that
 
 ## TREE-HAS-A-LIVE-RUN
 
-- **Why it is refused.** a run executes its checkout's code and `.venv` for its whole life, so an edit, a merge, a checkout or an environment sync under it makes its result describe a tree that never existed. Measured 2026-10-19 in motronics: during a JMAG `deck run`, an agent edited a test, merged into the checkout and re-synced the venv the run executed from. The run is found WITHOUT its cooperation -- a process whose executable lies inside the checkout (`lab_commons.dev.liverun`, read off `lab_commons.census`) -- and the row binds only while one exists. `output/` and `.claude/` are not the tree.
+- **Why it is refused.** a run executes its checkout's code and `.venv` for its whole life, so an edit, a merge, a checkout or an environment sync under it makes its result describe a tree that never existed. Measured 2026-10-19 in motronics: during a JMAG `deck run`, an agent edited a test, merged into the checkout and re-synced the venv the run executed from. The run is found WITHOUT its cooperation (`lab_commons.dev.liverun`, read off `lab_commons.census`): a process READS the tree when it is a Python interpreter working in it or an argument names a path in it, and the row binds only while one exists. `output/`, `.claude/` and `.venv/` are not the tree; a process executing from the venv locks the venv (`dep`), not the tree.
 - **The exit.** Work in another worktree (git worktree add --detach .claude/worktrees/<name> <sha>), wait for the run, or stop it: python -m lab_commons.dev.stoprun --pid <pid>.
 
 ## GIT-STASH

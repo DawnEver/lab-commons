@@ -37,6 +37,9 @@ from lab_commons import proc
 __all__ = ['Process', 'processes']
 
 _QUERY_LIMITED: Final = 0x1000
+_QUERY_AND_READ: Final = 0x0400 | 0x0010  # PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+_PEB_PARAMETERS: Final = 0x20  # PEB.ProcessParameters, 64-bit
+_PARAMETERS_CWD: Final = 0x38  # RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath, 64-bit
 _COMMAND_LINE_CLASS: Final = 60  # ProcessCommandLineInformation
 _FILETIME_PER_S: Final = 10_000_000
 
@@ -50,6 +53,8 @@ class Process:
     executable: str
     command_line: str
     age_s: float | None
+    #: The working directory, ``''`` when unreadable: the PEB on Windows, ``/proc/<pid>/cwd`` on Linux.
+    cwd: str = ''
 
 
 def processes() -> tuple[Process, ...]:
@@ -85,11 +90,43 @@ def _windows() -> tuple[Process, ...]:
                     _image_name(kernel32, handle),
                     _command_line(ntdll, handle),
                     _age(kernel32, handle, now.value),
+                    _cwd(kernel32, ntdll, pid),
                 )
             )
         finally:
             kernel32.CloseHandle(handle)
     return tuple(out)
+
+
+def _read(kernel32: ctypes.WinDLL, handle: int, address: int, size: int) -> bytes | None:
+    buffer = ctypes.create_string_buffer(size)
+    done = ctypes.c_size_t()
+    ok = kernel32.ReadProcessMemory(handle, ctypes.c_void_p(address), buffer, size, ctypes.byref(done))
+    return buffer.raw if ok and done.value == size else None
+
+
+def _cwd(kernel32: ctypes.WinDLL, ntdll: ctypes.WinDLL, pid: int) -> str:
+    """The working directory out of the process's own PEB (64-bit layout); ``''`` when it cannot be read."""
+    if ctypes.sizeof(ctypes.c_void_p) != 8:  # noqa: PLR2004 -- the offsets below are the 64-bit layout
+        return ''
+    handle = kernel32.OpenProcess(_QUERY_AND_READ, False, pid)  # noqa: FBT003 -- Win32 positional
+    if not handle:
+        return ''
+    try:
+        basic = (ctypes.c_void_p * 6)()
+        if ntdll.NtQueryInformationProcess(handle, 0, basic, ctypes.sizeof(basic), None) != 0 or not basic[1]:
+            return ''
+        params = _read(kernel32, handle, basic[1] + _PEB_PARAMETERS, 8)
+        if params is None:
+            return ''
+        header = _read(kernel32, handle, int.from_bytes(params, 'little') + _PARAMETERS_CWD, 16)
+        if header is None:
+            return ''
+        length, address = int.from_bytes(header[:2], 'little'), int.from_bytes(header[8:], 'little')
+        text = _read(kernel32, handle, address, length) if length and address else None
+        return text.decode('utf-16-le') if text else ''
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _image_name(kernel32: ctypes.WinDLL, handle: int) -> str:
@@ -125,7 +162,7 @@ def _linux() -> tuple[Process, ...]:
         uptime = float(Path('/proc/uptime').read_text(encoding='utf-8').split()[0])
     except (OSError, ValueError, IndexError):
         uptime = None
-    ticks = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
+    ticks = os.sysconf('SC_CLK_TCK')  # Linux only: this reader runs nowhere else
     out = []
     for pid, (_name, ppid) in rows.items():
         base = Path(f'/proc/{pid}')
@@ -134,9 +171,12 @@ def _linux() -> tuple[Process, ...]:
         except OSError:
             argv = []
         command_line = ' '.join(word for word in argv if word)
-        out.append(
-            Process(pid, ppid, _invoked(base, argv[0] if argv else ''), command_line, _age_linux(pid, uptime, ticks))
-        )
+        try:
+            cwd = str((base / 'cwd').readlink())
+        except OSError:
+            cwd = ''
+        invoked = _invoked(base, argv[0] if argv else '')
+        out.append(Process(pid, ppid, invoked, command_line, _age_linux(pid, uptime, ticks), cwd))
     return tuple(out)
 
 
