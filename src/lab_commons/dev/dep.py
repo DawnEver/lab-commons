@@ -75,6 +75,7 @@ import lab_commons.launch as _door
 from lab_commons.box import Refused
 from lab_commons.census import Process, processes
 from lab_commons.dev import _dep_project
+from lab_commons.dev._dep_components import changed, record
 from lab_commons.dev._dep_network import CHILD_WALL_S, init_submodules, run_change
 from lab_commons.dev.envkey import env_key, env_manifest
 from lab_commons.dev.envseat import EnvironmentSeat
@@ -479,6 +480,7 @@ def main(
         syncing=syncing,
         upgrade_packages=args.upgrade_package,
         frozen=args.bootstrap is not None or locking,
+        reinstall_packages=changed(root, prefix) if syncing else (),
     )
     port = Port(name=str(root), anchor_paths=lambda: paths)
     try:
@@ -497,6 +499,8 @@ def main(
         emit(f'REFUSED: {exc}')
         return 1
     emit(result.render())
+    if syncing and result.returncode == 0:
+        record(root, prefix)  # the trees this environment now holds its components at
     return result.returncode or 0
 
 
