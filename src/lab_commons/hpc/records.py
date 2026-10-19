@@ -342,9 +342,45 @@ def _upgraded_words(holder: dict[str, Any]) -> dict[str, Any]:
     return {**rest, 'cells': cells}
 
 
+def _upgraded_arrays(state: dict[str, Any]) -> dict[str, Any]:
+    """A state of ONE array per round (``job_id``, a run-wide ``oom``) read as one array per memory class.
+
+    Before 2026-10-19 a round was one array at one memory and an OOM doubled every later item's
+    (:mod:`lab_commons.hpc.run`); a run in flight across the change keeps its round as one band.
+    """
+    rounds = [
+        {**{k: v for k, v in r.items() if k != 'job_id'}, 'job_ids': [r['job_id']]} if 'job_id' in r else r
+        for r in state.get('rounds', [])
+    ]
+    current = state.get('current')
+    if 'oom' in state:  # the run-wide growth lands on the files of the round in flight, the ones it would size
+        files = {n.split('::', maxsplit=1)[0] for item in (current or {}).get('items', ()) for n in item['ids']}
+        state = {**state, 'grown': {name: float(state['oom']) for name in files if state['oom'] > 1}}
+    state = {**{k: v for k, v in state.items() if k != 'oom'}, 'rounds': rounds}
+    state.setdefault('grown', {})
+    if current and 'job_id' in current:
+        last = rounds[-1]
+        band = {
+            'shards': [0, current['shards']],
+            'mem_mb': last['mem_mb'],
+            'minutes': last['minutes'],
+            'throttle': last['throttle'],
+            'at_ceiling': current.get('at_ceiling'),
+            'job_id': current['job_id'],
+        }
+        rest = {k: v for k, v in current.items() if k not in ('job_id', 'at_ceiling')}
+        state['current'] = {
+            **rest,
+            'job_ids': [current['job_id']],
+            'bands': [band],
+            'ceiling': current.get('at_ceiling') is not None,
+        }
+    return state
+
+
 def upgraded_state(state: dict[str, Any]) -> dict[str, Any]:
-    """A run's LIVE *state*, its retired word shape (and that of the record it may hold) upgraded on read."""
-    state = _upgraded_words(state)
+    """A run's LIVE *state*, its retired word and array shapes (and its record's words) upgraded on read."""
+    state = _upgraded_arrays(_upgraded_words(state))
     if isinstance(state.get('record'), dict):
         state = {**state, 'record': _upgraded_words(state['record'])}
     return state
@@ -356,7 +392,7 @@ def record_of(state: dict[str, Any], account: str) -> dict[str, Any]:
         **{key: state.get(key, {}) for key in _STATE_KEYS},
         'req': state['stamp'],
         'account': account,
-        'job_ids': [r['job_id'] for r in state['rounds']],
+        'job_ids': [job for r in state['rounds'] for job in r['job_ids']],
         'plan': state['rounds'][0] if state['rounds'] else {},
         **state['measured'],
     }

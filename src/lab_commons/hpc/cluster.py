@@ -57,7 +57,9 @@ __all__ = [
     'shard_states',
     'ssh_runner',
     'submit',
+    'submit_bands',
     'submitter',
+    'throttle',
 ]
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
@@ -298,6 +300,47 @@ def submit(
         msg = f'sbatch did not return a job id: {out!r}'
         raise RuntimeError(msg)
     return Submission(run_dir=run_dir, job_id=job_id, shards=len(plan.shards))
+
+
+def submit_bands(
+    run: Runner, plans: Sequence[Plan], config: Config, items: list[Any], *, stamp: str
+) -> tuple[str, list[str]]:
+    """ONE run directory, manifest and script for every band of a round, and ONE ``sbatch`` per band.
+
+    A Slurm array asks ONE memory for every task, so items of different memory classes are different
+    arrays: each *plan* covers its own consecutive shard indices of the one manifest (their shards
+    concatenated, in order), and its ``sbatch`` overrides the script's ``--mem``, ``--time``,
+    ``--partition`` and ``--qos`` with its own. Returns the run directory and each band's job id, in order.
+    """
+    run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
+    quoted = _sh_path(run_dir)
+    shards = [list(s) for plan in plans for s in plan.shards]
+    manifest = {'entry': config.job.entry, 'items': items, 'shards': shards}
+    run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
+    run(f'cat > {quoted}/job.sh', render_script(plans[0], config, run_dir))
+    job_ids, first = [], 0
+    for plan in plans:
+        indices = range(first, first + len(plan.shards))
+        first += len(plan.shards)
+        own = [
+            f'--mem={plan.mem_mb}M',
+            f'--time={plan.minutes}',
+            f'--partition={",".join(plan.partitions)}',
+            *([f'--qos={plan.qos}'] if plan.qos else []),
+        ]
+        array = _array_spec(indices, plan.throttle)
+        out = run(f'cd {quoted} && sbatch --parsable {" ".join(own)} --array={array} job.sh', None)
+        job_id = out.strip().split(';')[0]
+        if not job_id.isdigit():
+            msg = f'sbatch did not return a job id: {out!r}'
+            raise RuntimeError(msg)
+        job_ids.append(job_id)
+    return run_dir, job_ids
+
+
+def throttle(run: Runner, job_id: str, tasks: int) -> None:
+    """Set array *job_id*'s concurrency limit to *tasks* (``scontrol update ... ArrayTaskThrottle``)."""
+    run(f'scontrol update JobId={shlex.quote(job_id)} ArrayTaskThrottle={max(1, tasks)}', None)
 
 
 #: The ``sacct`` columns of a :class:`~lab_commons.hpc.phases.Clock`, in its field order.
