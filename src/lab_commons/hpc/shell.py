@@ -195,26 +195,41 @@ lc_url() { local b=${1%/} u=$2
   while :; do case $u in ./*) u=${u#./};; ../*) u=${u#../}; b=${b%/*};; *) break;; esac; done
   echo "$b/$u"; }
 lc_has() { git -C "$1" rev-parse -q --verify "$2^{commit}" > /dev/null; }
-lc_subs() { local dir=$1 parent=$2 key path name url sha c
+lc_pin() { local url=$1 sha=$2 path=$3 c
+  c=$(lc_cache "$url")
+  [ -d "$c" ] || git init -q --bare "$c"
+  git -C "$c" remote add origin "$url" 2>/dev/null || git -C "$c" remote set-url origin "$url"
+  lc_has "$c" "$sha" || git -C "$c" fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*' || true
+  lc_has "$c" "$sha" || git -C "$c" fetch -q origin "$sha" 2>/dev/null || true
+  lc_has "$c" "$sha" || { echo "BUILD_FAILED submodule $path at $sha is not in $url"; return 1; }
+  git -C "$c" update-ref "refs/lab-ci/$sha" "$sha"
+  echo "$c"; }
+lc_each() { local dir=$1 parent=$2 repo=$3 rev=$4 key path name url sha
   [ -f "$dir/.gitmodules" ] || return 0
   while read -r key path; do
     name=${key#submodule.}; name=${name%.path}
     url=$(lc_url "$parent" "$(git config -f "$dir/.gitmodules" --get "submodule.$name.url")")
-    sha=$(git -C "$dir" ls-tree HEAD -- "$path" | awk '$2 == "commit" {print $3}')
+    sha=$(git -C "$repo" ls-tree "$rev" -- "$path" | awk '$2 == "commit" {print $3}')
     [ -n "$sha" ] || continue
-    c=$(lc_cache "$url")
-    [ -d "$c" ] || git init -q --bare "$c"
-    git -C "$c" remote add origin "$url" 2>/dev/null || git -C "$c" remote set-url origin "$url"
-    lc_has "$c" "$sha" || git -C "$c" fetch -q --prune origin '+refs/heads/*:refs/remotes/origin/*' || true
-    lc_has "$c" "$sha" || git -C "$c" fetch -q origin "$sha" 2>/dev/null || true
-    lc_has "$c" "$sha" || { echo "BUILD_FAILED submodule $path at $sha is not in $url"; return 1; }
-    git -C "$c" update-ref "refs/lab-ci/$sha" "$sha"
+    echo "$sha $url $path"
+  done < <(git config -f "$dir/.gitmodules" --get-regexp '^submodule\..*\.path$' || true); }
+lc_subs() { local dir=$1 parent=$2 path url sha c rows
+  rows=$(lc_each "$dir" "$parent" "$dir" HEAD) || return 1
+  while read -r sha url path; do
+    [ -n "$sha" ] || continue
+    c=$(lc_pin "$url" "$sha" "$path") || { echo "$c"; return 1; }
     if [ -e "$dir/$path/.git" ]; then git -C "$dir/$path" checkout -q --detach "$sha"
     else rmdir "$dir/$path" 2>/dev/null || true; git -C "$c" worktree add -q --detach "$dir/$path" "$sha"; fi
     lc_subs "$dir/$path" "$url" || return 1
-  done < <(git config -f "$dir/.gitmodules" --get-regexp '^submodule\..*\.path$' || true); }""".replace(
-    'CACHES', CACHES.replace('"', '')
-).replace('BUILD_FAILED', BUILD_FAILED)
+  done <<< "$rows"; }
+lc_export() { local dir=$1 parent=$2 repo=$3 rev=$4 path url sha c rows
+  rows=$(lc_each "$dir" "$parent" "$repo" "$rev") || return 1
+  while read -r sha url path; do
+    [ -n "$sha" ] || continue
+    c=$(lc_pin "$url" "$sha" "$path") || { echo "$c"; return 1; }
+    mkdir -p "$dir/$path" && git -C "$c" archive "$sha" | tar -x -C "$dir/$path"
+    lc_export "$dir/$path" "$url" "$c" "$sha" || return 1
+  done <<< "$rows"; }""".replace('CACHES', CACHES.replace('"', '')).replace('BUILD_FAILED', BUILD_FAILED)
 
 
 def submodules_script(repo_url: str) -> list[str]:
@@ -230,6 +245,17 @@ def submodules_script(repo_url: str) -> list[str]:
     reaches prints :data:`BUILD_FAILED` and stops the build.
     """
     return [_SUBMODULE_FUNCTIONS, f'lc_subs "$PWD" {shlex.quote(repo_url)} || exit 0']
+
+
+def export_submodules_script(repo_url: str, cache: str, sha: str) -> list[str]:
+    """Export every submodule *sha* pins into the ``git archive`` of it in ``$PWD``, recursively, before an install.
+
+    ``git archive`` leaves a submodule's path empty, so a path dependency into one cannot build. Each submodule
+    is fetched into its own cache exactly as :func:`submodules_script` does and archived at the commit its
+    parent's tree records (read from the parent's CACHE, the export holds no ``.git``). :data:`BUILD_FAILED`
+    stops the build when a pinned commit is unreachable.
+    """
+    return [_SUBMODULE_FUNCTIONS, f'lc_export "$PWD" {shlex.quote(repo_url)} {cache} {sha} || exit 0']
 
 
 def needs_script(spec: RunSpec) -> str:
