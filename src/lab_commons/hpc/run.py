@@ -62,12 +62,12 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.learned import OOM_GROWTH, Measured
-from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit_bands
+from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit_bands, throttle
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.phases import round_clock
-from lab_commons.hpc.plan import Plan, allocate, grantable_gb
+from lab_commons.hpc.plan import Plan, allocate, grantable_gb, live_throttle
 from lab_commons.hpc.records import (
     files_made,
     fold,
@@ -398,6 +398,10 @@ def gather_run(
     clocks = shard_clock(run, current['job_ids'])
     states = {shard: clock.state for shard, clock in clocks.items()}
     if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
+        grant = next(g for g in machine.grants if g.account == account)
+        snapshot, qos = probe(run, grant.slurm_account), state['rounds'][-1]['qos']
+        if _rethrottled(current, states, run, snapshot, cost=cost, qos=qos):
+            _save(home, state)
         return None
     measured = Measured.of(state['measured'])
     streams = read_streams(run, *stream_sources(sha, current['tag']))
@@ -453,6 +457,36 @@ def gather_run(
         job_measured(state['rounds'], state['cells'], measured, cpus=cost.cpus, files=files_made(home, state)),
     )
     return record
+
+
+def _rethrottled(
+    current: dict[str, Any], states: Mapping[int, str], run: Runner, snapshot: Snapshot, *, cost: Cost, qos: str
+) -> bool:
+    """Re-set each live band's array throttle to the headroom now (:func:`live_throttle`); whether any moved.
+
+    Bands are taken heaviest first, each one's added tasks charged to the account before the next is sized,
+    so two bands never both spend the same free memory.
+    """
+    moved = False
+    for band in current['bands']:
+        shards = range(*band['shards'])
+        unfinished = sum(1 for n in shards if states.get(n, 'PENDING') in ACTIVE)
+        if not unfinished:
+            continue
+        running = sum(1 for n in shards if states.get(n) == 'RUNNING')
+        task = replace(cost, mem_gb=band['mem_mb'] / 1024)
+        limit = snapshot.quota.qos_max_jobs.get(qos)
+        tasks = live_throttle(snapshot, task, running=running, unfinished=unfinished, max_jobs=limit)
+        extra = max(0, tasks - running)
+        used = dict(snapshot.quota.used)
+        used['cpu'] = used.get('cpu', 0.0) + extra * cost.cpus
+        used['mem'] = used.get('mem', 0.0) + extra * band['mem_mb']
+        snapshot = replace(snapshot, quota=replace(snapshot.quota, used=used))
+        if tasks != band['throttle']:
+            throttle(run, band['job_id'], tasks)
+            band['throttle'] = tasks
+            moved = True
+    return moved
 
 
 def _grown(

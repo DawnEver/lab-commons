@@ -29,6 +29,13 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
    and pended an hour on ``AssocGrpMemLimit`` behind 232 GB held by the account's other jobs. The plan
    records that headroom as ``room``; a FIRST round with ``room`` 0 is not submitted
    (:mod:`lab_commons.hpc.run`), so the part goes to a host that has it.
+
+THE THROTTLE FOLLOWS THE HEADROOM WHILE THE ARRAY LIVES (:func:`live_throttle`). The ``%N`` an array is
+submitted with is the headroom AT SUBMIT; as the account's other jobs end it is stale. Measured 2026-10-19
+(Ada, 5 accounts of 96 cores): 22 single-core tasks ran (~5%) while runs reported ``STALLED ...
+(JobArrayTaskLimit)`` -- pending on their OWN throttle. Each gather re-reads the account and raises (or
+lowers) the throttle to what the grant's ceiling (GrpTRES cpu and mem, the QOS's per-user job limit, all read
+from the cluster) has free, bounded by the tasks still to run.
 """
 
 from __future__ import annotations
@@ -58,6 +65,7 @@ __all__ = [
     'free_slots',
     'grantable_gb',
     'headroom',
+    'live_throttle',
     'make_plan',
     'plan_on',
     'quota_slots',
@@ -238,6 +246,20 @@ def grantable_gb(snapshots: Sequence[tuple[Grant, Snapshot]]) -> float | None:
     if not ceilings or None in ceilings:
         return None
     return max(c for c in ceilings if c is not None) / 1024
+
+
+def live_throttle(snapshot: Snapshot, cost: Cost, *, running: int, unfinished: int, max_jobs: int | None = None) -> int:
+    """The concurrency an array of tasks of *cost* may have NOW: its *running* tasks plus what the ceiling has free.
+
+    Free is :func:`quota_slots` of what the account's running jobs leave (cpu, memory, gpu as the cluster
+    reports them), never a fixed number; bounded by the *unfinished* tasks and the QOS's per-user job limit
+    *max_jobs*; at least one. An account that reports no ceiling at all frees its schedulable CPUs.
+    """
+    try:
+        free = quota_slots(snapshot, cost, Limits(), remaining=True)
+    except ValueError:  # no ceiling at all: what the nodes have free
+        free = headroom(snapshot) // max(1, cost.cpus)
+    return max(1, min(unfinished, running + free, max_jobs or unfinished))
 
 
 def headroom(snapshot: Snapshot) -> int:

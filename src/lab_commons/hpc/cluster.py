@@ -59,6 +59,7 @@ __all__ = [
     'submit',
     'submit_bands',
     'submitter',
+    'throttle',
 ]
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
@@ -335,6 +336,11 @@ def submit_bands(
             raise RuntimeError(msg)
         job_ids.append(job_id)
     return run_dir, job_ids
+
+
+def throttle(run: Runner, job_id: str, tasks: int) -> None:
+    """Set array *job_id*'s concurrency limit to *tasks* (``scontrol update ... ArrayTaskThrottle``)."""
+    run(f'scontrol update JobId={shlex.quote(job_id)} ArrayTaskThrottle={max(1, tasks)}', None)
 
 
 #: The ``sacct`` columns of a :class:`~lab_commons.hpc.phases.Clock`, in its field order.
