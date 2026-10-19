@@ -18,7 +18,7 @@ from typing import Any
 import lab_commons.launch as _door
 from lab_commons.config import config_path
 from lab_commons.hpc.declared import REFUSALS
-from lab_commons.hpc.deploy_spec import LAB_COMMONS, Deployment, Repo, checkout_of, host_serve_argv, load
+from lab_commons.hpc.deploy_spec import Deployment, Repo, checkout_of, host_serve_argv, load
 from lab_commons.hpc.deploy_steps import Step, Tools, build, update
 from lab_commons.log import emit
 
@@ -47,11 +47,15 @@ def tick(
     """One cron tick of served repo *name*: THE HOST refreshes, then serves it with its own kit.
 
     Runs from the host's lab-commons checkout, never the repo's venv (incident 2026-10-13: a repo venv
-    whose old ``forge serve`` exited 2 every tick could never run the code that would update it). First
-    lab-commons follows its declared ref, then *name* follows its own and its venv is rebuilt where its
-    inputs (its committed lock among them) moved (:func:`lab_commons.hpc.deploy_steps.build`). A kit that
-    cannot move is reported and the repo serves with the kit it has; a repo that cannot is RELEASED this
-    tick with its reason, exit 2, and is not served. Serving is the host kit's ``forge serve`` in the repo's
+    whose old ``forge serve`` exited 2 every tick could never run the code that would update it). *name*
+    follows its declared ref and its venv is rebuilt where its inputs (its committed lock among them) moved
+    (:func:`lab_commons.hpc.deploy_steps.build`); a repo that cannot is RELEASED this tick with its reason,
+    exit 2, and is not served.
+
+    THE SHARED KIT HAS ONE WRITER: lab-commons is always a served repo, so ITS OWN tick (under its own
+    ``flock``) is the only one that moves the host checkout; every other tick reads it. Measured 2026-10-19
+    (Ada): every repo's tick also updated it, each under only its own repo's flock, and concurrent ticks
+    collided on ``.git/index.lock``. Serving is the host kit's ``forge serve`` in the repo's
     checkout (:func:`~lab_commons.hpc.deploy_spec.host_serve_argv`), never the repo venv's.
     """
     spec = load(config or config_path())
@@ -60,9 +64,6 @@ def tick(
         emit(f'[tick] refused: {name} is not a served repo of [deploy] in {config or config_path()}', err=True)
         return 2
     step = Step(tools or Tools(), dry=False)
-    lab = next(one for one in spec.repos if one.name == LAB_COMMONS)
-    if lab != repo and (why := _refresh(step, spec, home, lab)):
-        emit(f'[tick] lab-commons not refreshed; {name} serves with the kit it has: {why}', err=True)
     if why := _refresh(step, spec, home, repo):
         emit(f'[tick] {name} released, not served this tick: {why}', err=True)
         return 2

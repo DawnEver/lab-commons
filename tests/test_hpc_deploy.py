@@ -9,6 +9,7 @@ from __future__ import annotations
 import shlex
 import sys
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
@@ -468,24 +469,45 @@ def _tick(box: Box, name: str, served: list[tuple[list[str], Path, str]]) -> int
     return tick.tick(name, home=box.home, config=box.machine, tools=box.tools, run=run)
 
 
-def test_a_tick_refreshes_the_kit_and_the_repo_before_the_repos_own_forge_serve(box: Box) -> None:
-    """THE PLANTED CONTROL (incident 2026-10-13): the HOST refreshes the kit, then the repo, before its forge.
+def test_a_tick_refreshes_its_repo_before_the_repos_own_forge_serve(box: Box) -> None:
+    """THE PLANTED CONTROL (incident 2026-10-13): the HOST refreshes the repo, then serves it with the host kit.
 
-    lab-commons moved upstream; alpha's venv is its committed lock, so nothing is installed over it.
+    alpha's venv is its committed lock, so nothing is installed over it.
     """
     assert box.run(*DECLARE) == 0
     src = box.home / 'src'
-    (src / 'lab-commons' / '.git' / 'HEAD_SHA').write_text('b' * 40, encoding='utf-8')
     start, served = len(box.logged()), []
     assert _tick(box, 'alpha', served) == 0
     [(argv, cwd, logged)] = served
     assert cwd == src / 'alpha'
     assert argv == deploy_spec.host_serve_argv(), 'the HOST kit serves; the repo venv only runs its producers'
     before = logged[start:]
-    kit = before.index(f'git -C {src / "lab-commons"} checkout -q -B trunk')
-    repo = before.index(f'git -C {src / "alpha"} checkout -q -B trunk')
-    assert kit < repo, 'the kit first, then the repo, then its forge'
+    assert f'git -C {src / "alpha"} checkout -q -B trunk' in before
     assert '--reinstall-package' not in before, 'a served venv is exactly its lock'
+
+
+def test_only_the_lab_commons_tick_writes_the_shared_kit_checkout(box: Box) -> None:
+    """ONE WRITER OF THE SHARED KIT (Ada 2026-10-19): every repo's tick used to update ``~/src/lab-commons``.
+
+    Each tick holds only its OWN repo's flock, so two ticks checked the kit out at once and one died on
+    ``.git/index.lock``. The planted concurrent update: the kit's own tick is mid-checkout (its index.lock
+    held) while alpha and beta tick together -- neither touches the kit, both serve, and the kit's own
+    tick is the one that refreshes it.
+    """
+    assert box.run(*DECLARE) == 0
+    kit = box.home / 'src' / 'lab-commons'
+    (kit / '.git' / 'HEAD_SHA').write_text('b' * 40, encoding='utf-8')
+    lock = kit / '.git' / 'index.lock'
+    lock.write_text('', encoding='utf-8')  # the kit's own tick, mid-update
+    start, served = len(box.logged()), []
+    with ThreadPoolExecutor(2) as pool:
+        codes = list(pool.map(lambda name: _tick(box, name, served), ['alpha', 'beta']))
+    assert codes == [0, 0]
+    assert f'git -C {kit} ' not in box.logged()[start:], 'a repo tick never writes the shared kit'
+    lock.unlink()
+    start = len(box.logged())
+    assert _tick(box, deploy_spec.LAB_COMMONS, served) == 0
+    assert f'git -C {kit} checkout -q -B trunk' in box.logged()[start:], "the kit's own tick refreshes it"
 
 
 def test_a_repo_whose_refresh_fails_is_released_by_name_and_its_forge_never_runs(
