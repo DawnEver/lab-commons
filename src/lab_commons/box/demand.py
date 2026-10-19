@@ -31,8 +31,8 @@ from lab_commons.outcomes import Status
 from lab_commons.proc import system_memory
 
 __all__ = [
-    'GB', 'NOT_ADMITTED', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'NotAdmitted', 'ProcessEnd',
-    'Refused', 'declared_seats', 'not_admitted', 'read_ended', 'seat_supply', 'write_ended',
+    'GB', 'NOT_ADMITTED', 'WALL_CEILING_S', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'NotAdmitted',
+    'ProcessEnd', 'Refused', 'declared_seats', 'not_admitted', 'read_ended', 'seat_supply', 'write_ended',
 ]  # fmt: skip
 
 #: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
@@ -60,6 +60,12 @@ class DuplicateKey(Refused):
     """An EXTERNAL claim under the same key is still unresolved: its job must not be submitted twice."""
 
 
+#: The longest wall a :class:`Demand` may declare, and so the furthest future any ledger row may name. A row
+#: past it (or one whose start lies in the future) is one this code never wrote: it is reaped on sight, so a
+#: planted claim beside a live pid cannot pin a seat (motronics SR-20261016-031).
+WALL_CEILING_S: Final = 7 * 24 * 3600
+
+
 @dataclass(frozen=True)
 class Demand:
     """A run's declared resources and time limit. No field has a default.
@@ -82,6 +88,7 @@ class Demand:
             *(['mem_gb must be positive'] if not isinstance(self.mem_gb, int | float) or self.mem_gb < 0 else []),
             *(['mem_gb must be positive'] if self.mem_gb == 0 and not seats_only else []),
             *(['wall_s must be a positive int of seconds'] if not _positive_int(self.wall_s) else []),
+            *([f'wall_s must not exceed WALL_CEILING_S ({WALL_CEILING_S})'] if _past_ceiling(self.wall_s) else []),
             *(
                 f'seats[{name!r}] must be an int >= 0'
                 for name, count in self.seats.items()
@@ -96,6 +103,10 @@ class Demand:
     def mem_bytes(self) -> int:
         """The memory limit in bytes, the unit the ledger and the kernel limit share."""
         return int(self.mem_gb * GB)
+
+
+def _past_ceiling(wall_s: object) -> bool:
+    return isinstance(wall_s, int | float) and wall_s > WALL_CEILING_S
 
 
 def _positive_int(value: object) -> bool:

@@ -318,6 +318,8 @@ RETIRED: Final[dict[str, str]] = {
     'floating_git': "nothing: a git dependency's revision is the lock's (lab_commons.hpc.builds.builds_at)",
     'remote_tip': "nothing: a git dependency's revision is the lock's (lab_commons.hpc.builds.builds_at)",
     'overlay_argv': 'nothing: a served venv is exactly its committed lock; nothing is installed over it',
+    # ONE concurrency mechanism (user ruling 2026-10-18): an in-flight run holds a seat on the box ledger.
+    'claim_path': 'lab_commons.dev.inflight.seat / leader_run (the leader holds a seat on lab_commons.box)',
     # An HPC job ships ONE file and leaves a few (plan 2026-10-17): one artifact per sha, one results file per run.
     'files_needed': 'lab_commons.hpc.plan.FILES_PER_RUN (one results file per run: its width adds no file)',
     'FILES_PER_SHARD': 'lab_commons.hpc.plan.FILES_PER_RUN (one results file per run: its width adds no file)',
