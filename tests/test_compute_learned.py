@@ -114,10 +114,10 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
     plain, jmag = Job('', 'a' * 40, 'windows'), Job('', 'b' * 40, 'windows', frozenset({'jmag'}))
     box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1))
     measured = learned.box_demand(REPO, frozenset({'jmag'}), cpu=30, mem_gb=64)
-    assert measured == Demand(cpu=21, mem_gb=64.0, jmag=1), 'memory capped, the cores narrowed to it: 30 x 64 / 90'
+    assert measured == Demand(cpu=30, mem_gb=round(30 * 90 / 64, 3), jmag=1), 'the free cores, each at 90 / 64 GB'
     assert admit(jmag, measured, box)
     whole = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64)
-    assert whole == Demand(cpu=20, mem_gb=64.0, femm=1), '30 x 64 / 96'
+    assert whole == Demand(cpu=20, mem_gb=64.0, femm=1), 'the workers 64 GB holds at 96 / 30 GB each'
     plain = Job('', 'a' * 40, 'windows', frozenset({'femm'}))
     box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1, femm=1))
     assert admit(plain, whole, box)
@@ -207,4 +207,22 @@ def test_a_killed_part_is_reclaimed_at_its_grown_peak_and_narrows_to_fit_the_box
     assert again == Demand(cpu=4, mem_gb=6.0 * OOM_GROWTH * learned.BOX_HEADROOM), 'the grown figure, at its width'
     learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=20.0, cpu_s=4 * 60.0, wall_s=60.0), killed=True)
     fit = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=32)
-    assert fit == Demand(cpu=2, mem_gb=32.0), 'narrowed to the workers the box can hold'
+    assert fit == Demand(cpu=2, mem_gb=30.0), 'narrowed to the workers the box can hold, 15 GB each'
+
+
+def test_a_part_narrows_to_the_workers_the_free_memory_holds_and_waits_only_for_one() -> None:
+    """Measured 2026-10-19 (G): a 6-id dev_checkout part asked 4 workers x 1 GB against ~1.5 GB free, never admitted.
+
+    The width is :func:`learned.fit_width` of the ids handed, the free cores and the FREE memory at the
+    worker's price. PLANTED CONTROLS: a box with plenty runs the full width; one worker past the room is still
+    one worker (it waits), never priced under one.
+    """
+    checkout = frozenset({'dev_checkout'})
+    part = Job('', 'a' * 40, 'windows', checkout)
+    starved = learned.box_demand(REPO, checkout, cpu=30, mem_gb=1.6, ids=6)
+    assert starved == Demand(cpu=1, mem_gb=1.0, dev_checkout=1)
+    assert admit(part, starved, Supply('G', Resources(cpu=30, mem_gb=1.6, dev_checkout=1)))
+    plenty = learned.box_demand(REPO, checkout, cpu=30, mem_gb=64, ids=6)
+    assert plenty == Demand(cpu=learned.PART_WIDTH, mem_gb=learned.PART_WIDTH * 1.0, dev_checkout=1)
+    assert learned.box_demand(REPO, checkout, cpu=30, mem_gb=0.5, ids=6)['cpu'] == 1, 'one worker waits for room'
+    assert learned.fit_width(4, cpu=2.5, mem_gb=64, per_gb=1.0) == 2, 'the free cores'

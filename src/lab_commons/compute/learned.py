@@ -77,6 +77,7 @@ __all__ = [
     'cluster_demand',
     'demand',
     'directory',
+    'fit_width',
     'folded',
     'learn',
     'learn_peaks',
@@ -464,27 +465,37 @@ def selection_gb(repo: str, files: Iterable[str], workers: int, *, whole_gb: flo
     return round(max(max(1, workers) * per, whole_gb * BOX_HEADROOM), 3)
 
 
+def fit_width(cap: int, *, cpu: float, mem_gb: float, per_gb: float) -> int:
+    """THE ONE WIDTH RULE: *cap* workers, narrowed to the FREE *cpu* and *mem_gb* at *per_gb* each, never under one.
+
+    One worker that does not fit is still one: its claim waits for the room, never priced under a worker. A
+    box part (:func:`box_demand`) and a verify selection (:func:`lab_commons.dev.verifybox.selection_workers`)
+    both read it, and the pytest ``-n`` each runs IS this number (declared == used).
+    """
+    held = math.floor(mem_gb / per_gb) if per_gb > 0 else cap
+    return max(1, min(cap, math.floor(cpu), held))
+
+
 def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: float, ids: int | None = None) -> Demand:
     """What a box part DECLARES to the box -- admitted at it, and killed past it (:func:`lab_commons.box.run`).
 
-    The cores its last ``(local, need-set)`` run kept busy and its whole tree's peak times :data:`BOX_HEADROOM`.
-    Unmeasured, it is priced as its SELECTION (:func:`selection_gb`): the files its need-set's latest forge
-    record ran (:func:`part_files`), at one worker per test it is handed (*ids*, as the commit's posted parts
-    count them; ``None`` unknown) up to :data:`PART_WIDTH` and the box's cores. The cores ARE the workers its
-    producer runs (:func:`lab_commons.dev.verifybox.claimed_width`), so memory scales with them: past the
-    box's *mem_gb* the cores narrow in proportion -- a peak a kill grew (:func:`record_run`) is never a part
-    refused forever. One seat of each need.
+    *cpu* and *mem_gb* are the box's FREE room now. One worker's price: measured, its last ``(local, need-set)``
+    run's whole-tree peak times :data:`BOX_HEADROOM` over the cores it kept busy; unmeasured, its SELECTION's
+    (:func:`selection_gb` of the files its need-set's latest forge record ran, :func:`part_files`). Its width is
+    :func:`fit_width` of the cores it kept busy, else one per id it is handed (*ids*, as the commit's posted
+    parts count them; ``None`` unknown) up to :data:`PART_WIDTH`. The cores ARE the workers its producer runs
+    (:func:`lab_commons.dev.verifybox.claimed_width`) and the memory is that width at the worker's price, so a
+    part on a memory-starved box runs narrower instead of never being admitted. One seat of each need.
     """
     run = run_of(repo_url, LOCAL, needs)
     if run is None:
-        cores = max(1, min(PART_WIDTH, math.floor(cpu), PART_WIDTH if ids is None else max(1, ids)))
-        memory = selection_gb(repo_url, part_files(repo_url, needs), cores)
+        cap = PART_WIDTH if ids is None else max(1, min(PART_WIDTH, ids))
+        per = selection_gb(repo_url, part_files(repo_url, needs), 1)
     else:
-        cores = max(1, min(math.floor(cpu), int(run.demand(needs)['cpu'])))
-        memory = run.peak_mem_gb * BOX_HEADROOM
-    if memory > mem_gb:
-        cores = max(1, math.floor(cores * mem_gb / memory))
-    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(min(memory, mem_gb), 1.0)})
+        cap = max(1, int(run.demand(needs)['cpu']))
+        per = run.peak_mem_gb * BOX_HEADROOM / cap
+    cores = fit_width(cap, cpu=cpu, mem_gb=mem_gb, per_gb=per)
+    return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cores, 'mem_gb': max(round(cores * per, 3), 1.0)})
 
 
 def request_demand(repo_url: str, producer: str, needs: frozenset[str], *, cpu: float, mem_gb: float) -> Demand:
