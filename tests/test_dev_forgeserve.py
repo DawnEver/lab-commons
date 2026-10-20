@@ -32,7 +32,7 @@ from lab_commons.dev import (
     forgeservesteps,
     forgeship,
 )
-from lab_commons.dev.forgealarm import AUTH, IDLE, INTEGRATION, RUN, STARVED, UNTAGGED, Alarm
+from lab_commons.dev.forgealarm import IDLE, INTEGRATION, RUN, STARVED, UNTAGGED, Alarm
 from lab_commons.dev.forgeclaim import OPEN, Claim, Work
 from lab_commons.dev.forgeintegration import Child, Feedback, Ticked
 from lab_commons.dev.forgeproduce import Produced
@@ -165,7 +165,7 @@ def _serve(
     trees: _Trees | None = None,
     seen: dict[str, object] | None = None,
     holding: tuple[Holding, ...] = (),
-    later: tuple[TickReport, ...] = (),
+    later: tuple[TickReport | BaseException, ...] = (),
     ticks: list[dict] | None = None,
     table: dict | None = None,
     retain=lambda _root, **_kw: None,
@@ -180,6 +180,8 @@ def _serve(
     clock=lambda: NOW,
 ) -> tuple[forgeserve.ServeReport, list[str], list]:
     """Serve once: the first round's tick answers *ticked*, each later one the next of *later*, then nothing.
+
+    An exception in *later* is raised by its round.
 
     *seen* is what the FIRST tick was given; *ticks* collects what every tick was given.
     """
@@ -196,7 +198,10 @@ def _serve(
         if not given:
             seen.update(kwargs)
         given.append(kwargs)
-        return next(answers, TickReport((), (), ()))
+        answer = next(answers, TickReport((), (), ()))
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
 
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'home' / 'config.toml'))
     monkeypatch.setattr(forgerounds, 'tick', tick)
@@ -633,11 +638,12 @@ def test_work_this_host_cannot_serve_never_makes_it_idle(monkeypatch, tmp_path: 
     assert alarms == []
 
 
-def test_a_refused_credential_alarms_and_still_fails(monkeypatch, tmp_path: Path) -> None:
-    refused = Report(('GET', '/api/v1/user'), (Attempt(1, 401, 'unauthorized', Diagnosis.FORGE_REFUSED),), 3)
+def test_an_exhausted_401_fails_the_serve_and_raises_no_alarm(monkeypatch, tmp_path: Path) -> None:
+    """The forge never needs a re-login (2026-10-20): an exhausted 401 is the server's -- it raises, nobody is paged."""
+    gone = Report(('GET', '/api/v1/user'), (Attempt(3, 401, 'unauthorized', Diagnosis.TRANSIENT),), 3)
 
     def tick(*_a: object, **_k: object) -> TickReport:
-        raise ForgeCallFailed(refused)
+        raise ForgeCallFailed(gone)
 
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'home' / 'config.toml'))  # never this box's own machine file
     monkeypatch.setattr(forgerounds, 'tick', tick)
@@ -650,7 +656,7 @@ def test_a_refused_credential_alarms_and_still_fails(monkeypatch, tmp_path: Path
             table={}, supplied=functools.partial(forgerounds.supply_now, capacity=lambda: BOX, read=quiet(BOX)),
             holding=tuple, retain=lambda _root, **_kw: None,
         )  # fmt: skip
-    assert [a.kind for a in alarms] == [AUTH]
+    assert alarms == []
 
 
 def _waiting(kind: str, waited_h: float, blocked: str) -> Ranked:
@@ -1107,17 +1113,8 @@ def test_a_round_that_raises_joins_every_producer_first(monkeypatch, tmp_path: P
     first = Work('integrate/main', SHA, 'windows', 'mine', ME, argv=('first',))
     procs = {'first': _Sets(ended, beats=20)}
     failed = ForgeCallFailed(Report(('GET', '/x'), (Attempt(1, 128, 'boom', Diagnosis.TRANSIENT),), 3))
-    calls: list[int] = []
-
-    def tick(*_a: object, **_k: object) -> TickReport:
-        calls.append(1)
-        if len(calls) > 1:
-            raise failed
-        return _claimed(first)
-
-    monkeypatch.setattr(forgerounds, '_tick', lambda *_a, **kw: tick(**kw))
     with pytest.raises(ForgeCallFailed):
-        _serve(monkeypatch, tmp_path, _claimed(first), procs, table=QUICK)
+        _serve(monkeypatch, tmp_path, _claimed(first), procs, table=QUICK, later=(failed,))
     assert ended.is_set(), 'the producer ended before serve raised'
     assert not [t for t in threading.enumerate() if t.name.startswith('produce-')]
 

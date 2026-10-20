@@ -178,12 +178,11 @@ def _remove(client: Client, one: Closing, state: str) -> str:
     if one.delete:
         try:
             client.call('DELETE', f'{client.repo}/issues/{one.number}')  # gitea: repository admin rights
-        except ForgeCallFailed as refused:
-            if not refused.report.attempts or refused.report.attempts[-1].retryable:
-                raise
+        except ForgeCallFailed as failed:  # a 403 is retried like any failure (the forge never needs a re-login)
             if state == 'open':
                 client.issue_close(one.number)
-            return f'delete refused ({refused.report.attempts[-1].returncode}), closed instead'
+            last = failed.report.attempts[-1].returncode if failed.report.attempts else 0
+            return f'delete failed ({last}), closed instead'
         return 'deleted'
     client.issue_close(one.number)
     return 'closed'

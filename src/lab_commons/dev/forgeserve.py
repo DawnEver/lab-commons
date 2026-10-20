@@ -210,7 +210,7 @@ def serve(
     for line in reattach(root, client(root), lease=lease, say=say):  # runs a dead serve left journaled
         say(line)
     host_rounds = Rounds(
-        root, repo, alarm, runs, slurm=slurm, say=say, sized=cluster_demand(repo),
+        root, runs, slurm=slurm, say=say, sized=cluster_demand(repo),
         supplied=functools.partial(supplied, name=name, standing=standing),
         holding=(lambda: ()) if seat is not None else holding,
         ticking={

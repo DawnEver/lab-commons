@@ -19,9 +19,9 @@ RETRY, THEN REPORT, IN NETVERB'S VOCABULARY. Every call is bounded by
 :data:`~lab_commons.dev.netverb.DEFAULT_ATTEMPTS` and its outcome is a
 :class:`~lab_commons.dev.netverb.Report`, so an HTTP failure reads exactly like a failed ``git
 push``. An ANSWERED 4xx is a refusal and is never repeated (408 and 429 stay retryable, as the table
-says); a 5xx or a dropped connection is retried. A 401/403 is MEASURED before it is named: the same
-credential is asked ``GET /user``; a refusal there is a credential refusal (not retried, the ``auth
-login`` remedy), an answer there makes the 401/403 transient (retried, and never told to re-store).
+says); a 5xx, a dropped connection and a 401/403 are retried. A 401/403 is the SERVER's, never a verdict
+on the stored credential (user ruling 2026-10-20: the forge never needs a re-login), so it is retried
+under the same bound and, when it does not clear, reported EXHAUSTED with "retry later".
 A create whose response was lost may still have landed, so before a create is RETRIED the newest
 objects are read back and the token's own identical one created since the attempt began is returned
 instead (:class:`~lab_commons.dev._forge_journal.Probe`); when that read itself fails the create is
@@ -107,22 +107,10 @@ class ForgeCallFailed(OSError):
     """A forge call that did not succeed within the bound; :attr:`report` is netverb's report of it."""
 
     def __init__(self, report: Report) -> None:
-        """Carry the report; on a 401/403 the message adds what the credential check MEASURED."""
+        """Carry the report; an exhausted 401/403 adds that it is the server's and to retry later."""
         last = report.attempts[-1].returncode if report.attempts else 0
-        said = _forge.AUTH_REMEDY if _credential_refused(report) else _forge.AUTH_TRANSIENT
-        super().__init__(f'{report.remedy}. {said}' if last in _forge.AUTH_REFUSED else report.remedy)
+        super().__init__(f'{report.remedy}. {_forge.AUTH_TRANSIENT}' if last in _forge.AUTH_REFUSED else report.remedy)
         self.report = report
-
-    @property
-    def credential_refused(self) -> bool:
-        """Whether the forge refused the stored CREDENTIAL -- measured by ``GET /user``, never read off one status."""
-        return _credential_refused(self.report)
-
-
-def _credential_refused(report: Report) -> bool:
-    """The last attempt was a 401/403 that :meth:`Client._diagnosis` diagnosed refused after asking ``GET /user``."""
-    last = report.attempts[-1] if report.attempts else None
-    return last is not None and last.returncode in _forge.AUTH_REFUSED and last.diagnosis is Diagnosis.FORGE_REFUSED
 
 
 @dataclass(frozen=True)
@@ -218,7 +206,7 @@ def provenance(cwd: Path, env: Mapping[str, str]) -> str | None:
 def _diagnose(status: int, text: str) -> Diagnosis:
     """Read through netverb's table first; an answered 4xx it does not know is a refusal, never a transient.
 
-    A 401/403 never reaches here: :meth:`Client._diagnosis` measures it against ``GET /user`` first.
+    A 401/403 never reaches here: :meth:`Client._diagnosis` makes it transient first.
     """
     found = classify(f'error: {status} {text}')
     answered = _HTTP_ERROR_FLOOR <= status < _HTTP_SERVER_FLOOR and status not in _HTTP_RETRYABLE_4XX
@@ -263,22 +251,13 @@ class Client:
         finally:
             conn.close()
 
-    def _diagnosis(self, status: int, text: str, path: str) -> Diagnosis:
-        """:func:`_diagnose`, except a 401/403 is MEASURED: refused only when ``GET /user`` refuses the credential too.
+    def _diagnosis(self, status: int, text: str) -> Diagnosis:
+        """:func:`_diagnose`, except a 401/403 is TRANSIENT: the server's, never the stored credential's.
 
-        The incident (2026-10-18): one 401 was read as "permanent, re-store the credential" while ``git
-        credential fill`` held a credential that authenticated minutes later. A check that cannot be made
-        (dropped, 5xx) is not evidence against the credential, so the attempt stays transient.
+        The incidents (2026-10-18, 2026-10-20): 401s -- once with ``GET /user`` refusing too for ~30 min --
+        were read as "re-store the credential"; every one cleared with the credential untouched.
         """
-        if status not in _forge.AUTH_REFUSED:
-            return _diagnose(status, text)
-        user = f'{self.backend.api_root}/user'
-        if path != user:
-            try:
-                status, _ = self._once('GET', user, None, 'application/json', None)
-            except OSError:
-                return Diagnosis.TRANSIENT
-        return Diagnosis.FORGE_REFUSED if status in _forge.AUTH_REFUSED else Diagnosis.TRANSIENT
+        return Diagnosis.TRANSIENT if status in _forge.AUTH_REFUSED else _diagnose(status, text)
 
     @property
     def repo(self) -> str:
@@ -324,7 +303,7 @@ class Client:
         if not 0 < status < _HTTP_ERROR_FLOOR:
             text = payload.decode(errors='replace')[:300]
             raise ForgeCallFailed(
-                Report(('GET', path), (Attempt(1, status or 1, text, self._diagnosis(status, text, path)),), 1)
+                Report(('GET', path), (Attempt(1, status or 1, text, self._diagnosis(status, text)),), 1)
             )
         return payload
 
@@ -353,7 +332,7 @@ class Client:
             if 0 < status < _HTTP_ERROR_FLOOR:
                 return json.loads(payload) if payload else None
             text = payload.decode(errors='replace')[:300]
-            made.append(Attempt(index, status or 1, text, self._diagnosis(status, text, write.path)))
+            made.append(Attempt(index, status or 1, text, self._diagnosis(status, text)))
             if not made[-1].retryable:
                 break
             if index < DEFAULT_ATTEMPTS:

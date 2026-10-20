@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
+from lab_commons.dev.forgecred import FIRST_STORE
 from lab_commons.hpc.deploy_checks import grant_of, store_problem
 from lab_commons.hpc.deploy_spec import Deployment, has_grant, render_grant
 from lab_commons.hpc.deploy_steps import Step
@@ -24,9 +25,8 @@ from lab_commons.log import emit
 __all__ = ['ApiCheck', 'auth_check', 'credentials', 'grant']
 
 _CREDENTIAL_REMEDY: Final = (
-    'store your OWN forge token for it once: `git config --global credential.helper store`, then '
-    '`python -m lab_commons.dev.forge auth login` (or one line https://<user>:<token>@<forge host> in '
-    '~/.git-credentials, chmod 600) and re-run'
+    f'{FIRST_STORE} (with `git config --global credential.helper store`, or one line '
+    'https://<user>:<token>@<forge host> in ~/.git-credentials, chmod 600), then re-run'
 )
 
 #: Reads the forge API a tick needs for one repo url; ``''`` when nothing is refused.
@@ -61,8 +61,7 @@ def credentials(step: Step, spec: Deployment, home: Path, api: ApiCheck) -> int:
         emit(f'  {name}: {why}', err=True)
     if refused:
         emit(
-            f'deploy refused: the forge API refuses what a tick needs on {", ".join(refused)}; store a token '
-            'with the scopes each refusal names: `python -m lab_commons.dev.forge auth login`',
+            f'deploy refused: the forge API refuses what a tick needs on {", ".join(refused)}; {_CREDENTIAL_REMEDY}',
             err=True,
         )
         return 2

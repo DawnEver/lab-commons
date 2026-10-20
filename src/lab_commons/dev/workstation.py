@@ -59,6 +59,7 @@ from lab_commons.config import config_path, section
 from lab_commons.dev import servetask
 from lab_commons.dev._machinefile import diff, merged
 from lab_commons.dev.forgealarm import RUN, Alarm, sound
+from lab_commons.dev.forgecred import FIRST_STORE
 from lab_commons.dev.hostrefresh import Moved, follow, read, refresh, sync_venv, venv_python
 from lab_commons.dev.servelock import default_lock, held
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, host_serve_argv
@@ -80,10 +81,7 @@ _REMEDIES: Final = {
     'node': 'install Node.js LTS: winget install --id OpenJS.NodeJS.LTS -e',
 }
 _JMAG_REMEDY: Final = 'install JMAG-Designer; its installer registers ' + ' and '.join(JMAG_PROGIDS)
-_CREDENTIAL_REMEDY: Final = (
-    'store your OWN git credential for the forge once -- `git clone <forge>/<repo>.git` anywhere and sign '
-    'in, or `python -m lab_commons.dev.forge auth login` -- then re-run'
-)
+_CREDENTIAL_REMEDY: Final = f'{FIRST_STORE} (or `git clone <forge>/<repo>.git` anywhere and sign in), then re-run'
 #: Prompting off: only a STORED credential can answer.
 _NO_PROMPT: Final = {'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'}
 

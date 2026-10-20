@@ -79,7 +79,7 @@ class _Client:
     def call(self, method: str, _path: str, body: dict[str, str] | None = None, durable: object = None) -> object:
         if method == 'POST':
             if self.store.refuse:
-                attempt = Attempt(1, 403, 'forbidden', Diagnosis.FORGE_REFUSED)
+                attempt = Attempt(3, 403, 'forbidden', Diagnosis.TRANSIENT)
                 raise ForgeCallFailed(Report(('POST', _path), (attempt,), 3))
             assert body is not None
             self.store.add(body['state'], body['description'])

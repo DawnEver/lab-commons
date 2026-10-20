@@ -59,8 +59,8 @@ ROWS: Final[tuple[tuple[str, bool, tuple[str, ...]], ...]] = (
         # THE FORGE REFUSED THE IDENTITY IT ALREADY RESOLVED. A 403 is an answered request: the
         # server read the credential, matched it against a protected branch or a missing scope, and
         # said no. Repeating it three seconds later asks the same question of the same policy.
-        # The forge API's own 401/403 is NOT read off this row: `forgework` measures it against
-        # `GET /user` first (2026-10-18, a single API 401 whose credential authenticated minutes later).
+        # The forge API's own 401/403 is NOT read off this row: `forgework` makes it transient first
+        # (user ruling 2026-10-20: the forge never needs a re-login; every API 401/403 measured cleared).
         'forge-refused',
         False,
         ('403 forbidden', 'error: 403', 'protected branch', 'you are not allowed to push', 'permission denied to'),

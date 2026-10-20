@@ -86,7 +86,7 @@ def test_a_token_without_delete_rights_closes_instead_and_says_so() -> None:
     lines = tidy(forge, ALL)
     assert _states(forge, named)['dup'] == 'closed'
     assert _states(forge, named)['closed_dup'] == 'closed'
-    assert f'#{named["dup"]}: delete refused (403), closed instead' in lines
+    assert f'#{named["dup"]}: delete failed (403), closed instead' in lines
 
 
 def test_a_dry_run_writes_nothing() -> None:

@@ -11,7 +11,9 @@ and the normalized results are identical across backends; only the request shape
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -193,31 +195,36 @@ _INVALID = {'message': 'invalid username, password or token'}
 
 
 @pytest.mark.parametrize('code', [401, 403])
-def test_a_refusal_whose_credential_still_authenticates_is_retried_and_names_no_re_store(server, code) -> None:
-    """PLANTED CONTROL, the 2026-10-18 incident: one 401 while GET /user authenticates is not a bad credential."""
+def test_a_401_403_is_the_servers_and_is_retried_until_it_clears(server, code) -> None:
+    """User ruling 2026-10-20: the forge never needs a re-login -- a 401/403 is transient; GET /user is never asked."""
     _answer('GET', _STATUSES, (code, _INVALID), (200, []))
-    _answer('GET', '/api/v1/user', (200, {'login': 'alice'}))
     assert _client(Forge('f.example', 'o', 'r'), _Loopback(server)).call('GET', _STATUSES) == []
-    _answer('GET', _STATUSES, (code, _INVALID))
-    with pytest.raises(ForgeCallFailed) as caught:
-        _client(Forge('f.example', 'o', 'r'), _Loopback(server)).call('GET', _STATUSES)
-    assert not caught.value.credential_refused
-    assert caught.value.report.disposition is Disposition.EXHAUSTED
-    assert 'auth login' not in str(caught.value)
-    assert 'credential authenticates' in str(caught.value)
-    assert 'retrying cannot change' not in str(caught.value)
+    assert [r['path'] for r in _Recorder.received] == [_STATUSES, _STATUSES]
 
 
 @pytest.mark.parametrize('code', [401, 403])
-def test_a_refusal_whose_credential_check_also_refuses_names_the_re_store_remedy(server, code) -> None:
+def test_a_401_403_that_never_clears_is_exhausted_and_names_no_login_even_when_get_user_refuses(server, code) -> None:
+    """The 2026-10-20 incident: GET /user answered 401 too for ~30 min, and the credential was still good."""
     _answer('GET', _STATUSES, (code, _INVALID))
     _answer('GET', '/api/v1/user', (401, _INVALID))
     with pytest.raises(ForgeCallFailed) as caught:
         _client(Forge('f.example', 'o', 'r'), _Loopback(server)).call('GET', _STATUSES)
-    assert caught.value.credential_refused
+    said = str(caught.value)
+    assert caught.value.report.disposition is Disposition.EXHAUSTED
+    assert caught.value.report.diagnosis is Diagnosis.TRANSIENT
+    assert [r['path'] for r in _Recorder.received] == [_STATUSES] * 3
+    assert 'auth login' not in said
+    assert 'retrying cannot change' not in said
+    assert 'retry later' in said
+
+
+@pytest.mark.parametrize('code', [404, 422])
+def test_planted_control_a_non_auth_refusal_is_still_refused_once(server, code) -> None:
+    _answer('GET', _STATUSES, (code, {'message': 'no'}))
+    with pytest.raises(ForgeCallFailed) as caught:
+        _client(Forge('f.example', 'o', 'r'), _Loopback(server)).call('GET', _STATUSES)
     assert caught.value.report.disposition is Disposition.REFUSED
-    assert 'auth login' in str(caught.value)
-    assert [r['path'] for r in _Recorder.received] == [_STATUSES, '/api/v1/user']
+    assert len(_Recorder.received) == 1
 
 
 # --------------------------------------------------------------------------------------------
@@ -397,3 +404,45 @@ def test_download_returns_the_raw_bytes_with_the_credential_and_a_refusal_raises
     assert transport.asked[-1] == 'forge.example.org'
     with pytest.raises(ForgeCallFailed):
         _client(forge, transport).download('https://forge.example.org/attachments/absent')
+
+
+# --------------------------------------------------------------------------------------------
+# no text under src/ answers a refusal with a re-login (user ruling 2026-10-20)
+
+_SRC = Path(__file__).resolve().parents[1] / 'src'
+_REFUSAL = re.compile(r'refus|\b40[13]\b|did not authenticate|unauthori[sz]ed', re.IGNORECASE)
+_RELOGIN = re.compile(r'(?<!never )(?<!not )re-store|auth login', re.IGNORECASE)
+_FIRST_TIME = re.compile(r'no forge credential yet|no token|is missing', re.IGNORECASE)
+
+
+def _texts(source: str) -> list[str]:
+    """Every string literal in *source* a user can be shown -- docstrings excluded -- an f-string joined."""
+    tree = ast.parse(source)
+    docs = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
+    found = []
+    for node in ast.walk(tree):
+        if id(node) in docs:
+            continue
+        if isinstance(node, ast.JoinedStr):
+            found.append(''.join(v.value for v in node.values if isinstance(v, ast.Constant)))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.append(node.value)
+    return found
+
+
+def _relogins(source: str) -> list[str]:
+    return [t for t in _texts(source) if _REFUSAL.search(t) and _RELOGIN.search(t) and not _FIRST_TIME.search(t)]
+
+
+def test_planted_control_the_scan_finds_a_refusal_paired_with_a_re_login() -> None:
+    planted = "X = 'the forge refused the stored credential; re-store it: python -m lab_commons.dev.forge auth login'"
+    assert _relogins(planted)
+    assert _relogins("X = f'{host}: 401 -- run auth login'")
+    assert not _relogins("X = 'no token. Run: python -m lab_commons.dev.forge auth login'")
+
+
+def test_no_string_under_src_answers_a_refusal_with_a_re_login() -> None:
+    files = sorted(_SRC.rglob('*.py'))
+    assert files
+    found = {str(p.relative_to(_SRC)): hits for p in files if (hits := _relogins(p.read_text(encoding='utf-8')))}
+    assert found == {}

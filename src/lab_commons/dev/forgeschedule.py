@@ -260,14 +260,12 @@ def head_login(client: Client, sha: str) -> str:
     """The forge login commit *sha* resolves to (author, else committer); ``''`` when the forge resolves none.
 
     The forge maps the commit's email to an account; git's own author text is never read as a login, so an
-    unresolved head carries no origin -- and no login priority -- rather than a guess. A credential refusal raises.
+    unresolved head carries no origin -- and no login priority -- rather than a guess; so does a failed call.
     """
     path = f'{client.repo}/commits/{sha}' if client.backend is GITHUB else f'{client.repo}/git/commits/{sha}'
     try:
         raw = client.call('GET', path)
-    except ForgeCallFailed as failed:
-        if failed.credential_refused:
-            raise
+    except ForgeCallFailed:
         return ''
     if not isinstance(raw, Mapping):
         return ''
@@ -338,7 +336,7 @@ _REQUEST_HOST: Final = re.compile(r'^\s*host\s*=\s*["\'](?P<host>[\w./-]+)["\']'
 
 
 def optional[T](what: str, listing: Callable[[], Sequence[T]], say: Callable[[str], None]) -> Sequence[T]:
-    """An OPTIONAL listing: one that fails is said and served as empty; a credential refusal still raises.
+    """An OPTIONAL listing: one that fails, whatever its status, is said and served as empty.
 
     The integration head and the claims are ESSENTIAL -- without them nothing can be produced, so they
     raise. Open PRs and request issues only ADD candidates: losing them must not cost the head its part.
@@ -346,8 +344,6 @@ def optional[T](what: str, listing: Callable[[], Sequence[T]], say: Callable[[st
     try:
         return listing()
     except ForgeCallFailed as failed:
-        if failed.credential_refused:
-            raise
         say(f'[serve] skipped the {what}: {failed}')
         return ()
 

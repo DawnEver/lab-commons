@@ -159,8 +159,8 @@ class StateForge(Client):
 
     def _delete(self, number: int) -> None:
         if self.deny_delete:  # gitea answers a non-admin token 403
-            refused = Attempt(1, 403, 'token does not have at least one of required scope(s)', Diagnosis.FORGE_REFUSED)
-            raise ForgeCallFailed(Report(('DELETE', 'issue'), (refused,), 1))
+            refused = Attempt(3, 403, 'token does not have at least one of required scope(s)', Diagnosis.TRANSIENT)
+            raise ForgeCallFailed(Report(('DELETE', 'issue'), (refused,), 3))
         del self.issues_by_number[number]
 
     def _edit_issue(self, number: int, body: dict[str, Any]) -> dict[str, Any]:

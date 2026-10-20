@@ -27,13 +27,10 @@ from lab_commons.box.supply import Reading
 from lab_commons.compute import probe
 from lab_commons.compute.model import Demand, Supply
 from lab_commons.dev import forgerun, forgerunstate
-from lab_commons.dev.forgealarm import AUTH, Alarm
 from lab_commons.dev.forgeclaim import Work
-from lab_commons.dev.forgehosts import card_host, publish_card
+from lab_commons.dev.forgehosts import publish_card
 from lab_commons.dev.forgeproduce import Produced, box_claim
 from lab_commons.dev.forgetick import TickReport, tick
-from lab_commons.dev.forgework import ForgeCallFailed
-from lab_commons.hpc.account import ClusterAccount
 from lab_commons.hpc.needsets import needs_of
 
 __all__ = ['Producing', 'Rounds', 'locked_fetch', 'reserve', 'supply_now']
@@ -60,8 +57,6 @@ class Rounds:
     """
 
     root: Path
-    repo: str
-    alarm: Callable[[Alarm], object]
     runs: list[forgerunstate.Run]
     slurm: forgerunstate.Cluster | None
     say: Callable[[str], None]
@@ -96,10 +91,7 @@ class Rounds:
         held = tuple(self.holding())
         supply = self.supplied(held)
         running = [self.sized(needs_of(run.platform)) for run in self.runs]
-        ticked = _tick(
-            self.repo, self.root, self.alarm, **self.ticking,
-            supply=supply, running=running,
-        )  # fmt: skip
+        ticked = tick(self.root, **self.ticking, supply=supply, running=running)
         self.latest.update(ticked=ticked, supply=supply, held=held)
         for line in ticked.lines:
             self.say(line)
@@ -150,18 +142,6 @@ def reserve(
     except Refused as refused:
         return str(refused)
     return held.id
-
-
-def _tick(repo: str, root: Path, alarm: Callable[[Alarm], object], **kwargs: object) -> TickReport:
-    """One :func:`~lab_commons.dev.forgetick.tick`; the forge refusing the stored credential alarms before it raises."""
-    try:
-        return tick(root, **kwargs)
-    except ForgeCallFailed as failed:
-        if failed.credential_refused:
-            seat = kwargs.get('seat')
-            host = card_host(str(kwargs.get('machine') or ''), seat if isinstance(seat, ClusterAccount) else None)
-            alarm(Alarm(AUTH, repo, f'the forge refused the stored credential on {host}', str(failed)))
-        raise
 
 
 class Producing:

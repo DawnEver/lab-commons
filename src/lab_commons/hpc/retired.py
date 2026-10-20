@@ -19,6 +19,9 @@ _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
+    # The forge never needs a re-login (user ruling 2026-10-20): a 401/403 is the server's, retried as transient.
+    'credential_refused': 'nothing: a 401/403 is transient (lab_commons.dev.forgework.Client._diagnosis)',
+    'AUTH_REMEDY': 'lab_commons.dev.forge.AUTH_TRANSIENT (the server answered; do not re-store, retry later)',
     # A unit lives in the VALUE, never the NAME (user ruling 2026-10-19): the box wait is a pint duration.
     '--lock-wait-s': '--lock-wait "<duration>" (a time quantity such as "30 s"; a bare number is refused)',
     # A model API key is one scheme: its provider's host, username api-key[-<task>] (user ruling 2026-10-19).

@@ -185,16 +185,17 @@ def test_planted_control_a_token_header_only_server_refuses_basic(server) -> Non
 
 
 @pytest.mark.parametrize('code', [401, 403])
-def test_an_auth_refusal_is_asked_once_and_names_the_remedy(server, tmp_path, capsys, code) -> None:
+def test_an_auth_refusal_is_retried_and_never_names_a_re_login(server, tmp_path, capsys, code) -> None:
+    """User ruling 2026-10-20: a 401/403 is the server's -- a stored credential is never re-stored."""
     env, _ = _isolated_store(tmp_path)
-    _store_password(tmp_path, env, 'f.example', 'alice', 'stale')
+    _store_password(tmp_path, env, 'f.example', 'alice', 'kept')
     _answer('GET', '/api/v1/user', (code, {'message': 'invalid username, password or token'}))
     assert main(['status', '--host', 'f.example'], cwd=tmp_path, env=env, transport=_Loopback(server)) == 1
-    assert len(_Recorder.received) == 1
+    assert len(_Recorder.received) == 3
     err = capsys.readouterr().err
-    assert 'transient' not in err
-    assert 'auth login' in err
-    assert 'stale' not in err
+    assert 'auth login' not in err
+    assert 'retry later' in err
+    assert 'kept' not in err
 
 
 def test_a_server_error_stays_transient_and_is_retried(server) -> None:

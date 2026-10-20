@@ -13,7 +13,7 @@ from lab_commons.dev.forgealarm import AUTH, EVENT, Alarm, main, repeat_window, 
 from lab_commons.supervise.alert import Delivery, Notice
 
 NOW = datetime(2026, 10, 11, 12, tzinfo=UTC)
-ALARM = Alarm(AUTH, 'https://f/o/r.git', 'the forge refused the stored credential', 'remedy: auth login')
+ALARM = Alarm(AUTH, 'https://f/o/r.git', 'no stored forge credential on G', 'remedy: first-time setup')
 
 
 @pytest.fixture(autouse=True)
