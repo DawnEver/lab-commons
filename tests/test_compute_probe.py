@@ -105,9 +105,9 @@ def test_an_account_whose_qos_is_full_has_no_submits() -> None:
 def test_an_account_supplies_its_declared_tools_through_the_same_probe_as_a_box() -> None:
     """A Slurm account has femm exactly where the probe finds it; the machine file only counts its seats."""
     grant = [(_snapshot(cpus=8, mem_mb=1024, submit=None), 'normal')]
-    supply = account('slurm:me', grant, seats={'femm': 1, 'dev_checkout': 1}, presence=_have(femm=True))
+    supply = account('slurm:me', grant, seats={'femm': 1, 'workstation': 1}, presence=_have(femm=True))
     assert supply.resources['femm'] == 1.0
-    assert {'femm', 'dev_checkout', 'linux'} <= supply.present
+    assert {'femm', 'workstation', 'linux'} <= supply.present
     missing = account('slurm:me', grant, seats={'femm': 1}, presence=_have(femm=False))
     assert 'femm' not in missing.present, 'a declared tool its probe does not find is absent on an account too'
     found = account('slurm:me', grant, seats={}, presence=_have(femm=True))

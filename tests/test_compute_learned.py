@@ -144,17 +144,17 @@ def test_an_unmeasured_part_is_priced_as_its_selection_never_a_repo_wide_constan
 
     PLANTED CONTROL: the same part with the handed count unknown asks the full width.
     """
-    checkout = frozenset({'dev_checkout'})
+    checkout = frozenset({'workstation'})
     unknown = learned.box_demand(REPO, checkout, cpu=30, mem_gb=64)
-    assert unknown == Demand(cpu=learned.PART_WIDTH, mem_gb=learned.PART_WIDTH * 1.0, dev_checkout=1)
+    assert unknown == Demand(cpu=learned.PART_WIDTH, mem_gb=learned.PART_WIDTH * 1.0, workstation=1)
     blind = learned.box_demand(REPO, checkout, cpu=30, mem_gb=64, ids=1)
-    assert blind == Demand(cpu=1, mem_gb=1.0, dev_checkout=1), 'unmeasured: one worker at the floor'
-    cheap = {'repo': REPO, 'platform': 'dev_checkout', 'peaks_mb': {'tests/arch/test_visible.py': 150.0}}
+    assert blind == Demand(cpu=1, mem_gb=1.0, workstation=1), 'unmeasured: one worker at the floor'
+    cheap = {'repo': REPO, 'platform': 'workstation', 'peaks_mb': {'tests/arch/test_visible.py': 150.0}}
     learned.learn_record(REPO, 'r1.json.gz', cheap)
     assert learned.part_files(REPO, checkout) == ('tests/arch/test_visible.py',)
     one = learned.box_demand(REPO, checkout, cpu=30, mem_gb=64, ids=1)
     assert one['mem_gb'] < 2.0, 'a one-test cheap part asks well under 2 GB'
-    assert one == Demand(cpu=1, mem_gb=1.0, dev_checkout=1), 'its measured 0.15 GB x headroom is under the floor'
+    assert one == Demand(cpu=1, mem_gb=1.0, workstation=1), 'its measured 0.15 GB x headroom is under the floor'
     heavy = {'repo': REPO, 'platform': 'femm', 'peaks_mb': {'t/a.py': 2048.0, 't/b.py': 6144.0}}
     learned.learn_record(REPO, 'r2.json.gz', heavy)
     femm = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64, ids=2)
@@ -211,18 +211,18 @@ def test_a_killed_part_is_reclaimed_at_its_grown_peak_and_narrows_to_fit_the_box
 
 
 def test_a_part_narrows_to_the_workers_the_free_memory_holds_and_waits_only_for_one() -> None:
-    """Measured 2026-10-19 (G): a 6-id dev_checkout part asked 4 workers x 1 GB against ~1.5 GB free, never admitted.
+    """Measured 2026-10-19 (G): a 6-id workstation part asked 4 workers x 1 GB against ~1.5 GB free, never admitted.
 
     The width is :func:`learned.fit_width` of the ids handed, the free cores and the FREE memory at the
     worker's price. PLANTED CONTROLS: a box with plenty runs the full width; one worker past the room is still
     one worker (it waits), never priced under one.
     """
-    checkout = frozenset({'dev_checkout'})
+    checkout = frozenset({'workstation'})
     part = Job('', 'a' * 40, 'windows', checkout)
     starved = learned.box_demand(REPO, checkout, cpu=30, mem_gb=1.6, ids=6)
-    assert starved == Demand(cpu=1, mem_gb=1.0, dev_checkout=1)
-    assert admit(part, starved, Supply('G', Resources(cpu=30, mem_gb=1.6, dev_checkout=1)))
+    assert starved == Demand(cpu=1, mem_gb=1.0, workstation=1)
+    assert admit(part, starved, Supply('G', Resources(cpu=30, mem_gb=1.6, workstation=1)))
     plenty = learned.box_demand(REPO, checkout, cpu=30, mem_gb=64, ids=6)
-    assert plenty == Demand(cpu=learned.PART_WIDTH, mem_gb=learned.PART_WIDTH * 1.0, dev_checkout=1)
+    assert plenty == Demand(cpu=learned.PART_WIDTH, mem_gb=learned.PART_WIDTH * 1.0, workstation=1)
     assert learned.box_demand(REPO, checkout, cpu=30, mem_gb=0.5, ids=6)['cpu'] == 1, 'one worker waits for room'
     assert learned.fit_width(4, cpu=2.5, mem_gb=64, per_gb=1.0) == 2, 'the free cores'

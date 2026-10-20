@@ -31,14 +31,12 @@ __all__ = [
     'CHECKS',
     'SIMBA_SMOKE',
     'Check',
-    'codex_find',
     'femm_find',
     'file_version',
     'jmag_find',
     'jmag_headless',
     'matlab_find',
     'matlab_version',
-    'node_find',
     'simba_find',
 ]
 
@@ -292,24 +290,10 @@ def jmag_smoke(path: Path) -> tuple[bool, str]:
     return version is not None, detail
 
 
-def codex_find(*, which: Callable[[str], str | None] = shutil.which) -> tuple[str, Path] | None:
-    """``codex`` (the Codex CLI) on ``PATH``."""
-    found = which('codex')
-    return ('PATH', Path(found)) if found else None
-
-
-def node_find(*, which: Callable[[str], str | None] = shutil.which) -> tuple[str, Path] | None:
-    """``node`` on ``PATH``."""
-    found = which('node')
-    return ('PATH', Path(found)) if found else None
-
-
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
-    'codex': Check(codex_find, _versioned(lambda p: [str(p), '--version']), lambda p: _run([str(p), '--version'])),
     'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke),
     'jmag': Check(jmag_find, jmag_version, jmag_smoke),
     'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver'])),
-    'node': Check(node_find, _versioned(lambda p: [str(p), '--version']), lambda p: _run([str(p), '--version'])),
     'simba': Check(simba_find, simba_version, simba_smoke),
 }

@@ -2,7 +2,7 @@
 
 Design: one admission for the distributed compute system, migration step 3 (2026-10-13). Every resource is
 equal: a tool (``femm``, ``jmag``, ``matlab``), an OS (``windows``, ``linux``) or a host fact
-(``dev_checkout``) is one name, and a test that needs it carries its marker. The repository declares which
+(``workstation``) is one name, and a test that needs it carries its marker. The repository declares which
 of its markers name a resource, once, with the ONE producer of a part::
 
     [tool.lab_commons.tests]
