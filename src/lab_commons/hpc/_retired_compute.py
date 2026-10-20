@@ -87,6 +87,17 @@ COMPUTE: Final[dict[str, str]] = {
         '[tool.lab_commons.tests] resources = [<marker>, ...] -- every resource is equal; which host has one is '
         "its machine file's [capabilities.<name>] and the probes (lab_commons.compute.probe)"
     ),
+    # A resource is a host CAPABILITY boundary: the checkout, node and codex live on the same hosts, so they are
+    # one resource, and three parts queued three times on one host (user directive 2026-10-19).
+    'mark.dev_checkout': 'pytest.mark.workstation (lab_commons.dev.workstation.WORKSTATION)',
+    'mark.node': 'pytest.mark.workstation (lab_commons.dev.workstation.WORKSTATION)',
+    'mark.codex': 'pytest.mark.workstation (lab_commons.dev.workstation.WORKSTATION)',
+    'capabilities.dev_checkout': '[capabilities.workstation] (lab_commons.dev.workstation.WORKSTATION)',
+    'tests/dev_checkout': 'tests/workstation (the one part of the workstation resource)',
+    'tests/codex': 'tests/workstation (the one part of the workstation resource)',
+    'tests/node': 'tests/workstation (the one part of the workstation resource)',
+    'dev_checkout+node': 'workstation (one resource, one part)',
+    'DEV_CHECKOUT': 'lab_commons.dev.workstation.WORKSTATION',
     'engine = true': 'nothing: a resource marker is its own part only by being a need-set (tests/<part>)',
     'lab_commons.parts.produce': '[tool.lab_commons.tests] produce = [..., "{part}"] (the ONE producer of every part)',
     'produce.windows.full': '[tool.lab_commons.tests] produce = [..., "{part}"] (the ONE producer of every part)',

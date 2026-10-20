@@ -30,7 +30,7 @@ def test_the_reserve_table_declares_margins_and_refuses_the_rest() -> None:
 
 
 def test_the_machine_file_declares_what_this_host_provides() -> None:
-    assert provided({'jmag': {'seats': 4}, 'dev_checkout': {}}) == {'jmag': {'seats': 4}, 'dev_checkout': {}}
+    assert provided({'jmag': {'seats': 4}, 'workstation': {}}) == {'jmag': {'seats': 4}, 'workstation': {}}
     assert provided({}) == {}
 
 
