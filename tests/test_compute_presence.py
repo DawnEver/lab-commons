@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import runpy
 import sys
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -29,6 +31,7 @@ from lab_commons.compute.presence import (
     measured,
     probe,
     refresh,
+    renew,
 )
 from lab_commons.compute.toolchecks import CHECKS, Check, femm_find, matlab_find, matlab_version, simba_find
 
@@ -292,3 +295,77 @@ def test_jmag_exiting_0_without_the_version_file_is_absent_with_the_reason(monke
     one = probe('jmag', replace(CHECKS['jmag'], find=lambda: ('registry', EXE)), None, now=NOW)
     assert not one.present
     assert one.evidence[-1].value == 'FAILED: exit 0: JMAG-Designer Stopping; the script wrote no version file'
+
+
+# --- a stale reading is re-probed in place, never read as absent ---------------------------------------
+
+
+def test_a_stale_but_healthy_reading_is_re_probed_and_admitted(tmp_path: Path) -> None:
+    """The 2026-10-20 incident: every check passed, only the TTL clause failed, and a 10-hour step died."""
+    fake, state = Fake(), tmp_path / 'presence.json'
+    checks = {'femm': fake.check()}
+    refresh(FLOORS, checks=checks, state=state, now=NOW)
+    later = NOW + TTL + timedelta(seconds=1)
+    assert cached(checks=checks, state=state, now=later)['femm'].evidence[-1].source == 'ttl', 'planted control'
+    one = renew('femm', checks=checks, state=state, now=later)
+    assert one.present
+    assert fake.smokes == 2
+    assert cached(checks=checks, state=state, now=later)['femm'].present, 'the fresh reading is stored'
+
+
+def test_a_stale_reading_whose_re_probe_fails_is_absent_naming_the_failing_clause(tmp_path: Path) -> None:
+    fake, state = Fake(), tmp_path / 'presence.json'
+    checks = {'femm': fake.check()}
+    refresh(FLOORS, checks=checks, state=state, now=NOW)
+    fake.passes = False
+    one = renew('femm', checks=checks, state=state, now=NOW + TTL + timedelta(seconds=1))
+    assert not one.present
+    assert (one.evidence[-1].source, one.evidence[-1].value) == ('smoke', 'FAILED: exit 1')
+
+
+def test_the_re_probe_holds_the_stored_floor(tmp_path: Path) -> None:
+    fake, state = Fake(), tmp_path / 'presence.json'
+    checks = {'femm': fake.check()}
+    refresh(FLOORS, checks=checks, state=state, now=NOW)
+    fake.version = '4.2'
+    one = renew('femm', checks=checks, state=state, now=NOW + TTL + timedelta(seconds=1))
+    assert not one.present
+    assert one.evidence[-1].value.startswith('below the floor 5.0')
+
+
+@pytest.mark.parametrize('why', ['failed', 'demoted', 'fresh'])
+def test_only_a_merely_stale_reading_is_re_probed(tmp_path: Path, why: str) -> None:
+    fake, state = Fake(smoke=why != 'failed'), tmp_path / 'presence.json'
+    checks = {'femm': fake.check()}
+    refresh(FLOORS, checks=checks, state=state, now=NOW)
+    if why == 'demoted':
+        demote(['femm'], 'exit 4', state=state, now=NOW + timedelta(minutes=1))
+    fake.passes = True
+    at = NOW + timedelta(minutes=2) if why == 'fresh' else NOW + TTL + timedelta(seconds=1)
+    one = renew('femm', checks=checks, state=state, now=at)
+    assert fake.smokes == 1, 'a failed or demoted reading is the forge refresh to retake, not a unit'
+    assert one.present == (why == 'fresh')
+
+
+def test_concurrent_callers_on_one_stale_reading_share_one_probe(tmp_path: Path) -> None:
+    fake, state = Fake(), tmp_path / 'presence.json'
+    refresh(FLOORS, checks={'femm': fake.check()}, state=state, now=NOW)
+    slow = fake.check()
+
+    def smoke(path: Path) -> tuple[bool, str]:
+        time.sleep(0.2)
+        return slow.smoke(path)
+
+    checks = {'femm': Check(slow.find, slow.version, smoke)}
+    later = NOW + TTL + timedelta(seconds=1)
+    got: list[bool] = []
+    threads = [
+        threading.Thread(target=lambda: got.append(renew('femm', checks=checks, state=state, now=later).present))
+        for _ in range(8)
+    ]
+    for one in threads:
+        one.start()
+    for one in threads:
+        one.join()
+    assert got == [True] * 8
+    assert fake.smokes == 2, 'one re-probe; the other seven read its result'
