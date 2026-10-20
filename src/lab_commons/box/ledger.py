@@ -404,13 +404,12 @@ def _wait(
 ) -> Claim:
     warned = False
     while True:
-        held = _read(con)
-        reading = read([h.pid for h in held])
+        reading = read([h.pid for h in _read(con)])
         with _immediate(con):
             outcome = _try(con, ticket, capacity, demand, what, reading=reading, tag=tag)
         if isinstance(outcome, Claim):
             return outcome
-        if not warned and stuck_at_head(outcome, held, gives_up):
+        if not warned and stuck_at_head(outcome, _read(con), gives_up):
             warned = True
             emit(
                 f'box: STUCK AT THE HEAD -- {what} cannot fit before it gives up at {_when(gives_up)} (every '
