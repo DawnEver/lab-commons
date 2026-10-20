@@ -46,7 +46,7 @@ def test_the_known_tables_are_exactly_the_ones_this_kit_spells() -> None:
     spelled = {
         name
         for path in SRC.rglob('*.py')
-        if path.name not in {'declared.py', 'retired.py'}  # retired.py names the tables it RETIRED
+        if path.name not in {'declared.py', 'retired.py', '_retired_compute.py'}  # the retired tables, by name
         for name in re.findall(r'tool\.lab_commons\.([a-z_]+)', path.read_text(encoding='utf-8'))
     }
     assert len(spelled) >= 15, 'a floor: an empty scan reads exactly like agreement'
