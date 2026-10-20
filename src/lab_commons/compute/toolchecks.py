@@ -31,6 +31,7 @@ __all__ = [
     'CHECKS',
     'SIMBA_SMOKE',
     'Check',
+    'ProbeCrashed',
     'codex_find',
     'femm_find',
     'file_version',
@@ -64,13 +65,42 @@ class Check:
 # --- the readers ---------------------------------------------------------------------------------------
 
 
-def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, str]:
-    """Run *argv*; ``(exit 0, the last line of its output or why it did not run)``."""
+class ProbeCrashed(RuntimeError):
+    """The PROBE failed to run its child (it measured nothing); not the tool's answer, so it is never cached."""
+
+
+def _probe(argv: Sequence[str], timeout: float) -> subprocess.CompletedProcess[str]:
+    """THE ONE PLACE A PROBE STARTS A CHILD, with no stdin.
+
+    A probe never reads stdin, so the child gets none: from a hidden
+    detached serve the inherited stdin is invalid and the start raised ``[WinError 6]`` (2026-10-20).
+
+    Raises:
+        ProbeCrashed: the child could not be started -- the probe's own error.
+        subprocess.TimeoutExpired: the child ran and did not answer -- the tool's answer.
+
+    """
     try:
-        done = _door.run(
-            list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout, check=False
+        return _door.run(
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=timeout,
+            check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as failed:
+    except OSError as failed:
+        msg = f'{type(failed).__name__}: {failed}'
+        raise ProbeCrashed(msg) from failed
+
+
+def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, str]:
+    """Run *argv*; ``(exit 0, the last line of its output or why it did not answer)``."""
+    try:
+        done = _probe(argv, timeout)
+    except subprocess.TimeoutExpired as failed:
         return False, f'{type(failed).__name__}: {failed}'
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
     return done.returncode == 0, f'exit {done.returncode}: {lines[-1] if lines else "no output"}'
@@ -78,10 +108,8 @@ def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, s
 
 def _first_line(argv: Sequence[str]) -> str | None:
     try:
-        done = _door.run(
-            list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        done = _probe(argv, 60)
+    except subprocess.TimeoutExpired:
         return None
     lines = [line.strip() for line in done.stdout.splitlines() if line.strip()]
     return lines[0] if done.returncode == 0 and lines else None
