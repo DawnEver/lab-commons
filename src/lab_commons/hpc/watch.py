@@ -13,11 +13,11 @@ from typing import Final
 
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.config import Config
+from lab_commons.hpc.gather import gather_run
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.phases import describe, phases
 from lab_commons.hpc.progress import where
 from lab_commons.hpc.records import cells_of, summary, write_record
-from lab_commons.hpc.run import gather_run
 from lab_commons.hpc.testcells import conclude
 from lab_commons.log import emit
 from lab_commons.outcomes import Conclusion

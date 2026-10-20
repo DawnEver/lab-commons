@@ -14,7 +14,7 @@ commit (or ship a pack); add the tree; build its venv on the login node with the
 command; collect node ids there; group them by file and PACK whole files into items of up to
 :func:`item_seconds` measured seconds, so start-up is paid per item, not per file; re-allocate the real item count among
 the grants on that cluster; submit the array and leave the run's state on the cluster
-(:func:`submit_run`, minutes). Then each :func:`gather_run` is ONE short call: still active is
+(:func:`submit_run`, minutes). Then each :func:`lab_commons.hpc.gather.gather_run` is ONE short call: still active is
 pending; a finished round is folded, its unfinished ids re-submitted as the next round, or the record
 returned. NOTHING RESIDENT RUNS ON THE CALLER'S BOX, and the caller's repository is only READ.
 
@@ -34,8 +34,8 @@ only what is still unfinished after that is ``INFRA``. An item that closed witho
 recorded it ``PENDING``: never reported.
 
 AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory for
-the files of the KILLED items only (:func:`_grown`; a file that then finishes is back at its peak), HELD TO
-the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
+the files of the KILLED items only (:func:`lab_commons.hpc.gather.grown_after`; a file that then finishes is back at its
+peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
 counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
 halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
 (:func:`lab_commons.hpc.records.fold`). A round that NO GRANT CAN TAKE settles at once: its ids are
@@ -45,7 +45,7 @@ THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overhea
 minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next run reads them
 back (``history``), so an item's time is its file's overhead plus its ids' durations, an item's memory
 is its own files' worst measured peak times ``policy.safety`` -- items grouped by memory class, one array
-per class (:func:`_submit_round`) -- and ``cost`` is the fallback only for a file never measured -- named
+per class (:func:`submit_round`) -- and ``cost`` is the fallback only for a file never measured -- named
 in the plan as ``unmeasured``. EVERY FOLDED ROUND is learned (:mod:`lab_commons.compute.learned`), not only
 the record: measured 2026-10-13 on Ada, nine downstream runs were each superseded before their record, so
 none was learned and every round 0 planned blind.
@@ -61,20 +61,14 @@ from dataclasses import asdict, replace
 from typing import Any, Final
 
 from lab_commons.compute import learned
-from lab_commons.compute.learned import OOM_GROWTH, Measured
-from lab_commons.hpc.cluster import Runner, Unreachable, probe, shard_clock, submit_bands, throttle
+from lab_commons.compute.learned import Measured
+from lab_commons.hpc.cluster import Runner, Unreachable, probe, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
-from lab_commons.hpc.phases import round_clock
-from lab_commons.hpc.plan import Plan, allocate, grantable_gb, live_throttle
+from lab_commons.hpc.plan import Plan, allocate, grantable_gb
 from lab_commons.hpc.records import (
-    files_made,
-    fold,
-    job_measured,
-    read_streams,
     record_of,
-    stream_sources,
     upgraded_state,
 )
 from lab_commons.hpc.shards import balance
@@ -99,10 +93,11 @@ __all__ = [
     'ACTIVE',
     'RETRIES',
     'NoRoom',
-    'gather_run',
     'item_seconds',
     'load_state',
+    'save_state',
     'shares_home',
+    'submit_round',
     'submit_run',
 ]
 
@@ -143,12 +138,13 @@ def _state_dir(sha: str, part: str) -> str:
     return f'{ROOT}/runs/{sha}/{part}'
 
 
-def _save(run: Runner, state: dict[str, Any]) -> None:
+def save_state(run: Runner, state: dict[str, Any]) -> None:
+    """Write *state* to its run's ``state.json`` on the cluster *run* reaches."""
     where = _state_dir(state['sha'], state['platform'])
     run(f'mkdir -p {where} && cat > {where}/state.json', json.dumps(state))
 
 
-def _submit_round(
+def submit_round(
     state: dict[str, Any],
     pending: list[list[str]],
     *,
@@ -222,7 +218,9 @@ def _submit_round(
             }
         )
         unmeasured |= set(guessed)
-    assert chosen is not None  # noqa: S101 -- pending is never empty here
+    if chosen is None:
+        msg = 'a round was planned over no pending items'
+        raise ValueError(msg)
     pending = [pending[i] for i in order]
     ceiling = {'timeout_s': state['timeout_s']} if state.get('timeout_s') else {}
     items = [{'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, **ceiling} for i, group in enumerate(pending)]
@@ -281,8 +279,8 @@ def submit_run(
 ) -> dict[str, Any]:
     """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns that state.
 
-    The state is ``~/ci/runs/<sha>/<part>/state.json``; :func:`gather_run` reads it. *history* is a previous
-    record, read for its measurements only. Nothing here waits for a job.
+    The state is ``~/ci/runs/<sha>/<part>/state.json``; :func:`lab_commons.hpc.gather.gather_run` reads it.
+    *history* is a previous record, read for its measurements only. Nothing here waits for a job.
 
     *carry*, given the env key the build reported, names the cells earlier runs of THAT env hold for
     ids whose cell cannot have changed (``{node: (plain cell, origin sha, run sha)}``,
@@ -337,15 +335,18 @@ def submit_run(
     }
     files = group_items([node for node in ids if node not in handed and node not in taken])
     measured = Measured.of(state['measured'])
-    band = lambda ids: learned.memory_band(measured.item_gb(ids, cost, policy))  # noqa: E731 -- one key
+
+    def band(ids: list[str]) -> int:
+        return learned.memory_band(measured.item_gb(ids, cost, policy))
+
     pending = measured.pack(files, cost, item_seconds(policy), band)
     if not pending:  # every id was carried or handed: the record needs no job
         state['record'] = record_of(state, grant.slurm_account)
-        _save(run, state)
+        save_state(run, state)
         return state
     same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
-    _submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
-    _save(runners[state['current']['account']], state)
+    submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
+    save_state(runners[state['current']['account']], state)
     return state
 
 
@@ -370,155 +371,6 @@ def load_state(sha: str, part: str, machine: Machine, runners: dict[str, Runner]
         raise Unreachable(msg)
     msg = f'no run of {sha} ({part}) was submitted on any grant (no {_state_dir(sha, part)}/state.json)'
     raise RuntimeError(msg)
-
-
-def gather_run(
-    sha: str,
-    part: str,
-    machine: Machine,
-    connect: Callable[[Grant], Runner],
-    *,
-    cost: Cost,
-    policy: Policy,
-) -> dict[str, Any] | None:
-    """ONE short call: the record when the run is done, else ``None`` (pending).
-
-    A finished round is folded; what a killed shard left unfinished is re-submitted (up to :data:`RETRIES`
-    more rounds) and the call returns pending -- THE RETRIES ARE DRIVEN BY GATHER CALLS, nothing resident
-    waits. An outage raises :class:`Unreachable` and loses nothing: the jobs keep running and the state
-    stays on the cluster, so the next gather picks up where this one could not.
-    """
-    runners = {g.account: connect(g) for g in machine.grants}
-    state, home = load_state(sha, part, machine, runners)
-    if 'record' in state:
-        return state['record']
-    current = state['current']
-    account = tuple(current['account'])
-    run = runners[account]
-    clocks = shard_clock(run, current['job_ids'])
-    states = {shard: clock.state for shard, clock in clocks.items()}
-    if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
-        grant = next(g for g in machine.grants if g.account == account)
-        snapshot, qos = probe(run, grant.slurm_account), state['rounds'][-1]['qos']
-        if _rethrottled(current, states, run, snapshot, cost=cost, qos=qos):
-            _save(home, state)
-        return None
-    measured = Measured.of(state['measured'])
-    streams = read_streams(run, *stream_sources(sha, current['tag']))
-    planned = state['rounds'][-1]
-    band_of = {n: band for band in current['bands'] for n in range(*band['shards'])}
-    walls = [
-        clocks[n].elapsed if n in clocks and clocks[n].elapsed > 0 else band_of[n]['minutes'] * 60
-        for n in range(len(planned['shards']))
-    ]
-    shard_of = {i: n for n, (a, b) in enumerate(planned['shards']) for i in range(a, b)}
-    oomed = [i for i, n in shard_of.items() if states.get(n) == 'OUT_OF_MEMORY']
-    pending, killed, busy = fold(
-        current['items'],
-        streams,
-        state['cells'],
-        measured,
-        shards=planned['shards'],
-        walls=walls,
-        alone={i: band_of[shard_of[i]]['mem_mb'] for i in oomed if band_of[shard_of[i]]['at_ceiling']},
-    )
-    planned['clock'] = round_clock(clocks, busy)
-    planned['walls_s'] = walls
-    state['measured'] = measured.record()
-    learned.learn({'repo': state['repo'], **state['measured']})
-    timed_out = 'TIMEOUT' in states.values()
-    oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
-    state['grown'] = _grown(current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom)
-    if timed_out:
-        state['min_minutes'] = 2 * planned['minutes']
-    if pending and (len(state['rounds']) <= RETRIES or (oom and current['ceiling'])):
-        grant = next(g for g in machine.grants if g.account == account)
-        snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
-        try:
-            _submit_round(
-                state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy
-            )
-        except ValueError as refused:  # no grant can take it, now or ever: a definite red, never a hang
-            unplaced = Cell(Status.UNAVAILABLE, reason=Reason('placement', f'could not be placed: {refused}'))
-            state['cells'].update({node: TestCell(unplaced).to_plain() for group in pending for node in group})
-            pending = []
-        else:
-            _save(home, state)
-            return None
-    lost = Cell(Status.INFRA, reason=Reason('lost', f'still unfinished after {len(state["rounds"])} round(s)'))
-    state['cells'].update({node: TestCell(lost).to_plain() for group in pending for node in group})
-    record = record_of(state, next(g.slurm_account for g in machine.grants if g.account == account))
-    state['record'] = record
-    _save(home, state)
-    learned.record_run(
-        state['repo'],
-        learned.SLURM,
-        needs_of(state['platform']),
-        job_measured(state['rounds'], state['cells'], measured, cpus=cost.cpus, files=files_made(home, state)),
-    )
-    return record
-
-
-def _rethrottled(
-    current: dict[str, Any], states: Mapping[int, str], run: Runner, snapshot: Snapshot, *, cost: Cost, qos: str
-) -> bool:
-    """Re-set each live band's array throttle to the headroom now (:func:`live_throttle`); whether any moved.
-
-    Bands are taken heaviest first, each one's added tasks charged to the account before the next is sized,
-    so two bands never both spend the same free memory.
-    """
-    moved = False
-    for band in current['bands']:
-        shards = range(*band['shards'])
-        unfinished = sum(1 for n in shards if states.get(n, 'PENDING') in ACTIVE)
-        if not unfinished:
-            continue
-        running = sum(1 for n in shards if states.get(n) == 'RUNNING')
-        task = replace(cost, mem_gb=band['mem_mb'] / 1024)
-        limit = snapshot.quota.qos_max_jobs.get(qos)
-        tasks = live_throttle(snapshot, task, running=running, unfinished=unfinished, max_jobs=limit)
-        extra = max(0, tasks - running)
-        used = dict(snapshot.quota.used)
-        used['cpu'] = used.get('cpu', 0.0) + extra * cost.cpus
-        used['mem'] = used.get('mem', 0.0) + extra * band['mem_mb']
-        snapshot = replace(snapshot, quota=replace(snapshot.quota, used=used))
-        if tasks != band['throttle']:
-            throttle(run, band['job_id'], tasks)
-            band['throttle'] = tasks
-            moved = True
-    return moved
-
-
-def _grown(
-    items: list[dict[str, Any]],
-    cells: Mapping[str, Any],
-    shard_of: Mapping[int, int],
-    states: Mapping[int, str],
-    grown: Mapping[str, float],
-    *,
-    oom: bool,
-) -> dict[str, float]:
-    """The run's memory growth per FILE after a round: a KILLED item's files grow, a finished one's reset.
-
-    In a round that ran out of memory, an item left unfinished in a shard that did not time out was killed,
-    and each of its files asks
-    :data:`OOM_GROWTH` times more next round, never every later item (Ada 2026-10-19: one heavy file's kill
-    doubled every task of the part). A file whose item finished every id outside an
-    OUT_OF_MEMORY shard is back at its measured peak (:meth:`Measured.learn` keeps it): its growth is dropped.
-    """
-    after = dict(grown)
-    killed: set[str] = set()  # a file grows ONCE a round, however many of its items were killed
-    for index, item in enumerate(items):
-        files = {node.split('::', maxsplit=1)[0] for node in item['ids']}
-        shard = states.get(shard_of[index], '')
-        if all(node in cells for node in item['ids']) and shard != 'OUT_OF_MEMORY':
-            for name in files:
-                after.pop(name, None)
-        elif oom and shard != 'TIMEOUT':
-            killed |= files
-    for name in killed:
-        after[name] = after.get(name, 1.0) * OOM_GROWTH
-    return after
 
 
 def _plan_record(plan: Plan, grant: Grant, job_ids: list[str], run_dir: str) -> dict[str, Any]:
