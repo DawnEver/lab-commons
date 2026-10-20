@@ -13,12 +13,13 @@ the tracked tree, prose included.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Final
 
 from lab_commons.hpc._retired_compute import COMPUTE
 
-__all__ = ['RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys']
+__all__ = ['RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys', 'retired_in']
 
 _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev/githooks/base.toml)'
 
@@ -218,6 +219,20 @@ TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {
     'missing': ('pending', ''),
     'not-covered': None,
 }
+
+
+def _pattern(spelling: str) -> re.Pattern[str]:
+    """A FLAG spelling (leading ``-``) matches as a whole token, so ``--mode`` is not in ``--model``."""
+    escaped = re.escape(spelling)
+    return re.compile(rf'(?<![\w-]){escaped}(?![\w-])' if spelling.startswith('-') else escaped)
+
+
+_PATTERNS: Final = {spelling: _pattern(spelling) for spelling in RETIRED}
+
+
+def retired_in(text: str) -> list[str]:
+    """Every retired spelling *text* carries, in registry order (flags as whole tokens)."""
+    return [spelling for spelling, pattern in _PATTERNS.items() if pattern.search(text)]
 
 
 def refusal(prog: str, word: str) -> str | None:
