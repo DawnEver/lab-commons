@@ -29,6 +29,13 @@ RETIRED: Final[dict[str, str]] = {
     '--lock-wait-s': '--lock-wait "<duration>" (a time quantity such as "30 s"; a bare number is refused)',
     # A model API key is one scheme: its provider's host, username api-key[-<task>] (user ruling 2026-10-19).
     'pr-review.anthropic.lab-commons': "api.anthropic.com's pr-review task key (lab_commons.credentials.api_key)",
+    # The forge only orchestrates (plan step 5, 2026-10-20): the review is the repo's declared command, run in the
+    # integration step on whichever host runs it; the forge holds no model client, prompt or key.
+    'pr_review': 'nothing: the review runs inside the integration step (lab_commons.dev.forgereview.step)',
+    'forgereview.anthropic': '[tool.lab_commons.review] command (the method chooses provider and model)',
+    'forgereview import anthropic': '[tool.lab_commons.review] command (the method chooses provider and model)',
+    'ReviewKeyMissing': 'nothing: the review command reads its own key (ai_lab)',
+    'forgereview.review_key': 'nothing: the review command reads its own key (ai_lab)',
     # The offer sentence judges nothing; it lives beside the request it names (user ruling 2026-10-19 #8).
     'verify.offer_line': 'lab_commons.dev.forgerequest.offer_line',
     'verify import offer_line': 'from lab_commons.dev.forgerequest import offer_line',
