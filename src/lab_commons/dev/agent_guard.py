@@ -87,8 +87,11 @@ SETTINGS_REL: Final = '.claude/settings.json'
 
 #: The hook command line, DERIVED from the two paths above rather than spelled twice -- the lesson
 #: :data:`lab_commons.dev.hook_install.INSTALL_COMMAND` records: a restatement of a path is a place
-#: for the real one to move away from.
-HOOK_COMMAND: Final = f'node {ENGINE_REL} {RULES_REL}'
+#: for the real one to move away from. ANCHORED ON ``$CLAUDE_PROJECT_DIR`` (2026-10-20): the tool runs
+#: a hook in the SESSION's cwd, and a cwd-relative engine path from a cwd holding no
+#: ``.claude/hooks/`` exits 1 on MODULE_NOT_FOUND -- a NON-BLOCKING hook error, so every command ran
+#: unjudged. The variable is the tool's own, so the committed line stays true on every box.
+HOOK_COMMAND: Final = f'node "$CLAUDE_PROJECT_DIR/{ENGINE_REL}" "$CLAUDE_PROJECT_DIR/{RULES_REL}"'
 
 #: The parts, in the order a reader should fix them: an engine with no rules refuses nothing, and
 #: rules with no wiring are read by nobody.

@@ -14,6 +14,8 @@ one are different things, and only one of them refuses anything.
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -165,12 +167,21 @@ def test_unreadable_rules_are_stale_rather_than_present(repo: Path) -> None:
     assert agent_guard.guard_installation(repo).by_part['rules'].status == agent_guard.STALE
 
 
-def _ask(repo: Path, wired: list[str], command: str) -> str | None:
-    """Run the hook EXACTLY as the tool would: the wired argv, from the repo, payload on stdin."""
-    payload = {'tool_name': 'Bash', 'tool_input': {'command': command}, 'cwd': str(repo)}
+def _wired_argv(repo: Path) -> list[str]:
+    """The installed hook command, expanded the way the tool's shell expands it for *repo*."""
+    settings = json.loads((repo / agent_guard.SETTINGS_REL).read_text(encoding='utf-8'))
+    line = settings['hooks']['PreToolUse'][0]['hooks'][0]['command']
+    expanded = line.replace('$CLAUDE_PROJECT_DIR', repo.as_posix())
+    return shlex.split(expanded)
+
+
+def _ask(repo: Path, wired: list[str], command: str, *, cwd: Path | None = None) -> str | None:
+    """Run the hook EXACTLY as the tool would: the wired argv, from the session cwd, payload on stdin."""
+    where = cwd or repo
+    payload = {'tool_name': 'Bash', 'tool_input': {'command': command}, 'cwd': str(where)}
     done = subprocess.run(
         [agenthooks.node_executable(), *wired[1:]],
-        cwd=repo,
+        cwd=where,
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -178,6 +189,7 @@ def _ask(repo: Path, wired: list[str], command: str) -> str | None:
         errors='replace',
         check=False,
         timeout=60,
+        env={**os.environ, 'CLAUDE_PROJECT_DIR': str(repo)},
     )
     if not done.stdout.strip():
         return None
@@ -194,15 +206,31 @@ def test_the_installed_guard_actually_refuses_a_command(repo: Path) -> None:
     """
     _declare(repo)
     agent_guard.install_guard(repo)
-    settings = json.loads((repo / agent_guard.SETTINGS_REL).read_text(encoding='utf-8'))
-    wired = settings['hooks']['PreToolUse'][0]['hooks'][0]['command'].split()
-    assert (repo / wired[1]).is_file(), 'the wiring names a path that is not there'
-    assert (repo / wired[2]).is_file(), 'the wiring names a path that is not there'
+    wired = _wired_argv(repo)
+    assert Path(wired[1]).is_file(), 'the wiring names a path that is not there'
+    assert Path(wired[2]).is_file(), 'the wiring names a path that is not there'
 
     denied = _ask(repo, wired, 'pytest tests/')
     assert denied is not None, 'the installed guard allowed a bare test line'
     assert 'lab_commons.dev.verify' in denied, denied
     assert _ask(repo, wired, 'git status') is None, 'the installed guard refused an ordinary command'
+
+
+def test_the_installed_guard_refuses_from_a_session_cwd_without_hooks(repo: Path) -> None:
+    """THE 2026-10-20 INCIDENT: the hook runs in the SESSION's cwd, not the repo root.
+
+    The wiring used to read `node .claude/hooks/deny-commands.js ...`, cwd-relative. From any session
+    cwd that holds no `.claude/hooks/` (a subdirectory, a sibling repo) node exited 1 on
+    MODULE_NOT_FOUND, which the tool treats as a NON-BLOCKING hook error -- so every command ran
+    unjudged, and bare `python -m pytest` lines spawned eight xdist workers each and filled 55 GB.
+    The wiring is anchored on `$CLAUDE_PROJECT_DIR`, so the cwd no longer decides whether it runs.
+    """
+    _declare(repo)
+    agent_guard.install_guard(repo)
+    elsewhere = repo / 'tests' / 'unit'
+    elsewhere.mkdir(parents=True)
+    denied = _ask(repo, _wired_argv(repo), '.venv/Scripts/python.exe -m pytest -q tests/unit/x.py', cwd=elsewhere)
+    assert denied is not None, 'from a cwd without .claude/hooks the guard failed open'
 
 
 def test_the_wiring_matches_every_shell_tool(repo: Path) -> None:
