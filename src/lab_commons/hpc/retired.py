@@ -44,6 +44,9 @@ RETIRED: Final[dict[str, str]] = {
     'integration-home': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',
     'push-from-its-own-branch': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',
     'integrator.host': 'nothing: no host owns integration; any host raises its prompts as one forge issue per row',
+    # The integration branch moves by the FORGE's merge of a green PR; a client verb is a second writer
+    # (user ruling 2026-10-19, INTEGRATION-TAKES-ONLY-FORGE-MERGES).
+    'integrate merge': 'the forge merges a green pull request server side (lab_commons.dev.forgemerge)',
     'forge promote': 'python -m lab_commons.dev.integrate promote <sha>, then a plain push of the trunk',
     'forgepromote': 'lab_commons.dev.integrate',
     # All maintenance happens on gitea; GitHub is ONLY a push mirror (user ruling 2026-10-19): nothing reads,
