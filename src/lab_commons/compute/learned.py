@@ -60,6 +60,7 @@ from typing import Any, Final
 
 from lab_commons.compute.model import Demand
 from lab_commons.config import config_path
+from lab_commons.durable import durable_text, read_table
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.needsets import needs_of
 
@@ -346,14 +347,11 @@ def _path(repo: str) -> Path:
 def learned(repo: str) -> dict[str, Any]:
     """Everything learned for *repo* (the per-test keys of :class:`Measured`, and ``runs``); none yet is ``{}``."""
     path = _path(repo)
-    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    return read_table(path)  # a torn table is quarantined and read as {}, never a dead admission
 
 
 def _write(repo: str, table: dict[str, Any]) -> Path:
-    target = _path(repo)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({**table, 'repo': repo}), encoding='utf-8')
-    return target
+    return durable_text(_path(repo), json.dumps({**table, 'repo': repo}))
 
 
 def folded(repo: str) -> frozenset[str]:

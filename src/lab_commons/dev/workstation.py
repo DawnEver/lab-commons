@@ -62,6 +62,7 @@ from lab_commons.dev.forgealarm import RUN, Alarm, sound
 from lab_commons.dev.hostrefresh import Moved, follow, network, read, refresh, sync_venv, venv_python
 from lab_commons.dev.netverb import run_network_verb
 from lab_commons.dev.servelock import default_lock, held
+from lab_commons.durable import durable_text
 from lab_commons.hpc.deploy_spec import LAB_COMMONS, host_serve_argv
 from lab_commons.hpc.deploy_steps import Step, Tools
 from lab_commons.hpc.retired import refusal
@@ -223,10 +224,7 @@ def _machine_file(step: Step, tables: Mapping[str, Mapping[str, Any]]) -> int:
     if step.dry:
         emit('  [dry-run] the diff above is not written')
         return 0
-    path.parent.mkdir(parents=True, exist_ok=True)
-    staged = path.with_name(path.name + '.new')
-    staged.write_text(after, encoding='utf-8')
-    staged.replace(path)
+    durable_text(path, after)
     return 0
 
 

@@ -29,7 +29,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -38,9 +37,10 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.dev.worktreeplace import main_checkout
+from lab_commons.durable import durable_write
 
 __all__ = [
-    'LOOKBACK', 'OUTBOX_REL', 'RETAIN_S', 'WRITES', 'Durable', 'Journal', 'Probe', 'Write', 'durable_write',
+    'LOOKBACK', 'OUTBOX_REL', 'RETAIN_S', 'WRITES', 'Durable', 'Journal', 'Probe', 'Write',
     'journal_for', 'outbox_dir', 'since', 'write_key',
 ]  # fmt: skip
 
@@ -141,29 +141,6 @@ class Write:
             raw.get('host') or '', None if probe is None else Probe(probe['path'], dict(probe['fields'])),
             float(raw['queued_at']), float(raw['until']),
         )  # fmt: skip
-
-
-def _fsync_directory(directory: Path) -> None:
-    if os.name == 'nt':  # Windows opens no directory handle; NTFS journals the rename itself
-        return
-    handle = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(handle)
-    finally:
-        os.close(handle)
-
-
-def durable_write(target: Path, data: bytes) -> Path:
-    """Write *data* to *target* so a crash leaves the whole file or the previous one: temp, fsync, rename."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    staged = target.with_name(f'{target.name}.{os.getpid()}.tmp')
-    with staged.open('wb') as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    staged.replace(target)
-    _fsync_directory(target.parent)
-    return target
 
 
 @dataclass(frozen=True)

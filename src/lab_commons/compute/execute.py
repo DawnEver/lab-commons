@@ -49,7 +49,7 @@ from lab_commons.compute.graph import Graph
 from lab_commons.compute.presence import Presence
 from lab_commons.compute.store import Nondeterministic, Record, Result, ResultStore, result_hash
 from lab_commons.compute.unit import Engine, Environment, Output, Unit
-from lab_commons.dev._forge_journal import durable_write
+from lab_commons.durable import durable_write
 
 __all__ = [
     'CACHED',

@@ -78,6 +78,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, runtime_checkable
 
 from lab_commons.dev import floors
+from lab_commons.durable import durable_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -325,8 +326,7 @@ def write(
         merged[row.nodeid] = round(float(row.seconds), 3)
         provenance[row.nodeid] = {'at_ns': now, 'tree': tree, 'env': env}
     payload = {'selector': selector, 'seconds': merged, 'provenance': provenance}
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    return path
+    return durable_text(path, json.dumps(payload, indent=2, sort_keys=True) + '\n')
 
 
 def read(root: Path) -> Ledger:

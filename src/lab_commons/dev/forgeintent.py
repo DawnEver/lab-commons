@@ -29,13 +29,13 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Final
 
-from lab_commons.dev._forge_journal import durable_write
 from lab_commons.dev.forgeclaim import Claim, forge_now
 from lab_commons.dev.forgestatus import status_history, status_post
 from lab_commons.dev.forgework import Client, ForgeCallFailed
 from lab_commons.dev.producer import RETRYABLE
 from lab_commons.dev.shatree import close_tree
 from lab_commons.dev.worktreeplace import main_checkout
+from lab_commons.durable import durable_write
 from lab_commons.proc import pid_alive
 
 __all__ = ['RUNS_REL', 'Intent', 'forget', 'journal', 'journaled', 'reattach']
