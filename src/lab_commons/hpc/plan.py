@@ -57,9 +57,13 @@ from lab_commons.width import fits
 #: Slurm reports memory in MiB; :data:`~lab_commons.resources.MEMORY` counts bytes.
 MIB: Final = 1024**2
 
+#: A partition's refusal when its QOS takes no more submits from the caller (:meth:`Quota.submit_room` is 0).
+SUBMIT_ROOM_SPENT: Final = 'submit limit already reached'
+
 __all__ = [
     'FILES_PER_RUN',
     'MIB',
+    'SUBMIT_ROOM_SPENT',
     'Plan',
     'allocate',
     'free_slots',
@@ -69,6 +73,7 @@ __all__ = [
     'make_plan',
     'plan_on',
     'quota_slots',
+    'spend',
 ]
 
 
@@ -197,7 +202,7 @@ def make_plan(
             continue
         room = snapshot.quota.submit_room(qos)
         if room == 0:
-            refusals.append(f'{name}: qos {qos!r} submit limit already reached')
+            refusals.append(f'{name}: qos {qos!r} {SUBMIT_ROOM_SPENT}')
             continue
         ceiling = _ceiling(snapshot, name, qos)
         at_once = min(allowed, snapshot.quota.qos_max_jobs.get(qos) or allowed)
@@ -383,3 +388,15 @@ def allocate(
         raise ValueError(msg)
     *_, grant, plan = min(options, key=lambda o: o[:5])
     return grant, plan
+
+
+def spend(
+    snapshots: Sequence[tuple[Grant, Snapshot]], grant: Grant, qos: str, tasks: int
+) -> list[tuple[Grant, Snapshot]]:
+    """*snapshots* with *tasks* more submits queued under *qos* on *grant*: what the next band of a round plans on."""
+
+    def queued(snapshot: Snapshot) -> Snapshot:
+        held = {**snapshot.quota.queued, qos: snapshot.quota.queued.get(qos, 0) + tasks}
+        return replace(snapshot, quota=replace(snapshot.quota, queued=held))
+
+    return [(g, queued(s) if g == grant else s) for g, s in snapshots]
