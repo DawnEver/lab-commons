@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,10 +27,24 @@ from typing import Final, Protocol
 from lab_commons.compute.unit import canonical, content_hash
 from lab_commons.dev._forge_journal import durable_write
 
-__all__ = ['RECORD', 'Nondeterministic', 'Record', 'Result', 'ResultStore', 'SharedTier', 'result_hash']
+__all__ = [
+    'INSTALL_BACKOFF_S',
+    'RECORD',
+    'Nondeterministic',
+    'Record',
+    'Result',
+    'ResultStore',
+    'SharedTier',
+    'result_hash',
+]
 
 #: The record's file name inside a result directory; never an output name.
 RECORD: Final = 'record.json'
+
+#: The waits, in seconds, before each retry of an install rename that a foreign handle refused: Windows denies a
+#: directory rename (WinError 5 / 32) while an indexer, a scanner or a just-exited child holds a handle inside it,
+#: and that hold is transient. Six retries, 7.75 s of waiting in total, then the refusal is raised.
+INSTALL_BACKOFF_S: Final = (0.25, 0.5, 1.0, 1.0, 2.0, 3.0)
 
 
 class Nondeterministic(RuntimeError):
@@ -130,20 +145,36 @@ class ResultStore:
         return result
 
     def _install(self, staged: Path, record: Record) -> Result:
+        """Rename *staged* into place; a foreign handle's refusal is retried per INSTALL_BACKOFF_S."""
         target = self.path(record.unit_hash)
         target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            staged.rename(target)
-        except OSError:
-            held = self._local(record.unit_hash)
-            if held is None:
-                raise
-            shutil.rmtree(staged, ignore_errors=True)
-            if held.record.result_hash != record.result_hash:
-                msg = (
-                    f'unit {record.unit_hash[:16]}: result {record.result_hash[:16]} from {record.host} differs '
-                    f'from the stored {held.record.result_hash[:16]} from {held.record.host}; the first stands'
-                )
-                raise Nondeterministic(msg) from None
-            return held
-        return Result(target, record)
+        for wait in (*INSTALL_BACKOFF_S, None):
+            try:
+                staged.rename(target)
+                return Result(target, record)
+            except OSError as refused:
+                held = self._local(record.unit_hash)
+                if held is not None:
+                    return self._first_stands(staged, record, held)
+                if not isinstance(refused, PermissionError):
+                    raise
+                if wait is None:
+                    msg = (
+                        f'install of {staged} -> {target} still refused after {len(INSTALL_BACKOFF_S)} retries '
+                        f'over {sum(INSTALL_BACKOFF_S)} s: {refused}'
+                    )
+                    raise PermissionError(refused.errno, msg) from refused
+                time.sleep(wait)
+        raise AssertionError  # unreachable: the last pass returns or raises
+
+    @staticmethod
+    def _first_stands(staged: Path, record: Record, held: Result) -> Result:
+        """Drop *staged* for the *held* result; one with other outputs raises Nondeterministic."""
+        shutil.rmtree(staged, ignore_errors=True)
+        if held.record.result_hash != record.result_hash:
+            msg = (
+                f'unit {record.unit_hash[:16]}: result {record.result_hash[:16]} from {record.host} differs '
+                f'from the stored {held.record.result_hash[:16]} from {held.record.host}; the first stands'
+            )
+            raise Nondeterministic(msg) from None
+        return held

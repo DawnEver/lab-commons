@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.hpc.cluster import _completed, render_script, submit
+from lab_commons.hpc.cluster import _completed, render_script, submit, throttle
 from lab_commons.hpc.config import Cluster, Config, Cost, JobSpec, Limits, Policy, load_config
 from lab_commons.hpc.plan import free_slots, make_plan, quota_slots
 from lab_commons.hpc.sacct import shard_states
@@ -266,3 +266,24 @@ def test_queued_jobs_use_up_the_submit_room() -> None:
     assert snap.quota.submit_room('dev') == 0
     plan = make_plan(3, Cost(seconds=60), snap, cluster=CLUSTER, policy=Policy(), limits=Limits())
     assert plan.partitions[0] == 'shortq'
+
+
+def test_a_throttle_on_an_array_that_already_finished_is_a_no_op_and_any_other_refusal_raises() -> None:
+    """Ada 2026-10-20: a live re-throttle met ``7738129_12: Job has already finished``, exit 1, and the run was dropped.
+
+    The array ended between the sacct read and the update: there is nothing left to throttle. PLANTED
+    CONTROL: any other scontrol refusal still raises.
+    """
+
+    def finished(_command: str, _stdin: object) -> str:
+        msg = 'ssh exited 1: scontrol: error: 7738129_12: Job has already finished'
+        raise RuntimeError(msg)
+
+    throttle(finished, '7738129', 4)  # no raise
+
+    def refused(_command: str, _stdin: object) -> str:
+        msg = 'ssh exited 1: scontrol: error: Access/permission denied'
+        raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match='permission denied'):
+        throttle(refused, '7738129', 4)
