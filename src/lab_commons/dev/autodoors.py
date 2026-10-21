@@ -84,8 +84,8 @@ DOOR_MODULES: Final[dict[str, str]] = {
     'lab_commons.dev.verify': 'the family verdict',
     'lab_commons.dev.branchset': 'branch census; --apply deletes merged LOCAL branches only',
     'lab_commons.dev.worktrees': (
-        'worktree census; --prune removes a worktree only if it is clean and pushed;'
-        ' nothing is archived aside, and anything blocking is listed and refused'
+        'worktree census; --prune removes a worktree only if it is clean and pushed, anything blocking is'
+        ' listed and refused; --archive NAME moves its outputs home and saves its work, removing nothing'
     ),
     'lab_commons.dev.stoprun': 'stops ONE identifiable gate/verify run and its subtree',
     'lab_commons.dev.netverb': 'the bounded-retry network verb',
