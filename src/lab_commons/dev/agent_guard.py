@@ -91,7 +91,16 @@ SETTINGS_REL: Final = '.claude/settings.json'
 #: a hook in the SESSION's cwd, and a cwd-relative engine path from a cwd holding no
 #: ``.claude/hooks/`` exits 1 on MODULE_NOT_FOUND -- a NON-BLOCKING hook error, so every command ran
 #: unjudged. The variable is the tool's own, so the committed line stays true on every box.
-HOOK_COMMAND: Final = f'node "$CLAUDE_PROJECT_DIR/{ENGINE_REL}" "$CLAUDE_PROJECT_DIR/{RULES_REL}"'
+#: AND IT FAILS CLOSED (2026-10-21): a missing engine, a missing ``node`` or an engine that crashed exits
+#: nonzero-but-not-2, which the tool reads as a NON-BLOCKING error -- the same fail-open by another door.
+#: So the line is a POSIX wrapper: no engine file, or any engine exit but 0, exits 2 (blocking) naming why.
+HOOK_COMMAND: Final = (
+    f'e="$CLAUDE_PROJECT_DIR/{ENGINE_REL}"; '
+    '[ -f "$e" ] || { echo "agent-guard: no engine at $e -- refused (fail closed); '
+    're-install: python -m lab_commons.dev.hook_install --install" >&2; exit 2; }; '
+    f'node "$e" "$CLAUDE_PROJECT_DIR/{RULES_REL}" || '
+    '{ echo "agent-guard: the engine exited $? -- refused (fail closed)" >&2; exit 2; }'
+)
 
 #: The parts, in the order a reader should fix them: an engine with no rules refuses nothing, and
 #: rules with no wiring are read by nobody.

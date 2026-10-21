@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -167,20 +167,23 @@ def test_unreadable_rules_are_stale_rather_than_present(repo: Path) -> None:
     assert agent_guard.guard_installation(repo).by_part['rules'].status == agent_guard.STALE
 
 
-def _wired_argv(repo: Path) -> list[str]:
-    """The installed hook command, expanded the way the tool's shell expands it for *repo*."""
+#: The POSIX shell the tool runs a hook line in (Git Bash on Windows).
+_SHELL = shutil.which('bash') or shutil.which('sh') or 'sh'
+
+
+def _wired_line(repo: Path) -> str:
+    """The installed hook command line, verbatim: the tool's shell runs it with ``$CLAUDE_PROJECT_DIR`` set."""
     settings = json.loads((repo / agent_guard.SETTINGS_REL).read_text(encoding='utf-8'))
-    line = settings['hooks']['PreToolUse'][0]['hooks'][0]['command']
-    expanded = line.replace('$CLAUDE_PROJECT_DIR', repo.as_posix())
-    return shlex.split(expanded)
+    return settings['hooks']['PreToolUse'][0]['hooks'][0]['command']
 
 
-def _ask(repo: Path, wired: list[str], command: str, *, cwd: Path | None = None) -> str | None:
-    """Run the hook EXACTLY as the tool would: the wired argv, from the session cwd, payload on stdin."""
+def _run_hook(repo: Path, line: str, command: str, *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the hook EXACTLY as the tool would: the wired line in a POSIX shell, from the session cwd."""
     where = cwd or repo
     payload = {'tool_name': 'Bash', 'tool_input': {'command': command}, 'cwd': str(where)}
-    done = subprocess.run(
-        [agenthooks.node_executable(), *wired[1:]],
+    node = Path(agenthooks.node_executable()).parent.as_posix()
+    return subprocess.run(
+        [_SHELL, '-c', line],
         cwd=where,
         input=json.dumps(payload),
         capture_output=True,
@@ -189,8 +192,14 @@ def _ask(repo: Path, wired: list[str], command: str, *, cwd: Path | None = None)
         errors='replace',
         check=False,
         timeout=60,
-        env={**os.environ, 'CLAUDE_PROJECT_DIR': str(repo)},
+        env={**os.environ, 'CLAUDE_PROJECT_DIR': repo.as_posix(), 'PATH': f'{node}{os.pathsep}{os.environ["PATH"]}'},
     )
+
+
+def _ask(repo: Path, line: str, command: str, *, cwd: Path | None = None) -> str | None:
+    """The hook's deny reason for *command*, or ``None`` when it allowed it; a blocking exit fails the test."""
+    done = _run_hook(repo, line, command, cwd=cwd)
+    assert done.returncode == 0, done.stderr
     if not done.stdout.strip():
         return None
     return json.loads(done.stdout)['hookSpecificOutput']['permissionDecisionReason']
@@ -206,9 +215,9 @@ def test_the_installed_guard_actually_refuses_a_command(repo: Path) -> None:
     """
     _declare(repo)
     agent_guard.install_guard(repo)
-    wired = _wired_argv(repo)
-    assert Path(wired[1]).is_file(), 'the wiring names a path that is not there'
-    assert Path(wired[2]).is_file(), 'the wiring names a path that is not there'
+    wired = _wired_line(repo)
+    assert (repo / agent_guard.ENGINE_REL).is_file(), 'the wiring names a path that is not there'
+    assert (repo / agent_guard.RULES_REL).is_file(), 'the wiring names a path that is not there'
 
     denied = _ask(repo, wired, 'pytest tests/')
     assert denied is not None, 'the installed guard allowed a bare test line'
@@ -229,8 +238,29 @@ def test_the_installed_guard_refuses_from_a_session_cwd_without_hooks(repo: Path
     agent_guard.install_guard(repo)
     elsewhere = repo / 'tests' / 'unit'
     elsewhere.mkdir(parents=True)
-    denied = _ask(repo, _wired_argv(repo), '.venv/Scripts/python.exe -m pytest -q tests/unit/x.py', cwd=elsewhere)
+    denied = _ask(repo, _wired_line(repo), '.venv/Scripts/python.exe -m pytest -q tests/unit/x.py', cwd=elsewhere)
     assert denied is not None, 'from a cwd without .claude/hooks the guard failed open'
+
+
+def test_a_missing_engine_fails_closed_with_a_blocking_exit(repo: Path) -> None:
+    """2026-10-21: an engine that is not there made node exit 1 -- NON-blocking, so every command ran unjudged."""
+    _declare(repo)
+    agent_guard.install_guard(repo)
+    (repo / agent_guard.ENGINE_REL).unlink()
+    done = _run_hook(repo, _wired_line(repo), 'git status')
+    assert done.returncode == 2, (done.returncode, done.stderr)
+    assert 'fail closed' in done.stderr
+    assert 'hook_install' in done.stderr
+
+
+def test_an_engine_that_crashes_fails_closed_with_a_blocking_exit(repo: Path) -> None:
+    """PLANTED CONTROL: the file is there but the engine dies -- still a blocking exit, never an allowed command."""
+    _declare(repo)
+    agent_guard.install_guard(repo)
+    (repo / agent_guard.ENGINE_REL).write_text('process.exit(1);\n', encoding='utf-8')
+    done = _run_hook(repo, _wired_line(repo), 'git status')
+    assert done.returncode == 2, (done.returncode, done.stderr)
+    assert 'engine exited 1' in done.stderr
 
 
 def test_the_wiring_matches_every_shell_tool(repo: Path) -> None:
