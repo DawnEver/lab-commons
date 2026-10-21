@@ -46,8 +46,22 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import lab_commons.launch as _door
-from lab_commons.credentials import _GIT, _GIT_TIMEOUT_S, NoCredential, credential_for, store_credential
-from lab_commons.dev.forgecred import AUTH_REFUSED, AUTH_REMEDY, AUTH_TRANSIENT, authorization, token_for
+from lab_commons.credentials import (
+    _GIT,
+    _GIT_TIMEOUT_S,
+    NoCredential,
+    credential_for,
+    refresh_credential,
+    store_credential,
+)
+from lab_commons.dev.forgecred import (
+    AUTH_GONE,
+    AUTH_REFUSED,
+    AUTH_REMEDY,
+    AUTH_TRANSIENT,
+    authorization,
+    token_for,
+)
 from lab_commons.dev.netverb import run_network_verb
 
 if TYPE_CHECKING:
@@ -56,6 +70,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     'APPLIED',
+    'AUTH_GONE',
     'AUTH_REFUSED',
     'AUTH_REMEDY',
     'AUTH_TRANSIENT',
@@ -79,6 +94,7 @@ __all__ = [
     'on_origin',
     'protection_body',
     'read_rule',
+    'refresh_credential',
     'store_credential',
     'token_for',
 ]

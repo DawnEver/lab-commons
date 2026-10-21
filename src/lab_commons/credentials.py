@@ -43,6 +43,7 @@ __all__ = [
     'api_keys',
     'credential_for',
     'key_username',
+    'refresh_credential',
     'store_credential',
 ]
 
@@ -150,6 +151,23 @@ def store_credential(
     if done.returncode != 0:
         msg = f'git credential approve failed for {host} (exit {done.returncode}); is a credential.helper configured?'
         raise NoCredential(msg)
+
+
+def refresh_credential(
+    host: str, refused: tuple[str, str], *, cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> tuple[str, str]:
+    """What git itself does after a 401: ``reject`` the *refused* ``(username, secret)``, then ``fill`` again.
+
+    THE MECHANISM BEHIND "A GIT VERB FAILS ONCE, THEN SUCCEEDS" (measured 2026-10-21): Git Credential
+    Manager's OAuth store (username ``OAUTH_USER``) hands out a cached access token that EXPIRES. A git verb
+    sends it, the forge answers 401, git rejects it, and the next ``fill`` -- the retry -- makes GCM spend its
+    refresh token on a new one. A store that keeps no refresh token (``git credential-store``, a pasted
+    token) has nothing left after the reject, so this raises :class:`NoCredential`: only then is storing a
+    new credential the remedy. ``docs-src/dev/forge.md#credentials`` is where this is explained.
+    """
+    username, secret = refused
+    _credential('reject', {'host': host, 'username': username, 'password': secret}, cwd=cwd, env=env)
+    return credential_for(host, cwd=cwd, env=env)
 
 
 def _why_no_credential(host: str, done: subprocess.CompletedProcess[str]) -> str:

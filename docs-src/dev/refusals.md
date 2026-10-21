@@ -41,7 +41,7 @@ When a command targets another repo, the engine adds one header line naming that
 
 ## GIT-NETWORK-VERB
 
-- **Why it is refused.** the forge is a REMOTE service that nobody in this family restarts, and a single transient auth/DNS/connection failure on any of these verbs reads as "blocked" -- which is the report the retry wrapper exists to prevent. Measured 2026-08-21 on a `git fetch`: it failed auth once and succeeded on the retry, and was reported blocked in between.
+- **Why it is refused.** the forge is a REMOTE service that nobody in this family restarts, and a single transient auth/DNS/connection failure on any of these verbs reads as "blocked" -- which is the report the retry wrapper exists to prevent. Measured 2026-08-21 on a `git fetch`: it failed auth once and succeeded on the retry, and was reported blocked in between. That attempt-1 auth failure is not a mystery: it is an expired OAuth access token that git rejects and refreshes on the retry ([the forge](forge.md#a-gitea-auth-refusal-is-an-expired-oauth-token-not-a-bad-credential)), so never answer it with `forge auth login`.
 - **The exit.** Re-issue through the retry wrapper, which retries 3x and then REPORTS with a diagnosis: {remedy}
 
 ## GIT-STASH

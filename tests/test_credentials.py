@@ -20,6 +20,7 @@ from lab_commons.credentials import (
     api_keys,
     credential_for,
     key_username,
+    refresh_credential,
     store_credential,
 )
 from lab_commons.dev import forge
@@ -229,3 +230,25 @@ def test_a_task_with_no_slot_1_is_refused_by_name(tmp_path: Path, monkeypatch: p
     _store_of(tmp_path, monkeypatch, {'api-key': 'd1', 'api-key-optimization-2': 'o2'})
     with pytest.raises(NoCredential, match='api-key-optimization@'):
         api_keys('api.example.org', task='optimization')
+
+
+def test_a_refresh_rejects_the_refused_secret_and_fills_again_as_git_does_after_a_401(tmp_path: Path) -> None:
+    """The GCM OAuth shape: ``reject`` drops the expired access token, the next ``fill`` answers a fresh one."""
+    state = (tmp_path / 'token').as_posix()
+    (tmp_path / 'token').write_text('stale', encoding='utf-8')
+    helper = (
+        f'!f() {{ case "$1" in get) echo username=OAUTH_USER; echo password=$(cat {state});; '
+        f'erase) cat >/dev/null; printf fresh > {state};; esac; }}; f'
+    )
+    env = _helper_config(tmp_path, helper)
+    stale = credential_for('forge.example.org', cwd=tmp_path, env=env)
+    assert stale == ('OAUTH_USER', 'stale')
+    assert refresh_credential('forge.example.org', stale, cwd=tmp_path, env=env) == ('OAUTH_USER', 'fresh')
+
+
+def test_a_refresh_of_a_store_that_held_only_the_refused_secret_leaves_no_credential(tmp_path: Path) -> None:
+    """PLANTED CONTROL: a plain store keeps no refresh token, so after ``reject`` nothing is left -- refused."""
+    env = _helper_config(tmp_path, f'store --file={(tmp_path / "creds").as_posix()}')
+    store_credential('forge.example.org', 'alice', 'revoked', cwd=tmp_path, env=env)
+    with pytest.raises(NoCredential):
+        refresh_credential('forge.example.org', ('alice', 'revoked'), cwd=tmp_path, env=env)
