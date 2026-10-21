@@ -8,6 +8,7 @@ written. Nothing resident waits: the retries are driven by gather calls.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
@@ -21,7 +22,7 @@ from lab_commons.hpc.needsets import needs_of
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import live_throttle
 from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of, stream_sources
-from lab_commons.hpc.run import ACTIVE, RETRIES, load_state, save_state, shares_home, submit_round
+from lab_commons.hpc.run import ACTIVE, RETRIES, NoRoom, load_state, save_state, shares_home, submit_round
 from lab_commons.hpc.sacct import shard_clock
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.testcells import TestCell
@@ -38,6 +39,7 @@ def gather_run(
     *,
     cost: Cost,
     policy: Policy,
+    now: Callable[[], float] = time.time,
 ) -> dict[str, Any] | None:
     """ONE short call: the record when the run is done, else ``None`` (pending).
 
@@ -46,11 +48,19 @@ def gather_run(
     BY GATHER CALLS, nothing resident waits. An outage raises :class:`~lab_commons.hpc.cluster.Unreachable`
     and loses nothing: the jobs keep running and the state stays on the cluster, so the next gather
     picks up where this one could not.
+
+    A retry round the QOS has no submit room for (:class:`~lab_commons.hpc.run.NoRoom`) is CAPACITY, never a
+    settled run: the folded round's cells stay, the unfinished items wait in ``state['waiting']``, and each
+    later gather tries the submit again. Ada 2026-10-21 (motronics #4684): 42 items finished over ~6 h, the
+    retry round hit ``QOSMaxSubmitJobPerUserLimit``, and the run was released "ended without a record". A wait
+    past ``policy.stall_minutes`` settles with what DID run, the waiting ids named unrun.
     """
     runners = {g.account: connect(g) for g in machine.grants}
     state, home = load_state(sha, part, machine, runners)
     if 'record' in state:
         return state['record']
+    if 'waiting' in state:
+        return _resubmit(state, home, runners, machine, cost=cost, policy=policy, now=now)
     current = state['current']
     account = tuple(current['account'])
     run = runners[account]
@@ -97,6 +107,10 @@ def gather_run(
             submit_round(
                 state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy
             )
+        except NoRoom as why:  # capacity, not a result: wait for the room, keep what ran
+            state['waiting'] = {'pending': pending, 'since': now(), 'why': str(why)}
+            save_state(home, state)
+            return None
         except ValueError as refused:  # no grant can take it, now or ever: a definite red, never a hang
             unplaced = Cell(Status.UNAVAILABLE, reason=Reason('placement', f'could not be placed: {refused}'))
             state['cells'].update({node: TestCell(unplaced).to_plain() for group in pending for node in group})
@@ -106,6 +120,59 @@ def gather_run(
             return None
     lost = Cell(Status.INFRA, reason=Reason('lost', f'still unfinished after {len(state["rounds"])} round(s)'))
     state['cells'].update({node: TestCell(lost).to_plain() for group in pending for node in group})
+    return _recorded(state, home, account, machine, measured, cost=cost)
+
+
+def _resubmit(
+    state: dict[str, Any],
+    home: Runner,
+    runners: Mapping[tuple[str, ...], Runner],
+    machine: Machine,
+    *,
+    cost: Cost,
+    policy: Policy,
+    now: Callable[[], float],
+) -> dict[str, Any] | None:
+    """Submit the waiting retry round again: pending once out or within the stall bound, else the record of what ran."""
+    waiting = state['waiting']
+    account = tuple(state['current']['account'])
+    grant = next(g for g in machine.grants if g.account == account)
+    snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
+    try:
+        submit_round(
+            state, waiting['pending'], runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy
+        )
+    except NoRoom as why:
+        waited = (now() - waiting['since']) / 60
+        if waited < policy.stall_minutes:
+            waiting['why'] = str(why)
+            save_state(home, state)
+            return None
+        why_unrun = f'never ran: no submit room for its retry in {waited:.0f} min: {why}'
+        unrun = Cell(Status.INFRA, reason=Reason('unrun', why_unrun))
+        state['cells'].update({node: TestCell(unrun).to_plain() for group in waiting['pending'] for node in group})
+        del state['waiting']
+        return _recorded(state, home, account, machine, Measured.of(state['measured']), cost=cost)
+    except ValueError as refused:  # no grant can take it, now or ever: a definite red, never a hang
+        unplaced = Cell(Status.UNAVAILABLE, reason=Reason('placement', f'could not be placed: {refused}'))
+        state['cells'].update({node: TestCell(unplaced).to_plain() for group in waiting['pending'] for node in group})
+        del state['waiting']
+        return _recorded(state, home, account, machine, Measured.of(state['measured']), cost=cost)
+    del state['waiting']
+    save_state(home, state)
+    return None
+
+
+def _recorded(
+    state: dict[str, Any],
+    home: Runner,
+    account: tuple[str, ...],
+    machine: Machine,
+    measured: Measured,
+    *,
+    cost: Cost,
+) -> dict[str, Any]:
+    """Write the run's record into its state, teach its repo the run's measurements, and return the record."""
     record = record_of(state, next(g.slurm_account for g in machine.grants if g.account == account))
     state['record'] = record
     save_state(home, state)

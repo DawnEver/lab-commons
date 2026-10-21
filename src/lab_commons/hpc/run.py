@@ -57,17 +57,18 @@ import json
 import math
 import shlex
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.learned import Measured
-from lab_commons.hpc.cluster import Runner, Unreachable, probe, submit_bands
+from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
-from lab_commons.hpc.plan import Plan, allocate, grantable_gb
+from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
     record_of,
     upgraded_state,
@@ -146,6 +147,27 @@ def save_state(run: Runner, state: dict[str, Any]) -> None:
     run(f'mkdir -p {where} && cat > {where}/state.json', json.dumps(state))
 
 
+@contextmanager
+def _no_room() -> Iterator[None]:
+    """A refusal for want of QOS submits -- planned (:data:`SUBMIT_ROOM_SPENT`) or Slurm's -- as :class:`NoRoom`.
+
+    Ada 2026-10-21: an ``sbatch`` refused on :data:`~lab_commons.hpc.cluster.SUBMIT_LIMIT` stuck its run on
+    ``bash exited 1`` every tick, holding the claim while other grants had headroom. The probe's room can be
+    stale (another session submits between the probe and the ``sbatch``), so the refusal itself is the signal.
+    """
+    try:
+        yield
+    except SubmitLimit as refused:
+        msg = f'the QOS refused the round, so a host with room takes it: {refused}'
+        raise NoRoom(msg) from refused
+    except ValueError as refused:
+        if SUBMIT_ROOM_SPENT not in str(refused):
+            raise
+        msg = f'nothing was submitted: {refused}'
+        raise NoRoom(msg) from refused
+
+
+@_no_room()
 def submit_round(
     state: dict[str, Any],
     pending: list[list[str]],
@@ -205,6 +227,7 @@ def submit_round(
             )
             raise NoRoom(msg)
         local, shards = balance(seconds, plan.shards)
+        snapshots = spend(snapshots, chosen, plan.qos, len(shards))  # the bands of a round share one submit room
         plan = _rewalled(plan, shards, [seconds[i] for i in local], policy, min_minutes)
         base, first = len(order), sum(len(p.shards) for p in plans)
         order += [members[i] for i in local]
