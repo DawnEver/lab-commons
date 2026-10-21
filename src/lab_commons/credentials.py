@@ -54,7 +54,7 @@ API_KEY_USERNAME: Final = 'api-key'
 API_KEY_TASKS: Final = frozenset(
     {
         'pr-review',  # lab_commons.dev.forgereview, the advisory PR reviewer (Anthropic)
-        'optimization',  # the optimization decider driven through ai_lab.connect (motronics turing campaigns)
+        'optimization',  # the optimization decider driven through ai_lab.connect (a consumer turing campaigns)
     }
 )
 

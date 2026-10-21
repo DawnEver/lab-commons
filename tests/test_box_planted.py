@@ -1,4 +1,4 @@
-"""A row this code could not have written pins nothing: the planted-claim attack (motronics SR-20261016-031).
+"""A row this code could not have written pins nothing: the planted-claim attack (a consumer SR-20261016-031).
 
 The attack: a local writer plants a claim whose time lies in the future -- a start not yet reached, or a
 deadline past any wall a :class:`Demand` may declare -- beside a LIVE pid, so neither pid liveness nor the
