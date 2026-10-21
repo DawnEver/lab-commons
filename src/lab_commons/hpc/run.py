@@ -55,8 +55,9 @@ from __future__ import annotations
 
 import json
 import math
+import shlex
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from typing import Any, Final
 
@@ -93,6 +94,7 @@ __all__ = [
     'ACTIVE',
     'RETRIES',
     'NoRoom',
+    'cancel_run',
     'item_seconds',
     'load_state',
     'save_state',
@@ -348,6 +350,36 @@ def submit_run(
     submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
     save_state(runners[state['current']['account']], state)
     return state
+
+
+def cancel_run(
+    sha: str,
+    part: str,
+    machine: Machine,
+    connect: Callable[[Grant], Runner],
+    *,
+    also: Sequence[str] = (),
+    aliases: Sequence[str] = (),
+) -> list[str]:
+    """``scancel`` every recorded round of *sha*'s run of *part*, *also*, and any job of its name Slurm holds.
+
+    THE ONE cancel path. Names are its :func:`job_name` and *aliases*; squeue's ``%F`` is the array's own id
+    (``%i`` spells a pending array ``7683032_[12-68%1]``, which ``scancel`` refuses: Ada 2026-10-14).
+    """
+    try:
+        state, _ = load_state(sha, part, machine, {grant.account: connect(grant) for grant in machine.grants})
+        recorded = [job for one in state['rounds'] for job in one['job_ids']]
+    except Unreachable:
+        raise
+    except RuntimeError:  # no state.json: only what Slurm holds by name
+        recorded = []
+    shell = connect(machine.grants[0])
+    names = ','.join((job_name(sha, part), *aliases))
+    held = shell(f'squeue -h --me -n {names} -o %F', None).split()
+    ids = sorted({*recorded, *also, *held})
+    if ids:
+        shell(f'scancel {shlex.join(ids)}', None)
+    return ids
 
 
 def job_name(sha: str, part: str) -> str:

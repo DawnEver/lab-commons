@@ -21,7 +21,10 @@ A smoke costs seconds to minutes (MATLAB starting), so a reading is CACHED for :
 ``tool-presence.json`` beside the machine file, with the requirement it was taken against. :func:`refresh`
 re-probes what is due -- older than the TTL, demoted since its smoke, or taken against another requirement
 -- and ``forge serve`` calls it once per tick; :func:`cached` only reads, and a reading past its TTL is
-absent, so a host nobody refreshes stops claiming. All readers of the OS are module functions behind
+absent, so a host nobody refreshes stops claiming. A reading that is MERELY stale -- every clause passed,
+only its age failed -- is not evidence of absence, so a unit about to run calls :func:`renew`, which
+re-probes it in place (one probe per process, however many station threads ask) and admits on a pass.
+All readers of the OS are module functions behind
 :class:`~lab_commons.compute.toolchecks.Check` (:mod:`lab_commons.compute.toolchecks`), so a test passes fakes.
 """
 
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -50,6 +54,8 @@ __all__ = [
     'measured',
     'probe',
     'refresh',
+    'renew',
+    'stale',
 ]
 
 #: How long one probe's reading holds before :func:`refresh` runs it again and :func:`cached` reads it absent.
@@ -285,6 +291,49 @@ def refresh(
     if due:
         _save(path, stored)
     return cached(checks=checks, state=path, now=now, ttl=ttl)
+
+
+#: One re-probe at a time in this process: a caller that waited re-reads the state the prober wrote.
+_RENEWING: Final = threading.Lock()
+
+
+def _requirement(required: str) -> Requirement | None:
+    """The inverse of :meth:`Requirement.text` (``any``: none); a stored floor carries no reason, so it says so."""
+    if not required.startswith('>='):
+        return None
+    floor, _, below = required.removeprefix('>=').partition(',<')
+    return Requirement(floor, 'as cached', below or None, 'as cached' if below else '')
+
+
+def stale(one: Presence) -> bool:
+    """Absent ONLY because the reading aged past its TTL: every clause it records passed."""
+    return not one.present and bool(one.evidence) and one.evidence[-1].source == 'ttl'
+
+
+def renew(
+    tool: str,
+    *,
+    checks: Mapping[str, Check] = CHECKS,
+    state: Path | None = None,
+    now: datetime | None = None,
+    ttl: timedelta = TTL,
+) -> Presence:
+    """*tool*'s reading, re-probed in place when it is merely stale (:func:`stale`) against its stored floor.
+
+    A failed, demoted or never-taken reading is returned as it is: retaking those is :func:`refresh`'s.
+    """
+    path = _state(state)
+    with _RENEWING:
+        at = now or datetime.now(UTC)
+        one = cached(checks={tool: checks[tool]}, state=path, now=at, ttl=ttl)[tool]
+        stored = _load(path)
+        if not stale(one) or not stored[tool].get('present'):
+            return one
+        required = stored[tool].get('required', 'any')
+        row = probe(tool, checks[tool], _requirement(required), now=at).row()
+        stored[tool] = {**row, 'probed': at.isoformat(), 'required': required}
+        _save(path, stored)
+        return cached(checks={tool: checks[tool]}, state=path, now=at, ttl=ttl)[tool]
 
 
 def demote(tools: Sequence[str], why: str, *, state: Path | None = None, now: datetime | None = None) -> None:
