@@ -56,6 +56,7 @@ KNOWN_TABLES: Final = frozenset(
         'components',
         'dep',
         'doors',
+        'famfiles',
         'forge',
         'hooks',
         'hpc',
