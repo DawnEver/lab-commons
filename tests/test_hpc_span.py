@@ -165,7 +165,7 @@ def test_a_grant_whose_tree_cannot_be_built_is_dropped_and_the_rest_take_the_bat
 def test_when_no_grant_can_build_the_refusal_names_each_build_failure(tmp_path: Path) -> None:
     """A build failure on every grant is named, never reported as an empty machine.
 
-    2026-10-19 (motronics T3 at ae1cf8ef77): every artifact build failed on a missing submodule, each
+    2026-10-19 (a consumer T3 at ae1cf8ef77): every artifact build failed on a missing submodule, each
     grant was dropped, and submit said "this machine holds no grant" -- the build error was lost.
     """
     machine, logins = _cluster()
