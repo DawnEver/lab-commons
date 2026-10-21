@@ -51,7 +51,7 @@ Location (:func:`box_path`): ``$LAB_COMMONS_BOX`` if set, else on Windows
 session of its user (agents, services, terminals) and one manager per MACHINE is the point;
 ProgramData admits a user-created subdirectory without elevation.
 
-AN UNTRUSTED ROW PINS NOTHING (motronics SR-20261016-031: a planted claim with a future time pinned every
+AN UNTRUSTED ROW PINS NOTHING (a consumer SR-20261016-031: a planted claim with a future time pinned every
 seat). Every row this code writes starts now and ends within :data:`~lab_commons.box.demand.WALL_CEILING_S`;
 a row starting in the future or ending past that is reaped on sight, live pid or not. And a ledger file
 another user could write is refused at open (:func:`untrusted`): its rows carry liveness probes the reaper
