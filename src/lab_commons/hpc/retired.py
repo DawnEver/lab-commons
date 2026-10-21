@@ -37,6 +37,8 @@ RETIRED: Final[dict[str, str]] = {
     'forgereview import anthropic': '[tool.lab_commons.review] command (the method chooses provider and model)',
     'ReviewKeyMissing': 'nothing: the review command reads its own key (ai_lab)',
     'forgereview.review_key': 'nothing: the review command reads its own key (ai_lab)',
+    # The forge-sync watch set was named for git's upstream, another thing (2026-10-21): a sync merges FROM it.
+    'labUpstream': '`branch.<child>.labSyncFrom` (lab_commons.dev.forgesync.CONFIG_KEY)',
     # The offer sentence judges nothing; it lives beside the request it names (user ruling 2026-10-19 #8).
     'verify.offer_line': 'lab_commons.dev.forgerequest.offer_line',
     'verify import offer_line': 'from lab_commons.dev.forgerequest import offer_line',
