@@ -53,8 +53,9 @@ API_KEY_USERNAME: Final = 'api-key'
 #: ``api-key-<N>`` is the default's Nth slot.
 API_KEY_TASKS: Final = frozenset(
     {
-        'pr-review',  # lab_commons.dev.forgereview, the advisory PR reviewer (Anthropic)
+        'pr-review',  # the advisory PR review command the forge runs (ai_lab.review; lab_commons.dev.forgereview)
         'optimization',  # the optimization decider driven through ai_lab.connect (a consumer turing campaigns)
+        'session',  # the interactive host launchers (cc-config ccc/ccds/codc/cods): the key a session runs on
     }
 )
 
