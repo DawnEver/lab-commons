@@ -334,8 +334,20 @@ def submit_bands(
 
 
 def throttle(run: Runner, job_id: str, tasks: int) -> None:
-    """Set array *job_id*'s concurrency limit to *tasks* (``scontrol update ... ArrayTaskThrottle``)."""
-    run(f'scontrol update JobId={shlex.quote(job_id)} ArrayTaskThrottle={max(1, tasks)}', None)
+    """Set array *job_id*'s concurrency limit to *tasks* (``scontrol update ... ArrayTaskThrottle``).
+
+    An array that finished between the state read and the update has nothing left to throttle: Slurm's
+    ``Job has already finished`` is a no-op (Ada 2026-10-20: it dropped a live run). Any other refusal raises.
+    """
+    try:
+        run(f'scontrol update JobId={shlex.quote(job_id)} ArrayTaskThrottle={max(1, tasks)}', None)
+    except RuntimeError as exc:
+        if _ALREADY_FINISHED not in str(exc):
+            raise
+
+
+#: Slurm's answer to an update of a job that has ended (``slurm_strerror(ESLURM_ALREADY_DONE)``).
+_ALREADY_FINISHED: Final = 'Job has already finished'
 
 
 #: Separates the results file from an earlier worker's per-shard files in :func:`gather`'s one read.

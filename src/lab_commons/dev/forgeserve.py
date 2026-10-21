@@ -86,8 +86,9 @@ NOTHING FAILS SILENTLY ON AN UNATTENDED HOST (:mod:`lab_commons.dev.forgealarm`)
 the credential, a lease that cannot be renewed, a run that cannot advance, and an account IDLE while
 work it could serve is pending each raise an alarm.
 
-LAST, on a host declaring ``[capabilities.pr_review]`` only, the ADVISORY PR review
-(:func:`lab_commons.dev.forgereview.step`): once per open PR head, with its own key, gating nothing.
+Inside that integration step, on whichever host runs it, the ADVISORY PR review
+(:func:`lab_commons.dev.forgereview.step`): the repo's declared review command, once per open PR head, gating
+nothing.
 """
 
 from __future__ import annotations
@@ -128,10 +129,9 @@ from lab_commons.dev.forgeintent import reattach
 from lab_commons.dev.forgeoutbox import PostFailed, flush, unprompted_client
 from lab_commons.dev.forgeproduce import Produced, demote_unreachable, produce
 from lab_commons.dev.forgerecords import serve_prune as serve_records_prune
-from lab_commons.dev.forgereview import step as review_step
 from lab_commons.dev.forgerounds import Rounds, locked_fetch, reserve, supply_now
 from lab_commons.dev.forgeschedule import host_weights
-from lab_commons.dev.forgeservesteps import hygiene, prompt, retain_storage, starved, tidy_runs
+from lab_commons.dev.forgeservesteps import hygiene, prompt, relock, retain_storage, starved, tidy_runs
 from lab_commons.dev.forgeslurm import slurm_cluster, standing_of
 from lab_commons.dev.forgework import Client, ForgeCallFailed, client_for
 from lab_commons.dev.platformparts import origin_url
@@ -195,6 +195,7 @@ def serve(
 
     runs = list(forgerunstate.live(repo, refused=refused)) if seat is not None else []
     refuse_retired_keys('serve', section('serve'))
+    refuse_retired_keys('capabilities', section('capabilities'))
     tools = {name: one.row() for name, one in inventory(declared_seats(), present(root)).items()}
     priority = Priority.of(section(PRIORITY_TABLE))
     serves = Serves.of(section(SERVE_TABLE))
@@ -249,8 +250,8 @@ def serve(
         alarm(Alarm(IDLE, repo, f'{name} is idle with work pending', f'{named}: {refused}'))
     starved(root, repo, client(root), cards, say=say, alarm=alarm)
     card(claimed)
-    prompt(root, repo, client(root), say=say, alarm=alarm)
-    review_step(root, client(root), repo, capabilities=section('capabilities'), say=say, alarm=alarm)
+    prompt(root, repo, client(root), say=say, alarm=alarm, host=name)
+    relock(root, repo, client(root), say=say, alarm=alarm)
     broken = tuple(
         f'{p.platform} {p.sha[:12]}: the producer refused its argv: {" ".join(p.argv)}'
         for p in produced
@@ -331,7 +332,7 @@ def main(
         return client_for(here, env=env, transport=transport) if env is not None else unprompted_client(here)
 
     seat = seat_of()
-    machine = this_machine(seat)
+    machine = this_machine()
     try:
         report = serve(
             root,

@@ -13,12 +13,13 @@ the tracked tree, prose included.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Final
 
 from lab_commons.hpc._retired_compute import COMPUTE
 
-__all__ = ['RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys']
+__all__ = ['RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys', 'retired_in']
 
 _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev/githooks/base.toml)'
 
@@ -29,6 +30,13 @@ RETIRED: Final[dict[str, str]] = {
     '--lock-wait-s': '--lock-wait "<duration>" (a time quantity such as "30 s"; a bare number is refused)',
     # A model API key is one scheme: its provider's host, username api-key[-<task>] (user ruling 2026-10-19).
     'pr-review.anthropic.lab-commons': "api.anthropic.com's pr-review task key (lab_commons.credentials.api_key)",
+    # The forge only orchestrates (plan step 5, 2026-10-20): the review is the repo's declared command, run in the
+    # integration step on whichever host runs it; the forge holds no model client, prompt or key.
+    'pr_review': 'nothing: the review runs inside the integration step (lab_commons.dev.forgereview.step)',
+    'forgereview.anthropic': '[tool.lab_commons.review] command (the method chooses provider and model)',
+    'forgereview import anthropic': '[tool.lab_commons.review] command (the method chooses provider and model)',
+    'ReviewKeyMissing': 'nothing: the review command reads its own key (ai_lab)',
+    'forgereview.review_key': 'nothing: the review command reads its own key (ai_lab)',
     # The offer sentence judges nothing; it lives beside the request it names (user ruling 2026-10-19 #8).
     'verify.offer_line': 'lab_commons.dev.forgerequest.offer_line',
     'verify import offer_line': 'from lab_commons.dev.forgerequest import offer_line',
@@ -44,6 +52,9 @@ RETIRED: Final[dict[str, str]] = {
     'integration-home': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',
     'push-from-its-own-branch': 'the base pre-push row `session-branch` (lab_commons/dev/githooks/base.toml)',
     'integrator.host': 'nothing: no host owns integration; any host raises its prompts as one forge issue per row',
+    # The integration branch moves by the FORGE's merge of a green PR; a client verb is a second writer
+    # (user ruling 2026-10-19, INTEGRATION-TAKES-ONLY-FORGE-MERGES).
+    'integrate merge': 'the forge merges a green pull request server side (lab_commons.dev.forgemerge)',
     'forge promote': 'python -m lab_commons.dev.integrate promote <sha>, then a plain push of the trunk',
     'forgepromote': 'lab_commons.dev.integrate',
     # All maintenance happens on gitea; GitHub is ONLY a push mirror (user ruling 2026-10-19): nothing reads,
@@ -211,6 +222,20 @@ TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {
     'missing': ('pending', ''),
     'not-covered': None,
 }
+
+
+def _pattern(spelling: str) -> re.Pattern[str]:
+    """A FLAG spelling (leading ``-``) matches as a whole token, so ``--mode`` is not in ``--model``."""
+    escaped = re.escape(spelling)
+    return re.compile(rf'(?<![\w-]){escaped}(?![\w-])' if spelling.startswith('-') else escaped)
+
+
+_PATTERNS: Final = {spelling: _pattern(spelling) for spelling in RETIRED}
+
+
+def retired_in(text: str) -> list[str]:
+    """Every retired spelling *text* carries, in registry order (flags as whole tokens)."""
+    return [spelling for spelling, pattern in _PATTERNS.items() if pattern.search(text)]
 
 
 def refusal(prog: str, word: str) -> str | None:

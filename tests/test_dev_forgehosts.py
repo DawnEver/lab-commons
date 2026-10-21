@@ -14,9 +14,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from lab_commons.dev import forgehosts
+from lab_commons.dev import forgeclaim, forgehosts
 from lab_commons.dev.forgehosts import HOSTS_MARKER, HOSTS_TITLE, HostCard, publish, read_cards
 from lab_commons.dev.forgework import ForgeCallFailed, is_pull
+from lab_commons.hpc.account import ClusterAccount
 from tests._forge_state import StateForge
 
 if TYPE_CHECKING:
@@ -130,12 +131,12 @@ def test_a_card_written_before_a_field_was_renamed_reads_without_it() -> None:
 
 def test_retiring_a_host_removes_its_one_card_and_leaves_the_others() -> None:
     forge = StateForge()
-    publish(forge, _card('duip622037'))
+    publish(forge, _card('workstation-1'))
     publish(forge, _card('ada/alice'))
-    assert forgehosts.retire(forge, 'duip622037') == 'retired'
+    assert forgehosts.retire(forge, 'workstation-1') == 'retired'
     assert {card.host for card in read_cards(forge)} == {'ada/alice'}
-    assert forgehosts.retire(forge, 'duip622037') == 'absent', 'a second retire finds nothing and says so'
-    assert publish(forge, _card('duip622037', 5)) == 'created', 'the host rejoins by ticking again'
+    assert forgehosts.retire(forge, 'workstation-1') == 'absent', 'a second retire finds nothing and says so'
+    assert publish(forge, _card('workstation-1', 5)) == 'created', 'the host rejoins by ticking again'
 
 
 def test_planted_control_retiring_an_unknown_host_touches_no_card() -> None:
@@ -147,10 +148,10 @@ def test_planted_control_retiring_an_unknown_host_touches_no_card() -> None:
 
 def test_the_cli_retires_through_the_forge_door(monkeypatch, capsys) -> None:
     forge = StateForge()
-    publish(forge, _card('duip622037'))
+    publish(forge, _card('workstation-1'))
     monkeypatch.setattr(forgehosts, 'client_for', lambda _root: forge)
-    assert forgehosts.main(['retire', 'duip622037']) == 0
-    assert 'duip622037: retired' in capsys.readouterr().out
+    assert forgehosts.main(['retire', 'workstation-1']) == 0
+    assert 'workstation-1: retired' in capsys.readouterr().out
     assert read_cards(forge) == ()
 
 
@@ -220,3 +221,32 @@ def test_turning_public_retires_the_named_card_and_retire_finds_the_opaque_one()
     assert _SEAT not in _bodies(forge)
     assert forgehosts.retire(forge, _SEAT) == 'retired'
     assert read_cards(forge) == ()
+
+
+def _claim_on(box: str, monkeypatch: pytest.MonkeyPatch) -> forgeclaim.Claim:
+    """The claim a tick on *box* writes for login ``alice``, with no ``$HARNESS_MACHINE``, read back from the forge."""
+    monkeypatch.delenv('HARNESS_MACHINE', raising=False)
+    monkeypatch.setattr(forgeclaim.socket, 'gethostname', lambda: box)
+    written = forgeclaim.Claim(forgeclaim.this_machine(), 'alice', datetime(2026, 10, 21, tzinfo=UTC))
+    read = forgeclaim.Claim.parse(written.description())
+    assert read is not None
+    return read
+
+
+def test_two_workstations_on_one_login_are_two_claim_owners(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No harness, one forge login, two boxes: neither reads the other's claim as MINE. PLANTED CONTROL: same box."""
+    g, ws2 = _claim_on('G.lab.example', monkeypatch), _claim_on('duipezztz', monkeypatch)
+    assert not g.same_owner(ws2)
+    assert g.machine == 'G'
+    assert g.same_owner(_claim_on('G', monkeypatch))
+
+
+def test_the_claim_machine_and_the_card_host_are_one_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off a cluster the card is the claim's machine; on a cluster the card is the seat, the claim the login host."""
+    claim = _claim_on('duip622037', monkeypatch)
+    monkeypatch.setattr(forgehosts, 'this_seat', lambda: None)
+    assert forgehosts.this_host() == claim.machine == 'duip622037'
+    seat = ClusterAccount('ada', 'alice')
+    assert _claim_on('login2.ada', monkeypatch).machine == 'login2'
+    monkeypatch.setattr(forgehosts, 'this_seat', lambda: seat)
+    assert forgehosts.this_host() == 'ada/alice'

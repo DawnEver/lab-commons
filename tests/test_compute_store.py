@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from lab_commons.compute import store as store_module
 from lab_commons.compute.store import RECORD, Nondeterministic, Record, Result, ResultStore, result_hash
 
 UNIT = 'ab' + 'c' * 62
@@ -102,3 +103,50 @@ def test_a_local_only_result_never_leaves_the_box(tmp_path: Path) -> None:
     where, record = staged(control, '42')
     control.put(where, replace(record, local_only=False))
     assert shared.posts == 1
+
+
+def held_rename(monkeypatch: pytest.MonkeyPatch, refusals: int) -> list[float]:
+    """Plant a rename a foreign handle refuses *refusals* times (WinError 5), then lets through; return the waits."""
+    real, calls, waits = Path.rename, [0], []
+
+    def rename(self: Path, target: Path) -> Path:
+        calls[0] += 1
+        if calls[0] <= refusals:
+            raise PermissionError(13, 'Access is denied', str(self), 5, str(target))
+        return real(self, target)
+
+    monkeypatch.setattr(Path, 'rename', rename)
+    monkeypatch.setattr(store_module.time, 'sleep', waits.append)
+    return waits
+
+
+def test_a_held_install_rename_is_retried_until_it_goes_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ResultStore(tmp_path / 'store')
+    waits = held_rename(monkeypatch, refusals=3)
+    put = store.put(*staged(store, '42'))
+    assert put.output('out.txt').read_text(encoding='utf-8') == '42'
+    assert waits == list(store_module.INSTALL_BACKOFF_S[:3])
+
+
+def test_a_rename_held_past_every_retry_raises_naming_the_staging_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ResultStore(tmp_path / 'store')
+    waits = held_rename(monkeypatch, refusals=10**6)
+    where, record = staged(store, '42')
+    with pytest.raises(PermissionError, match=where.name):
+        store.put(where, record)
+    assert waits == list(store_module.INSTALL_BACKOFF_S)
+
+
+def test_a_writer_that_wins_during_the_retry_wait_is_the_first_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ResultStore(tmp_path / 'store')
+    first = store.put(*staged(store, '42', host='h2'))
+    held_rename(monkeypatch, refusals=1)
+    assert store.put(*staged(store, '42')) == first
+    with pytest.raises(Nondeterministic):
+        store.put(*staged(store, '43'))

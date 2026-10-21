@@ -69,6 +69,11 @@ class Page(NamedTuple):
 #: all cite, and the verdict before the branch layers that spend it.
 PAGES: Final[tuple[Page, ...]] = (
     Page(
+        'onboarding',
+        'Onboarding a repo',
+        'The one call, every declaration a new repo supplies, and the order that matters',
+    ),
+    Page(
         'migrate',
         'Migrating a workstation',
         'Start here if you used to run the gate before a push: what to stop, and the five commands that replace it',
@@ -76,7 +81,7 @@ PAGES: Final[tuple[Page, ...]] = (
     Page(
         'the-three-participants',
         'The three participants',
-        'Who does what: the human, the authors, the producers and the integrator',
+        'Who does what: the human, the authors, the producers, the forge and the steward',
     ),
     Page(
         'verdict-model',
@@ -110,9 +115,9 @@ PAGES: Final[tuple[Page, ...]] = (
         'forge', 'The forge', 'Parts, claims, `forge serve`, scheduling and `forge queue`: how a sha gets its verdict'
     ),
     Page(
-        'integrator',
-        'The integrator',
-        'The integration tick, PRs into integration, `forge sync`, `integrate`, the merge audit, session-branch leases',
+        'integration',
+        'The integration branch',
+        'The path of one change, the roles, the integration tick, `forge sync`, `integrate promote`, the merge audit',
     ),
     Page(
         'issues',
