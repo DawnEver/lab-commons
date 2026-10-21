@@ -63,7 +63,7 @@ class DuplicateKey(Refused):
 
 #: The longest wall a :class:`Demand` may declare, and so the furthest future any ledger row may name. A row
 #: past it (or one whose start lies in the future) is one this code never wrote: it is reaped on sight, so a
-#: planted claim beside a live pid cannot pin a seat (motronics SR-20261016-031).
+#: planted claim beside a live pid cannot pin a seat (a consumer SR-20261016-031).
 WALL_CEILING_S: Final = 7 * 24 * 3600
 
 

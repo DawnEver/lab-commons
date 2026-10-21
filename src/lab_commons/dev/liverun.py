@@ -1,7 +1,7 @@
 """TREE-HAS-A-LIVE-RUN: a checkout whose run is in progress is not edited, merged into, or re-synced.
 
-THE INCIDENTS (motronics, 2026-10-19). While a JMAG run executed from a checkout -- its interpreter
-``<checkout>/.venv/Scripts/python.exe -m motronics case sweep|deck run ...`` -- an agent edited a test file in
+THE INCIDENTS (a consumer, 2026-10-19). While a JMAG run executed from a checkout -- its interpreter
+``<checkout>/.venv/Scripts/python.exe -m consumer case sweep|deck run ...`` -- an agent edited a test file in
 that checkout, ran ``git merge`` into it, and ran ``dep --sync`` on a worktree's venv the run was executing
 from. ``deck run`` holds no environment seat, so the seat could not refuse the sync: a seat is a promise the
 run has to make, and this one forgot.

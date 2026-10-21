@@ -342,3 +342,21 @@ def test_what_became_of_a_unit_is_named_settled_and_the_generic_name_is_gone() -
     assert 'Settled' in execute_module.__all__
     with pytest.raises(AttributeError):
         _ = importlib.import_module(execute_module.__name__).Outcome
+
+
+def test_presence_check_re_probes_a_stale_reading_instead_of_refusing() -> None:
+    stale = Presence(
+        'jmag', present=False, evidence=(Evidence('version: designer -w', '25.2', 't'), Evidence('ttl', 'older', 't'))
+    )
+    fresh = Presence('jmag', present=True, evidence=(Evidence('version: designer -w', '25.2', 'u'),))
+    asked: list[str] = []
+    why = presence_check(None, {'jmag': stale}, renew=lambda name: asked.append(name) or fresh)
+    assert why(Engine('jmag', '25.2')) == ''
+    assert asked == ['jmag']
+    failed = Presence('jmag', present=False, evidence=(Evidence('smoke', 'FAILED: exit 1', 'u'),))
+    why = presence_check(None, {'jmag': stale}, renew=lambda _name: failed)
+    assert 'smoke: FAILED: exit 1' in why(Engine('jmag', '25.2'))
+    asked.clear()
+    absent = Presence('jmag', present=False, evidence=(Evidence('find', 'not found', 't'),))
+    assert 'not present' in presence_check(None, {'jmag': absent}, renew=asked.append)(Engine('jmag', '25.2'))
+    assert asked == [], 'only a merely stale reading is re-probed'

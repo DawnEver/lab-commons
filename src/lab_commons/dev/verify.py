@@ -59,6 +59,7 @@ from lab_commons.dev.hook_install import read_hooks
 from lab_commons.dev.inflight import RunKey, box_directory, run_once
 from lab_commons.dev.localpart import part_selection, post_cited, post_part
 from lab_commons.dev.lockpins import lock_freshness
+from lab_commons.dev.lockwait import lock_wait_arg
 from lab_commons.dev.logref import LogRef, UnverifiableLog
 from lab_commons.dev.platformparts import part_context
 from lab_commons.dev.producer import ProducerExit, full_suite_refusal
@@ -445,13 +446,13 @@ def main(argv: list[str] | None = None) -> int:
         epilog='Exit codes: 0 pass, 1 fail (failures named), 2 refused argv, 3 inconclusive (the run cannot say).',
     )
     parser.add_argument(
-        '--lock-wait-s',
-        type=float,
+        '--lock-wait',
+        type=lock_wait_arg,
         default=None,
-        metavar='SECONDS',
+        metavar='DURATION',
         help=(
-            f'ceiling on the wait for this box (default {MEASURE_WAIT_S:.0f}s for a selection, '
-            f'{WAIT_S:.0f}s for the producer); 0 checks once and refuses'
+            f'ceiling on the wait for this box, a duration such as "30 s" (default {MEASURE_WAIT_S:.0f} s for a '
+            f'selection, {WAIT_S:.0f} s for the producer); "0 s" checks once and refuses'
         ),
     )
     parser.add_argument('--part', default='', help='produce this part (tests/<part>): exactly its need-set')
@@ -473,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
     if refused is not None:
         emit(refused, err=True)
         return ProducerExit.USAGE
-    wait_s = parsed.lock_wait_s if parsed.lock_wait_s is not None else (MEASURE_WAIT_S if targeted else WAIT_S)
+    wait_s = parsed.lock_wait if parsed.lock_wait is not None else (MEASURE_WAIT_S if targeted else WAIT_S)
     stale = lock_freshness(root)
     if stale:
         emit(f'verify: inconclusive -- nothing ran: {stale}', err=True)
@@ -545,7 +546,8 @@ def _judge(
         return _inconclusive(
             f'verify: inconclusive -- this box is held and nothing was measured. Held by: {exc}. '
             f'Wait for it, or stop that holder, then re-run; '
-            f'--lock-wait-s raises or drops the {wait_s:.0f}s ceiling on the wait. {offer_line(root, head, arguments)}'
+            f'--lock-wait "<duration>" raises or drops the {wait_s:.0f} s ceiling on the wait. '
+            f'{offer_line(root, head, arguments)}'
         )
     except UnverifiableLog as exc:
         return _inconclusive(

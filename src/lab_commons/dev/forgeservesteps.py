@@ -1,4 +1,4 @@
-"""The STEPS one ``forge serve`` tick runs after its rounds: issue-kept alarms, cleanup, hygiene, retention.
+"""The STEPS one ``forge serve`` tick runs after its rounds: issue-kept alarms, cleanup, hygiene, retention, relock.
 
 Each step is failure-contained -- a forge or disk failure is said or alarmed, never raised into the tick --
 so one broken step never stops the others (:func:`lab_commons.dev.forgeserve.serve` calls them in order).
@@ -10,14 +10,15 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from lab_commons.dev import forgeship, retention
+from lab_commons.dev.breakglass import notices as break_glass
 from lab_commons.dev.forgealarm import INTEGRATION, ISSUE_KINDS, RUN, STARVED, STORAGE, Alarm
 from lab_commons.dev.forgeclaim import forge_now
 from lab_commons.dev.forgehosts import HostCard
 from lab_commons.dev.forgeintegration import alarms as sync_alarms
 from lab_commons.dev.forgeintegration import tick as integration_tick
-from lab_commons.dev.forgemirror import step as mirror_step
-from lab_commons.dev.forgepulls import ListingIncomplete
+from lab_commons.dev.forgepulls import ListingIncomplete, pr_list
 from lab_commons.dev.forgequeue import forge_queue, unadmitted
+from lab_commons.dev.forgereview import step as review_step
 from lab_commons.dev.forgeroute import reconcile
 from lab_commons.dev.forgeschedule import load_schedule, starved_alarms
 from lab_commons.dev.forgestatus import status_list
@@ -26,9 +27,10 @@ from lab_commons.dev.forgetidy import tidy as issue_tidy
 from lab_commons.dev.forgework import Client, ForgeCallFailed
 from lab_commons.dev.integrator import observe
 from lab_commons.dev.lanepolicy import load_policy
+from lab_commons.dev.relock import carry
 from lab_commons.hpc.account import ClusterAccount
 
-__all__ = ['hygiene', 'prompt', 'raise_once', 'retain_storage', 'starved', 'tidy_runs']
+__all__ = ['hygiene', 'prompt', 'raise_once', 'relock', 'retain_storage', 'starved', 'tidy_runs']
 
 
 def raise_once(built: Client, kind: str, alarms: Sequence[Alarm], *, alarm: Callable[[Alarm], object]) -> None:
@@ -73,6 +75,7 @@ def prompt(
     *,
     say: Callable[[str], None],
     alarm: Callable[[Alarm], object],
+    host: str,
 ) -> None:
     """The integrator's prompts and every child's behind/conflict report, one issue per row.
 
@@ -82,11 +85,12 @@ def prompt(
     try:
         found = observe(root, repo, statuses=lambda sha: status_list(built, sha))
         policy = load_policy(root)
-        mirror_step(root, built, policy, say=lambda line: say(f'[serve] {line}'))
         ticked = integration_tick(root, built, policy)
         for line in ticked.lines:
             say(f'[serve] integration: {line}')
-        raise_once(built, INTEGRATION, [*found, *sync_alarms(ticked.said, policy, repo)], alarm=alarm)
+        review_step(root, built, policy=policy, say=say, host=host)  # advisory: the review host follows the integrator
+        glass = break_glass(root, policy, repo)
+        raise_once(built, INTEGRATION, [*found, *sync_alarms(ticked.said, policy, repo), *glass], alarm=alarm)
     except (ForgeCallFailed, ListingIncomplete, OSError) as failed:
         say(f'[serve] the integration queue was not derived: {failed}')
 
@@ -137,3 +141,21 @@ def retain_storage(
     if done is not None and done.over:
         body = done.alarm or f'freed {done.freed_bytes} bytes and {done.freed_files} files; still over pressure'
         alarm(Alarm(STORAGE, repo, f'{who} storage is still near its quota', body))
+
+
+def relock(
+    root: Path, repo: str, built: Client, *, say: Callable[[str], None], alarm: Callable[[Alarm], object]
+) -> None:
+    """Keep integration's lock at the newest resolution through one relock PR (:func:`lab_commons.dev.relock.carry`).
+
+    Only where the forge merges PRs into integration (``pr_merges_since`` declared): there the relock lands like
+    any other PR, and nowhere else would it land by itself. A failure alarms; the next tick tries afresh.
+    """
+    policy = load_policy(root)
+    if not policy.pr_merges_since:
+        return
+    try:
+        pulls = [pull for pull in pr_list(built) if pull.base == policy.integration]
+        say(f'[serve] relock: {carry(root, policy, pulls=lambda: pulls, create=built.pr_create)}')
+    except (ForgeCallFailed, ListingIncomplete, OSError) as failed:
+        alarm(Alarm(INTEGRATION, repo, f'the {policy.integration} lock could not be relocked', str(failed)))

@@ -13,11 +13,12 @@ from typing import Final
 
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.config import Config
+from lab_commons.hpc.gather import gather_run
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.phases import describe, phases
 from lab_commons.hpc.progress import where
 from lab_commons.hpc.records import cells_of, summary, write_record
-from lab_commons.hpc.run import gather_run
+from lab_commons.hpc.run import cancel_run
 from lab_commons.hpc.testcells import conclude
 from lab_commons.log import emit
 from lab_commons.outcomes import Conclusion
@@ -55,7 +56,12 @@ def settle(
                 emit(f'pending: {exc}')
                 continue
             except RuntimeError as exc:
-                emit(f'{sha[:12]} cannot be gathered: {exc}')
+                # dropped with its arrays queued, it would hold QOS submit slots forever (Ada 2026-10-20)
+                try:
+                    cancelled = f'jobs {" ".join(cancel_run(sha, part, machine, connect)) or "none"} cancelled'
+                except RuntimeError as failed:  # the drop stands; the jobs it could not cancel are named
+                    cancelled = f'its jobs could NOT be cancelled: {failed}'
+                emit(f'{sha[:12]} cannot be gathered: {exc}; {cancelled}')
                 left.remove(sha)
                 red = True
                 continue

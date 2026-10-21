@@ -30,11 +30,12 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from lab_commons.hpc.artifact import enter_lines, require
-from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, shard_states, submit
+from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, submit
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.run import ACTIVE
+from lab_commons.hpc.sacct import shard_states
 from lab_commons.hpc.span import Placement, span
 
 __all__ = [

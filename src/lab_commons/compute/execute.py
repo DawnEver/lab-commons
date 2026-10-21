@@ -46,7 +46,7 @@ from lab_commons.box.demand import Claim, Refused
 from lab_commons.box.ledger import hold as box_hold
 from lab_commons.box.ledger import release
 from lab_commons.compute.graph import Graph
-from lab_commons.compute.presence import Presence
+from lab_commons.compute.presence import Presence, renew, stale
 from lab_commons.compute.store import Nondeterministic, Record, Result, ResultStore, result_hash
 from lab_commons.compute.unit import Engine, Environment, Output, Unit
 from lab_commons.durable import durable_write
@@ -128,16 +128,29 @@ Hold = Callable[..., AbstractContextManager[Any]]
 Offer = Callable[[Unit, str, Mapping[str, Path]], str]
 
 
-def presence_check(here: Environment | None, presence: Mapping[str, Presence]) -> Callable[[Engine], str]:
-    """Why *engine* cannot run on this host (``''``: it can) -- ours at *here*, a vendor at its probed version."""
+def presence_check(
+    here: Environment | None,
+    presence: Mapping[str, Presence],
+    *,
+    renew: Callable[[str], Presence] = renew,
+) -> Callable[[Engine], str]:
+    """Why *engine* cannot run on this host (``''``: it can) -- ours at *here*, a vendor at its probed version.
+
+    A vendor reading that is merely stale (:func:`~lab_commons.compute.presence.stale`) is re-probed through
+    *renew* when a unit asks, so a run longer than the TTL is never refused by its own snapshot's age.
+    """
+    readings = dict(presence)
 
     def why(engine: Engine) -> str:
         if engine.environment is not None:
             if engine.environment != here:
                 return f'{engine.name} needs environment {engine.environment.key}; this process is {here and here.key}'
             return ''
+        found = readings.get(engine.name)
+        if found is not None and stale(found):
+            readings[engine.name] = renew(engine.name)
         try:
-            probed = Engine.vendor(engine.name, presence)
+            probed = Engine.vendor(engine.name, readings)
         except LookupError as absent:
             return str(absent)
         return (

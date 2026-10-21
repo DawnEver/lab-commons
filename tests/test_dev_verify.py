@@ -42,6 +42,7 @@ from lab_commons.compute import learned
 from lab_commons.compute.model import Resources
 from lab_commons.dev import forgerequest, localpart, platformparts, verify, verifybox
 from lab_commons.dev.inflight import seat
+from lab_commons.dev.lockwait import lock_wait
 from lab_commons.dev.logref import LogRef, UnverifiableLog, verify_log
 from lab_commons.dev.platformparts import part_context, part_of
 from lab_commons.dev.producer import PRODUCING_VAR, ProducerExit, producing
@@ -60,6 +61,7 @@ from lab_commons.dev.verify import EXIT_CODES, LEDGER_PLUGIN, PYTEST_ARGS, build
 from lab_commons.dev.verify import _tee as tee_step
 from lab_commons.hpc.needsets import BASE, Vocabulary
 from lab_commons.hpc.records import read_record
+from lab_commons.hpc.retired import RETIRED
 from lab_commons.hpc.testcells import TestCell
 from lab_commons.outcomes import Cell, Conclusion, Record, Status
 
@@ -1146,7 +1148,7 @@ def test_a_held_box_exits_3_from_a_real_process(tmp_path: Path) -> None:
     """THE SHELL'S VIEW of the lock-wait path: ``verify && push`` must stop, so the PROCESS exits 3.
 
     A child holds every core of a PRIVATE box ledger, and a second ``python -m lab_commons.dev.verify
-    --lock-wait-s 0`` runs against that ledger: its pytest step is refused by the box. Its selection is its
+    --lock-wait "0 s"`` runs against that ledger: its pytest step is refused by the box. Its selection is its
     own, so the run key differs from any enclosing verify and it cannot attach to it.
     """
     records = {'LAB_COMMONS_RESOURCE_DIR': str(tmp_path), BOX_ENV: str(tmp_path / 'box.sqlite')}
@@ -1167,8 +1169,8 @@ def test_a_held_box_exits_3_from_a_real_process(tmp_path: Path) -> None:
                 '-m',
                 'lab_commons.dev.verify',
                 '--rerun',
-                '--lock-wait-s',
-                '0',
+                '--lock-wait',
+                '0 s',
                 '--',
                 'tests/test_dev_verify.py',
                 '-k',
@@ -1436,3 +1438,17 @@ def test_a_cited_measure_outside_the_producer_posts_nothing(monkeypatch, tmp_pat
     record(cache, run)
     assert verify.main(['tests/a.py']) == ProducerExit.PASS
     assert posted == []
+
+
+def test_the_lock_wait_is_a_duration_quantity(capsys: pytest.CaptureFixture[str]) -> None:
+    """``--lock-wait`` carries its unit in the VALUE (user ruling 2026-10-19): a bare number has none."""
+    assert lock_wait('30 s') == pytest.approx(30.0, abs=1e-9)  # s: a unit conversion, exact to rounding
+    assert lock_wait('2 min') == pytest.approx(120.0, abs=1e-9)  # s
+    for bad in ('30', '3 m'):
+        with pytest.raises(Exception, match='duration'):
+            lock_wait(bad)
+    with pytest.raises(SystemExit):
+        verify.main(['--lock-wait', '0'])
+    retired = next(word for word in RETIRED if word.startswith('--lock-wait'))
+    assert verify.main([retired, '0']) == ProducerExit.USAGE
+    assert '--lock-wait "<duration>"' in capsys.readouterr().err

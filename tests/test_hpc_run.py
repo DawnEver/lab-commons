@@ -16,7 +16,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import ClassVar, Final
 
 import pytest
@@ -30,10 +30,11 @@ from lab_commons.dev.githooks import bash_executable
 from lab_commons.dev.platformparts import PartRefusal, part_of, parts_of
 from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc import cluster as cluster_module
-from lab_commons.hpc import shell
+from lab_commons.hpc import shell, watch
 from lab_commons.hpc.builds import Builds, cargo_target
 from lab_commons.hpc.cluster import Unreachable
-from lab_commons.hpc.config import Cost, Limits, Policy
+from lab_commons.hpc.config import Config, Cost, Limits, Policy
+from lab_commons.hpc.gather import gather_run
 from lab_commons.hpc.grants import Grant, Machine, Session
 from lab_commons.hpc.needsets import BASE, Vocabulary
 from lab_commons.hpc.phases import describe, phases
@@ -52,7 +53,7 @@ from lab_commons.hpc.records import (
     stream_sources,
     write_record,
 )
-from lab_commons.hpc.run import RETRIES, NoRoom, gather_run, load_state, submit_run
+from lab_commons.hpc.run import RETRIES, NoRoom, load_state, submit_run
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
     FULL,
@@ -1068,7 +1069,10 @@ def test_packing_groups_files_of_one_memory_class_so_a_heavy_file_never_sizes_a_
     cost, policy = Cost(seconds=120, mem_gb=1), Policy(safety=1.5)
     files = [['a.py::t'], ['h.py::t'], ['b.py::t']]
     assert measured.pack(files, cost, budget=60.0) == [['a.py::t', 'h.py::t', 'b.py::t']], 'PLANTED CONTROL'
-    band = lambda ids: learned.memory_band(measured.item_gb(ids, cost, policy))  # noqa: E731
+
+    def band(ids: list[str]) -> int:
+        return learned.memory_band(measured.item_gb(ids, cost, policy))
+
     items = measured.pack(files, cost, budget=60.0, band=band)
     assert items == [['a.py::t', 'b.py::t'], ['h.py::t']]
     assert [measured.item_gb(ids, cost, policy) for ids in items] == [1.0, 30.0]
@@ -1613,9 +1617,9 @@ def test_the_build_facts_report_the_key_and_the_resolved_list_of_one_reading() -
 
 
 def test_each_repository_fetches_into_its_own_cache_whose_origin_is_that_repository() -> None:
-    url = 'https://github.com/pemc/numerics-lab.git'
+    url = 'https://github.com/family/numerics-lab.git'
     cache = cache_dir(url)
-    assert cache.startswith(f'{ROOT}/cache/pemc-numerics-lab-'), cache
+    assert cache.startswith(f'{ROOT}/cache/family-numerics-lab-'), cache
     assert cache.endswith('.git'), cache
     spec = RunSpec(sha=SHA, repo_url=url, builds=Builds(install='true', env_key='k1'))
     script = fetch_script(spec)
@@ -1628,7 +1632,7 @@ def test_each_repository_fetches_into_its_own_cache_whose_origin_is_that_reposit
 
 
 def test_two_repositories_never_share_a_cache() -> None:
-    urls = ('https://g/a/motronics-studio.git', 'https://g/a/numerics-lab.git', 'https://h/a/numerics-lab.git', 'u')
+    urls = ('https://g/a/consumer-studio.git', 'https://g/a/numerics-lab.git', 'https://h/a/numerics-lab.git', 'u')
     assert len({cache_dir(u) for u in urls}) == len(urls)
     assert cache_dir(urls[1]) == cache_dir(urls[1]), 'deterministic'
 
@@ -1693,3 +1697,35 @@ def test_a_tree_gets_every_submodule_recursively_each_from_its_own_cache(tmp_pat
     assert not (Path(top) / 'modules').exists(), 'nothing written into the parent repository'
     pinned = _git('ls-tree', 'HEAD', 'mid', cwd=tree).split()[2]
     assert _git('rev-parse', 'HEAD', cwd=tree / 'mid') == pinned, 'the checkout is the recorded gitlink'
+
+
+def test_a_run_that_cannot_be_gathered_has_its_live_jobs_cancelled_before_it_is_dropped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ada 2026-10-20: a run dropped as "cannot be gathered" left its arrays queued, holding QOS submit slots.
+
+    The drop cancels every job of the run Slurm still holds. PLANTED CONTROL: a run still pending cancels nothing.
+    """
+    asked: list[str] = []
+
+    def runner(command: str, _stdin: object) -> str:
+        asked.append(command)
+        return '7738129\n' if command.startswith('squeue') else ''
+
+    machine = Machine(session=None, grants=(GRANT,))
+    sha = 'a' * 40
+
+    def unreadable(*_a: object, **_k: object) -> None:
+        msg = 'ssh exited 1: scontrol: error: something else'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(watch, 'gather_run', unreadable)
+    args = ([sha], machine, lambda _grant: runner, Config(), tmp_path)
+    assert watch.settle(*args, part='base', sleep=None) == 1
+    assert 'scancel 7738129' in asked, 'a dropped run leaves no live job'
+
+    asked.clear()
+    monkeypatch.setattr(watch, 'gather_run', lambda *_a, **_k: None)
+    monkeypatch.setattr(watch, 'where', lambda *_a, **_k: SimpleNamespace(describe=lambda: 'pending'))
+    assert watch.settle(*args, part='base', sleep=None) == PENDING
+    assert not any(command.startswith('scancel') for command in asked), asked

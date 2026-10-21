@@ -178,6 +178,7 @@ def _serve(
     children: tuple = (),
     present=lambda _root: {},
     clock=lambda: NOW,
+    reviewed: list | None = None,
 ) -> tuple[forgeserve.ServeReport, list[str], list]:
     """Serve once: the first round's tick answers *ticked*, each later one the next of *later*, then nothing.
 
@@ -219,8 +220,12 @@ def _serve(
         return proc
 
     monkeypatch.setattr(forgeservesteps, 'observe', observe or (lambda *_a, **_k: []))
-    monkeypatch.setattr(forgeservesteps, 'mirror_step', lambda *_a, **_k: ())
     monkeypatch.setattr(forgeservesteps, 'integration_tick', lambda *_a, **_k: Ticked((), tuple(children)))
+    monkeypatch.setattr(
+        forgeservesteps,
+        'review_step',
+        lambda _root, _built, **kw: (reviewed if reviewed is not None else []).append(kw),
+    )
     monkeypatch.setattr(forgeservesteps, 'reconcile', (issues or _Issues()).reconcile)
     monkeypatch.setattr(forgeserve, 'serve_prune', prune)
     monkeypatch.setattr(forgeserve, 'serve_records_prune', records_prune)
@@ -367,6 +372,25 @@ def test_any_host_prompts_the_integrator_and_n_hosts_page_once(monkeypatch, tmp_
     rows[:] = []
     _serve(monkeypatch, tmp_path, TickReport((), (), ()), observe=observe, issues=forge)
     assert forge.open == {}
+
+
+def test_any_host_runs_the_advisory_review_inside_its_integration_step(monkeypatch, tmp_path: Path) -> None:
+    """The review host follows the integrator: no capability, the integration step's own policy.
+
+    PLANTED CONTROL: a tick whose integration queue cannot be derived reviews nothing.
+    """
+    reviewed: list = []
+    _serve(monkeypatch, tmp_path, TickReport((), (), ()), reviewed=reviewed)
+    ((given,),) = [tuple(one['policy'] for one in reviewed)]
+    assert given.integration == 'integrate/main'
+
+    def unreachable(*_a: object, **_k: object) -> list[Alarm]:
+        msg = 'the forge is down'
+        raise OSError(msg)
+
+    reviewed.clear()
+    _serve(monkeypatch, tmp_path, TickReport((), (), ()), observe=unreachable, reviewed=reviewed)
+    assert reviewed == []
 
 
 def test_every_tick_reports_behind_and_conflicts_and_alarms_past_the_bound(monkeypatch, tmp_path: Path) -> None:
@@ -525,6 +549,24 @@ def test_inconclusive_and_unreachable_producers_are_released_never_red(monkeypat
         assert report.broken == ()
         assert forge.posts[-1][1] == 'error'
         assert forge.posts[-1][2].startswith(reason)
+
+
+@pytest.mark.parametrize('kept', [('', ()), ('output/26/10/20/parts/x', ())])
+def test_an_inconclusive_part_without_its_record_names_the_missing_record(
+    monkeypatch, tmp_path: Path, kept: tuple
+) -> None:
+    """W1.4 (live on Ada): a part ending ``inconclusive (exit 3) -- no part`` gave its author nothing to act on.
+
+    PLANTED CONTROL: the same exit with its record written is released with the bare reason.
+    """
+    monkeypatch.setattr(forgeproduce, 'record_manifest', lambda _r, _s, _c: kept)
+    forge = _Forge()
+    forge.post(None, SHA, context='tests/windows', state='pending', description=ME.description())
+    local = Work('integrate/main', SHA, 'windows', 'mine', ME, argv=('verify',))
+    _serve(monkeypatch, tmp_path, _claimed(local), {'verify': _Proc(ProducerExit.INCONCLUSIVE)}, forge)
+    assert forge.posts[-1][1] == 'error'
+    assert forge.posts[-1][2].startswith(release_reason(ProducerExit.INCONCLUSIVE))
+    assert ('the run wrote no record' in forge.posts[-1][2]) is not kept[0]
 
 
 @pytest.mark.parametrize('code', [69, 137])

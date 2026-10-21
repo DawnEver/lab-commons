@@ -251,8 +251,8 @@ ROWS: tuple[tuple[str, str, tuple[str | tuple[str, str], ...]], ...] = (
         (
             'Every new first-parent commit of the integration branch, from the declared `merges_only_since` '
             'forward, is a two-parent merge naming its branch in a `Merged-Branch:` trailer whose merge audit '
-            'passes -- the same judgement the commit-msg hook makes. Refused at pre-push; `integrate merge` '
-            'makes such a merge with no working tree.'
+            'passes -- the same judgement the commit-msg hook makes. Refused at pre-push; once `pr_merges_since` '
+            'stands, INTEGRATION-TAKES-ONLY-FORGE-MERGES replaces this with the forge`s own merge.'
         ),
         ('tests/test_dev_sessionbranch.py', 'tests/test_dev_integrate.py'),
     ),
@@ -263,22 +263,23 @@ ROWS: tuple[tuple[str, str, tuple[str | tuple[str, str], ...]], ...] = (
             'by the forge merging a pull request server-side -- a merge commit, made once every `tests/<part>` '
             'part of its head stands PASS, the head merges cleanly, and the merge audit passes -- and a client '
             'push adding any commit to it is refused at pre-push. A PR still missing a condition stays open and '
-            'its one integration comment names what is missing. No break-glass exists.'
+            'its one integration comment names what is missing. The ONE bypass is in history: a direct push is '
+            'admitted only when EVERY new first-parent commit carries a non-empty `Break-Glass: <reason>` trailer '
+            '(an empty reason is refused at commit-msg), and every such commit past the declared start stays an '
+            'open `integration` issue naming it and its reason until `pr_merges_since` moves past it.'
         ),
-        ('tests/test_dev_sessionbranch.py', 'tests/test_dev_forgemerge.py'),
+        ('tests/test_dev_sessionbranch.py', 'tests/test_dev_forgemerge.py', 'tests/test_dev_mergeaudit.py'),
     ),
     (
         'PR-REVIEW-IS-ADVISORY',
         (
-            'The Claude PR reviewer runs only on a `forge serve` host declaring `[capabilities.pr_review]`, reads '
-            'ONE dedicated Anthropic key -- the `pr-review` task key of the one model-key scheme '
-            '(`api-key-pr-review` at `api.anthropic.com`), never the default key nor any other -- refusing by '
-            'that name when it is absent, and never logs it. It reviews each open, non-draft PR into '
-            'integration once per head sha against the rule files at integration, under a diff-size cap, and '
-            'posts a comment plus a `tests/review` status that is never a part: no merge, promotion or push '
-            'admission waits on it.'
+            'The PR review is the repo-declared command (`[tool.lab_commons.review] command`), run by the forge '
+            'inside its integration step on each open, non-draft PR into integration once per head sha, under a '
+            'diff-size cap; its stdout is read as the versioned findings JSON and an unknown `schema_version` is '
+            'refused by name. The forge holds no model client, prompt or key. It posts a comment plus a '
+            '`tests/review` status that is never a part: no merge, promotion or push admission waits on it.'
         ),
-        ('tests/test_dev_forgereview.py', 'tests/test_credentials.py'),
+        ('tests/test_dev_forgereview.py', 'tests/test_dev_forgeserve.py'),
     ),
     (
         'FORMATS-UPGRADE-ON-READ',

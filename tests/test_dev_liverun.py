@@ -38,7 +38,7 @@ def _proc(
 ) -> Process:
     """A process; by default a sweep, whose cwd is the checkout its venv interpreter lives in."""
     where = str(Path(exe).parents[2]) if cwd is None and exe else str(cwd or '')
-    return Process(pid, ppid, str(exe), cmd or f'{exe} -m motronics case sweep cases/x', age, where)
+    return Process(pid, ppid, str(exe), cmd or f'{exe} -m consumer case sweep cases/x', age, where)
 
 
 @pytest.fixture
@@ -130,13 +130,13 @@ def _edit(path: Path, tool: str = 'Edit') -> io.StringIO:
 def test_the_hook_denies_an_edit_of_a_tree_with_a_live_run_and_names_it(
     tree: Path, tool: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    run = _proc(4242, _venv_python(tree), cmd='python.exe -m motronics deck run cases/x')
+    run = _proc(4242, _venv_python(tree), cmd='python.exe -m consumer deck run cases/x')
     assert liverun.main(['hook'], stdin=_edit(tree / 'src' / 'a.py', tool), census=lambda: [run]) == 0
     decision = json.loads(capsys.readouterr().out)['hookSpecificOutput']
     assert decision['permissionDecision'] == 'deny'
     reason = decision['permissionDecisionReason']
     assert reason.startswith('TREE-HAS-A-LIVE-RUN:')
-    assert 'pid 4242: python.exe -m motronics deck run cases/x' in reason
+    assert 'pid 4242: python.exe -m consumer deck run cases/x' in reason
     assert 'another worktree' in reason
 
 
@@ -189,10 +189,10 @@ def test_the_row_binds_only_while_a_run_is_live() -> None:
 
 def test_dep_refuses_an_environment_a_live_process_executes_from(tmp_path: Path) -> None:
     prefix = tmp_path / 'env'
-    user = _proc(5151, prefix / _SCRIPTS / _PYTHON, cmd='python -m motronics deck run cases/x')
+    user = _proc(5151, prefix / _SCRIPTS / _PYTHON, cmd='python -m consumer deck run cases/x')
     ran: list[object] = []
     port = dep.Port(name='repo', anchor_paths=lambda: (), key=lambda: 'k')
-    with pytest.raises(dep.HeldEnvironmentError, match=r'pid 5151: python -m motronics deck run'):
+    with pytest.raises(dep.HeldEnvironmentError, match=r'pid 5151: python -m consumer deck run'):
         dep._change(
             ['uv', 'sync'], port=port, prefix=str(prefix), python=None, run=ran.append, dry_run=False,
             census=lambda: [user],
@@ -246,7 +246,13 @@ def live_tree(tmp_path_factory: pytest.TempPathFactory):  # noqa: ANN201 -- a ge
     """A throwaway checkout with a REAL venv and a REAL sleeper executing from it, old enough to be a run."""
     root = _checkout(tmp_path_factory.mktemp('live') / 'repo')
     subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(root / '.venv')], check=True, timeout=300)
-    sleeper = subprocess.Popen([str(_venv_python(root)), '-c', 'import time; time.sleep(300)'], cwd=root)
+    sleeper = subprocess.Popen(  # no inherited handles: a hook's console pipe may be busy (WinError 231)
+        [str(_venv_python(root)), '-c', 'import time; time.sleep(300)'],
+        cwd=root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     try:
         deadline = time.monotonic() + 60
         while not liverun.live_runs(root) and time.monotonic() < deadline:
@@ -278,7 +284,7 @@ def _junction(link: Path, target: Path) -> None:
         link.symlink_to(target, target_is_directory=True)
 
 
-@pytest.mark.node
+@pytest.mark.workstation  # `node` is workstation kit (the `node` marker was retired into `workstation`)
 def test_the_real_engine_refuses_a_merge_into_a_live_tree_and_allows_an_idle_one(
     live_tree: tuple[Path, int], tmp_path: Path
 ) -> None:

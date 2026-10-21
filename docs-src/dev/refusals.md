@@ -22,17 +22,17 @@ When a command targets another repo, the engine adds one header line naming that
 ## FORGE-WRITE-VIA-CLI
 
 - **Why it is refused.** a forge write through any client but the family door carries no PROVENANCE. The forge records only the token`s login, and every agent on a box shares one token, so an issue, comment, close or PR written this way cannot say which machine or which agent wrote it. The family door opens every body it writes with `[<machine> · <agent> · <branch>]`, read from HARNESS_MACHINE / HARNESS_AGENT.
-- **The exit.** Write through the family door: .venv/Scripts/python.exe or .venv/bin/python -m lab_commons.dev.forge issue create|comment|close, pr create (reads: issue list|view, pr view; token: auth login|status). A write the door has no verb for -- merge, edit, review -- is the integrator`s to make: report it rather than reaching for another client.
+- **The exit.** Write through the family door: .venv/Scripts/python.exe or .venv/bin/python -m lab_commons.dev.forge issue create|comment|close, pr create (reads: issue list|view, pr view; token: auth login|status). A write the door has no verb for -- merge, edit, review -- is the steward`s to make: report it rather than reaching for another client.
 
 ## FORGE-WRITE-VIA-GH-API
 
 - **Why it is refused.** a forge write through any client but the family door carries no PROVENANCE. The forge records only the token`s login, and every agent on a box shares one token, so an issue, comment, close or PR written this way cannot say which machine or which agent wrote it. The family door opens every body it writes with `[<machine> · <agent> · <branch>]`, read from HARNESS_MACHINE / HARNESS_AGENT.
-- **The exit.** Write through the family door: .venv/Scripts/python.exe or .venv/bin/python -m lab_commons.dev.forge issue create|comment|close, pr create (reads: issue list|view, pr view; token: auth login|status). A write the door has no verb for -- merge, edit, review -- is the integrator`s to make: report it rather than reaching for another client.
+- **The exit.** Write through the family door: .venv/Scripts/python.exe or .venv/bin/python -m lab_commons.dev.forge issue create|comment|close, pr create (reads: issue list|view, pr view; token: auth login|status). A write the door has no verb for -- merge, edit, review -- is the steward`s to make: report it rather than reaching for another client.
 
 ## FORGE-WRITE-VIA-HTTP
 
 - **Why it is refused.** a forge write through any client but the family door carries no PROVENANCE. The forge records only the token`s login, and every agent on a box shares one token, so an issue, comment, close or PR written this way cannot say which machine or which agent wrote it. The family door opens every body it writes with `[<machine> · <agent> · <branch>]`, read from HARNESS_MACHINE / HARNESS_AGENT.
-- **The exit.** Write through the family door: .venv/Scripts/python.exe or .venv/bin/python -m lab_commons.dev.forge issue create|comment|close, pr create (reads: issue list|view, pr view; token: auth login|status). A write the door has no verb for -- merge, edit, review -- is the integrator`s to make: report it rather than reaching for another client.
+- **The exit.** Write through the family door: .venv/Scripts/python.exe or .venv/bin/python -m lab_commons.dev.forge issue create|comment|close, pr create (reads: issue list|view, pr view; token: auth login|status). A write the door has no verb for -- merge, edit, review -- is the steward`s to make: report it rather than reaching for another client.
 
 ## GIT-COMMIT-AMEND
 
@@ -46,7 +46,7 @@ When a command targets another repo, the engine adds one header line naming that
 
 ## TREE-HAS-A-LIVE-RUN
 
-- **Why it is refused.** a run executes its checkout's code and `.venv` for its whole life, so an edit, a merge, a checkout or an environment sync under it makes its result describe a tree that never existed. Measured 2026-10-19 in motronics: during a JMAG `deck run`, an agent edited a test, merged into the checkout and re-synced the venv the run executed from. The run is found WITHOUT its cooperation (`lab_commons.dev.liverun`, read off `lab_commons.census`): a process READS the tree when it is a Python interpreter working in it or an argument names a path in it, and the row binds only while one exists. `output/`, `.claude/` and `.venv/` are not the tree; a process executing from the venv locks the venv (`dep`), not the tree.
+- **Why it is refused.** a run executes its checkout's code and `.venv` for its whole life, so an edit, a merge, a checkout or an environment sync under it makes its result describe a tree that never existed. Measured 2026-10-19 in a consumer: during a JMAG `deck run`, an agent edited a test, merged into the checkout and re-synced the venv the run executed from. The run is found WITHOUT its cooperation (`lab_commons.dev.liverun`, read off `lab_commons.census`): a process READS the tree when it is a Python interpreter working in it or an argument names a path in it, and the row binds only while one exists. `output/`, `.claude/` and `.venv/` are not the tree; a process executing from the venv locks the venv (`dep`), not the tree.
 - **The exit.** Work in another worktree (git worktree add --detach .claude/worktrees/<name> <sha>), wait for the run, or stop it: python -m lab_commons.dev.stoprun --pid <pid>.
 
 ## GIT-STASH

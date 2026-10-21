@@ -412,12 +412,17 @@ def test_a_bootstrap_initialises_the_submodules_its_path_dependencies_point_into
 
     The sync's path dependency points into ``components/engine``; uv saw it as not existing until a
     manual ``git submodule update --init``. The fake sync records whether the engine is there when it runs.
+
+    GIT'S DEFAULT POLICY IS PINNED, never opened (2026-10-19, a consumer's fresh worktree): a local submodule
+    url is the ``file`` transport, which git refuses since 2.38.1, and ``dep --bootstrap`` failed on exactly
+    that. This test once opened the transport in the environment and so could not see the defect; now only
+    the FIXTURE's own ``submodule add`` opens it, and the bootstrap must open it itself.
     """
     git = shutil.which('git')
     assert git is not None
-    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')  # a local submodule url is a file:// transport
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')  # git's own default, against a permissive global config
     monkeypatch.setenv('GIT_CONFIG_KEY_0', 'protocol.file.allow')
-    monkeypatch.setenv('GIT_CONFIG_VALUE_0', 'always')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_0', 'user')
     who = ['-c', 'user.name=control', '-c', 'user.email=control@example.invalid']
 
     def git_in(where: Path, *argv: str) -> None:
@@ -434,7 +439,7 @@ def test_a_bootstrap_initialises_the_submodules_its_path_dependencies_point_into
         '[tool.uv.sources]\nengine={path="components/engine"}\n',
         encoding='utf-8',
     )
-    git_in(product, 'submodule', 'add', '-q', engine.as_uri(), 'components/engine')
+    git_in(product, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', engine.as_uri(), 'components/engine')
     git_in(product, 'add', '.')
     git_in(product, 'commit', '-qm', 'product')
     subprocess.run([git, 'clone', '-q', str(product), str(lane)], check=True, capture_output=True)

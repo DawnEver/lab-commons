@@ -25,7 +25,8 @@ The invariants refused here by name, with NO network call beyond the push itself
   declared, the integration branch moves ONLY by the forge's server-side merge of a green pull request
   (:mod:`lab_commons.dev.forgemerge`). Such a merge is on origin before any client holds it, so a client push
   that adds ANY first-parent commit past origin's tip (and past the declared start) is not one, and is refused.
-  It replaces P4 for that branch. There is no integrator break-glass: no such rule exists in the family.
+  It replaces P4 for that branch. The ONE bypass is in the history: a push whose every new first-parent
+  commit carries a non-empty ``Break-Glass: <reason>`` trailer is admitted (:mod:`lab_commons.dev.breakglass`).
 
 Every ref is judged by the declaration its pushed tip carries, never the working tree's; a deletion carries
 no content, so it is judged by the integration branch's declaration (``origin/<integration>``, else the
@@ -45,6 +46,7 @@ from typing import Final
 
 import lab_commons.launch as _door
 from lab_commons.dev.branchset import BranchSetNotDeclared, branchset_at
+from lab_commons.dev.breakglass import BREAK_GLASS, reason
 from lab_commons.dev.lanepolicy import Policy, policy_at
 from lab_commons.dev.mergeaudit import MergeAuditError, judge
 from lab_commons.log import emit
@@ -72,7 +74,6 @@ _HEADS: Final = 'refs/heads/'
 _FIELDS: Final = 4
 _PARENTS: Final = 2
 _TRAILER: Final = re.compile(rf'^{MERGED_BRANCH}:\s*(\S+)\s*$', re.MULTILINE)
-_MERGE: Final = 'python -m lab_commons.dev.integrate merge <branch>'
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -110,11 +111,11 @@ def _merges_only(root: Path, policy: Policy, old: str, new: str) -> list[str]:
         parents = _git(root, 'rev-list', '--parents', '-n', '1', sha).stdout.split()[1:]
         message = _git(root, 'log', '-1', '--format=%B', sha).stdout
         if len(parents) != _PARENTS:
-            found.append(f'{P4}: {sha[:12]} is not a merge ({len(parents)} parent(s)); merge with {_MERGE}')
+            found.append(f'{P4}: {sha[:12]} is not a merge ({len(parents)} parent(s)); land it as a forge-merged PR')
             continue
         name = merged_branch(message)
         if name is None or name == policy.integration:
-            found.append(f'{P4}: {sha[:12]} names no {MERGED_BRANCH}: <branch> trailer; merge with {_MERGE}')
+            found.append(f'{P4}: {sha[:12]} names no {MERGED_BRANCH}: <branch> trailer; land it as a forge-merged PR')
             continue
         try:
             problems = judge(root, parents, sha, message, roots=policy.test_roots, label=sha[:12])
@@ -131,13 +132,16 @@ def _forge_merges_only(root: Path, policy: Policy, old: str, new: str) -> list[s
     if listed.returncode != 0:
         return [f'{P5}: cannot list the new commits of {policy.integration}: {listed.stderr.strip()}']
     added = listed.stdout.split()
-    if not added:
+    unglassed = [sha for sha in added if not reason(_git(root, 'log', '-1', '--format=%B', sha).stdout)]
+    if not unglassed:
         return []
     return [
         (
-            f'{P5}: this push adds {len(added)} commit(s) to {policy.integration} (newest {added[0][:12]}); it '
-            f'moves only by the forge merging a green pull request. Push a pr/<topic> branch and open a PR into '
-            f'{policy.integration} instead'
+            f'{P5}: this push adds {len(added)} commit(s) to {policy.integration}, {len(unglassed)} with no '
+            f'{BREAK_GLASS}: <reason> trailer (newest {unglassed[0][:12]}); it moves only by the forge merging a '
+            f'green pull request. Push a pr/<topic> branch and open a PR into {policy.integration} instead -- or, '
+            f'only when the forge itself is down or its auto-merge broken, give EVERY new commit a '
+            f'{BREAK_GLASS}: <reason> trailer'
         )
     ]
 
