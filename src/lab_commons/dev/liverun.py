@@ -158,8 +158,16 @@ def _named_paths(one: Process) -> Iterable[Path]:
         if text.startswith('-') or ('/' not in text and '\\' not in text):
             continue
         path = Path(text) if Path(text).is_absolute() else Path(one.cwd, text) if one.cwd else None
-        if path is not None and path.exists():
+        if path is not None and _exists(path):
             yield path
+
+
+def _exists(path: Path) -> bool:
+    """``Path.exists`` that answers ``False`` where stat RAISES: a busy named pipe (WinError 231, 2026-10-21)."""
+    try:
+        return path.exists()
+    except OSError:
+        return False
 
 
 def reads_tree(one: Process, root: Path | str) -> bool:
