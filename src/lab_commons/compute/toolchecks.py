@@ -66,7 +66,14 @@ def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, s
     """Run *argv*; ``(exit 0, the last line of its output or why it did not run)``."""
     try:
         done = _door.run(
-            list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout, check=False
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=timeout,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as failed:
         return False, f'{type(failed).__name__}: {failed}'
@@ -77,7 +84,14 @@ def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, s
 def _first_line(argv: Sequence[str]) -> str | None:
     try:
         done = _door.run(
-            list(argv), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60, check=False
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=60,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
