@@ -9,7 +9,7 @@ verdict, and a difference in it means the verdict does not exist rather than tha
 WHY THE KEY TAKES A MANIFEST RATHER THAN READING ONE. Two functions that each read the environment
 can describe two different environments; a manifest and a key cannot, because there is exactly one
 place the environment is read. The same split, for the same reason, as the address in
-:mod:`lab_commons.dev.content`, which is handed its records rather than re-walking its targets.
+:mod:`dev_lab.dev.content`, which is handed its records rather than re-walking its targets.
 
 A GIT INSTALL'S COMMIT RIDES IN THE VERSION STRING, so nothing here reads ``direct_url.json``. pip
 derives ``<declared>+<sha>`` as the installed version of a VCS install, which means the manifest
@@ -22,7 +22,7 @@ is one the next reader adds a file to recover.
 REPRODUCIBILITY IS BY RECORD, NOT BY PIN (user ruling 2026-10-17, "dependencies are not pinned"): no
 lock fixes what a run resolves, so every run record states it -- :func:`env_record` is the key AND the
 full ``name==version`` list it was taken over, written into the local record
-(:func:`lab_commons.dev.localpart.local_record`) and the cluster record (the build's ``resolved`` fact,
+(:func:`dev_lab.dev.localpart.local_record`) and the cluster record (the build's ``resolved`` fact,
 :func:`lab_commons.hpc.shell.build_script`). One manifest read feeds both fields, so they cannot disagree.
 
 THE UNREADABLE ROW IS KEPT, NEVER DROPPED. A distribution whose name or version cannot be read --

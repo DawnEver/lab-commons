@@ -133,8 +133,8 @@ def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
     if shutil.which('sbatch') is None:
         msg = (
             'this box has no sbatch: submitting and gathering run ON the cluster login node, where '
-            '`python -m lab_commons.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
-            'from any machine `python -m lab_commons.dev.forge queue` shows where each run is'
+            '`python -m dev_lab.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
+            'from any machine `python -m dev_lab.dev.forge queue` shows where each run is'
         )
         raise NotOnCluster(msg)
     run = functools.partial(local_runner, timeout=timeout)
@@ -249,7 +249,7 @@ def run_home(job: JobSpec) -> str:
     """Where a job's run directories live: ``~/ci/jobs/<sha>`` for a job at a commit, else ``<workdir>/.lab-hpc``.
 
     A commit's jobs carry the sha in their submit directory, which ``squeue %Z`` reports, so retention reads
-    which artifact a queued or running job needs (:mod:`lab_commons.dev.retentionplan`).
+    which artifact a queued or running job needs (:mod:`dev_lab.dev.retentionplan`).
     """
     return f'~/ci/jobs/{job.sha}' if job.sha else f'{job.workdir.rstrip("/")}/.lab-hpc'
 

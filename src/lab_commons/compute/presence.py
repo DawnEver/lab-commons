@@ -14,7 +14,7 @@ A tool is PRESENT on a host only when all four agree:
 4. no real unit on that tool has failed on this host since that smoke (:func:`demote`).
 
 Each step leaves :class:`Evidence` (source, value, time), and the host card shows it
-(:mod:`lab_commons.dev.forgehosts`): the card is the probe's reading, never a declaration. Seat counts
+(:mod:`dev_lab.dev.forgehosts`): the card is the probe's reading, never a declaration. Seat counts
 are the one thing a person declares (:mod:`lab_commons.box.machine`), because no probe can read a licence.
 
 A smoke costs seconds to minutes (MATLAB starting), so a reading is CACHED for :data:`TTL` in

@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -24,9 +25,6 @@ import pytest
 from lab_commons.compute import learned
 from lab_commons.compute.learned import Measured
 from lab_commons.config import CONFIG_ENV
-from lab_commons.dev.forgestatus import CommitStatus
-from lab_commons.dev.githooks import bash_executable
-from lab_commons.dev.platformparts import PartRefusal, part_of, parts_of
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc import cluster as cluster_module
@@ -75,7 +73,6 @@ from lab_commons.hpc.slurm import parse_snapshot
 from lab_commons.hpc.testcells import TestCell
 from lab_commons.hpc.tree import build_run
 from lab_commons.hpc.watch import PENDING
-from lab_commons.outcomes import Conclusion
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
@@ -165,6 +162,17 @@ def test_a_restarted_item_keeps_only_its_last_attempt_and_a_kept_file_only_its_r
     )
     assert split_streams(text, 'r0') == {0: '{"item": 0, "b": 2}', 1: '{"item": 1, "c": 3}'}
     assert split_streams(text, 'r1') == {}, 'PLANTED CONTROL: a kept file of another round is no stream of this one'
+
+
+def bash_executable() -> str:
+    """Bash: ``PATH`` first, then the one Git for Windows ships beside its ``git``."""
+    if found := shutil.which('bash'):
+        return found
+    git = shutil.which('git')
+    beside = Path(git).resolve().parent.parent / 'bin' / 'bash.exe' if git else None
+    assert beside is not None, 'no bash on PATH and no git to find one beside'
+    assert beside.is_file(), f'no bash on PATH and none at {beside}'
+    return str(beside)
 
 
 def _bash_runner() -> Callable[[str, str | None], str]:
@@ -640,8 +648,6 @@ def test_what_is_still_unfinished_after_the_retries_is_infra() -> None:
     words = _words(record['cells'])
     assert words['tests/b.py::t3'] == 'ok', 'what a killed shard finished is kept'
     assert [words[f'tests/b.py::t{n}'] for n in (4, 5)] == ['infra', 'infra'], 'the machine, not the test, said no'
-    with pytest.raises(PartRefusal, match='INCONCLUSIVE'):
-        part_of(record)
 
 
 def test_an_out_of_memory_round_doubles_the_memory_of_the_next() -> None:
@@ -1523,7 +1529,7 @@ def test_a_failed_run_build_is_inconclusive(
     assert 'could not find `cargo`' in capsys.readouterr().err
 
 
-# -- carried cells (lab_commons.dev.forgecarry) ------------------------------------------------------
+# -- carried cells (dev_lab.dev.forgecarry) ------------------------------------------------------
 
 A_SHA = 'a' * 40
 OK_CELL: dict[str, object] = {'status': 'ok', 'evidence': 'observed'}
@@ -1552,14 +1558,6 @@ def test_carried_ids_are_never_submitted_and_the_record_names_their_origin() -> 
     assert record['carried'] == {'tests/a.py::t1': A_SHA, 'tests/a.py::t2': A_SHA}, 'an id not collected is not taken'
     assert _words(record['cells'])['tests/a.py::t2'] == 'rejected', 'a carried red stays red'
     assert record['scope'] == FULL, 'a carried run is still the full suite'
-    part = part_of(record)
-    assert (part.ran, part.kept, part.result) == (3, {A_SHA[:12]: 2}, Conclusion.FAIL), (
-        'carried is never counted as run'
-    )
-    assert part.description().endswith(f'kept={A_SHA[:12]}:2')
-    assert (
-        parts_of([CommitStatus(f'tests/{part.platform}', 'failure', part.description(), '')])[0][part.platform] == part
-    )
 
 
 def test_a_run_whose_every_id_is_carried_writes_its_record_without_a_job() -> None:
@@ -1569,7 +1567,6 @@ def test_a_run_whose_every_id_is_carried_writes_its_record_without_a_job() -> No
     assert not fake.manifests, 'nothing was submitted'
     assert state['rounds'] == []
     assert _gather(fake) == state['record']
-    assert part_of(state['record']).ran == 0
 
 
 def test_two_parts_of_one_sha_are_two_runs_with_two_states_and_two_job_names() -> None:

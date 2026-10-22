@@ -2,14 +2,14 @@
 
 ONE FILE PER REPOSITORY, ``<config dir>/compute-learned/<key>.json`` (beside the machine file), keyed by
 the remote URL and machine-local, so it serves every host and grant the machine holds. It holds two
-kinds of fact, both written by finished runs -- a box run (:mod:`lab_commons.dev.forgeproduce`) and a
+kinds of fact, both written by finished runs -- a box run (:mod:`dev_lab.dev.forgeproduce`) and a
 Slurm run (:mod:`lab_commons.hpc.run`) alike -- and never by hand:
 
 * PER TEST (:class:`Measured`) -- what prices a shard and a worker: seconds per node id, floors, per-file
   overheads and per-file peak RSS. :meth:`Measured.pack` cuts a Slurm array from it, grouping files by memory class;
   :meth:`Measured.item_gb` is one item's memory;
   :meth:`Measured.worker_gb` is the memory one worker needs -- a Slurm task's request and a box
-  selection's claim (:func:`lab_commons.dev.verifybox.selection_mem_gb`).
+  selection's claim (:func:`dev_lab.dev.verifybox.selection_mem_gb`).
 * PER JOB (:class:`Run`), keyed by ``(producer, need-set)`` -- the job's peak memory, cpu-seconds and wall
   seconds, read back as a :class:`~lab_commons.compute.model.Demand` by :func:`demand`, with a declared
   prior for a job never measured.
@@ -492,7 +492,7 @@ def selection_gb(repo: str, files: Iterable[str], workers: int, *, whole_gb: flo
     Each worker at :func:`worker_gb` -- the worst file's learned peak times :data:`BOX_HEADROOM`, an unmeasured
     file at its siblings' median, never under :class:`~lab_commons.hpc.config.Cost`'s per-task floor (the
     runner a worker carries) -- and never under a measured *whole_gb* tree peak times the headroom. A verify
-    selection (:func:`lab_commons.dev.verifybox.selection_mem_gb`) and an unmeasured box part
+    selection (:func:`dev_lab.dev.verifybox.selection_mem_gb`) and an unmeasured box part
     (:func:`box_demand`) both read it, so a part of ONE cheap test asks one floor, not a repo-wide constant.
     """
     per = worker_gb(repo, files, prior_gb=Cost().mem_gb, safety=BOX_HEADROOM)
@@ -503,7 +503,7 @@ def fit_width(cap: int, *, cpu: float, mem_gb: float, per_gb: float) -> int:
     """THE ONE WIDTH RULE: *cap* workers, narrowed to the FREE *cpu* and *mem_gb* at *per_gb* each, never under one.
 
     One worker that does not fit is still one: its claim waits for the room, never priced under a worker. A
-    box part (:func:`box_demand`) and a verify selection (:func:`lab_commons.dev.verifybox.selection_workers`)
+    box part (:func:`box_demand`) and a verify selection (:func:`dev_lab.dev.verifybox.selection_workers`)
     both read it, and the pytest ``-n`` each runs IS this number (declared == used).
     """
     held = math.floor(mem_gb / per_gb) if per_gb > 0 else cap
@@ -518,7 +518,7 @@ def box_demand(repo_url: str, needs: frozenset[str], *, cpu: float, mem_gb: floa
     (:func:`selection_gb` of the files its need-set's latest forge record ran, :func:`part_files`). Its width is
     :func:`fit_width` of the cores it kept busy, else one per id it is handed (*ids*, as the commit's posted
     parts count them; ``None`` unknown) up to :data:`PART_WIDTH`. The cores ARE the workers its producer runs
-    (:func:`lab_commons.dev.verifybox.claimed_width`) and the memory is that width at the worker's price, so a
+    (:func:`dev_lab.dev.verifybox.claimed_width`) and the memory is that width at the worker's price, so a
     part on a memory-starved box runs narrower instead of never being admitted. One seat of each need.
     """
     run = run_of(repo_url, LOCAL, needs)

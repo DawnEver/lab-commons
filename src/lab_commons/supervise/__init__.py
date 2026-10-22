@@ -29,5 +29,5 @@ The modules are reached by name rather than re-exported here, so this package's 
 module list and nothing is bound twice.
 """
 
-#: Reached by name, like ``lab_commons.dev.netverb``: no re-export, so no name is bound twice.
+#: Reached by name, like ``dev_lab.dev.netverb``: no re-export, so no name is bound twice.
 __all__: list[str] = []

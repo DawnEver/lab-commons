@@ -2,7 +2,7 @@
 
 THE ONE CODE PATH of ``run gather [--wait]`` and of ``forge serve``'s gather step; where a run still
 pending is comes from :func:`lab_commons.hpc.progress.where`. Notification is NOT here: ``forge serve``
-posts a run's progress on its claim and raises alarms (:mod:`lab_commons.dev.forgerun`).
+posts a run's progress on its claim and raises alarms (:mod:`dev_lab.dev.forgerun`).
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def settle(
             )
             emit(describe(phases(record)))
             emit(f'written {path}')
-            emit(f'post it as the {record["platform"]} part: python -m lab_commons.dev.platformparts post {path}')
+            emit(f'post it as the {record["platform"]} part: python -m dev_lab.dev.platformparts post {path}')
         if not left:
             return 1 if red else 0
         if sleep is None:
