@@ -287,10 +287,7 @@ def cluster_part(root: Path, head: str) -> ClusterPart:
     collect = _text(hpc, name, 'collect', '"tests"', required=False)
     outputs = _strings(hpc.get('outputs'), name, 'outputs', '["output/fields/*.h5"]', required=False)
     return ClusterPart(
-        repo_url=origin_url(root),
-        collect=collect,
-        output=_records(root, head, declared),
-        outputs=tuple(outputs),
+        repo_url=origin_url(root), collect=collect, output=_records(root, head, declared), outputs=tuple(outputs)
     )
 
 
@@ -357,12 +354,7 @@ def part_of(record: Mapping[str, Any]) -> Part:
     hands = dict(Counter(handed.values()))
     kept = dict(Counter(origin[:12] for node, origin in record.get('carried', {}).items() if node in covered))
     return Part(
-        platform=platform,
-        scope=scope,
-        result=result,
-        ran=len(covered) - sum(kept.values()),
-        hands=hands,
-        kept=kept,
+        platform=platform, scope=scope, result=result, ran=len(covered) - sum(kept.values()), hands=hands, kept=kept
     )
 
 

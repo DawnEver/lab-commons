@@ -122,7 +122,11 @@ def assert_scratch_never_committed(root: Path) -> None:
     """
     scratch = declared_placement(root).scratch
     done = launch.run(
-        ['git', '-C', str(root), 'ls-files', '-z', '--', scratch], capture_output=True, text=True, check=True
+        ['git', '-C', str(root), 'ls-files', '-z', '--', scratch],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=True,
     )
     tracked = set(filter(None, done.stdout.split('\0')))
     readme = f'{scratch}{SCRATCH_README}'
