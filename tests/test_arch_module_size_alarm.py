@@ -76,6 +76,9 @@ def code_lines(path: Path) -> int:
 DEBT: dict[str, int] = {
     'src/lab_commons/dev/_rule_rows.py': 422,  # 461 raw; every line it gained was ISC004 parenthesisation
     'src/lab_commons/dev/_unit_tokens.py': 310,  # 408 raw; a token registry, 10 lines over
+    # Over the band at 8c401f0 and unpinned there: pinned with their measurement, each a refactor not yet done.
+    'src/lab_commons/dev/workstation.py': 335,
+    'src/lab_commons/hpc/run.py': 319,
 }
 
 #: The ceiling on the escape hatch: total pinned debt in CODE lines. It went UP exactly once, on

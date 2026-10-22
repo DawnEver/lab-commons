@@ -1,6 +1,6 @@
 """SCARCE-PARTS-BY-REACH -- a PR needs a scarce part only where its diff reaches that part's tests.
 
-User ruling 2026-10-22 ("统一全部"): Windows capacity is scarce (G is the only Windows forge host), so a PR must
+User ruling 2026-10-22 ("unify all of it"): Windows capacity is scarce (G is the only Windows forge host), so a PR must
 not wait on it for tests its change cannot affect. A part is SCARCE when its need-set holds a resource the
 repository declares scarce -- ONE table, data, at the judged commit::
 
