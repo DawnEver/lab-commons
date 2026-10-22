@@ -37,10 +37,12 @@ from lab_commons.outcomes.record import OUTCOME, Event
 
 __all__ = [
     'BUILD_TIMEOUT',
+    'SUBMIT_LIMIT',
     'TERMINAL_OK',
     'NotOnCluster',
     'Runner',
     'Submission',
+    'SubmitLimit',
     'Unreachable',
     'failover_runner',
     'files_of',
@@ -56,6 +58,14 @@ __all__ = [
     'submitter',
     'throttle',
 ]
+
+#: Slurm's refusal of a submit past the per-user QOS ``MaxSubmitPU`` -- a CAPACITY signal, never a failed run.
+SUBMIT_LIMIT: Final = 'QOSMaxSubmitJobPerUserLimit'
+
+
+class SubmitLimit(RuntimeError):
+    """``sbatch`` refused a band on :data:`SUBMIT_LIMIT`; the bands this round already queued were cancelled."""
+
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
 type Runner = Callable[[str, str | None], str]
@@ -306,6 +316,7 @@ def submit_bands(
     arrays: each *plan* covers its own consecutive shard indices of the one manifest (their shards
     concatenated, in order), and its ``sbatch`` overrides the script's ``--mem``, ``--time``,
     ``--partition`` and ``--qos`` with its own. Returns the run directory and each band's job id, in order.
+    A band refused on :data:`SUBMIT_LIMIT` cancels the bands already queued and raises :class:`SubmitLimit`.
     """
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
@@ -324,7 +335,14 @@ def submit_bands(
             *([f'--qos={plan.qos}'] if plan.qos else []),
         ]
         array = _array_spec(indices, plan.throttle)
-        out = run(f'cd {quoted} && sbatch --parsable {" ".join(own)} --array={array} job.sh', None)
+        try:
+            out = run(f'cd {quoted} && sbatch --parsable {" ".join(own)} --array={array} job.sh', None)
+        except RuntimeError as refused:
+            if SUBMIT_LIMIT not in str(refused):
+                raise
+            if job_ids:  # a round is whole or not at all: the bands it queued would hold submit slots
+                run(f'scancel {" ".join(job_ids)}', None)
+            raise SubmitLimit(str(refused)) from refused
         job_id = out.strip().split(';')[0]
         if not job_id.isdigit():
             msg = f'sbatch did not return a job id: {out!r}'

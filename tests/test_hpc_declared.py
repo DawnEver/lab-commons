@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons.hpc.builds import read_builds
-from lab_commons.hpc.declared import KNOWN_TABLES, OutdatedKit, kit_tables
+from lab_commons.hpc.declared import KNOWN_TABLES, InvalidDeclaration, KitAheadOfItsServer, OutdatedKit, kit_tables
 from lab_commons.hpc.needsets import read_vocabulary
 
 SRC = Path(__file__).resolve().parents[1] / 'src' / 'lab_commons'
@@ -33,6 +33,19 @@ def test_every_judged_reader_refuses_it() -> None:
     for reader in (read_vocabulary, read_builds):
         with pytest.raises(OutdatedKit):
             reader(NEWER)
+
+
+def test_the_kit_declaring_an_unknown_table_is_its_own_commits_defect() -> None:
+    """PLANTED (lab-commons #244): no server of the kit knows a table the kit's own unmerged commit adds.
+
+    PLANTED CONTROL: the test above -- the same table in a consumer is the READER's defect (OutdatedKit).
+    """
+    with pytest.raises(
+        KitAheadOfItsServer, match=r'drop \[tool\.lab_commons\.tomorrow\] until the kit merges'
+    ) as raised:
+        kit_tables('[project]\nname = "lab_commons"\n' + NEWER)
+    assert not isinstance(raised.value, OutdatedKit)
+    assert isinstance(raised.value, InvalidDeclaration)
 
 
 def test_a_known_declaration_reads_and_an_absent_one_is_empty() -> None:
