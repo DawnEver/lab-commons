@@ -26,6 +26,10 @@ _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (lab_commons/dev
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
     **COMPUTE,
+    # Scratch is tracked by git but never committed (user ruling 2026-10-22): a one-off is promoted into src/
+    # with tests or deleted; the archive-to-memory exit is gone with no compatibility path.
+    'SCRATCH-ARCHIVED-OR-PROMOTED': 'SCRATCH-IS-NEVER-COMMITTED (lab_commons.dev.scratch)',
+    'archive_scratch': 'promote into src/ with tests, or python -m lab_commons.dev.scratch discard <path>',
     # A unit lives in the VALUE, never the NAME (user ruling 2026-10-19): the box wait is a pint duration.
     '--lock-wait-s': '--lock-wait "<duration>" (a time quantity such as "30 s"; a bare number is refused)',
     # A model API key is one scheme: its provider's host, username api-key[-<task>] (user ruling 2026-10-19).
