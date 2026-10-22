@@ -61,7 +61,7 @@ def save_toml(file_path: Path, dict_data: dict) -> None:
     """
     try:
         # Create the parent dir if missing: save targets like the user modeling
-        # library (config/lib/...) may not exist yet on a fresh machine.
+        # library (config/lib/<file>) may not exist yet on a fresh machine.
         Path(file_path).parent.mkdir(parents=True, exist_ok=True)
         with Path.open(file_path, 'w', encoding='utf-8') as f:
             f.write(dumps(dict_data))
