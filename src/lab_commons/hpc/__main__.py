@@ -31,6 +31,10 @@ cron tick of it: the host refreshes the kit and the repo, then the repo's ``forg
 (:mod:`lab_commons.hpc.allocation`), ``allocate --show`` prints it, ``allocate --clear`` deletes it. Every
 planning verb resolves ``$LC_HPC_SESSION``'s share from that record, else derives it from Slurm
 (:func:`lab_commons.hpc.allocate.resolve`).
+
+``clean --root <remote abs dir> [--dry-run] [--grant <user>] <name>...`` deletes named directories directly
+under that root through the grant, refusing everything if a running job works under one
+(:mod:`lab_commons.hpc.clean`).
 """
 
 from __future__ import annotations
@@ -43,7 +47,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
-from lab_commons.hpc import deploy, tick
+from lab_commons.hpc import clean, deploy, tick
 from lab_commons.hpc.allocate import allocate, resolve
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
@@ -368,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     """Parse the verb and dispatch it against this machine's grants."""
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
-    direct = {'deploy': deploy.main, 'allocate': allocate}
+    direct = {'deploy': deploy.main, 'allocate': allocate, 'clean': clean.main}
     if argv and argv[0] in direct:
         return direct[argv[0]](argv[1:])
     if argv[:1] == ['tick'] and argv[1:]:
