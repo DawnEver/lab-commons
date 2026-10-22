@@ -98,11 +98,11 @@ _SHA_HEX: Final = 40
 
 
 #: Prints the tree venv's env record as two facts from ONE manifest reading, the fields of
-#: :func:`lab_commons.dev.envkey.env_record`: ``env`` (the key a base part is carried under) and ``resolved``
+#: :func:`lab_commons.envkey.env_record`: ``env`` (the key a base part is carried under) and ``resolved``
 #: (every ``name==version`` it ran against, JSON). Spelled with ``env_manifest``/``env_key`` so a tree whose
 #: resolved kit predates ``env_record`` still reports both. Single quotes only: it runs inside ``python -c "..."``.
 _ENV_FACTS: Final = (
-    'import json; from lab_commons.dev import envkey as k; m = list(k.env_manifest()); '
+    'import json; from lab_commons import envkey as k; m = list(k.env_manifest()); '
     "print(k.env_key(m)); print('resolved=' + json.dumps(m))"
 )
 

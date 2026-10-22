@@ -75,7 +75,7 @@ def build_run(spec: RunSpec, run: Runner, where: str) -> dict[str, Any]:
     told: dict[str, Any] = dict(facts(built))
     if not told.get('env'):
         msg = (
-            f'the venv built for {spec.sha[:12]} on {where} reported no env hash (lab_commons.dev.envkey is not '
+            f'the venv built for {spec.sha[:12]} on {where} reported no env hash (lab_commons.envkey is not '
             'importable there), so its part could never be carried; nothing was submitted'
         )
         raise NotSubmitted(msg)

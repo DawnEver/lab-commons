@@ -23,7 +23,6 @@ _PKG: Final = _ROOT / 'src' / 'lab_commons'
 GATED: Final[dict[str, str]] = {
     'em': 'units',
     'file_io': 'io',
-    'multiprocess': 'units',
     'paths': 'paths',
     'structured': 'structured',
     'units': 'units',
