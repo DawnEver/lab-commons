@@ -246,6 +246,12 @@ class Candidate:
     refused: str = ''  # why its own request body is refused (an unvouched host pin); '' when it is not
     paths: tuple[str, ...] = ()  # the test files a TESTS request names (lab_commons.dev.forgerequest); () else
 
+    def __post_init__(self) -> None:
+        """Work is always AT a commit: an empty sha is refused here, never carried to a ``statuses/<sha>`` URL."""
+        if not self.sha:
+            msg = f'{self.ref} names no commit sha: a candidate is work at a commit'
+            raise ValueError(msg)
+
     @property
     def key(self) -> str:
         """How a host card and an alarm name it: ``<ref>@<sha12>:<platform>``."""
