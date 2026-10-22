@@ -102,6 +102,7 @@ __all__ = [
     'shares_home',
     'submit_round',
     'submit_run',
+    'withdraw_pending',
 ]
 
 
@@ -386,8 +387,54 @@ def cancel_run(
 ) -> list[str]:
     """``scancel`` every recorded round of *sha*'s run of *part*, *also*, and any job of its name Slurm holds.
 
-    THE ONE cancel path. Names are its :func:`job_name` and *aliases*; squeue's ``%F`` is the array's own id
-    (``%i`` spells a pending array ``7683032_[12-68%1]``, which ``scancel`` refuses: Ada 2026-10-14).
+    THE DELIBERATE STOP (a user's or integrator's): started tasks die too. Supersession never calls it
+    (:func:`withdraw_pending`).
+    """
+    shell, _names, ids = _run_jobs(sha, part, machine, connect, also=also, aliases=aliases)
+    if ids:
+        shell(f'scancel {shlex.join(ids)}', None)
+    return ids
+
+
+def withdraw_pending(
+    sha: str,
+    part: str,
+    machine: Machine,
+    connect: Callable[[Grant], Runner],
+    *,
+    also: Sequence[str] = (),
+    aliases: Sequence[str] = (),
+) -> list[str]:
+    """Withdraw every NOT-YET-STARTED task of *sha*'s run of *part*; the job ids still started after it.
+
+    NEWEST-HEAD-ONLY (user ruling 2026-10-22): a superseded run loses its pending tasks and keeps its started
+    ones -- ``scancel --state=PENDING`` drops only an array's pending elements, never a running one. ``[]``
+    means nothing of the run is left running.
+    """
+    shell, names, ids = _run_jobs(sha, part, machine, connect, also=also, aliases=aliases)
+    if not ids:
+        return []
+    shell(f'scancel --state=PENDING {shlex.join(ids)}', None)
+    return sorted(set(shell(f'squeue -h --me -n {names} -t {_STARTED} -o %F', None).split()))
+
+
+#: The squeue states of a task that has STARTED: supersession never cancels one.
+_STARTED: Final = 'RUNNING,COMPLETING,CONFIGURING,SUSPENDED'
+
+
+def _run_jobs(
+    sha: str,
+    part: str,
+    machine: Machine,
+    connect: Callable[[Grant], Runner],
+    *,
+    also: Sequence[str],
+    aliases: Sequence[str],
+) -> tuple[Runner, str, list[str]]:
+    """The shell, the job names, and every job id of the run: each recorded round, *also*, and squeue's by name.
+
+    Names are its :func:`job_name` and *aliases*; squeue's ``%F`` is the array's own id (``%i`` spells a
+    pending array ``7683032_[12-68%1]``, which ``scancel`` refuses: Ada 2026-10-14).
     """
     try:
         state, _ = load_state(sha, part, machine, {grant.account: connect(grant) for grant in machine.grants})
@@ -399,10 +446,7 @@ def cancel_run(
     shell = connect(machine.grants[0])
     names = ','.join((job_name(sha, part), *aliases))
     held = shell(f'squeue -h --me -n {names} -o %F', None).split()
-    ids = sorted({*recorded, *also, *held})
-    if ids:
-        shell(f'scancel {shlex.join(ids)}', None)
-    return ids
+    return shell, names, sorted({*recorded, *also, *held})
 
 
 def job_name(sha: str, part: str) -> str:

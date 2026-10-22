@@ -24,8 +24,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Final, Protocol
 
+from lab_commons.compute.durable import durable_write
 from lab_commons.compute.unit import canonical, content_hash
-from lab_commons.dev._forge_journal import durable_write
 
 __all__ = [
     'INSTALL_BACKOFF_S',

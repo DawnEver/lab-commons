@@ -1,4 +1,4 @@
-"""``lab_commons.dev.envkey`` — the environment a verdict was earned in, keyed.
+"""``lab_commons.envkey`` — the environment a verdict was earned in, keyed.
 
 The key exists so that a dependency moving underneath a verdict is VISIBLE. So the tests are about
 the two ways that could fail to be true: a version that changed without the key changing, and a
@@ -10,7 +10,7 @@ from typing import ClassVar
 
 import pytest
 
-from lab_commons.dev.envkey import UNREADABLE, env_key, env_manifest, env_record, interpreter_identity
+from lab_commons.envkey import UNREADABLE, env_key, env_manifest, env_record, interpreter_identity
 
 
 class _Dist:

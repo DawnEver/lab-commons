@@ -205,8 +205,14 @@ class Schedule:
     )
     #: Classes whose ref is COALESCED (D6, user ruling 2026-10-17): at most one run per (ref, part) in flight
     #: across the fleet, and the ref's current tip waits behind it -- the next tip is tested as one batch. A
-    #: class absent here (a lane ``branch``, a ``pr`` head) is tested at every pushed sha.
-    coalesce: tuple[str, ...] = (INTEGRATION, FEATURE)
+    #: class absent here (a lane ``branch``) is tested at every pushed sha. A ``pr`` head is coalesced: one PR
+    #: session holds at most one run per part in flight (user ruling 2026-10-22).
+    coalesce: tuple[str, ...] = (INTEGRATION, FEATURE, PR)
+    #: Classes served STRICTLY before every other, in this order, whatever their score (user ruling
+    #: 2026-10-22: on a scarce host the integration branch, then the PRs into it, never pile up behind lanes).
+    served_first: tuple[str, ...] = (INTEGRATION, PR)
+    #: Classes ordered OLDEST FIRST (by when their sha was committed) instead of by score.
+    oldest_first: tuple[str, ...] = (PR,)
     #: The label that makes an open issue a request.
     request_label: str = 'forge:request'
     #: Hours a request may wait unclaimed before its issue is told, ONCE, why the host that saw it did not admit it.
@@ -307,7 +313,9 @@ def rank(
     weights: Mapping[str, float] | None = None,
     priority: Callable[[Candidate], bool] = lambda _: False,
 ) -> tuple[Ranked, ...]:
-    """Every candidate scored and ordered: *priority* first, then by score within each.
+    """Every candidate ordered: *priority*, a user boost, ``served_first`` classes in order, then the rest.
+
+    Within a class by score, or oldest first for an ``oldest_first`` class (user ruling 2026-10-22).
 
     *priority* is the ranking host's declared ordering (:mod:`lab_commons.compute.priority`): pure order,
     never a claim on supply.
@@ -329,12 +337,20 @@ def rank(
             ranked,
             key=lambda item: (
                 not item.priority,
-                -item.score,
+                boost_of(item.candidate.labels, schedules[item.candidate.repo]) <= 0,
+                *_tier(item.candidate, schedules[item.candidate.repo], item.score),
                 item.candidate.since,
                 item.candidate.key,
             ),
         )
     )
+
+
+def _tier(candidate: Candidate, schedule: Schedule, score: float) -> tuple[int, float]:
+    """``(strict tier, order within it)``: a ``served_first`` class's index (the rest after), then score or age."""
+    first = schedule.served_first
+    tier = first.index(candidate.kind) if candidate.kind in first else len(first)
+    return tier, candidate.since.timestamp() if candidate.kind in schedule.oldest_first else -score
 
 
 def starved(ranked: Sequence[Ranked], schedules: Mapping[str, Schedule]) -> tuple[Ranked, ...]:
