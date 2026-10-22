@@ -14,6 +14,9 @@ take; it is admitted only when the MEASURED room holds it, and it runs inside a 
    core; `mem_margin`, default 0.10 of its memory) -- never more than the box's size less every declaration.
    An editor, a vendor GUI or another user's session counts because the OS counts it. Tool seats are declared:
    `[capabilities.<name>] seats`, 1 when undeclared.
+   A LENT resource is a count its CONSUMER declares from its own table (`box.Capacity.lent`, a job slot on
+   a remote node, say): named `<kind>:<instance>`, a shape no machine-file name can take, so its count has
+   one source. A seats-only claim takes no share of the machine, so it never samples the OS.
 3. **The claim is the limit.** `box.run` runs the process tree inside a Windows Job Object or a Linux
    systemd scope (on Slurm, the allocation or an RSS watchdog): killed past its memory or wall, so a claim is
    never exceeded and never idle-but-held. Where nothing can enforce, the run is refused.

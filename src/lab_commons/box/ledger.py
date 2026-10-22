@@ -380,6 +380,10 @@ def adopted(claim_id: int) -> Iterator[None]:
         release(Claim(claim_id, 0.0))
 
 
+#: The reading a SEATS-ONLY demand is decided on: it takes no share of the machine, so the OS is not sampled.
+_NO_SHARE: Final = Reading(cores=0.0, idle_cores=0.0, total_bytes=0, available_bytes=0)
+
+
 def _wait(
     con: sqlite3.Connection,
     ticket: int,
@@ -393,7 +397,7 @@ def _wait(
     poll_s: float,
 ) -> Claim:
     while True:
-        reading = read([h.pid for h in _read(con)])
+        reading = _NO_SHARE if not demand.cpu and not demand.mem_bytes else read([h.pid for h in _read(con)])
         with _immediate(con):
             outcome = _try(con, ticket, capacity, demand, what, reading=reading, tag=tag)
         if isinstance(outcome, Claim):
