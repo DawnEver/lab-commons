@@ -1888,3 +1888,28 @@ def test_a_retry_round_that_never_finds_room_settles_with_what_ran_and_names_the
     assert words['tests/b.py::t3'] == 'ok'
     assert [words[f'tests/b.py::t{n}'] for n in (4, 5)] == ['infra', 'infra']
     assert _whys(record['cells'])['tests/b.py::t4'].startswith('never ran: no submit room')
+
+
+def test_a_job_slurm_no_longer_holds_does_not_stop_a_withdrawal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A job Slurm no longer holds is the state a withdrawal or a cancel asks for (Ada 2026-10-23).
+
+    A recorded round's job had finished, ``scancel`` named it ``Invalid job id`` and exited 1,
+    so the superseded run never withdrew and every newer integration head waited behind it.
+
+    PLANTED CONTROL: any other ``scancel`` refusal still raises.
+    """
+    refusal = ['scancel: error: Kill job error on job id 100: Invalid job id specified']
+
+    def runner(command: str, _stdin: object) -> str:
+        if command.startswith('scancel'):
+            raise RuntimeError('bash exited 1: ' + '\n'.join(refusal))
+        return ''
+
+    monkeypatch.setattr(run_module, 'load_state', lambda *_a, **_k: ({'rounds': [{'job_ids': ['100']}]}, runner))
+    machine = Machine(session=None, grants=(GRANT,))
+    assert run_module.withdraw_pending('a' * 40, 'base', machine, lambda _grant: runner) == []
+    assert run_module.cancel_run('a' * 40, 'base', machine, lambda _grant: runner) == ['100']
+
+    refusal[:] = ['scancel: error: Kill job error on job id 100: Access/permission denied']
+    with pytest.raises(RuntimeError, match='permission denied'):
+        run_module.withdraw_pending('a' * 40, 'base', machine, lambda _grant: runner)
