@@ -392,7 +392,7 @@ def cancel_run(
     """
     shell, _names, ids = _run_jobs(sha, part, machine, connect, also=also, aliases=aliases)
     if ids:
-        shell(f'scancel {shlex.join(ids)}', None)
+        _scancel(shell, ids)
     return ids
 
 
@@ -414,8 +414,25 @@ def withdraw_pending(
     shell, names, ids = _run_jobs(sha, part, machine, connect, also=also, aliases=aliases)
     if not ids:
         return []
-    shell(f'scancel --state=PENDING {shlex.join(ids)}', None)
+    _scancel(shell, ids, '--state=PENDING')
     return sorted(set(shell(f'squeue -h --me -n {names} -t {_STARTED} -o %F', None).split()))
+
+
+#: ``scancel``'s line for an id Slurm no longer holds: a job already gone is what a cancel asks for.
+_GONE: Final = 'Invalid job id specified'
+
+
+def _scancel(shell: Runner, ids: Sequence[str], *flags: str) -> None:
+    """``scancel`` *ids*; an id Slurm no longer holds is not a refusal (Ada 2026-10-23), any other line is.
+
+    ``scancel`` still signals every id it holds when one of them is gone, and exits 1 for the gone one.
+    """
+    try:
+        shell(shlex.join(('scancel', *flags, *ids)), None)
+    except RuntimeError as refused:
+        errors = [line for line in str(refused).splitlines() if 'error' in line]
+        if not errors or any(_GONE not in line for line in errors):
+            raise
 
 
 #: The squeue states of a task that has STARTED: supersession never cancels one.
