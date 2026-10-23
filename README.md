@@ -21,6 +21,7 @@ The base installation is the standard library alone. Select capabilities explici
 
 | Extra | Modules | Additional dependencies |
 |---|---|---|
+| none | `html` report identities and document delivery | Standard library only |
 | `units` | `units`, `em` | NumPy, Pint, Pydantic |
 | `paths` | `paths` | platformdirs |
 | `io` | `file_io` | rtoml |
@@ -44,6 +45,9 @@ The base installation is the standard library alone. Select capabilities explici
   transport (console-only before the run directory is known, then a JSONL file sink).
 - `lab_commons.file_io` — TOML read/write (`read_toml`, `save_toml`), plus filesystem
   presence helpers (`check_path`, `list_files_in_dir`).
+- `lab_commons.html` — explicit case/report identity, portable filenames, UTF-8 HTML
+  documents and atomic delivery; safe JSON data blocks, escaped nested key/value
+  tables and report-relative asset URLs. No business model or plotting dependency.
 - `lab_commons.exceptions` — the generic subset of exception classes/decorators
   (`ParameterException`, `QuantityException`, `deprecated`, `not_implemented`).
   Project-specific exceptions (a vendor-solver name, an error-code catalog) stay in
@@ -103,6 +107,32 @@ The base installation is the standard library alone. Select capabilities explici
 - **consumer-b** — consumes the runtime package (logging, paths, file_io, exceptions, units, em) and
   the `[dev]` kit the same way. Its forks (Hairpinexample-org, consumer-b-webui) do NOT depend on
   lab-commons.
+
+## Case-owned HTML reports
+
+The business adapter supplies the canonical case name; this module never guesses
+identity from a directory, title, machine dimensions or current time. A primary
+report is `<case>.html`; a distinct report kind is `<case>.<kind>.html`. Unsafe,
+ambiguous or overlong names are rejected rather than silently slugged or truncated.
+
+```python
+from lab_commons.html import ReportIdentity, html_document, key_value_table, write_html_report
+
+identity = ReportIdentity('example_case')
+document = html_document('Example report', key_value_table({'configuration': {'slots': 72}}))
+path = write_html_report(run_directory, identity, document)
+```
+
+The caller resolves `run_directory` using its existing artifact policy. The writer
+owns only validated naming and atomic UTF-8/LF delivery. Generic figure exports,
+documentation `index.html`, and Markdown reports are separate mechanisms.
+
+`body_html`, CSS and JavaScript are trusted producer code, not user values. Titles
+are escaped; `json_data={'report-data': payload}` embeds strict, script-safe JSON;
+`key_value_table` escapes keys and values while retaining nested parent paths.
+`relative_asset_url` percent-encodes an asset path confined to the report directory.
+Chart selection, themes, domain units, section ordering and offline asset packaging
+remain the consuming application's responsibility.
 
 ## Installing (git URL)
 
