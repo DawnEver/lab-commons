@@ -60,7 +60,9 @@ def test_a_demand_without_a_field_is_a_type_error() -> None:
 
 
 @pytest.mark.parametrize(
-    'fields', [{'cpu': 0}, {'mem_gb': 0.0}, {'wall_s': -1}, {'seats': {'jmag': -1}}], ids=['cpu', 'mem', 'wall', 'seat']
+    'fields',
+    [{'cpu': -1}, {'mem_gb': 0.0}, {'wall_s': -1}, {'seats': {'jmag': -1}}],
+    ids=['cpu', 'mem', 'wall', 'seat'],
 )
 def test_a_non_positive_dimension_is_refused(fields: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match=next(iter(fields)).split('_')[0]):
