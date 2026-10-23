@@ -61,7 +61,8 @@ __all__ = [
 #: The one override record's name on the forge records home.
 RECORD: Final = 'hpc-allocation.json'
 
-#: The entry-point group of the one record reader: a callable returning the record's bytes, ``None`` if absent.
+#: The entry-point group of the one record reader: a callable returning the record's bytes, ``None`` if absent;
+#: a forge it cannot read raises :class:`OSError`.
 READER: Final = 'lab_commons.hpc.allocation'
 
 #: The stream every job without a session tag counts as.
@@ -124,18 +125,14 @@ def session_for(name: str | None, record: str | None, *, now: datetime) -> Sessi
     return Session(name, fixed=fixed)
 
 
-def recorded() -> str | None:
-    """:data:`RECORD`'s text through the installed :data:`READER`; none installed, absent or unreadable is ``None``."""
+def recorded() -> bytes | None:
+    """:data:`RECORD` through the installed :data:`READER`; none installed or none recorded is ``None``."""
     for point in entry_points(group=READER):
-        try:
-            held = point.load()()
-        except (OSError, ValueError):
-            return None
-        return None if held is None else held.decode('utf-8')
+        return point.load()()
     return None
 
 
-def resolve(machine: Machine, read: Callable[[], str | None] | None = None) -> Machine:
+def resolve(machine: Machine, read: Callable[[], bytes | None] | None = None) -> Machine:
     """*machine* with its session's share from the record *read* returns (default :func:`recorded`).
 
     A session already capped stays; a forge that cannot be read leaves the share derived.
@@ -144,9 +141,10 @@ def resolve(machine: Machine, read: Callable[[], str | None] | None = None) -> M
     if session is None or session.cpus is not None or session.mem_gb is not None:
         return machine
     try:
-        text = (read or recorded)()
+        held = (read or recorded)()
     except (OSError, ValueError):
-        text = None
+        held = None
+    text = None if held is None else held.decode('utf-8')
     return replace(machine, session=session_for(session.name, text, now=datetime.now(UTC)))
 
 

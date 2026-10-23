@@ -123,15 +123,15 @@ RECORD_A = render(Allocation(datetime(2099, 1, 1, tzinfo=UTC), {'a': Session('a'
 
 def test_resolve_applies_the_record_to_a_derived_session_and_a_forge_failure_leaves_it_derived() -> None:
     derived_machine = Machine(session=Session('a'), grants=(GRANT,))
-    assert allocation.resolve(derived_machine, lambda: RECORD_A).session == Session('a', cpus=8, mem_gb=16)
+    assert allocation.resolve(derived_machine, RECORD_A.encode).session == Session('a', cpus=8, mem_gb=16)
 
-    def down() -> str:
+    def down() -> bytes:
         raise OSError
 
     # Planted control: the forge down, or no record, the share is derived -- never a guessed override.
     assert allocation.resolve(derived_machine, down).session == Session('a')
     assert allocation.resolve(derived_machine, lambda: None).session == Session('a')
-    assert allocation.resolve(Machine(session=None, grants=(GRANT,)), lambda: RECORD_A).session is None
+    assert allocation.resolve(Machine(session=None, grants=(GRANT,)), RECORD_A.encode).session is None
 
 
 def test_the_record_is_read_through_the_installed_reader_and_none_installed_is_derived(
@@ -146,7 +146,7 @@ def test_the_record_is_read_through_the_installed_reader_and_none_installed_is_d
             return RECORD_A.encode
 
     monkeypatch.setattr(allocation, 'entry_points', lambda group: [_Point()] if group == allocation.READER else [])
-    assert allocation.recorded() == RECORD_A
+    assert allocation.recorded() == RECORD_A.encode()
     # Planted control: no reader installed, no record.
     monkeypatch.setattr(allocation, 'entry_points', lambda **_k: [])
     assert allocation.recorded() is None
@@ -165,7 +165,7 @@ def test_a_plain_hpc_submitter_applies_the_recorded_share(monkeypatch: pytest.Mo
     """A human's ``python -m lab_commons.hpc submit`` reads the record too, not only the forge (ruling 2026-10-23)."""
     seen: list[Machine] = []
     monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=Session('a'), grants=(GRANT,)))
-    monkeypatch.setattr(allocation, 'recorded', lambda: RECORD_A)
+    monkeypatch.setattr(allocation, 'recorded', RECORD_A.encode)
     monkeypatch.setattr(cli, '_job_config', lambda _p, _a: cli.Config())
     monkeypatch.setattr(cli, '_jobs', lambda _verb, _config, machine, *_a, **_k: seen.append(machine) or 0)
     monkeypatch.setattr(cli, '_run_submit', lambda _args, machine, _config: seen.append(machine) or 0)
