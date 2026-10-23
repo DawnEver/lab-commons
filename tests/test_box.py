@@ -60,11 +60,46 @@ def test_a_demand_without_a_field_is_a_type_error() -> None:
 
 
 @pytest.mark.parametrize(
-    'fields', [{'cpu': 0}, {'mem_gb': 0.0}, {'wall_s': -1}, {'seats': {'jmag': -1}}], ids=['cpu', 'mem', 'wall', 'seat']
+    'fields',
+    [{'cpu': -1}, {'mem_gb': 0.0}, {'wall_s': -1}, {'seats': {'jmag': -1}}],
+    ids=['cpu', 'mem', 'wall', 'seat'],
 )
 def test_a_non_positive_dimension_is_refused(fields: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match=next(iter(fields)).split('_')[0]):
         Demand(**{'cpu': 1, 'mem_gb': 1.0, 'wall_s': 60, 'seats': {}, **fields})
+
+
+def test_a_claim_may_book_memory_without_a_core() -> None:
+    """A process that holds memory and a seat but runs no solver -- a vendor GUI preparing a job -- asks 0 cores."""
+    assert Demand(cpu=0, mem_gb=1.5, wall_s=60, seats={'jmag': 1}).cpu == 0
+    assert Demand(cpu=0, mem_gb=1.5, wall_s=60, seats={}).mem_gb == 1.5
+
+
+def test_a_demand_for_nothing_is_still_refused() -> None:
+    """PLANTED CONTROL: zero cores AND zero memory with no seat books nothing, so it is no claim at all."""
+    with pytest.raises(ValueError, match='cpu'):
+        Demand(cpu=0, mem_gb=0.0, wall_s=60, seats={})
+
+
+@pytest.mark.usefixtures('box')
+def test_a_coreless_claim_is_admitted_while_another_claim_holds_every_core() -> None:
+    """D10 (motronics, 2026-10-23): a held solver claim never queues a stage that asks no core."""
+    with (
+        hold(_demand(cpu=4, mem_gb=1.0), 'solver', queue_s=0.2, **_ON),
+        hold(_demand(cpu=0, mem_gb=1.0, seats={'jmag': 1}), 'prepare', queue_s=0.2, **{**_ON, 'key': 'p'}),
+    ):
+        assert sorted(row.what for row in holdings()) == ['prepare', 'solver']
+
+
+@pytest.mark.usefixtures('box')
+def test_a_coreful_claim_still_waits_for_held_cores() -> None:
+    """PLANTED CONTROL: the same claim asking one core is refused while the solver holds all four."""
+    with (
+        hold(_demand(cpu=4, mem_gb=1.0), 'solver', queue_s=0.2, **_ON),
+        pytest.raises(NotAdmitted),
+        hold(_demand(cpu=1, mem_gb=1.0), 'prepare', queue_s=0.2, **{**_ON, 'key': 'p'}),
+    ):
+        pass
 
 
 def test_a_refusal_names_what_is_lacking_and_its_holders() -> None:
@@ -390,6 +425,23 @@ def test_two_cpu_contenders_keep_fifo_order(box: Path) -> None:
     with (
         pytest.raises(NotAdmitted, match='queued behind'),
         hold(_demand(cpu=1), 'late', queue_s=0.2, **_ON),
+    ):
+        pass
+
+
+def test_a_coreless_stage_passes_a_waiter_blocked_on_cores_when_its_memory_stays_reserved(box: Path) -> None:
+    """D10: a 4-core waiter is set aside in FULL (8 GB - 4 GB leaves 4); a coreless 2 GB stage fits beside it."""
+    _ticket(box, os.getpid(), _demand(cpu=4, mem_gb=4.0))
+    with hold(_demand(cpu=0, mem_gb=2.0, seats={'jmag': 1}), 'prepare', queue_s=0.2, **_ON):
+        assert [row.what for row in holdings()] == ['prepare']
+
+
+def test_a_later_stage_never_takes_memory_an_earlier_waiter_needs(box: Path) -> None:
+    """PLANTED CONTROL: 8 GB - the waiter's 4 GB leaves 3 GB short of 5: it queues, so the waiter cannot starve."""
+    _ticket(box, os.getpid(), _demand(cpu=4, mem_gb=4.0))
+    with (
+        pytest.raises(NotAdmitted, match='queued behind'),
+        hold(_demand(cpu=0, mem_gb=5.0, seats={'jmag': 1}), 'prepare', queue_s=0.2, **_ON),
     ):
         pass
 
