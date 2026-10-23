@@ -24,7 +24,7 @@ speeds it up (:func:`lab_commons.hpc.plan.allocate` when one is fastest), from w
 :mod:`lab_commons.hpc.run` runs one commit's test suite through the same layers.
 
 STDLIB ONLY, so no extra gates it: ``tomllib`` reads the config and ``json`` carries the manifest. Like
-``lab_commons.dev`` and ``lab_commons.viz`` it is an opt-in IMPORT -- ``import lab_commons`` does not
+``lab_commons.em`` and ``lab_commons.viz`` it is an opt-in IMPORT -- ``import lab_commons`` does not
 reach it, and ``tests/test_hpc_gate.py`` pins that against a fresh interpreter.
 """
 

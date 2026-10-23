@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import threading
+from pathlib import Path
+
 import pytest
 
 from lab_commons.compute import learned
 from lab_commons.compute.admission import admit
+from lab_commons.compute.durable import durable_write
 from lab_commons.compute.learned import OOM_GROWTH, Measured, Run
 from lab_commons.compute.model import Demand, Job, Resources, Supply
 
@@ -226,3 +230,58 @@ def test_a_part_narrows_to_the_workers_the_free_memory_holds_and_waits_only_for_
     assert plenty == Demand(cpu=learned.PART_WIDTH, mem_gb=learned.PART_WIDTH * 1.0, workstation=1)
     assert learned.box_demand(REPO, checkout, cpu=30, mem_gb=0.5, ids=6)['cpu'] == 1, 'one worker waits for room'
     assert learned.fit_width(4, cpu=2.5, mem_gb=64, per_gb=1.0) == 2, 'the free cores'
+
+
+def test_a_reader_never_sees_a_table_half_written_while_another_writer_rewrites_it() -> None:
+    prior = Run(peak_mem_gb=1.0, cpu_s=60.0, wall_s=60.0)
+    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+    stop = threading.Event()
+
+    def rewrite() -> None:
+        while not stop.is_set():
+            learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+
+    writers = [threading.Thread(target=rewrite) for _ in range(2)]
+    for writer in writers:
+        writer.start()
+    try:
+        seen = {learned.demand(REPO, 'linux', {'jmag'}, prior=prior)['mem_gb'] for _ in range(300)}
+    finally:
+        stop.set()
+        for writer in writers:
+            writer.join()
+    assert seen == {6.0}, 'every read is the whole table, never an empty or torn one'
+
+
+def test_an_empty_table_is_retried_then_read_as_nothing_learned_never_raised(monkeypatch) -> None:
+    path = learned._path(REPO)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('', encoding='utf-8')
+    monkeypatch.setattr(learned, 'READ_RETRY_S', 0.0)
+    prior = Run(peak_mem_gb=1.0, cpu_s=60.0, wall_s=60.0)
+    assert learned.learned(REPO) == {}
+    assert learned.demand(REPO, 'linux', {'jmag'}, prior=prior)['mem_gb'] == 1.0, 'the prior, not a crash'
+
+
+def test_a_table_emptied_for_an_instant_is_read_whole_on_the_retry(monkeypatch) -> None:
+    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+    path = learned._path(REPO)
+    whole = path.read_text(encoding='utf-8')
+    path.write_text('', encoding='utf-8')
+    monkeypatch.setattr(learned.time, 'sleep', lambda _s: path.write_text(whole, encoding='utf-8'))
+    assert learned.run_of(REPO, 'linux', ()).peak_mem_gb == 6.0
+
+
+def test_a_rename_held_by_a_windows_reader_is_retried_until_it_lands(tmp_path, monkeypatch) -> None:
+    real, refusals = Path.replace, [PermissionError('held'), PermissionError('held')]
+
+    def held_then_free(self: Path, target: Path) -> Path:
+        if refusals:
+            raise refusals.pop()
+        return real(self, target)
+
+    monkeypatch.setattr(Path, 'replace', held_then_free)
+    target = durable_write(tmp_path / 't.json', b'{}')
+    assert target.read_bytes() == b'{}'
+    assert not refusals
+    assert [p.name for p in tmp_path.iterdir()] == ['t.json'], 'no temp file is left behind'

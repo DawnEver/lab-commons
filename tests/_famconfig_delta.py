@@ -1,22 +1,22 @@
 r"""lab-commons' own DELTAS against the family config bases -- data, computed by nothing.
 
 GIT HOOKS ARE NOT A DELTA HERE: they are TOML (`[tool.lab_commons.hooks]` in pyproject.toml over
-`lab_commons/dev/githooks/base.toml`) and nothing is rendered for them.
+`dev_lab/dev/githooks/base.toml`) and nothing is rendered for them.
 
 `.gitignore` IS ADOPTED AS OF 2026-10-03, on the user's ruling that every project-level file has ONE
 source in this package. The base grew the family-mandated lines (`_famconfig_rows.GITIGNORE_FAMILY_LINES`)
 that made it cover this tree: `.verify/`, `**/__version__.py` (which reaches the hatch-vcs file
 `src/lab_commons/__version__.py`), `/build/`, `/dist/` and the ordered Claude project-state section, which
-covers `.claude/worktrees/`. What stays is ONE line, `*.py[cod]` -- a compiled file OUTSIDE a `__pycache__/`,
-which no consumer ignores and this repo always has. :data:`DELTAS` now holds all three artefacts, so
-the completeness arm runs here too.
+covers `.claude/worktrees/` and `.claude/automode.json`. What stays is ONE line, `*.py[cod]` --
+a compiled file OUTSIDE a `__pycache__/`, which no consumer ignores and this repo always has.
+:data:`DELTAS` holds every artefact, so the completeness arm runs here too.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-from lab_commons.dev.famconfig import Delta
+from dev_lab.dev.famconfig import Delta
 
 __all__ = [
     'DELTAS',
@@ -38,7 +38,8 @@ REPO: Final = 'lab-commons'
 MAKEFILE: Final = 'Makefile'
 
 #: This repo's OWN Makefile lines -- everything the family base does not name. MEASURED 2026-09-18 by
-#: the kit's survey against the adopted file: 26 lines, 0 drops. The ceiling IS the measurement rather
+#: the kit's survey against the adopted file: 26 lines, 0 drops; 27 since the cut-over to dev-lab, which
+#: made `install-dev` sync the `dev` group and install the hooks. The ceiling IS the measurement rather
 #: than a round number above it, so the next recipe line anybody adds raises it in the same edit.
 #:
 #: WHAT IS IN HERE AND WHY IT IS NOT IN THE BASE. Every `.PHONY:` line -- `MAKEFILE_RESIDUAL_SIGNALS`
@@ -58,7 +59,8 @@ MAKEFILE_DELTA: Final = Delta(
         '.PHONY: install',
         '\tuv pip install -e .',
         '.PHONY: install-dev',
-        '\tuv pip install -e ".[dev]"',
+        '\tuv sync --group dev',
+        '\tpython -m dev_lab.dev.hook_install --install',
         '.PHONY: lint',
         '\tpython -m ruff check .',
         '.PHONY: fmt-check',
@@ -82,7 +84,7 @@ MAKEFILE_DELTA: Final = Delta(
         '.PHONY: all',
     ),
     dropped={},
-    ceiling=26,
+    ceiling=27,
 )
 
 #: How many target headers the live Makefile must declare before a presence check over it means

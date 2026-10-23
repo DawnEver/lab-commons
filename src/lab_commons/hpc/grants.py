@@ -73,7 +73,7 @@ _RETIRED_KEYS: Final = {
     'workstation': f'jobs are tagged by session (${SESSION_ENV}) -- delete the line',
     'session': (
         'a session share is derived from Slurm, or overridden by one expiring forge record '
-        '(python -m lab_commons.hpc allocate) -- delete the table'
+        '(python -m dev_lab.dev.hpchost allocate) -- delete the table'
     ),
 }
 

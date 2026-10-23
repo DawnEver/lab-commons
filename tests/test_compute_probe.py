@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
@@ -10,7 +11,7 @@ from _box_fake import quiet
 from lab_commons.box import GB, Capacity, Holding
 from lab_commons.compute.presence import Presence
 from lab_commons.compute.probe import account, box, os_name, tools
-from lab_commons.hpc.slurm import Node, Quota, Snapshot
+from lab_commons.hpc.slurm import Held, Node, Quota, Snapshot
 
 
 def _have(**found: bool) -> dict[str, Presence]:
@@ -120,3 +121,11 @@ def test_a_tool_its_probe_finds_is_present_without_any_declaration() -> None:
     assert present == {'simba', 'matlab'}
     assert dict(counts) == {'simba': 1.0, 'matlab': 1.0}, 'an undeclared tool has one seat'
     assert tools({'matlab': {'seats': 3}}, presence=_have(matlab=True))[0]['matlab'] == 3.0, 'seats declared'
+
+
+def test_an_account_counts_its_pending_tasks_memory_as_held_like_their_cpus() -> None:
+    snapshot = dataclasses.replace(_snapshot(cpus=8, mem_mb=4096, submit=None), pending=(Held(1, 1.0, 1024.0),))
+    supply = account('slurm:me', [(snapshot, 'normal')], seats={})
+    assert supply.resources['mem_gb'] == pytest.approx(3.0, abs=1e-12), (
+        'a pending task is a claim the scheduler honours before a new submission -- its memory as well as its cpus'
+    )

@@ -15,6 +15,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
+from lab_commons.compute.durable import durable_write
 from lab_commons.compute.learned import Measured, Run
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
@@ -180,7 +181,7 @@ def stream_sources(sha: str, tag: str) -> tuple[str, str]:
 
     A superseded run's finished shards are carried (:func:`held_cells`) long after its tree is garbage, so
     retention keeps the round's stream beside the run state (:func:`kept_text`) before the tree goes
-    (:mod:`lab_commons.dev.retentionplan`): a file is an HPC resource.
+    (:mod:`dev_lab.dev.retentionplan`): a file is an HPC resource.
     """
     return f'{ROOT}/trees/{sha}/.lab-ci/{tag}.jsonl', f'{ROOT}/runs/{sha}/streams.jsonl'
 
@@ -242,12 +243,8 @@ def record_name(record: dict[str, Any]) -> str:
 
 def write_record(record: dict[str, Any], directory: Path) -> Path:
     """The record gzipped under *directory* (created) at :func:`record_name`; returns its path."""
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / record_name(record)
-    partial = target.with_name(target.name + '.partial')  # atomic: a crash never leaves half a record
-    partial.write_bytes(gzip.compress(json.dumps(record, sort_keys=True).encode('utf-8'), mtime=0))
-    partial.replace(target)
-    return target
+    data = gzip.compress(json.dumps(record, sort_keys=True).encode('utf-8'), mtime=0)
+    return durable_write(directory / record_name(record), data)  # a crash never leaves half a record
 
 
 def read_record(path: Path) -> dict[str, Any]:

@@ -326,7 +326,7 @@ def build_script(spec: RunSpec) -> str:
 
     Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`) and HARDLINKS from it (``UV_LINK_MODE``, declared
     rather than left to uv's platform default): one inode per installed file across every env key, which is what
-    the account's FILE quota counts (:mod:`lab_commons.dev.retentionplan`). A native
+    the account's FILE quota counts (:mod:`dev_lab.dev.retentionplan`). A native
     build's ``CARGO_TARGET_DIR`` is its native key's own (:func:`lab_commons.hpc.builds.cargo_target`, under
     its own ``flock``): a target shared across different native inputs reuses stale artifacts.
     Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).

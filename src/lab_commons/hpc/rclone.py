@@ -1,10 +1,11 @@
 """IS THIS ACCOUNT'S RCLONE REMOTE USABLE -- one cheap, read-only probe, and the recipe that makes it so.
 
 Several HPC accounts write the one shared artefact library, each through its OWN rclone remote
-(:mod:`lab_commons.dev.artefacts`). :func:`probe` runs ``rclone lsd <name>: --max-depth 1`` and returns why
+(:mod:`dev_lab.dev.artefacts`). :func:`probe` runs ``rclone lsd <name>: --max-depth 1`` and returns why
 the remote is missing or unusable, ``''`` when it answers. :func:`declared_remote` reads the remote a repo
-declares for ``backend = "rclone"``. Both live here, not in ``lab_commons.dev``, so ``hpc deploy`` can ask
-without reaching the dev layer; the artefact store's own validation stays in :mod:`lab_commons.dev.artefacts`.
+declares for ``backend = "rclone"``. Both are account facts, so they live with the account here; the dev-lab
+deploy (:mod:`dev_lab.dev.hpchost.deploy`) asks them, and the artefact store's own validation stays in
+:mod:`dev_lab.dev.artefacts`.
 """
 
 from __future__ import annotations
@@ -21,11 +22,11 @@ __all__ = ['RECIPE', 'declared_remote', 'probe']
 
 _TIMEOUT_S: Final = 60
 
-#: How a writer creates its remote; the full recipe is docs-src/dev/artefacts.md.
+#: How a writer creates its remote; the full recipe is dev-lab's docs-src/dev/artefacts.md.
 RECIPE: Final = (
     'create it with `rclone config` (type onedrive, token from `rclone authorize "onedrive"` on a machine with '
     'a browser, the SharePoint site\'s "Documents" library, drive_type = documentLibrary), then chmod 600 the '
-    'config; see docs-src/dev/artefacts.md'
+    'config; see dev-lab docs-src/dev/artefacts.md'
 )
 
 

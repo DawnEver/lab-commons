@@ -1,6 +1,6 @@
 # lab-commons documentation
 
-- This repo is the family's shared half: the code the labs import, and the mechanism docs they read.
-- [Development mechanism](dev/index.md): how a change is written, proved on the forge, integrated and promoted.
-  Arriving from the old local-gate model? Start with [Migrating a workstation](dev/migrate.md).
+- This repo is the family's shared runtime and execution layer: the code the labs import.
+- The development mechanism (forge, hooks, verify, gate, integration, HPC hosting, refusals) lives in
+  dev-lab, and so do its pages: dev-lab's `docs-src/dev/` (start at `index.md`).
 - There is no build step here: `docs-src/` is the source and also what a reader reads.

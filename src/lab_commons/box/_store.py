@@ -116,7 +116,7 @@ def immediate(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 def read(con: sqlite3.Connection) -> list[Holding]:
     """Every claim row on *con*, oldest first, as :class:`~lab_commons.box.demand.Holding`."""
     rows = con.execute(
-        'SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe FROM claims ORDER BY id'
+        'SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe, kept FROM claims ORDER BY id'
     ).fetchall()
     return [
         Holding(
@@ -129,6 +129,7 @@ def read(con: sqlite3.Connection) -> list[Holding]:
             row_id,
             key,
             None if probe is None else tuple(json.loads(probe)),
+            bool(kept),
         )
-        for what, pid, cpu, mem, seats, deadline, row_id, key, probe in rows
+        for what, pid, cpu, mem, seats, deadline, row_id, key, probe, kept in rows
     ]
