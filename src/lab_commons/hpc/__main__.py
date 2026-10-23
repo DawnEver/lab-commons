@@ -18,19 +18,16 @@ one short call -- where the run is and exit :data:`PENDING`, or the record writt
 blocks until the record. All three RUN ON THE CLUSTER LOGIN NODE with its own shell
 (:func:`lab_commons.hpc.cluster.submitter`; ``forge serve`` drives them there) and are refused
 on a box without ``sbatch`` -- no workstation submits over ssh. WHERE A RUN IS, AND WHAT THE CLUSTER CAN
-TAKE, IS READ FROM THE FORGE: ``python -m lab_commons.dev.forge queue`` shows each run's progress on its
+TAKE, IS READ FROM THE FORGE: ``python -m dev_lab.dev.forge queue`` shows each run's progress on its
 claim and each serving host's card (supply, partitions, quota), so no verb reaches the cluster to ask.
 ``-c`` is optional for ``run`` and only its ``[cost]``/``[policy]`` are read. ``run submit`` plans from what
 the repository's last record measured
 (:mod:`lab_commons.compute.learned`); a file never measured is priced at ``[cost]``. A retired verb is
-refused by name (:mod:`lab_commons.hpc.retired`). ``deploy [--dry-run|--remove]`` makes this account's
-login host a ``forge serve`` host in one run (:mod:`lab_commons.hpc.deploy`); ``tick <repo>`` is one
-cron tick of it: the host refreshes the kit and the repo, then the repo's ``forge serve`` runs.
-
-``allocate --until <iso> name=cpus/mem_gb ...`` writes the ONE expiring allocation record on the forge
-(:mod:`lab_commons.hpc.allocation`), ``allocate --show`` prints it, ``allocate --clear`` deletes it. Every
-planning verb resolves ``$LC_HPC_SESSION``'s share from that record, else derives it from Slurm
-(:func:`lab_commons.hpc.allocate.resolve`).
+refused by name (:mod:`lab_commons.hpc.retired`). Making a login host a ``forge serve`` host
+(``deploy``, its cron ``tick``) and the forge's expiring allocation record (``allocate``) are the forge's,
+so they live in dev-lab (``python -m dev_lab.dev.hpchost``). The record itself is a runtime fact: every
+planning verb here (``plan``, ``submit``, ``retry``, ``run submit``) resolves ``$LC_HPC_SESSION``'s share from
+it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 
 ``clean --root <remote abs dir> [--dry-run] [--grant <user>] <name>...`` deletes named directories directly
 under that root through the grant, refusing everything if a running job works under one
@@ -47,8 +44,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
-from lab_commons.hpc import clean, deploy, tick
-from lab_commons.hpc.allocate import allocate, resolve
+from lab_commons.hpc import allocation, clean
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -77,7 +73,7 @@ from lab_commons.log import emit
 
 __all__ = ['main']
 
-#: The producer contract's INCONCLUSIVE (``lab_commons.dev.producer.ProducerExit``, which hpc may not import):
+#: The producer contract's INCONCLUSIVE (``dev_lab.dev.producer.ProducerExit``, which hpc may not import):
 #: ``run submit`` exits with it when nothing was submitted, so a failed build is never read as a red run.
 _NOT_SUBMITTED = 3
 
@@ -339,7 +335,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     steps = {'submit': _run_submit, 'gather': _run_gather, 'build': _run_build}
     try:
         machine = load_grants()
-        return steps[args.step](args, resolve(machine) if args.step == 'submit' else machine, config)
+        return steps[args.step](args, allocation.resolve(machine) if args.step == 'submit' else machine, config)
     except NotOnCluster as off:
         emit(f'run {args.step} refused: {off}', err=True)
         return 2
@@ -372,18 +368,15 @@ def main(argv: list[str] | None = None) -> int:
     """Parse the verb and dispatch it against this machine's grants."""
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
-    direct = {'deploy': deploy.main, 'allocate': allocate, 'clean': clean.main}
-    if argv and argv[0] in direct:
-        return direct[argv[0]](argv[1:])
-    if argv[:1] == ['tick'] and argv[1:]:
-        return max(tick.tick(name, home=Path.home()) for name in argv[1:])
+    if argv[:1] == ['clean']:
+        return clean.main(argv[1:])
     _refuse_retired(parser, argv)
     args = parser.parse_args(argv)
     if args.verb == 'run':
         return _run(parser, args)
     machine = load_grants()
     if args.verb in {'plan', 'submit', 'retry'}:
-        machine = resolve(machine)
+        machine = allocation.resolve(machine)
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
     if args.wait and args.verb != 'gather':

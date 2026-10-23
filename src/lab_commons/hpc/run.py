@@ -309,7 +309,7 @@ def submit_run(
 
     *carry*, given the env key the build reported, names the cells earlier runs of THAT env hold for
     ids whose cell cannot have changed (``{node: (plain cell, origin sha, run sha)}``,
-    :func:`lab_commons.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
+    :func:`dev_lab.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
     origin in ``carried`` and never submitted; when nothing is left the record is written at once.
     """
     runners = {g.account: connect(g) for g in machine.grants}

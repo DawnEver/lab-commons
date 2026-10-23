@@ -3,7 +3,7 @@
 TWO TIERS, ONE RULE. The LOCAL tier is a directory per unit hash (``<root>/<hh>/<unit hash>/``: the declared
 output files and ``record.json``), installed by ONE atomic rename of a fully written staging directory, so a
 crash leaves the whole result or none. The SHARED tier is whatever :class:`SharedTier` the caller hands in --
-the forge's (:class:`lab_commons.dev.forgeunit.ForgeResults`), whose writes go through the durable outbox.
+the forge's (:class:`dev_lab.dev.forgeunit.ForgeResults`), whose writes go through the durable outbox.
 
 THE FIRST RESULT FOR A UNIT HASH WINS. Units are deterministic, so a duplicate run (a lost lease, a partition)
 wastes time but cannot corrupt: an identical later result is dropped, and a DIFFERING one raises

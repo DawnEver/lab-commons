@@ -79,7 +79,7 @@ def emit(text: object = '', *, err: bool = False, flush: bool = False) -> None:
     read at call time, so pytest's capsys captures it.
 
     A CONSOLE THAT CANNOT CARRY A CHARACTER DEGRADES; IT DOES NOT KILL THE RUN. Measured 2026-09-18
-    on consumer-b: ``lab_commons.dev.verify._tee`` streamed a test's U+2713 to a cp1252 stdout -- the
+    on consumer-b: ``dev_lab.dev.verify._tee`` streamed a test's U+2713 to a cp1252 stdout -- the
     Windows DEFAULT whenever nothing overrides it -- and this function raised ``UnicodeEncodeError``
     out through the verdict runner, which then produced an INCONCLUSIVE WITH NO LOG: the one state
     that proves nothing and carries no verdict. A character the console cannot encode must not cost

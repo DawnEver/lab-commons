@@ -7,7 +7,7 @@ of its markers name a resource, once, with the ONE producer of a part::
 
     [tool.lab_commons.tests]
     resources = ["femm", "jmag", "windows"]                   # markers naming a resource
-    produce = ["-m", "lab_commons.dev.verify", "--part", "{part}"]   # argv after the venv python
+    produce = ["-m", "dev_lab.dev.verify", "--part", "{part}"]   # argv after the venv python
 
 PARTS ARE DERIVED, NEVER DECLARED. A test's need-set is the declared resources whose markers it carries;
 the suite is partitioned by need-set and each distinct need-set is ONE part, its status context
@@ -107,7 +107,7 @@ def read_vocabulary(text: str) -> Vocabulary:
     if not isinstance(scarce, list) or not set(scarce) <= set(value) or len(set(scarce)) != len(scarce):
         msg = (
             f'{_TABLE} scarce = {scarce!r}: distinct names among its resources {sorted(value)} '
-            '(lab_commons.dev.forgescarce)'
+            '(dev_lab.dev.forgescarce)'
         )
         raise ValueError(msg)
     return Vocabulary(tuple(sorted(value)), tuple(sorted(scarce)))

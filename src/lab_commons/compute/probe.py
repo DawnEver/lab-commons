@@ -16,7 +16,7 @@ Three sources, one value (:mod:`lab_commons.compute.model`):
 * **slurm account**: ``cpu`` AND ``mem_gb`` over EVERY grant of the account (:func:`account`), plus ``submits``
   -- the job submissions its QOS still accepts (infinite when uncapped) -- and ``files``, what the home's
   FILE quota still takes (user ruling 2026-10-14: an Ada home at its 2,020,000-file limit failed every
-  write while its supply read free cores; the caller reads it, :mod:`lab_commons.dev.diskusage`).
+  write while its supply read free cores; the caller reads it, :mod:`dev_lab.dev.diskusage`).
 
 The readers of the OS are module functions taken as defaults, so a test passes fakes; the arithmetic is pure.
 """

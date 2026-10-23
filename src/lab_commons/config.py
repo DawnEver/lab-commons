@@ -12,7 +12,7 @@ default, read through :func:`user`. Measured 2026-10-13: ``text_editor_command``
 formats were defined in two consumers' schemas with the same default literal, and the machine file
 carried ``text_editor_command`` once per package. So a package table that repeats a key of
 :data:`SHARED_KEYS`, at any depth, is REFUSED by :func:`section` with the remedy; there is no
-fallback and no alias. The source-side twin is :mod:`lab_commons.dev.famtests.sharedsettings`.
+fallback and no alias. The source-side twin is :mod:`dev_lab.dev.famtests.sharedsettings`.
 
 NO SECRETS. Keys, tokens and passwords stay in their own stores (``~/.ssh/config``, the git credential
 helper); this file is plain text a user may paste into a bug report.

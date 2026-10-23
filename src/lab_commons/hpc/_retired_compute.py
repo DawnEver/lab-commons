@@ -14,18 +14,18 @@ __all__ = ['COMPUTE']
 #: Retired spelling -> its replacement, for the compute surface. Keys are plain substrings of tracked text.
 COMPUTE: Final[dict[str, str]] = {
     # The push gate decides a push; `admit` is the one fit rule (lab_commons.compute.admission), D2 2026-10-16.
-    'lab_commons.dev.admission': 'lab_commons.dev.pushgate (decide, Decision)',
-    'dev import admission': 'from lab_commons.dev import pushgate',
+    'lab_commons.dev.admission': 'dev_lab.dev.pushgate (decide, Decision)',
+    'dev import admission': 'from dev_lab.dev import pushgate',
     # The machine's box ledger and an environment's mutation seat are two resources with two names.
     'BoxLock': 'lab_commons.box.run (every run declares its claim on the one box ledger and is held to it)',
     'boxlock': 'lab_commons.box',
     'BOX_POOL': 'lab_commons.box (one ledger per machine, lab_commons.box.box_path)',
-    'EnvLock': 'lab_commons.dev.envseat.EnvironmentSeat (keyed by one environment prefix)',
-    'envlock': 'lab_commons.dev.envseat',
-    'hold_the_box': 'lab_commons.box.run (the claim), and lab_commons.dev.envseat.EnvironmentSeat (the env)',
+    'EnvLock': 'dev_lab.dev.envseat.EnvironmentSeat (keyed by one environment prefix)',
+    'envlock': 'dev_lab.dev.envseat',
+    'hold_the_box': 'lab_commons.box.run (the claim), and dev_lab.dev.envseat.EnvironmentSeat (the env)',
     'refuse_if_locked': 'nothing: dep.mutate holds the TARGET environment seat and refuses naming its holder',
     'LOCK_UNDECLARED': 'nothing: who may block a change is the target environment seat, not a port answer',
-    'lock_holders': 'lab_commons.dev.envseat.EnvironmentSeat.holders(prefix)',
+    'lock_holders': 'dev_lab.dev.envseat.EnvironmentSeat.holders(prefix)',
     'assert_the_holders_adapter_names_a_planted_holder': (
         'famtests.depdoor.assert_a_verdict_in_another_environment_does_not_refuse'
     ),
@@ -45,12 +45,12 @@ COMPUTE: Final[dict[str, str]] = {
     'no free core': "the admission's lacking resource: 'not admitted: lacking cpu' (compute.admission.admit)",
     # A tick claims in rank order WHILE JOBS ADMIT, several per host (design: one admission, step 6, 2026-10-13).
     'OUTRANKED': (
-        'nothing: a tick claims every job that admits, in rank order (lab_commons.dev.forgetick); one that does not '
+        'nothing: a tick claims every job that admits, in rank order (dev_lab.dev.forgetick); one that does not '
         "fit waits 'not admitted: lacking <resource>'"
     ),
     'outranked by': "'not admitted: lacking <resource>' (a higher-ranked claim is running demand, never a blocker)",
-    'a run in flight here': 'nothing: a run in flight is running demand in the admission (lab_commons.dev.forgeserve)',
-    'NO_HEADROOM': 'lab_commons.dev.forgeschedule.NOT_ADMITTED',
+    'a run in flight here': 'nothing: a run in flight is running demand in the admission (dev_lab.dev.forgeserve)',
+    'NO_HEADROOM': 'dev_lab.dev.forgeschedule.NOT_ADMITTED',
     'no headroom:': "'not admitted: lacking <resource>' (lab_commons.compute.admission.Admission.why)",
     # The host card's measured vector is its supply, read by that key only.
     'card.headroom': 'HostCard.supply (what the tick admitted against)',
@@ -61,7 +61,7 @@ COMPUTE: Final[dict[str, str]] = {
     'lab_commons.hpc.learned': 'lab_commons.compute.learned (the one measured demand table)',
     'lab_commons.hpc.measured': 'lab_commons.compute.learned.Measured',
     'hpc-learned': 'compute-learned (beside the machine config, lab_commons.compute.learned.directory)',
-    'lab_commons.hpc.outstanding': 'lab_commons.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
+    'lab_commons.hpc.outstanding': 'dev_lab.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
     # A host's own user is served by its own reserve, and an account is divided by reservations (2026-10-13).
     'own_weight': (
         'nothing: the own reserve (lab_commons.box.machine.own_reserve) keeps the [reserve] margins for the user '
@@ -72,9 +72,9 @@ COMPUTE: Final[dict[str, str]] = {
     # A box job's cpu was capped at the box's because its cpu was wall x cores; it is now measured (2026-10-13).
     'model.fitted': 'nothing: a demand is what the job measured (lab_commons.proccpu.TreeCpu); compute.model.submitted',
     # A carry is derived from each test's footprint, never declared per repo (2026-10-13).
-    'inert_globs': 'lab_commons.dev.footprint.Footprints (the footprint of each test file, derived at the judged sha)',
+    'inert_globs': 'dev_lab.dev.footprint.Footprints (the footprint of each test file, derived at the judged sha)',
     'parts] inert': (
-        'nothing: what a change reaches is derived per test (lab_commons.dev.footprint); declare only what a '
+        'nothing: what a change reaches is derived per test (dev_lab.dev.footprint); declare only what a '
         'module reads by path, [tool.lab_commons.carry.reads] -- delete the key'
     ),
     'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share)',
@@ -89,15 +89,15 @@ COMPUTE: Final[dict[str, str]] = {
     ),
     # A resource is a host CAPABILITY boundary: the checkout, node and codex live on the same hosts, so they are
     # one resource, and three parts queued three times on one host (user directive 2026-10-19).
-    'mark.dev_checkout': 'pytest.mark.workstation (lab_commons.dev.workstation.WORKSTATION)',
-    'mark.node': 'pytest.mark.workstation (lab_commons.dev.workstation.WORKSTATION)',
-    'mark.codex': 'pytest.mark.workstation (lab_commons.dev.workstation.WORKSTATION)',
-    'capabilities.dev_checkout': '[capabilities.workstation] (lab_commons.dev.workstation.WORKSTATION)',
+    'mark.dev_checkout': 'pytest.mark.workstation (dev_lab.dev.workstation.WORKSTATION)',
+    'mark.node': 'pytest.mark.workstation (dev_lab.dev.workstation.WORKSTATION)',
+    'mark.codex': 'pytest.mark.workstation (dev_lab.dev.workstation.WORKSTATION)',
+    'capabilities.dev_checkout': '[capabilities.workstation] (dev_lab.dev.workstation.WORKSTATION)',
     'tests/dev_checkout': 'tests/workstation (the one part of the workstation resource)',
     'tests/codex': 'tests/workstation (the one part of the workstation resource)',
     'tests/node': 'tests/workstation (the one part of the workstation resource)',
     'dev_checkout+node': 'workstation (one resource, one part)',
-    'DEV_CHECKOUT': 'lab_commons.dev.workstation.WORKSTATION',
+    'DEV_CHECKOUT': 'dev_lab.dev.workstation.WORKSTATION',
     'engine = true': 'nothing: a resource marker is its own part only by being a need-set (tests/<part>)',
     'lab_commons.parts.produce': '[tool.lab_commons.tests] produce = [..., "{part}"] (the ONE producer of every part)',
     'produce.windows.full': '[tool.lab_commons.tests] produce = [..., "{part}"] (the ONE producer of every part)',
@@ -105,16 +105,16 @@ COMPUTE: Final[dict[str, str]] = {
     'cannot_run(': 'lab_commons.hpc.needsets.selecting(vocabulary, part) (exactly one need-set)',
     'CAPABILITY_ROWS': 'nothing: every resource is equal (lab_commons.hpc.needsets)',
     'served_parts': 'lab_commons.compute.admission.admit (needs present on the host, demand within its supply)',
-    'declared_parts': 'lab_commons.dev.platformparts.derived (base, and every part a posted part hands to)',
-    'part_argv': 'lab_commons.dev.platformparts.producer_argv (the one declared producer, {part} filled)',
+    'declared_parts': 'dev_lab.dev.platformparts.derived (base, and every part a posted part hands to)',
+    'part_argv': 'dev_lab.dev.platformparts.producer_argv (the one declared producer, {part} filled)',
     # Every host serves every candidate class from one queue (user ruling 2026-10-13, "fix all"): ORDER is
     # rank(), FIT is admit(), exclusivity is a reservation. A serve mode chose refs per host; none survives.
     '--mode': (
         'nothing: forge serve / forge tick / workstation deploy|serve take no mode -- every host serves every class '
         '(rank orders, admit fits); a host that takes no foreign work does not run forge serve'
     ),
-    'forgetick.MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
-    'forgetick import MODES': 'nothing: one queue for every host (lab_commons.dev.forgeschedule.candidates)',
+    'forgetick.MODES': 'nothing: one queue for every host (dev_lab.dev.forgeschedule.candidates)',
+    'forgetick import MODES': 'nothing: one queue for every host (dev_lab.dev.forgeschedule.candidates)',
     'develop|quiet': 'nothing: one queue for every host; a host that serves nobody else does not run forge serve',
     '[deploy] serve': 'nothing: delete the [deploy] serve key from the machine file (forge serve takes no mode)',
     'schedule] branches': (
@@ -125,8 +125,8 @@ COMPUTE: Final[dict[str, str]] = {
         '[tool.lab_commons.schedule] classes_by_ref (a child branch is a ref the rule classes; '
         'lab_commons.compute.model.Schedule.class_of)'
     ),
-    'forgealarm.REPEAT': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
-    'REPEAT: Final': "the machine file's [alerts] repeat_hours (lab_commons.dev.forgealarm.repeat_window)",
+    'forgealarm.REPEAT': "the machine file's [alerts] repeat_hours (dev_lab.dev.forgealarm.repeat_window)",
+    'REPEAT: Final': "the machine file's [alerts] repeat_hours (dev_lab.dev.forgealarm.repeat_window)",
     'holds_against(': 'nothing: nothing is reserved (lab_commons.compute.admission.admit fits against what runs)',
     'compute.model.admit': 'lab_commons.compute.admission.admit (needs present, demand within supply less what runs)',
     'compute.model.Admission': 'lab_commons.compute.admission.Admission',
@@ -135,10 +135,10 @@ COMPUTE: Final[dict[str, str]] = {
     'forgereserve': 'nothing: nothing is reserved; favour work with the machine file [priority] (ordering only)',
     'forge reserve': 'nothing: nothing is reserved; favour work with the machine file [priority] (ordering only)',
     'forge release': 'nothing: nothing is reserved, so there is no lease to release',
-    'compute.ledger': 'lab_commons.dev.forgehosts.read_cards (the cards; no lease is stored)',
+    'compute.ledger': 'dev_lab.dev.forgehosts.read_cards (the cards; no lease is stored)',
     'forgelend': 'nothing: nothing is lent; a box claim is enforced by the box (lab_commons.box.run)',
     'preempt_runs': 'nothing: nothing is preempted (lab_commons.compute.priority orders, it never displaces)',
-    'PREEMPTED': 'lab_commons.dev.producer.RETRYABLE (the one release that leaves a part open)',
+    'PREEMPTED': 'dev_lab.dev.producer.RETRYABLE (the one release that leaves a part open)',
     'on_loan': 'nothing: a claim borrows nothing',
     'Reservation(': 'nothing: nothing is reserved (lab_commons.compute.admission.admit)',
     '[reserve] delegates': 'nothing: [reserve] keeps only the cpu_margin and mem_margin of the box',
@@ -156,8 +156,8 @@ COMPUTE: Final[dict[str, str]] = {
     'cpuseat': 'lab_commons.box (every run declares its claim on the one box ledger and is held to it)',
     'CpuSeat': 'lab_commons.box.run, or python -m lab_commons.box run --cpu --mem-gb --wall --queue-s --key --outcome',
     'CPU_POOL': 'lab_commons.box.box_path (the one ledger of this machine)',
-    'LIGHT_WIDTH': 'lab_commons.dev.verifybox.SELECTION_CPU (a selection declares its cores to the box)',
-    'LIGHT_MEMORY_BYTES': 'lab_commons.dev.verifybox.selection_mem_gb (a selection declares its measured memory)',
+    'LIGHT_WIDTH': 'dev_lab.dev.verifybox.SELECTION_CPU (a selection declares its cores to the box)',
+    'LIGHT_MEMORY_BYTES': 'dev_lab.dev.verifybox.selection_mem_gb (a selection declares its measured memory)',
     # ONE box ledger (D2 2026-10-16): the per-box broker, its pools, records and refusal fold into lab_commons.box.
     'resources.Broker': 'lab_commons.box.hold (cores, memory and seats on the one ledger)',
     'Broker(': 'lab_commons.box.hold',
@@ -165,11 +165,11 @@ COMPUTE: Final[dict[str, str]] = {
     'Exhausted': 'lab_commons.box.Refused (one refusal, naming what is lacking and its holders)',
     'RESOURCE_DIR_ENV': 'lab_commons.box.BOX_ENV (the one ledger file)',
     'resource_dir()': 'lab_commons.box.box_path().parent (the ledger directory, outside every repo)',
-    'environment_pool': 'lab_commons.dev.envseat.environment_seat (a seat on the box ledger)',
+    'environment_pool': 'dev_lab.dev.envseat.environment_seat (a seat on the box ledger)',
     'bounded.worker_width': 'lab_commons.box.hold on the measured room; a selection declares selection_mem_gb',
-    'SELECTION_MEM_GB': 'lab_commons.dev.verifybox.selection_mem_gb (its files measured peaks, D4/D5)',
+    'SELECTION_MEM_GB': 'dev_lab.dev.verifybox.selection_mem_gb (its files measured peaks, D4/D5)',
     'boxwait': 'lab_commons.box (admission waits at most queue_s, then refuses naming every holder)',
-    'hold_run_seats': 'lab_commons.box.command (the run in the box) and lab_commons.dev.envseat.EnvironmentSeat',
+    'hold_run_seats': 'lab_commons.box.command (the run in the box) and dev_lab.dev.envseat.EnvironmentSeat',
     'boxseat': 'nothing: the box ledger is machine-wide by construction (lab_commons.box.box_path)',
     'PRODUCE_WALL_S': 'lab_commons.compute.learned.BOX_WALL_S (the wall the box enforces)',
     # The box's decision is a RECORD, never a sentinel exit code a child could also choose (SR-20261015-002).
@@ -182,5 +182,5 @@ COMPUTE: Final[dict[str, str]] = {
     'lab_commons.box.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
     'demand.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
     # ONE concurrency mechanism (user ruling 2026-10-18): an in-flight run holds a seat on the box ledger.
-    'claim_path': 'lab_commons.dev.inflight.seat / leader_run (the leader holds a seat on lab_commons.box)',
+    'claim_path': 'dev_lab.dev.inflight.seat / leader_run (the leader holds a seat on lab_commons.box)',
 }

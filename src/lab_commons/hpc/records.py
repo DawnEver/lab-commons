@@ -180,7 +180,7 @@ def stream_sources(sha: str, tag: str) -> tuple[str, str]:
 
     A superseded run's finished shards are carried (:func:`held_cells`) long after its tree is garbage, so
     retention keeps the round's stream beside the run state (:func:`kept_text`) before the tree goes
-    (:mod:`lab_commons.dev.retentionplan`): a file is an HPC resource.
+    (:mod:`dev_lab.dev.retentionplan`): a file is an HPC resource.
     """
     return f'{ROOT}/trees/{sha}/.lab-ci/{tag}.jsonl', f'{ROOT}/runs/{sha}/streams.jsonl'
 
