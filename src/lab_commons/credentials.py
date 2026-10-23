@@ -1,6 +1,6 @@
 """The git credential store as THE one place a secret lives: read and stored through ``git credential``.
 
-Promoted out of :mod:`lab_commons.dev.forgecred` (2026-10-13) when model API keys joined the forge token
+Promoted out of :mod:`dev_lab.dev.forgecred` (2026-10-13) when model API keys joined the forge token
 in the same store (user ruling 2026-10-13: Windows and Linux configure keys ONE way, no environment
 variables). A runtime caller -- a library reading its provider's key -- has neither the ``dev`` extra nor
 a repository, so this module is stdlib only and ``cwd`` is optional. A secret is keyed by the ``https``
@@ -53,7 +53,7 @@ API_KEY_USERNAME: Final = 'api-key'
 #: ``api-key-<N>`` is the default's Nth slot.
 API_KEY_TASKS: Final = frozenset(
     {
-        'pr-review',  # the advisory PR review command the forge runs (ai_lab.review; lab_commons.dev.forgereview)
+        'pr-review',  # the advisory PR review command the forge runs (ai_lab.review; dev_lab.dev.forgereview)
         'optimization',  # the optimization decider driven through ai_lab.connect (a consumer turing campaigns)
         'session',  # the interactive host launchers (cc-config ccc/ccds/codc/cods): the key a session runs on
     }

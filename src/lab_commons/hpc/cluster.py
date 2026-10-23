@@ -133,8 +133,8 @@ def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
     if shutil.which('sbatch') is None:
         msg = (
             'this box has no sbatch: submitting and gathering run ON the cluster login node, where '
-            '`python -m lab_commons.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
-            'from any machine `python -m lab_commons.dev.forge queue` shows where each run is'
+            '`python -m dev_lab.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
+            'from any machine `python -m dev_lab.dev.forge queue` shows where each run is'
         )
         raise NotOnCluster(msg)
     run = functools.partial(local_runner, timeout=timeout)
@@ -249,7 +249,7 @@ def run_home(job: JobSpec) -> str:
     """Where a job's run directories live: ``~/ci/jobs/<sha>`` for a job at a commit, else ``<workdir>/.lab-hpc``.
 
     A commit's jobs carry the sha in their submit directory, which ``squeue %Z`` reports, so retention reads
-    which artifact a queued or running job needs (:mod:`lab_commons.dev.retentionplan`).
+    which artifact a queued or running job needs (:mod:`dev_lab.dev.retentionplan`).
     """
     return f'~/ci/jobs/{job.sha}' if job.sha else f'{job.workdir.rstrip("/")}/.lab-hpc'
 
@@ -349,6 +349,23 @@ def submit_bands(
             raise RuntimeError(msg)
         job_ids.append(job_id)
     return run_dir, job_ids
+
+
+#: ``scancel``'s line for an id Slurm no longer holds: a job already gone is what a cancel asks for.
+_GONE: Final = 'Invalid job id specified'
+
+
+def scancel(shell: Runner, ids: Sequence[str], *flags: str) -> None:
+    """``scancel`` *ids*; an id Slurm no longer holds is not a refusal (Ada 2026-10-23), any other line is.
+
+    ``scancel`` still signals every id it holds when one of them is gone, and exits 1 for the gone one.
+    """
+    try:
+        shell(shlex.join(('scancel', *flags, *ids)), None)
+    except RuntimeError as refused:
+        errors = [line for line in str(refused).splitlines() if 'error' in line]
+        if not errors or any(_GONE not in line for line in errors):
+            raise
 
 
 def throttle(run: Runner, job_id: str, tasks: int) -> None:

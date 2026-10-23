@@ -1,6 +1,6 @@
 """``python -m lab_commons.supervise`` -- the runnable entry point.
 
-Ten lines, the same shape as ``lab_commons.dev.githooks.__main__``: the package is reached by name
+Ten lines, the same shape as ``dev_lab.dev.githooks.__main__``: the package is reached by name
 rather than re-exported, so this file exists only to give that name something to run.
 """
 

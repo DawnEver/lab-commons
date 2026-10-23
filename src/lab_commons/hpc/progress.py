@@ -136,7 +136,7 @@ def held_by_a_limit(progress: Progress, policy: Policy) -> str:
     """Why a job with NOTHING running has pended past ``policy.stall_minutes`` on an account limit; else ``''``.
 
     Such a claim is idle on a host whose account cannot run it, while another host's could: the forge
-    releases it (:mod:`lab_commons.dev.forgeslurm`). Measured 2026-10-16: a 52-task array sat an hour on
+    releases it (:mod:`dev_lab.dev.forgeslurm`). Measured 2026-10-16: a 52-task array sat an hour on
     ``AssocGrpMemLimit`` with 0 running while other accounts were nearly idle. A job with a task running is
     progressing, and a pend for any other reason (priority, resources) is the cluster's, not the account's.
     """
