@@ -141,12 +141,14 @@ def account(
 
     The account's OS, ``linux``, counts as many as ``cpu``.
     ``cpu`` per grant is :func:`lab_commons.hpc.plan.headroom` (quota less what is held); ``mem_gb`` the
-    quota's remaining memory, else -- uncapped -- the free memory of the schedulable nodes.
+    quota's remaining memory less every pending task's, else -- uncapped -- the free memory of the schedulable nodes.
     """
     cpu = mem = submits = 0.0
     for snapshot, qos in snapshots:
         cpu += headroom(snapshot)
         left = snapshot.quota.remaining()['mem']
+        if left is not None:  # the ceiling less running, less what pends: a pending task is held, as its cpus are
+            left = max(0.0, left - sum(task.mem_mb for task in snapshot.pending))
         mem += (left if left is not None else sum(n.mem_mb for n in snapshot.nodes if n.schedulable)) / 1024
         room = snapshot.quota.submit_room(qos)
         submits += math.inf if room is None else room
