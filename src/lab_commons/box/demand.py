@@ -70,9 +70,10 @@ WALL_CEILING_S: Final = 7 * 24 * 3600
 class Demand:
     """A run's declared resources and time limit. No field has a default.
 
-    Cores and memory may be 0 only for a claim that holds SEATS alone (an environment, a supervision target):
-    it books a named exclusion on the one ledger and no share of the machine. A run :func:`~lab_commons.box.run`
-    enforces declares both positive.
+    Cores may be 0 for a claim that runs no compute of its own: a vendor GUI preparing a job holds memory and a
+    seat but no core (D10, 2026-10-23). Memory may be 0 only for a claim that holds SEATS alone (an environment, a
+    supervision target). A demand booking nothing at all is refused. A run :func:`~lab_commons.box.run` enforces
+    declares both positive (it refuses otherwise).
     """
 
     cpu: int
@@ -81,10 +82,15 @@ class Demand:
     seats: Mapping[str, int]
 
     def __post_init__(self) -> None:
-        """Refuse every non-positive dimension at once, by name; 0 cores and memory only beside a seat."""
+        """Refuse every non-positive dimension at once, by name; 0 cores beside memory or a seat."""
         seats_only = self.cpu == 0 and self.mem_gb == 0 and any(self.seats.values())
+        coreless = self.cpu == 0 and isinstance(self.mem_gb, int | float) and self.mem_gb > 0
         bad = [
-            *(['cpu must be a positive int of cores'] if not _positive_int(self.cpu) and not seats_only else []),
+            *(
+                ['cpu must be a positive int of cores']
+                if not _positive_int(self.cpu) and not seats_only and not coreless
+                else []
+            ),
             *(['mem_gb must be positive'] if not isinstance(self.mem_gb, int | float) or self.mem_gb < 0 else []),
             *(['mem_gb must be positive'] if self.mem_gb == 0 and not seats_only else []),
             *(['wall_s must be a positive int of seconds'] if not _positive_int(self.wall_s) else []),
