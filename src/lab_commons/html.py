@@ -29,9 +29,10 @@ __all__ = [
 _INVALID_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _SCRIPT_ID = re.compile(r'[A-Za-z][A-Za-z0-9_-]*\Z')
 _DEVICE_NAMES = frozenset(
-    {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in range(1, 10)}
+    {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in '123456789¹²³'}
 )
 _MAX_FILENAME_BYTES = 255
+_KIND_SEPARATOR = '--'
 
 
 def _validate_name(value: str) -> None:
@@ -42,7 +43,9 @@ def _validate_name(value: str) -> None:
         not value
         or value != value.strip()
         or '..' in value
-        or value.endswith('.')
+        or _KIND_SEPARATOR in value
+        or value.startswith('-')
+        or value.endswith(('-', '.'))
         or _INVALID_NAME.search(value)
         or value.split('.', 1)[0].upper() in _DEVICE_NAMES
         or value.lower().endswith(('.html', '.htm'))
@@ -57,7 +60,10 @@ class ReportIdentity:
     """Business-supplied case identity and optional distinct report kind.
 
     Primary reports use ``<case>.html``; multiple reports in one run use
-    ``<case>.<kind>.html``. Names are preserved, never inferred or silently slugged.
+    ``<case>--<kind>.html``. The reserved separator cannot appear in either
+    component and neither component may start or end with a hyphen, so dotted
+    primary case names and separator-boundary hyphens cannot cause collisions.
+    Names are preserved, never inferred or silently slugged.
     """
 
     case_name: str
@@ -75,7 +81,7 @@ class ReportIdentity:
     @property
     def stem(self) -> str:
         """The artifact stem, also suitable for a report's sibling asset directory."""
-        return self.case_name if self.report_kind is None else f'{self.case_name}.{self.report_kind}'
+        return self.case_name if self.report_kind is None else f'{self.case_name}{_KIND_SEPARATOR}{self.report_kind}'
 
     @property
     def filename(self) -> str:

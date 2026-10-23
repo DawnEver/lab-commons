@@ -111,8 +111,13 @@ The base installation is the standard library alone. Select capabilities explici
 
 The business adapter supplies the canonical case name; this module never guesses
 identity from a directory, title, machine dimensions or current time. A primary
-report is `<case>.html`; a distinct report kind is `<case>.<kind>.html`. Unsafe,
-ambiguous or overlong names are rejected rather than silently slugged or truncated.
+report is `<case>.html`; a distinct report kind is `<case>--<kind>.html`. The `--`
+separator is reserved and neither component may start or end with a hyphen,
+so its boundary is unambiguous. It cannot appear in a case or kind name: `case.geometry`
+as a primary identity therefore cannot overwrite the `geometry` report of `case`.
+Unsafe, ambiguous or overlong names are rejected rather than silently slugged or truncated.
+Case is preserved; applications must keep their case identities distinct under the
+target filesystem's case rules and use separate run directories for independent runs.
 
 ```python
 from lab_commons.html import ReportIdentity, html_document, key_value_table, write_html_report

@@ -21,7 +21,7 @@ def test_primary_and_secondary_report_names_preserve_identity(html) -> None:
     primary = html.ReportIdentity('ipm_uv_cummins')
     assert primary.stem == 'ipm_uv_cummins'
     assert primary.filename == 'ipm_uv_cummins.html'
-    assert html.ReportIdentity('ipm_uv_cummins', 'geometry').filename == 'ipm_uv_cummins.geometry.html'
+    assert html.ReportIdentity('ipm_uv_cummins', 'geometry').filename == 'ipm_uv_cummins--geometry.html'
     assert html.ReportIdentity('Case 中文.v1').filename == 'Case 中文.v1.html'
 
 
@@ -56,8 +56,14 @@ def test_primary_and_secondary_report_names_preserve_identity(html) -> None:
         'NUL',
         'COM1',
         'lpt9.txt',
+        'COM¹',
+        'com².txt',
+        'LPT³',
         'case.html',
         'case.HTML',
+        'case--comparison',
+        '-case',
+        'case-',
     ],
 )
 def test_unsafe_or_file_shaped_case_identity_is_refused(html, name) -> None:
@@ -76,6 +82,8 @@ def test_report_kind_uses_the_same_validation_and_length_limit(html) -> None:
         html.ReportIdentity('case', '../geometry')
     with pytest.raises(ValueError, match='report identity'):
         html.ReportIdentity('case', '')
+    with pytest.raises(ValueError, match='report identity'):
+        html.ReportIdentity('case', 'comparison--detail')
     with pytest.raises(ValueError, match='255-byte'):
         html.ReportIdentity('a' * 200, 'b' * 50)
     assert len(html.ReportIdentity('a' * 250).filename.encode('utf-8')) == 255
@@ -83,6 +91,25 @@ def test_report_kind_uses_the_same_validation_and_length_limit(html) -> None:
         html.ReportIdentity('a' * 251)
     with pytest.raises(ValueError, match='255-byte'):
         html.ReportIdentity('中' * 84)
+
+
+def test_primary_and_secondary_identity_composition_has_no_ambiguous_dot_split(html) -> None:
+    assert html.ReportIdentity('case.geometry').filename != html.ReportIdentity('case', 'geometry').filename
+    assert html.ReportIdentity('case.a', 'b').filename != html.ReportIdentity('case', 'a.b').filename
+    assert html.ReportIdentity('case.geometry').filename == 'case.geometry.html'
+    assert html.ReportIdentity('case-a', 'detail-b').filename == 'case-a--detail-b.html'
+
+
+def test_secondary_separator_is_included_in_the_portable_filename_limit(html) -> None:
+    assert len(html.ReportIdentity('a' * 200, 'b' * 48).filename.encode('utf-8')) == 255
+    with pytest.raises(ValueError, match='255-byte'):
+        html.ReportIdentity('a' * 200, 'b' * 49)
+
+
+@pytest.mark.parametrize(('case', 'kind'), [('case-', 'kind'), ('case', '-kind'), ('case', 'kind-')])
+def test_hyphen_boundary_cannot_make_secondary_identity_composition_ambiguous(html, case, kind) -> None:
+    with pytest.raises(ValueError, match='report identity'):
+        html.ReportIdentity(case, kind)
 
 
 def test_script_json_roundtrips_without_html_termination(html) -> None:
