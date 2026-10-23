@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons.box import BOX_ENV, GB, Capacity, Demand, Holding, Refused, hold
+from lab_commons.box.ledger import stuck_at_head
 from lab_commons.box.supply import Reading, Usage, room
 from lab_commons.proccpu import system_cpu_seconds
 
@@ -86,3 +87,39 @@ def test_this_box_reads_a_sane_reading() -> None:
     assert 0 < reading.available_bytes <= reading.total_bytes
     assert reading.usage[os.getpid()].resident_bytes > 0
     assert system_cpu_seconds() is not None
+
+
+# ISSUE #5 (2026-10-19, five deadlocks): a HOLDER's nested ask (a vendor Designer it starts and hands over) is
+# sequential with the holder's own growth -- the holder waits on its child -- so the holder's UNUSED part is
+# room for its own nested claim. Measured: 10.0 GB free, holder 1.4 GB unused, 3.4 GB kept, nested ask 6.29 GB.
+_ISSUE5_CAP = Capacity(cpu=7.0, mem_bytes=28 * GB, seats={}, kept_cpu=1.0, kept_bytes=int(3.4 * GB))
+_ISSUE5_READ = Reading(
+    cores=8.0, idle_cores=8.0, total_bytes=32 * GB, available_bytes=10 * GB, usage={7: Usage(int(2.6 * GB), 0.0)}
+)
+_NESTED_GB = 6.29
+
+
+def test_a_holders_nested_ask_fits_only_because_its_own_unused_part_is_its_own() -> None:
+    """PLANTED both ways: the same ask on the same box fits for the holder and not for a stranger."""
+    holder = [_held(7, cpu=1, mem_gb=4.0)]  # 4 GB declared, 2.6 GB resident -> 1.4 GB unused
+    assert room(_ISSUE5_CAP, holder, _ISSUE5_READ)['mem_gb'] < _NESTED_GB, 'a stranger still sees 5.2 GB'
+    assert room(_ISSUE5_CAP, holder, _ISSUE5_READ, asker=7)['mem_gb'] >= _NESTED_GB  # 10 - 3.4 = 6.6 GB
+
+
+def test_another_pids_unused_claim_is_still_counted_against_the_asker() -> None:
+    held = [_held(7, cpu=1, mem_gb=4.0), _held(8, cpu=1, mem_gb=2.0)]  # pid 8 resident 0: 2 GB owed
+    assert room(_ISSUE5_CAP, held, _ISSUE5_READ, asker=7)['mem_gb'] == pytest.approx(10 - 3.4 - 2.0, abs=1e-6)
+
+
+def test_a_nested_ask_beyond_even_the_holders_headroom_still_does_not_fit() -> None:
+    free = room(_ISSUE5_CAP, [_held(7, cpu=1, mem_gb=4.0)], _ISSUE5_READ, asker=7)['mem_gb']
+    assert free < 7.0
+
+
+def test_a_room_refused_head_ticket_no_deadline_frees_in_time_is_named_stuck() -> None:
+    """PLANTED both ways: stuck when every holder outlives the ticket; not when one is due, nor behind FIFO."""
+    late = [Holding(what='a', pid=1, cpu=1, mem_bytes=GB, seats={}, deadline=200.0)]
+    soon = [*late, Holding(what='b', pid=2, cpu=1, mem_bytes=GB, seats={}, deadline=50.0)]
+    assert stuck_at_head('mem_gb lacking', late, gives_up=100.0)
+    assert not stuck_at_head('mem_gb lacking', soon, gives_up=100.0)
+    assert not stuck_at_head("queued behind 'x', which came first", late, gives_up=100.0)

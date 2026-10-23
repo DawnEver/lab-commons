@@ -93,6 +93,7 @@ from lab_commons.box.supply import Reading, room
 from lab_commons.compute.admission import admit
 from lab_commons.compute.model import Job, Resources, Supply
 from lab_commons.liveness import creation_stamp, still_the_same_process
+from lab_commons.log import emit
 
 #: The OS reader a decision measures with: the claim pids in, a :class:`~lab_commons.box.supply.Reading` out.
 Read = Callable[[Iterable[int]], Reading]
@@ -195,7 +196,7 @@ def _when(epoch: float) -> str:
 
 def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand, what: str) -> str | None:
     """``None`` when THE RULE admits *demand* on the measured room, else why not -- naming each lacking holder."""
-    free = room(capacity, held, reading, seats=demand.seats)
+    free = room(capacity, held, reading, seats=demand.seats, asker=os.getpid())
     verdict = admit(Job(repo='', sha='', producer=what), _vector(demand), Supply('box', free, free.names | {'cpu'}))
     if verdict:
         return None
@@ -380,6 +381,15 @@ def adopted(claim_id: int) -> Iterator[None]:
         release(Claim(claim_id, 0.0))
 
 
+def stuck_at_head(outcome: str, held: Sequence[Holding], gives_up: float) -> bool:
+    """Whether a ticket refused for ROOM (not behind another ticket) cannot fit before it gives up.
+
+    Every holder's deadline falls after *gives_up*, so no claim is due to free its room in time: strict FIFO
+    then holds every later ticket behind one that will wait out its whole limit (issue #5: ~7.7 h, silent).
+    """
+    return not outcome.startswith('queued behind') and bool(held) and all(h.deadline > gives_up for h in held)
+
+
 def _wait(
     con: sqlite3.Connection,
     ticket: int,
@@ -392,12 +402,20 @@ def _wait(
     gives_up: float,
     poll_s: float,
 ) -> Claim:
+    warned = False
     while True:
         reading = read([h.pid for h in _read(con)])
         with _immediate(con):
             outcome = _try(con, ticket, capacity, demand, what, reading=reading, tag=tag)
         if isinstance(outcome, Claim):
             return outcome
+        if not warned and stuck_at_head(outcome, _read(con), gives_up):
+            warned = True
+            emit(
+                f'box: STUCK AT THE HEAD -- {what} cannot fit before it gives up at {_when(gives_up)} (every '
+                f'holder runs past it), and every later ticket waits behind it: {outcome}',
+                err=True,
+            )
         left = gives_up - time.time()
         if left <= 0:
             msg = f'{what}: {NOT_ADMITTED} -- no room within the queue limit -- {outcome}'
