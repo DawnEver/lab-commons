@@ -101,11 +101,12 @@ def room(
     The module docstring's formula; a seat nobody declared counts 1, as a present undeclared tool does.
     *asker* is the pid asking: ITS OWN claims' unused part is its room (issue #5, 2026-10-19 -- a holder's
     nested ask is sequential with its own growth, since the holder waits on the child it hands the claim to),
-    so for those only what is in use counts. Every other pid's unused part is still owed.
+    so for those only what is in use counts. A KEPT claim (taken for a run that adopts it) is not the asker's
+    growth but that run's reservation, so it is owed like any other. Every other pid's unused part is still owed.
     """
     used = {h.pid: reading.usage.get(h.pid, Usage(0, 0.0)) for h in held}
-    others = [h for h in held if h.pid != asker]
-    own = [h for h in held if h.pid == asker]
+    own = [h for h in held if h.pid == asker and not h.kept]
+    others = [h for h in held if h.pid != asker or h.kept]
     cpu_owed = sum(max(0.0, h.cpu - used[h.pid].busy_cores) for h in others)
     mem_owed = sum(max(0, h.mem_bytes - used[h.pid].resident_bytes) for h in others)
     declared_cpu = sum(h.cpu for h in others) + sum(min(h.cpu, used[h.pid].busy_cores) for h in own)

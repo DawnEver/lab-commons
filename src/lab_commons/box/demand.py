@@ -214,6 +214,7 @@ class Holding:
     id: int = 0
     key: str = ''
     probe: tuple[str, ...] | None = None
+    kept: bool = False
 
     @property
     def claim(self) -> Claim:
