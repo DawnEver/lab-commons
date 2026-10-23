@@ -20,7 +20,7 @@ install:
 
 .PHONY: install-dev
 install-dev:
-	uv pip install -e ".[dev]"
+	uv sync --group dev
 	python -m dev_lab.dev.hook_install --install
 
 .PHONY: lint

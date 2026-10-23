@@ -15,7 +15,7 @@ from typing import Final
 
 import pytest
 
-from lab_commons.hpc.builds import builds_at, read_builds
+from lab_commons.hpc.builds import ItemWall, builds_at, read_builds
 
 _GIT: Final = shutil.which('git') or 'git'
 COLLECTOR: Final = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / 'collect.py'
@@ -160,3 +160,16 @@ def test_the_per_scope_timeout_is_declared_data_and_an_unknown_scope_is_refused(
         read_builds('[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {heavy = 3000}\n')
     with pytest.raises(ValueError, match='timeout_s'):
         read_builds('[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {full = 0}\n')
+
+
+def test_the_per_test_wall_is_declared_data_with_one_set_of_defaults() -> None:
+    text = '[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {multiple = 5, floor_s = 120}\n'
+    assert read_builds(text).item_wall == ItemWall(multiple=5, floor_s=120)
+    assert read_builds('[tool.lab_commons.hpc]\ninstall = "x"\n').item_wall == ItemWall()
+    assert ItemWall(multiple=5, floor_s=120).bound(100.0) == 500
+    assert ItemWall(multiple=5, floor_s=120).bound(1.0) == 120
+    assert ItemWall(unmeasured_s=900).bound(None) == 900
+    with pytest.raises(ValueError, match='item_wall'):
+        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {ceiling = 3}\n')
+    with pytest.raises(ValueError, match='item_wall'):
+        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {floor_s = 0}\n')

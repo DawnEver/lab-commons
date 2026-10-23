@@ -27,7 +27,6 @@ The base installation is the standard library alone. Select capabilities explici
 | `structured` | `structured` | structlog, colorama on Windows |
 | `viz` | the plotting vocabulary (`viz`) | NumPy |
 | `viz-mpl` / `viz-bokeh` | named renderer adapter, beside `viz` | matplotlib / Bokeh |
-| `dev` | development tools and their declared infrastructure | verification/tool dependencies |
 
 ## What's here (v1)
 
@@ -98,10 +97,10 @@ The base installation is the standard library alone. Select capabilities explici
   `Expectation`, an append-only fsynced `Record` with DECIDED finality, and `Conclusion`.
 - **consumer-a** — the origin of this code; re-points `core/utils/{config,logger}.py`
   at this package (see that repo's `plan-lab-commons-standalone.md` for the swap runbook).
-- **consumer-c** — consumes the runtime package and the `[dev]` kit (shared rules registry,
+- **consumer-c** — consumes the runtime package, and dev-lab as its `dev` group (shared rules registry,
   deny rules and agent guard, famconfig-rendered config, `dev_lab.dev.verify`).
 - **consumer-b** — consumes the runtime package (logging, paths, file_io, exceptions, units, em) and
-  the `[dev]` kit the same way. Its forks (Hairpinexample-org, consumer-b-webui) do NOT depend on
+  dev-lab the same way. Its forks (Hairpinexample-org, consumer-b-webui) do NOT depend on
   lab-commons.
 
 ## Installing (git URL)

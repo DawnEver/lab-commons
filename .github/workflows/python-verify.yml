@@ -19,7 +19,7 @@
         "extras": {
           "description": "Space-separated optional-dependency extras to sync (each becomes --extra X).",
           "required": false,
-          "default": "dev",
+          "default": "",
           "type": "string"
         },
         "guard-targets": {
