@@ -518,7 +518,7 @@ def test_a_tree_the_box_did_not_admit_is_released_retryable_never_an_error_verdi
     local = Work('integrate/main', SHA, 'windows', 'mine', ME, argv=('verify',))
     refusal = (
         'dep --bootstrap exited 1: REFUSED: dep:x: not admitted -- no room within the queue limit -- '
-        "queued behind 'verify:p8', which came first (strict FIFO)"
+        "queued behind 'verify:p8', which came first: holding this would delay its earliest start"
     )
     trees, spawned = _Trees(tmp_path, refuse=refusal), []
     report, _said, _alarms = _serve(

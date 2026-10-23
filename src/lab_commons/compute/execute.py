@@ -2,9 +2,9 @@
 
 ONE INTERFACE (:class:`Executor`: ``run(graph) -> {name: Settled}``), ONE LOCAL IMPLEMENTATION
 (:class:`LocalExecutor`). Every READY unit -- its upstream all decided -- starts at once on its own thread, and the
-BOX LEDGER is the only bound: a unit whose declared demand the ledger cannot admit now waits in its queue (FIFO
-among contenders), so a vendor's seats, not a pool size, cap how many of its units overlap. Settled units come back
-in graph order. For each unit:
+BOX LEDGER is the only bound: a unit whose declared demand the ledger cannot admit now waits in its queue
+(backfill by reservation, `box.order`), so a vendor's seats, not a pool size, cap how many of its units overlap.
+Settled units come back in graph order. For each unit:
 
 1. an upstream that did not produce a result -> the unit is SKIPPED, naming it (a failure stops its dependants);
 2. its inputs resolve (a file, or an upstream result's output) and give the unit hash;

@@ -284,7 +284,7 @@ def test_a_queue_ahead_is_named_as_the_cause_not_a_verdict_in_this_environment(m
 
     @contextmanager
     def queued(_self: EnvironmentSeat) -> Iterator[None]:
-        msg = "dep:x: not admitted -- queued behind 'verify:p8', which came first (strict FIFO)"
+        msg = "dep:x: not admitted -- queued behind 'verify:p8', which came first: holding this would delay it"
         raise NotAdmitted(msg)
         yield
 
