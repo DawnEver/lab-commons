@@ -351,6 +351,23 @@ def submit_bands(
     return run_dir, job_ids
 
 
+#: ``scancel``'s line for an id Slurm no longer holds: a job already gone is what a cancel asks for.
+_GONE: Final = 'Invalid job id specified'
+
+
+def scancel(shell: Runner, ids: Sequence[str], *flags: str) -> None:
+    """``scancel`` *ids*; an id Slurm no longer holds is not a refusal (Ada 2026-10-23), any other line is.
+
+    ``scancel`` still signals every id it holds when one of them is gone, and exits 1 for the gone one.
+    """
+    try:
+        shell(shlex.join(('scancel', *flags, *ids)), None)
+    except RuntimeError as refused:
+        errors = [line for line in str(refused).splitlines() if 'error' in line]
+        if not errors or any(_GONE not in line for line in errors):
+            raise
+
+
 def throttle(run: Runner, job_id: str, tasks: int) -> None:
     """Set array *job_id*'s concurrency limit to *tasks* (``scontrol update ... ArrayTaskThrottle``).
 
