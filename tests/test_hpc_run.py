@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -32,7 +33,7 @@ from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc import cluster as cluster_module
 from lab_commons.hpc import run as run_module
 from lab_commons.hpc import shell, watch
-from lab_commons.hpc.builds import Builds, cargo_target
+from lab_commons.hpc.builds import Builds, ItemWall, cargo_target
 from lab_commons.hpc.cluster import SUBMIT_LIMIT, Unreachable
 from lab_commons.hpc.config import Config, Cost, Limits, Policy
 from lab_commons.hpc.gather import gather_run
@@ -313,6 +314,37 @@ def test_a_pytest_that_dies_mid_item_names_the_test_it_was_running(
     assert _words(result['cells']) == {ids[0]: 'ok'}
     assert result['done']['done'] == 3
     assert result['started'] == ids[1], 'the plugin streams a START line, so the in-flight id is known'
+
+
+def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hang pytest-timeout is not asked to catch: the runner kills the tree, records a timeout, runs the rest."""
+    runner = _item_runner(tmp_path, monkeypatch)
+    body = (
+        'import subprocess, sys, time\n\n'
+        'def test_a():\n    pass\n\n'
+        'def test_hang():\n'
+        '    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])\n'
+        '    while True:\n        time.sleep(1)\n\n'
+        'def test_c():\n    pass\n'
+    )
+    ids = _tree(tmp_path, body)
+    began = time.monotonic()
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 3)})
+    assert time.monotonic() - began < 60, 'the hang ended within its wall, not at the scheduler limit'
+    assert _words(result['cells']) == {ids[0]: 'ok', ids[1]: 'timeout', ids[2]: 'ok'}, result['tail']
+    assert _whys(result['cells'])[ids[1]].startswith('timeout after 3s')
+    assert ids[1] not in result['seconds'], 'the bound it hit is no measurement of the test'
+    assert result['done'] is not None
+
+
+def test_a_normal_item_under_a_wall_passes_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _item_runner(tmp_path, monkeypatch)
+    ids = _tree(tmp_path, 'def test_a():\n    pass\n\ndef test_b():\n    pass\n')
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 30)})
+    assert _words(result['cells']) == dict.fromkeys(ids, 'ok')
+    assert result['done']['done'] == 0
 
 
 def test_a_round_of_items_leaves_one_file_where_it_left_two_per_item(
@@ -1438,6 +1470,18 @@ def test_every_item_carries_the_timeout_its_scope_declares() -> None:
     submit_run(narrowed, MACHINE, lambda _g: incremental, cost=COST, policy=POLICY)
     assert {i['timeout_s'] for i in full.manifests[0]['items']} == {3000}
     assert {i['timeout_s'] for i in incremental.manifests[0]['items']} == {300}
+
+
+def test_every_id_carries_a_wall_derived_from_its_measured_duration() -> None:
+    builds = Builds(install='true', env_key='k1', item_wall=ItemWall(multiple=10, floor_s=60, unmeasured_s=900))
+    history = {'durations': {'tests/a.py::t1': 30.0, 'tests/a.py::t2': 0.1}}
+    fake = FakeRunCluster()
+    spec = RunSpec(sha=SHA, repo_url='u', builds=builds)
+    submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, history=history)
+    walls = {n: s for i in fake.manifests[0]['items'] for n, s in i['walls'].items()}
+    assert walls['tests/a.py::t1'] == 300, 'ten times its measured 30 s'
+    assert walls['tests/a.py::t2'] == 60, 'never under the floor'
+    assert {s for n, s in walls.items() if n not in history['durations']} == {900}, 'unmeasured: the declared default'
 
 
 def test_the_run_state_names_the_build_directories_it_runs_in() -> None:

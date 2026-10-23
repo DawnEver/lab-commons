@@ -33,9 +33,11 @@ manifest by :func:`run` (the new runner appends to the round file), what it alre
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -43,7 +45,7 @@ import time
 import tomllib
 from collections.abc import Collection, Mapping
 from pathlib import Path
-from typing import Any, Final, Protocol
+from typing import IO, Any, Final, Protocol
 
 __all__ = [
     'DECIDED',
@@ -348,7 +350,8 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
         plain = {k: v for k, v in line.items() if k not in ('id', 's', 'item')}
         if node not in cells or _line_badness(plain) < _line_badness(cells[node]):
             cells[node] = plain
-        seconds[node] = round(seconds.get(node, 0.0) + float(line.get('s', 0.0)), 3)
+        if 's' in line:  # a wall kill's cell carries none: the bound it hit is no measurement of the test
+            seconds[node] = round(seconds.get(node, 0.0) + float(line['s']), 3)
     return {'cells': cells, 'seconds': seconds, 'done': done, 'started': started}
 
 
@@ -399,13 +402,128 @@ def split_streams(text: str, tag: str) -> dict[int, str]:
     return {index: '\n'.join(lines) for index, lines in streams.items()}
 
 
-def _wait(proc: subprocess.Popen[bytes]) -> tuple[int, float | None]:
-    """Exit code and the child's peak RSS in MB -- ``wait4`` where the OS has it, else no peak."""
+def _poll(proc: subprocess.Popen[bytes]) -> tuple[int, float | None] | None:
+    """Exit code and peak RSS in MB once the child has exited (``wait4`` where the OS has it), else ``None``."""
     if sys.platform == 'win32':
-        return proc.wait(), None
-    _, status, usage = os.wait4(proc.pid, 0)
+        rc = proc.poll()
+        return None if rc is None else (rc, None)
+    pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
+    if pid == 0:
+        return None
     proc.returncode = os.waitstatus_to_exitcode(status)
     return proc.returncode, round(usage.ru_maxrss / 1024, 1)  # Linux reports KiB
+
+
+def _launch(argv: list[str], env: dict[str, str], out: IO[bytes]) -> subprocess.Popen[bytes]:
+    """Start pytest as the leader of its own process group, so a kill takes every child it spawned."""
+    group = {} if sys.platform == 'win32' else {'start_new_session': True}
+    return subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env, **group)
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill *proc* and every process under it; one already gone is no error."""
+    if sys.platform == 'win32':
+        taskkill = ['taskkill', '/F', '/T', '/PID', str(proc.pid)]
+        subprocess.run(taskkill, capture_output=True, check=False)
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait()
+
+
+#: Seconds between two looks at the stream while a test runs: the slack a wall kill lands within.
+_POLL_S: Final = 0.5
+
+
+class _Watch:
+    """THE PER-TEST WALL, enforced from outside pytest: reads this item's new stream lines as they land.
+
+    The clock of a test starts at its START line and runs until the next one, so a hung teardown is the
+    test's own; before any START (collection, imports) the clock is the launch's and the bound the
+    largest of the ids still owed. pytest-timeout cannot do this: it lives inside the interpreter a C loop
+    holds (measured on Ada: 20 h at 100% CPU, a verdict held 4 h under a 21 h Slurm limit).
+    """
+
+    def __init__(self, target: str, index: int, ids: list[str], walls: Mapping[str, float]) -> None:
+        self.target, self.index, self.expected, self.walls = target, index, set(ids), walls
+        self.offset = os.stat(target).st_size  # noqa: PTH116 -- os, not pathlib: see _write
+        self.reported: set[str] = set()
+        self.inflight: str | None = None
+        self.since = time.monotonic()
+
+    def launched(self) -> None:
+        self.inflight, self.since = None, time.monotonic()
+
+    def _read(self) -> None:
+        fd = os.open(self.target, os.O_RDONLY)
+        try:
+            os.lseek(fd, self.offset, os.SEEK_SET)
+            chunk = b''
+            while block := os.read(fd, 1 << 16):
+                chunk += block
+        finally:
+            os.close(fd)
+        whole = chunk[: chunk.rfind(b'\n') + 1]  # a line still being written waits for the next look
+        self.offset += len(whole)
+        for raw in whole.decode('utf-8', 'replace').splitlines():
+            try:
+                line = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(line, dict) or line.get('item') != self.index:
+                continue
+            if 'start' in line:
+                self.inflight, self.since = canonical(line['start'], self.expected), time.monotonic()
+            elif 'id' in line:
+                self.reported.add(canonical(line['id'], self.expected))
+
+    def overdue(self, owed: list[str]) -> tuple[list[str], float] | None:
+        """The ids a kill now names, and the bound they passed; ``None`` while every clock is within its wall."""
+        self._read()
+        if self.inflight is not None and self.inflight in self.walls:
+            culprits, bound = [self.inflight], float(self.walls[self.inflight])
+        else:
+            culprits = [n for n in owed if n not in self.reported]
+            bound = max((float(self.walls[n]) for n in culprits if n in self.walls), default=0.0)
+        if not bound or time.monotonic() - self.since <= bound:
+            return None
+        return culprits, bound
+
+
+def _timed_out(target: str, index: int, node: str, bound: float) -> None:
+    """Record *node* as a TIMEOUT cell, its reason naming the bound -- and no seconds (:func:`read_stream`)."""
+    reason = f'timeout after {bound:g}s (per-test wall; process tree killed)'
+    _write(target, index, {'id': node, 'status': 'timeout', 'reason': {'kind': 'timeout', 'text': reason}})
+
+
+def _supervise(
+    item: dict[str, Any], ids: list[str], target: str, index: int, *, env: dict[str, str], out: IO[bytes]
+) -> tuple[int, float | None]:
+    """Run *ids*; a test past its wall is killed with its process tree, recorded, and the rest run on."""
+    walls: Mapping[str, float] = item.get('walls') or {}
+    watch = _Watch(target, index, ids, walls)
+    owed, rc, peak = list(ids), 0, None
+    while owed:
+        files = list(dict.fromkeys(node.split('::', maxsplit=1)[0] for node in owed))
+        Path(env[IDS_ENV]).write_text(json.dumps(owed), encoding='utf-8')
+        proc = _launch(item_argv(item, files), env, out)
+        watch.launched()
+        while (ended := _poll(proc)) is None:
+            if walls and (hit := watch.overdue(owed)) is not None:
+                _kill_tree(proc)
+                culprits, bound = hit
+                for node in culprits:
+                    _timed_out(target, index, node, bound)
+                watch.overdue([])  # take in what the killed run wrote before it died
+                owed = [n for n in owed if n not in watch.reported and n not in culprits]
+                ended = (1, None)  # a test failed -- pytest's own code, not a signal Slurm sent
+                break
+            time.sleep(_POLL_S)
+        else:
+            owed = []
+        rc = ended[0]
+        peak = ended[1] if peak is None else max(peak, ended[1] or 0.0)
+    return rc, peak
 
 
 def item_argv(item: dict[str, Any], files: list[str]) -> list[str]:
@@ -431,15 +549,11 @@ def run(item: dict[str, Any]) -> dict[str, Any]:
     stream.parent.mkdir(parents=True, exist_ok=True)
     target = str(stream.resolve())
     _write(target, index, {'begin': time.time()})
-    files = list(dict.fromkeys(node.split('::', maxsplit=1)[0] for node in ids))
-    argv = item_argv(item, files)
     start = time.monotonic()
     with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryFile() as out:  # node-local, never GPFS
         chosen = Path(scratch) / 'ids.json'
-        chosen.write_text(json.dumps(ids), encoding='utf-8')
         env = {**os.environ, STREAM_ENV: target, ITEM_ENV: str(index), IDS_ENV: str(chosen)}
-        proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env)
-        rc, peak = _wait(proc)
+        rc, peak = _supervise(item, ids, target, index, env=env, out=out)
         out.seek(0)
         tail = out.read().decode('utf-8', 'replace').strip().splitlines()[-20:]
     _write(target, index, {'done': rc, 'wall': round(time.monotonic() - start, 3), 'peak_mb': peak})

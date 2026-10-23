@@ -64,6 +64,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.learned import Measured
+from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
@@ -168,6 +169,18 @@ def _no_room() -> Iterator[None]:
         raise NoRoom(msg) from refused
 
 
+def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
+    """Each id's wall in seconds: the run's declared :class:`ItemWall` over what the id was MEASURED to take.
+
+    The measurement is the larger of its recorded duration and its floor (a kill's lower bound); an id with
+    neither is unmeasured. A state written before the wall existed gets the declared defaults.
+    """
+    wall = ItemWall(**state.get('item_wall', {}))
+    measured = Measured.of(state.get('measured', {}))
+    seen = {**measured.floors, **{n: max(s, measured.floors.get(n, 0.0)) for n, s in measured.durations.items()}}
+    return {node: wall.bound(seen.get(node)) for node in ids}
+
+
 @_no_room()
 def submit_round(
     state: dict[str, Any],
@@ -249,7 +262,10 @@ def submit_round(
         raise ValueError(msg)
     pending = [pending[i] for i in order]
     ceiling = {'timeout_s': state['timeout_s']} if state.get('timeout_s') else {}
-    items = [{'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, **ceiling} for i, group in enumerate(pending)]
+    items = [
+        {'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, 'walls': item_walls(group, state), **ceiling}
+        for i, group in enumerate(pending)
+    ]
     sha = state['sha']
     job = JobSpec(
         name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=(ENV,), entry=f'{ITEM_MODULE}:run'
@@ -344,6 +360,7 @@ def submit_run(
         'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
         'scope': spec.scope,
         'timeout_s': spec.timeout_s,
+        'item_wall': asdict(spec.builds.item_wall),
         'platform': spec.part,
         'system': told.get('platform', ''),
         'env': told['env'],
