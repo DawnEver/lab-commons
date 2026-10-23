@@ -40,6 +40,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.toolchecks import CHECKS, Check
 from lab_commons.config import config_path
 
@@ -208,17 +209,11 @@ def _state(path: Path | None) -> Path:
 
 
 def _load(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return {}
+    return read_table(path)
 
 
 def _save(path: Path, state: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix('.tmp')
-    temp.write_text(json.dumps(state, indent=1), encoding='utf-8')
-    temp.replace(path)
+    durable_text(path, json.dumps(state, indent=1))
 
 
 def _required(requirement: Requirement | None) -> str:

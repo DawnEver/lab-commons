@@ -59,7 +59,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.compute.durable import durable_write
+from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.model import Demand
 from lab_commons.config import config_path
 from lab_commons.hpc.config import Cost, Policy
@@ -353,7 +353,8 @@ def learned(repo: str) -> dict[str, Any]:
     """Everything learned for *repo* (the per-test keys of :class:`Measured`, and ``runs``); none yet is ``{}``.
 
     The table is ADVISORY: an unparseable one (a writer from before whole-file writes, a torn disk) is
-    retried for :data:`READ_RETRY_S`, then read as ``{}`` -- the caller's prior -- never raised through a run.
+    retried for :data:`READ_RETRY_S`, then quarantined and read as ``{}`` -- the caller's prior -- never raised
+    through a run (:func:`~lab_commons.compute.durable.read_table`).
     """
     path = _path(repo)
     deadline = time.monotonic() + READ_RETRY_S
@@ -362,13 +363,13 @@ def learned(repo: str) -> dict[str, Any]:
             return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
         except (ValueError, OSError):
             if time.monotonic() >= deadline:
-                return {}
+                return read_table(path)
             time.sleep(0.05)
 
 
 def _write(repo: str, table: dict[str, Any]) -> Path:
     """Write *repo*'s table WHOLE (temp, fsync, rename): a concurrent reader sees the old file or the new one."""
-    return durable_write(_path(repo), json.dumps({**table, 'repo': repo}).encode('utf-8'))
+    return durable_text(_path(repo), json.dumps({**table, 'repo': repo}))
 
 
 def folded(repo: str) -> frozenset[str]:

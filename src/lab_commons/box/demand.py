@@ -26,6 +26,7 @@ from typing import Final
 
 import lab_commons.launch as _door
 from lab_commons.box.machine import own_reserve, provided, reserve_table
+from lab_commons.compute.durable import durable_text
 from lab_commons.config import section
 from lab_commons.outcomes import Status
 from lab_commons.proc import system_memory
@@ -256,9 +257,7 @@ def write_ended(path: Path, ended: ProcessEnd | Refused) -> None:
     and a child may exit with any number, so no code can mean "the box refused" or "the box killed it".
     """
     record = {'refused': str(ended)} if isinstance(ended, Refused) else {'ended': asdict(ended)}
-    staged = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-    staged.write_text(json.dumps(record), encoding='utf-8')
-    staged.replace(path)
+    durable_text(path, json.dumps(record))
 
 
 def read_ended(path: Path) -> ProcessEnd | Refused | None:
