@@ -133,7 +133,7 @@ def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
     if shutil.which('sbatch') is None:
         msg = (
             'this box has no sbatch: submitting and gathering run ON the cluster login node, where '
-            '`python -m dev_lab.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
+            '`python -m dev_lab.dev.forge serve` produces the part (dev-lab docs-src/dev/hpc.md, deployment); '
             'from any machine `python -m dev_lab.dev.forge queue` shows where each run is'
         )
         raise NotOnCluster(msg)

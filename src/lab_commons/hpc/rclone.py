@@ -22,11 +22,11 @@ __all__ = ['RECIPE', 'declared_remote', 'probe']
 
 _TIMEOUT_S: Final = 60
 
-#: How a writer creates its remote; the full recipe is docs-src/dev/artefacts.md.
+#: How a writer creates its remote; the full recipe is dev-lab's docs-src/dev/artefacts.md.
 RECIPE: Final = (
     'create it with `rclone config` (type onedrive, token from `rclone authorize "onedrive"` on a machine with '
     'a browser, the SharePoint site\'s "Documents" library, drive_type = documentLibrary), then chmod 600 the '
-    'config; see docs-src/dev/artefacts.md'
+    'config; see dev-lab docs-src/dev/artefacts.md'
 )
 
 

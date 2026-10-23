@@ -10,11 +10,11 @@ def test_the_account_is_the_slurm_cluster_and_the_login_user() -> None:
 
     def shell(command: str, _stdin: str | None) -> str:
         asked.append(command)
-        return 'ada\nezzls2\n'
+        return 'ada\nuser-a\n'
 
     found = cluster_account(shell)
-    assert found == ClusterAccount('ada', 'ezzls2')
-    assert str(found) == 'ada/ezzls2'
+    assert found == ClusterAccount('ada', 'user-a')
+    assert str(found) == 'ada/user-a'
     assert 'ClusterName' in asked[0]
     assert 'id -un' in asked[0]
 
