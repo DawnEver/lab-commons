@@ -40,7 +40,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.compute.toolchecks import CHECKS, Check
+from lab_commons.compute.durable import durable_text, read_table
+from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed
 from lab_commons.config import config_path
 
 __all__ = [
@@ -208,17 +209,11 @@ def _state(path: Path | None) -> Path:
 
 
 def _load(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return {}
+    return read_table(path)
 
 
 def _save(path: Path, state: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix('.tmp')
-    temp.write_text(json.dumps(state, indent=1), encoding='utf-8')
-    temp.replace(path)
+    durable_text(path, json.dumps(state, indent=1))
 
 
 def _required(requirement: Requirement | None) -> str:
@@ -286,7 +281,11 @@ def refresh(
     required = {tool: _required(versions.get(tool)) for tool in checks}
     due = [tool for tool in checks if tool not in stored or not _current(stored[tool], required[tool], now, ttl)]
     for tool in due:
-        row = probe(tool, checks[tool], versions.get(tool), now=now).row()
+        try:
+            row = probe(tool, checks[tool], versions.get(tool), now=now).row()
+        except ProbeCrashed:
+            stored.pop(tool, None)  # the probe measured nothing: no reading, re-probed on the next refresh
+            continue
         stored[tool] = {**row, 'probed': now.isoformat(), 'required': required[tool]}
     if due:
         _save(path, stored)
@@ -330,7 +329,10 @@ def renew(
         if not stale(one) or not stored[tool].get('present'):
             return one
         required = stored[tool].get('required', 'any')
-        row = probe(tool, checks[tool], _requirement(required), now=at).row()
+        try:
+            row = probe(tool, checks[tool], _requirement(required), now=at).row()
+        except ProbeCrashed:
+            return one  # the probe measured nothing: the stale reading stands, re-probed next time
         stored[tool] = {**row, 'probed': at.isoformat(), 'required': required}
         _save(path, stored)
         return cached(checks={tool: checks[tool]}, state=path, now=at, ttl=ttl)[tool]

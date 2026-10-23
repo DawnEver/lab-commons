@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import runpy
+import subprocess
 import sys
 import threading
 import time
@@ -369,3 +370,63 @@ def test_concurrent_callers_on_one_stale_reading_share_one_probe(tmp_path: Path)
         one.join()
     assert got == [True] * 8
     assert fake.smokes == 2, 'one re-probe; the other seven read its result'
+
+
+# INCIDENT 2026-10-20 01:25: `designer -w` smoke-run from a hidden detached serve INHERITED an invalid stdin,
+# raised `[WinError 6] The handle is invalid`, and the FAILED reading stuck for its TTL -- every run refused
+# while JMAG was fine. A probe never reads stdin, and a probe that crashed measured nothing.
+
+
+def test_a_probe_never_hands_its_child_the_inherited_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PLANTED: an inherited stdin that is invalid fails the start; the probe still answers."""
+    real = toolchecks._door.run
+
+    def run(argv: list[str], **kwargs: object) -> object:
+        if kwargs.get('stdin') is not subprocess.DEVNULL:
+            raise OSError(6, 'The handle is invalid')
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(toolchecks._door, 'run', run)
+    passed, detail = toolchecks._run([sys.executable, '-c', 'import sys; print(repr(sys.stdin.read()))'])
+    assert passed, detail
+    assert detail.endswith("''"), 'the child reads an empty stdin, never the parent console'
+
+
+def test_a_probe_that_crashes_records_no_reading_and_is_retaken(tmp_path: Path) -> None:
+    """A crash is the probe's own error, not the tool's answer: nothing is stored, so the next refresh re-probes."""
+    state, smokes = tmp_path / 'presence.json', []
+
+    def smoke(_path: Path) -> tuple[bool, str]:
+        smokes.append(1)
+        crashed = 'OSError: [WinError 6] The handle is invalid'
+        raise toolchecks.ProbeCrashed(crashed)
+
+    check = Check(lambda: ('install dir', EXE), lambda _p: ('--version', '5.0'), smoke)
+    assert not refresh(FLOORS, checks={'femm': check}, state=state, now=NOW)['femm'].present
+    assert 'femm' not in json.loads(state.read_text(encoding='utf-8') if state.exists() else '{}')
+    refresh(FLOORS, checks={'femm': check}, state=state, now=NOW + timedelta(seconds=1))
+    assert len(smokes) == 2, 'a crashed probe must not be cached for its TTL'
+
+
+def test_a_tool_that_answers_failed_is_still_cached(tmp_path: Path) -> None:
+    """The planted other side: the TOOL's own failure is a reading, kept for its TTL."""
+    fake, state = Fake(smoke=False), tmp_path / 'presence.json'
+    refresh(FLOORS, checks={'femm': fake.check()}, state=state, now=NOW)
+    refresh(FLOORS, checks={'femm': fake.check()}, state=state, now=NOW + TTL / 2)
+    assert fake.smokes == 1
+
+
+def test_a_re_probe_that_crashes_keeps_the_stale_reading_and_raises_nothing(tmp_path: Path) -> None:
+    """The crash rule through :func:`renew`: a probe that measured nothing replaces no reading."""
+    fake, state = Fake(), tmp_path / 'presence.json'
+    refresh(FLOORS, checks={'femm': fake.check()}, state=state, now=NOW)
+    before = state.read_text(encoding='utf-8')
+
+    def crashes(_path: Path) -> tuple[bool, str]:
+        crashed = 'OSError: [WinError 6] The handle is invalid'
+        raise toolchecks.ProbeCrashed(crashed)
+
+    check = Check(lambda: ('install dir', EXE), lambda _p: ('--version', '5.0'), crashes)
+    one = renew('femm', checks={'femm': check}, state=state, now=NOW + TTL + timedelta(seconds=1))
+    assert one.evidence[-1].source == 'ttl', 'still the stale reading, never a crash cached as absent'
+    assert state.read_text(encoding='utf-8') == before

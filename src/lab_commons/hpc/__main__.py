@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
+from lab_commons.compute.durable import durable_text
 from lab_commons.hpc import allocation, clean
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
@@ -109,7 +110,7 @@ def _record(config: Config) -> dict[str, Any]:
 
 
 def _save_record(config: Config, record: dict[str, Any]) -> None:
-    _state_path(config).write_text(json.dumps(record, indent=2), encoding='utf-8')
+    durable_text(_state_path(config), json.dumps(record, indent=2))
 
 
 def _ensure(config: Config, repo: Path) -> Ensure | None:

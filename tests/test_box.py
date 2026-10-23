@@ -93,11 +93,11 @@ def test_a_coreless_claim_is_admitted_while_another_claim_holds_every_core() -> 
         assert sorted(row.what for row in holdings()) == ['prepare', 'solver']
 
 
-@pytest.mark.usefixtures('box')
-def test_a_coreful_claim_still_waits_for_held_cores() -> None:
+def test_a_coreful_claim_still_waits_for_held_cores(box: Path) -> None:
     """PLANTED CONTROL: the same claim asking one core is refused while the solver holds all four."""
+    # ANOTHER process holds (the parent, alive): this process's own unused claim would be its own room (issue #5)
+    _row(box, pid=os.getppid(), created=None, deadline=time.time() + 600)
     with (
-        hold(_demand(cpu=4, mem_gb=1.0), 'solver', queue_s=0.2, **_ON),
         pytest.raises(NotAdmitted),
         hold(_demand(cpu=1, mem_gb=1.0), 'prepare', queue_s=0.2, **{**_ON, 'key': 'p'}),
     ):
@@ -148,15 +148,25 @@ def test_a_claim_is_a_row_while_held_and_gone_after() -> None:
 
 
 @pytest.mark.usefixtures('box')
-def test_a_wait_never_exceeds_queue_s_and_names_the_holder() -> None:
-    with hold(_demand(cpu=4), 'holder-run', queue_s=1, **_ON):
-        start = time.monotonic()
-        with (
-            pytest.raises(Refused, match='holder-run'),
-            hold(_demand(cpu=1), 'late', queue_s=1.0, **_ON),
-        ):
-            pass
-        assert time.monotonic() - start < 1.0 + 1.0
+def test_a_wait_never_exceeds_queue_s_and_names_the_holder(box: Path) -> None:
+    # ANOTHER process holds (the parent, alive): this process's own unused claim would be its own room (issue #5)
+    _row(box, pid=os.getppid(), created=None, deadline=time.time() + 600)
+    start = time.monotonic()
+    with (
+        pytest.raises(Refused, match='ghost'),
+        hold(_demand(cpu=1), 'late', queue_s=1.0, **_ON),
+    ):
+        pass
+    assert time.monotonic() - start < 1.0 + 1.0
+
+
+def test_the_holders_own_nested_ask_is_admitted_from_its_own_unused_claim() -> None:
+    """ISSUE #5 through the ledger: a holder's nested hold fits its own headroom."""
+    with (
+        hold(_demand(cpu=4), 'holder-run', queue_s=1, **_ON),
+        hold(_demand(cpu=1), 'its designer', queue_s=1.0, outside=True, **_ON),
+    ):
+        pass
 
 
 def _ticket(path: Path, pid: int, demand: Demand | None = None) -> None:
@@ -210,7 +220,7 @@ def test_an_expired_deadline_row_is_reaped(box: Path) -> None:
 
 
 def test_a_deadline_within_grace_still_holds(box: Path) -> None:
-    _row(box, pid=os.getpid(), created=None, deadline=time.time() - 1)
+    _row(box, pid=os.getppid(), created=None, deadline=time.time() - 1)
     with (
         pytest.raises(Refused, match='ghost'),
         hold(_demand(cpu=1), 'after', queue_s=0.5, **_ON),
