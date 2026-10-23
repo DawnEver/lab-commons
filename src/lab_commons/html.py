@@ -47,7 +47,7 @@ def _validate_name(value: str) -> None:
         or value.startswith('-')
         or value.endswith(('-', '.'))
         or _INVALID_NAME.search(value)
-        or value.split('.', 1)[0].upper() in _DEVICE_NAMES
+        or value.split('.', 1)[0].rstrip(' ').upper() in _DEVICE_NAMES
         or value.lower().endswith(('.html', '.htm'))
         or len(value.encode('utf-8')) > _MAX_FILENAME_BYTES
     ):

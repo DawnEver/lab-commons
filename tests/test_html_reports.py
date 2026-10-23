@@ -51,6 +51,8 @@ def test_primary_and_secondary_report_names_preserve_identity(html) -> None:
         'a\x7fb',
         'CON',
         'con.txt',
+        'NUL .txt',
+        'COM1  .log',
         'PRN',
         'AUX',
         'NUL',
