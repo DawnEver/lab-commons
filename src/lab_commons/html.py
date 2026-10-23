@@ -29,7 +29,8 @@ __all__ = [
 _INVALID_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _SCRIPT_ID = re.compile(r'[A-Za-z][A-Za-z0-9_-]*\Z')
 _DEVICE_NAMES = frozenset(
-    {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in '123456789¹²³'}
+    {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'}
+    | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in '123456789¹²³'}
 )
 _MAX_FILENAME_BYTES = 255
 _KIND_SEPARATOR = '--'
