@@ -11,29 +11,37 @@ is held to what it holds now, the asking session's demand is unbounded, so an id
 and its share lends out, and two busy sessions meet at equal halves. Past its share a session's new
 submissions WAIT (:func:`session_room` gives them no room); nothing is ever cancelled.
 
-THE OVERRIDE IS ONE RECORD, :data:`RECORD`, on the forge's records home (``python -m dev_lab.dev.hpchost
-allocate``): ``{"expires": <UTC iso>, "sessions": {name: {cpus, mem_gb, tasks?, task_cpus?, task_mem_gb?}}}``.
+THE OVERRIDE IS ONE RECORD, :data:`RECORD`, on the forge's records home; only its WRITER, the verb deciding
+shares, is the forge's (``python -m dev_lab.dev.hpchost allocate``). Its shape:
+``{"expires": <UTC iso>, "sessions": {name: {cpus, mem_gb, tasks?, task_cpus?, task_mem_gb?}}}``.
 While it is unexpired it FIXES the named sessions' shares; the remainder -- the pool less what each named
 session uses of its share, floored at 0 -- is divided by the same max-min among the unnamed active streams,
 untagged included, so a named session's slack lends out exactly as a derived share's does. Expired
-or absent, the derived default stands. Every submitter -- any agent, any tool -- reads the same record
-under its own ``$LC_HPC_SESSION``.
+or absent, the derived default stands. Every submitter -- any agent, any tool, a human's ``python -m
+lab_commons.hpc plan|submit|retry|run submit`` and the forge alike -- reads the same record under its own
+``$LC_HPC_SESSION`` (:func:`resolve`, user ruling 2026-10-23: it is a runtime fact about the account).
+
+THE READER IS A PORT. The record lives where the forge keeps records, and hpc never reaches the forge, so the
+forge installs the one reader as an entry point in :data:`READER` (:func:`recorded`); none installed, or a
+forge that cannot be read, leaves the share derived -- the default, never a guessed override.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from importlib.metadata import entry_points
 from typing import Final
 
 from lab_commons.hpc.config import Cost
-from lab_commons.hpc.grants import Session
+from lab_commons.hpc.grants import Machine, Session
 from lab_commons.hpc.slurm import Held, Snapshot
 
 __all__ = [
+    'READER',
     'RECORD',
     'UNTAGGED',
     'Allocation',
@@ -43,13 +51,18 @@ __all__ = [
     'parse',
     'parse_shares',
     'pool',
+    'recorded',
     'render',
+    'resolve',
     'session_for',
     'session_room',
 ]
 
 #: The one override record's name on the forge records home.
 RECORD: Final = 'hpc-allocation.json'
+
+#: The entry-point group of the one record reader: a callable returning the record's bytes, ``None`` if absent.
+READER: Final = 'lab_commons.hpc.allocation'
 
 #: The stream every job without a session tag counts as.
 UNTAGGED: Final = 'untagged'
@@ -109,6 +122,32 @@ def session_for(name: str | None, record: str | None, *, now: datetime) -> Sessi
         return allocation.sessions[name]
     fixed = tuple((n, x.cpus or 0.0, x.mem_gb or 0.0) for n, x in sorted(allocation.sessions.items()))
     return Session(name, fixed=fixed)
+
+
+def recorded() -> str | None:
+    """:data:`RECORD`'s text through the installed :data:`READER`; none installed, absent or unreadable is ``None``."""
+    for point in entry_points(group=READER):
+        try:
+            held = point.load()()
+        except (OSError, ValueError):
+            return None
+        return None if held is None else held.decode('utf-8')
+    return None
+
+
+def resolve(machine: Machine, read: Callable[[], str | None] | None = None) -> Machine:
+    """*machine* with its session's share from the record *read* returns (default :func:`recorded`).
+
+    A session already capped stays; a forge that cannot be read leaves the share derived.
+    """
+    session = machine.session
+    if session is None or session.cpus is not None or session.mem_gb is not None:
+        return machine
+    try:
+        text = (read or recorded)()
+    except (OSError, ValueError):
+        text = None
+    return replace(machine, session=session_for(session.name, text, now=datetime.now(UTC)))
 
 
 def active(snapshots: Sequence[Snapshot]) -> dict[str, Held]:

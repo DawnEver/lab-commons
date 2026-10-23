@@ -25,8 +25,9 @@ the repository's last record measured
 (:mod:`lab_commons.compute.learned`); a file never measured is priced at ``[cost]``. A retired verb is
 refused by name (:mod:`lab_commons.hpc.retired`). Making a login host a ``forge serve`` host
 (``deploy``, its cron ``tick``) and the forge's expiring allocation record (``allocate``) are the forge's,
-so they live in dev-lab (``python -m dev_lab.dev.hpchost``); a planning verb here derives each session's
-share from Slurm (:mod:`lab_commons.hpc.allocation`).
+so they live in dev-lab (``python -m dev_lab.dev.hpchost``). The record itself is a runtime fact: every
+planning verb here (``plan``, ``submit``, ``retry``, ``run submit``) resolves ``$LC_HPC_SESSION``'s share from
+it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 
 ``clean --root <remote abs dir> [--dry-run] [--grant <user>] <name>...`` deletes named directories directly
 under that root through the grant, refusing everything if a running job works under one
@@ -43,7 +44,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
-from lab_commons.hpc import clean
+from lab_commons.hpc import allocation, clean
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -334,7 +335,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     steps = {'submit': _run_submit, 'gather': _run_gather, 'build': _run_build}
     try:
         machine = load_grants()
-        return steps[args.step](args, machine, config)
+        return steps[args.step](args, allocation.resolve(machine) if args.step == 'submit' else machine, config)
     except NotOnCluster as off:
         emit(f'run {args.step} refused: {off}', err=True)
         return 2
@@ -374,6 +375,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.verb == 'run':
         return _run(parser, args)
     machine = load_grants()
+    if args.verb in {'plan', 'submit', 'retry'}:
+        machine = allocation.resolve(machine)
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
     if args.wait and args.verb != 'gather':
