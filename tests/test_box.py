@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Iterable
 from multiprocessing.queues import Queue
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from lab_commons.box import (
     release,
 )
 from lab_commons.box.ledger import _decide
+from lab_commons.box.supply import Reading
 
 _CAP = Capacity(cpu=4.0, mem_bytes=8 * 2**30, seats={'jmag': 1})
 _QUIET = quiet(_CAP)
@@ -464,5 +466,31 @@ def test_a_ticket_that_declares_no_demand_contends_for_everything(box: Path) -> 
     with (
         pytest.raises(NotAdmitted),
         hold(_demand(cpu=0, mem_gb=0.0, seats={'env-x': 1}), 'dep:x', queue_s=0.2, **_ON),
+    ):
+        pass
+
+
+def _foreign(available_gb: float) -> Callable[[Iterable[int]], Reading]:
+    """An OS reader of a box whose memory outside the ledger leaves only *available_gb* available."""
+    return lambda _pids: Reading(4.0, 4.0, 8 * 2**30, int(available_gb * 2**30))
+
+
+def test_a_waiter_the_foreign_load_makes_unreachable_reserves_nothing(box: Path) -> None:
+    """MEASURED 2026-10-23: a 45 GB measure under two foreign solves held the head for its whole wait.
+
+    5 GB of the 8 are in use OUTSIDE the ledger, so the 6 GB waiter cannot be admitted by any release here; a
+    later 1 GB demand is admitted beside it instead of idling the box behind it.
+    """
+    _ticket(box, os.getpid(), _demand(cpu=1, mem_gb=6.0))
+    with hold(_demand(cpu=1, mem_gb=1.0), 'small', queue_s=0.2, **{**_ON, 'read': _foreign(3.0)}):
+        assert [row.what for row in holdings()] == ['small']
+
+
+def test_a_waiter_the_box_can_reach_still_reserves_its_room(box: Path) -> None:
+    """PLANTED CONTROL: the same waiter on a box with no foreign load is reachable, so it keeps the queue (FIFO)."""
+    _ticket(box, os.getpid(), _demand(cpu=1, mem_gb=6.0))
+    with (
+        pytest.raises(NotAdmitted, match='queued behind'),
+        hold(_demand(cpu=1, mem_gb=3.0), 'small', queue_s=0.2, **{**_ON, 'read': _foreign(8.0)}),
     ):
         pass
