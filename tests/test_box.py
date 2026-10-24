@@ -107,8 +107,8 @@ def test_a_coreful_claim_still_waits_for_held_cores(box: Path) -> None:
 
 def test_a_refusal_names_what_is_lacking_and_its_holders() -> None:
     held = Holding(what='solver', pid=1, cpu=3, mem_bytes=2**30, seats={'jmag': 1}, deadline=1234.0)
-    assert _decide(_CAP, [held], _QUIET(()), _demand(cpu=1), 'w') is None
-    refusal = _decide(_CAP, [held], _QUIET(()), _demand(seats={'jmag': 1}), 'w')
+    assert _decide(_CAP, [held], _QUIET(()), _demand(cpu=1)[0], 'w') is None
+    refusal = _decide(_CAP, [held], _QUIET(()), _demand(seats={'jmag': 1})[0], 'w')
     assert refusal is not None
     assert 'jmag' in refusal
     assert 'solver' in refusal

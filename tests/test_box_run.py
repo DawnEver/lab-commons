@@ -185,7 +185,9 @@ def test_the_child_is_told_the_cores_it_was_admitted_at(monkeypatch: pytest.Monk
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
     seen: list[Mapping[str, str] | None] = []
 
-    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> ProcessEnd:
+    def fake(
+        _argv: object, _demand: object, _wall_s: object, *, env: Mapping[str, str] | None, **_kw: object
+    ) -> ProcessEnd:
         seen.append(env)
         return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
 
@@ -210,7 +212,9 @@ def test_the_childs_thread_pools_are_sized_to_the_claim(monkeypatch: pytest.Monk
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
     seen: list[Mapping[str, str] | None] = []
 
-    def fake(_argv: object, _demand: object, _cwd: object, env: Mapping[str, str] | None, _ids: object) -> ProcessEnd:
+    def fake(
+        _argv: object, _demand: object, _wall_s: object, *, env: Mapping[str, str] | None, **_kw: object
+    ) -> ProcessEnd:
         seen.append(env)
         return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)
 
@@ -252,7 +256,7 @@ def test_a_run_handed_its_callers_claim_adopts_it_and_is_never_refused(
         take(*demand, 'tests/y@sha', capacity=size, read=quiet(size), key='tests/y')
     during: list[list[tuple[int, int]]] = []
 
-    def fake(*_args: object) -> ProcessEnd:
+    def fake(*_args: object, **_kw: object) -> ProcessEnd:
         with sqlite3.connect(tmp_path / 'box.sqlite') as con:
             during.append(con.execute('SELECT id, pid FROM claims').fetchall())
         return ProcessEnd(0, 'exit', 0, 0.0, 0.0, 'fake', 'k', None)

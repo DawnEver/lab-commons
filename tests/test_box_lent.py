@@ -67,7 +67,8 @@ def test_processes_sharing_a_lent_capacity_never_exceed_it(box: Path) -> None:
 
 _TAKER = """
 import sys, time
-from lab_commons.box import Capacity, Demand, take
+from lab_commons.box import Capacity, take
+from lab_commons.compute.model import Demand
 take(Demand({'jobslot:ws1': 2, 'cpu': 0, 'mem_gb': 0}), 600, 'taker', key='k',
      capacity=Capacity.lent({'jobslot:ws1': 2}))
 print('held', flush=True)

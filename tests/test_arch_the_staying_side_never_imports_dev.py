@@ -31,8 +31,8 @@ _DEV_IMPORT: Final = re.compile(
     r"|'-m',\s*'(?:dev_lab|lab_commons\.dev)\b"
 )
 
-#: Measured 2026-10-22: 150+ staying modules. A floor, so an empty scan is not a pass.
-_FLOOR: Final = 100
+#: Measured 2026-10-24: 96 staying modules once supervise left. A floor, so an empty scan is not a pass.
+_FLOOR: Final = 80
 
 
 def dev_imports(text: str) -> list[int]:
