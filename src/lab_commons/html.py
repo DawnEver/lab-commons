@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from urllib.parse import quote
+
+from lab_commons.compute.durable import durable_text
 
 __all__ = [
     'ReportIdentity',
@@ -145,26 +146,8 @@ def write_html_report(directory: Path | str, identity: ReportIdentity, document:
     if not isinstance(identity, ReportIdentity):
         message = 'HTML report delivery requires an explicit ReportIdentity'
         raise TypeError(message)
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / identity.filename
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode='w',
-            encoding='utf-8',
-            newline='\n',
-            dir=directory,
-            prefix='.html-report-',
-            suffix='.tmp',
-            delete=False,
-        ) as stream:
-            temporary = Path(stream.name)
-            stream.write(document.replace('\r\n', '\n').replace('\r', '\n'))
-        temporary.replace(target)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    target = Path(directory) / identity.filename
+    durable_text(target, document.replace('\r\n', '\n').replace('\r', '\n'))
     return target
 
 
