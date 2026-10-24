@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.box import Demand, hold
+from lab_commons.box import hold
 from lab_commons.supervise.alert import Delivery, Notice, Notifier
 from lab_commons.supervise.component import ActionContext, CheckContext, Registry
 from lab_commons.supervise.policy import decide
@@ -390,7 +390,7 @@ def run_cycle(
     """
     state = store.read() or new_state()
     seat = re.sub(r'[^a-z0-9_]', '_', f'supervise_{config.get("target", {}).get("name", "unknown")}'.lower())
-    with hold(Demand(0, 0.0, CYCLE_WALL_S, {seat: 1}), 'supervision cycle', SEAT_WAIT, key=seat):
+    with hold({seat: 1}, CYCLE_WALL_S, 'supervision cycle', SEAT_WAIT, key=seat):
         metrics, anomalies, completions = _gather(
             registry, config=config, state=state, project=project, manager=manager, clock=clock
         )

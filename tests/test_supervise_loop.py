@@ -10,7 +10,8 @@ from typing import Any, ClassVar
 import pytest
 from _box_fake import boxed_as_run
 
-from lab_commons.box import Demand, Refused, hold
+from lab_commons.box import Refused, hold
+from lab_commons.compute.model import Demand
 from lab_commons.supervise.alert import Notifier
 from lab_commons.supervise.component import ActionContext, CheckContext, Component, Handler, Registry
 from lab_commons.supervise.loop import UNCONFIGURED, CycleResult, run_cycle
@@ -393,8 +394,8 @@ def test_dry_run_touches_nothing(tmp_path: Path) -> None:
 
 def test_a_second_cycle_on_one_target_is_refused_by_its_seat(tmp_path: Path) -> None:
     """THE ONLY LOCK. The kit forbids a pid file or a heartbeat as a second definition of it."""
-    seat = Demand(0, 0.0, 60, {'supervise_unit_test': 1})
-    with hold(seat, 'another cycle', 0.0, key='k'), pytest.raises(Refused):
+    seat = Demand({'supervise_unit_test': 1, 'cpu': 0, 'mem_gb': 0.0}), 60
+    with hold(*seat, 'another cycle', 0.0, key='k'), pytest.raises(Refused):
         _run(_registry(_Probe()), tmp_path)
 
 

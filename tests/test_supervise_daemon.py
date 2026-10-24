@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box import Demand, hold
+from lab_commons.box import hold
+from lab_commons.compute.model import Demand
 from lab_commons.supervise import daemon
 from lab_commons.supervise.cli import build_registry
 from lab_commons.supervise.component import CheckContext, Component, Registry
@@ -88,7 +89,7 @@ def test_a_cycle_that_finds_the_seat_taken_skips_rather_than_fails(tmp_path: Pat
     """
     probe = _Probe()
     loop = _loop(tmp_path, probe)
-    with hold(Demand(0, 0.0, 60, {'supervise_unit_test': 1}), 'another cycle', 0.0, key='k'):
+    with hold(Demand({'supervise_unit_test': 1, 'cpu': 0, 'mem_gb': 0.0}), 60, 'another cycle', 0.0, key='k'):
         assert loop.once(_CLOCK) is None
     assert probe.runs == 0, 'the seat is taken before any work, so no check should have run'
 

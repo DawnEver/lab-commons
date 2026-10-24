@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import Demand
+from lab_commons.compute.model import Demand
 from lab_commons.compute.presence import Presence
 from lab_commons.hpc.builds import builds_at
 
@@ -157,7 +157,7 @@ class Unit:
     """One calculation: *engine* calls *entry* (``module:function``) on *inputs*, producing files *outputs*.
 
     An input is a FILE (a :class:`~pathlib.Path`, or another unit's :class:`Output`) or a PARAMETER (any JSON
-    value). *demand* is what the box holds while it runs.
+    value). *demand* is what the box holds while it runs, for at most *wall_s* seconds.
     """
 
     engine: Engine
@@ -165,6 +165,7 @@ class Unit:
     inputs: Mapping[str, Any]
     outputs: tuple[str, ...]
     demand: Demand
+    wall_s: int
 
     def __post_init__(self) -> None:
         """Refuse an entry that is not ``module:function`` and a parameter JSON cannot spell."""

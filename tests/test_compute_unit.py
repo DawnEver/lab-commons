@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box.demand import Demand
+from lab_commons.compute.model import Demand
 from lab_commons.compute.presence import Evidence, Presence
 from lab_commons.compute.unit import (
     Engine,
@@ -21,12 +21,12 @@ from lab_commons.compute.unit import (
 )
 
 _GIT = shutil.which('git') or 'git'
-SMALL = Demand(1, 0.1, 60, {})
+SMALL = Demand(cpu=1, mem_gb=0.1)
 ENV = Environment('a' * 40, 'k' * 24)
 
 
 def unit(inputs: dict[str, object], *, engine: Engine | None = None, entry: str = 'pkg.mod:fn') -> Unit:
-    return Unit(engine or Engine.ours('ours.solve', ENV), entry, inputs, ('out.txt',), SMALL)
+    return Unit(engine or Engine.ours('ours.solve', ENV), entry, inputs, ('out.txt',), SMALL, 60)
 
 
 def test_the_hash_reads_file_content_never_its_path(tmp_path: Path) -> None:

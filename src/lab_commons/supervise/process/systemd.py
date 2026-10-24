@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box import Demand, Refused, command, read_ended
+from lab_commons.box import Refused, command, read_ended
+from lab_commons.compute.model import Demand
 from lab_commons.supervise.notify import NOTIFY_SOCKET
 from lab_commons.supervise.process.base import Ran
 
@@ -274,11 +275,13 @@ class SystemdProcessManager:
             What the command produced.
 
         """
-        demand = Demand(cpu=CAPPED_CPU, mem_gb=ceiling_gb(memory_max), wall_s=timeout, seats={})
+        demand = Demand(cpu=CAPPED_CPU, mem_gb=ceiling_gb(memory_max))
         what = f'supervise: {" ".join(argv)}'[:120]
         with tempfile.TemporaryDirectory(prefix='lab-supervise-box-') as scratch:
             record = Path(scratch) / 'outcome.json'
-            boxed = command(argv, demand, CAPPED_QUEUE_S, key=f'supervise:{argv[0]}', what=what, outcome=record)
+            boxed = command(
+                argv, demand, timeout, CAPPED_QUEUE_S, key=f'supervise:{argv[0]}', what=what, outcome=record
+            )
             return judged(self.runner(boxed, timeout + CAPPED_QUEUE_S + _GRACE, cwd), record)
 
 

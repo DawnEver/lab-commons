@@ -1,6 +1,6 @@
 """``python -m lab_commons.box run --cpu N --mem-gb G --wall S --queue-s Q --key K --outcome P [...] -- argv``.
 
-Every limit is REQUIRED, exactly as :class:`~lab_commons.box.Demand` has no defaults: a missing one
+Every limit is REQUIRED, exactly as a box claim's wall has no default: a missing one
 is an argparse refusal, never a number nobody chose. So is ``--outcome``: the box's decision is the
 record written there (:func:`~lab_commons.box.write_ended`) -- the :class:`~lab_commons.box.ProcessEnd`, or the
 refusal when nothing ran -- and NEVER the exit code. The exit code is the child's own, and a child may
@@ -16,7 +16,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from lab_commons.box.demand import Capacity, Demand, Refused, write_ended
+from lab_commons.box.demand import CPU, MEM_GB, Capacity, Refused, write_ended
 from lab_commons.box.run import run
 from lab_commons.log import emit
 
@@ -68,11 +68,12 @@ def main(args: Sequence[str] | None = None) -> int:
     argv = ns.argv[1:] if ns.argv[:1] == ['--'] else ns.argv
     if not argv:
         parser.error('run: no command after --')
-    demand = Demand(cpu=ns.cpu, mem_gb=ns.mem_gb, wall_s=ns.wall, seats=dict(ns.seat))
+    demand = {**dict(ns.seat), CPU: ns.cpu, MEM_GB: ns.mem_gb}
     try:
         outcome = run(
             argv,
             demand,
+            ns.wall,
             ns.what or ' '.join(argv),
             ns.queue_s,
             key=ns.key,
