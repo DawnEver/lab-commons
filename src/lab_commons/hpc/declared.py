@@ -55,6 +55,7 @@ KNOWN_TABLES: Final = frozenset(
     {
         'areas',
         'artefacts',
+        'automode',
         'branchset',
         'carry',
         'ci',
