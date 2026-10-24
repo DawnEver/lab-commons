@@ -15,9 +15,10 @@ from pathlib import Path
 import pytest
 from _box_fake import quiet
 
-from lab_commons.box import BOX_ENV, GB, Capacity, Demand, ProcessEnd, Refused, holdings, read_ended, run
+from lab_commons.box import BOX_ENV, GB, Capacity, ProcessEnd, Refused, holdings, read_ended, run
 from lab_commons.box.__main__ import main
 from lab_commons.box._linux import refusal
+from lab_commons.compute.model import Demand
 from lab_commons.proc import pid_alive
 
 #: Does this machine enforce a claim? A platform fact, read once.
@@ -40,14 +41,14 @@ def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _run(code: str, *, mem_mb: int = 200, wall_s: int = 30) -> ProcessEnd | None:
     """The enforced ProcessEnd, or ``None`` once the refusal this machine owes has been observed."""
-    demand = Demand(cpu=1, mem_gb=mem_mb * _MB / GB, wall_s=wall_s, seats={})
+    demand = Demand(cpu=1, mem_gb=mem_mb * _MB / GB), wall_s
     argv = [sys.executable, '-c', code]
     if not ENFORCES:
         with pytest.raises(Refused, match='unenforced'):
-            run(argv, demand, 'refused', queue_s=5, capacity=_CAP, read=_QUIET, key='k')
+            run(argv, *demand, 'refused', queue_s=5, capacity=_CAP, read=_QUIET, key='k')
         assert holdings() == []
         return None
-    return run(argv, demand, 'enforced', queue_s=5, capacity=_CAP, read=_QUIET, key='solve|ipm|fea', fingerprint='abc')
+    return run(argv, *demand, 'enforced', queue_s=5, capacity=_CAP, read=_QUIET, key='solve|ipm|fea', fingerprint='abc')
 
 
 def _gone(pid: int, within_s: float = 5.0) -> bool:
@@ -112,8 +113,9 @@ def test_killing_the_launcher_kills_the_tree(tmp_path: Path) -> None:
     pid_file = tmp_path / 'child.pid'
     child = f'import os, time; open({str(pid_file)!r}, "w").write(str(os.getpid())); time.sleep(60)'
     launcher = (
-        'from lab_commons.box import Capacity, Demand, run; import sys; '
-        f'run([sys.executable, "-c", {child!r}], Demand(cpu=1, mem_gb=0.2, wall_s=60, seats={{}}), '
+        'from lab_commons.box import Capacity, run; import sys; '
+        'from lab_commons.compute.model import Demand; '
+        f'run([sys.executable, "-c", {child!r}], Demand(cpu=1, mem_gb=0.2), 60, '
         f'"orphan", queue_s=5, capacity=Capacity(cpu=2.0, mem_bytes={4 * GB}, seats={{}}), key="orphan")'
     )
     proc = subprocess.Popen([sys.executable, '-c', launcher])

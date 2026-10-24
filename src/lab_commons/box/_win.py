@@ -27,7 +27,8 @@ from ctypes import wintypes
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import Demand, ProcessEnd
+from lab_commons.box.demand import ProcessEnd, cores, mem_bytes
+from lab_commons.compute.model import Demand
 
 __all__ = ['contain']
 
@@ -143,11 +144,12 @@ def _job(k32: ctypes.WinDLL, demand: Demand) -> tuple[int, int]:
     limits.BasicLimitInformation.LimitFlags = (
         _LIMIT_JOB_MEMORY | _LIMIT_KILL_ON_JOB_CLOSE | _LIMIT_DIE_ON_UNHANDLED_EXCEPTION
     )
-    limits.JobMemoryLimit = demand.mem_bytes
+    limits.JobMemoryLimit = mem_bytes(demand)
     _set(k32, job, _EXTENDED_LIMIT, limits, 'job memory limit')
-    cores = os.cpu_count() or demand.cpu
-    if demand.cpu < cores:
-        rate = _CpuRate(_CPU_RATE_ENABLE | _CPU_RATE_HARD_CAP, max(1, demand.cpu * 10000 // cores))
+    asked = cores(demand)
+    host = os.cpu_count() or asked
+    if asked < host:
+        rate = _CpuRate(_CPU_RATE_ENABLE | _CPU_RATE_HARD_CAP, max(1, asked * 10000 // host))
         _set(k32, job, _CPU_RATE_CONTROL, rate, 'job cpu hard cap')
     port = k32.CreateIoCompletionPort(wintypes.HANDLE(-1), None, None, 1)
     _check(port, 'CreateIoCompletionPort')
@@ -213,9 +215,15 @@ def _measure(k32: ctypes.WinDLL, job: int) -> tuple[int, float]:
 
 
 def contain(
-    argv: Sequence[str], demand: Demand, cwd: str | None, env: Mapping[str, str] | None, tag: tuple[str, str | None]
+    argv: Sequence[str],
+    demand: Demand,
+    wall_s: int,
+    *,
+    cwd: str | None,
+    env: Mapping[str, str] | None,
+    tag: tuple[str, str | None],
 ) -> ProcessEnd:
-    """Run *argv* inside a job sized to *demand*; wait, enforce, measure, and close the job."""
+    """Run *argv* inside a job sized to *demand*, killed at *wall_s*; wait, enforce, measure, and close the job."""
     k32 = _k32()
     job, port = _job(k32, demand)
     start = time.monotonic()
@@ -225,7 +233,7 @@ def contain(
         )
         _assign(k32, job, child)
         _resume(k32, child.pid)
-        reason = _supervise(k32, job, port, child, start + demand.wall_s)
+        reason = _supervise(k32, job, port, child, start + wall_s)
         peak, cpu_s = _measure(k32, job)
         returncode = child.returncode if child.returncode is not None else child.wait()
         return ProcessEnd(returncode, reason, peak, cpu_s, time.monotonic() - start, 'job-object', *tag)

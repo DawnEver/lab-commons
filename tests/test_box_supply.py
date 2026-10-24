@@ -12,9 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box import BOX_ENV, GB, Capacity, Demand, Holding, Refused, hold
+from lab_commons.box import BOX_ENV, GB, Capacity, Holding, Refused, hold
 from lab_commons.box.ledger import stuck_at_head
 from lab_commons.box.supply import Reading, Usage, room
+from lab_commons.compute.model import Demand
 from lab_commons.proccpu import system_cpu_seconds
 
 _CAP = Capacity(cpu=7.0, mem_bytes=12 * GB, seats={'jmag': 1}, kept_cpu=1.0, kept_bytes=4 * GB)  # 8 cores, 16 GB
@@ -69,13 +70,13 @@ def test_the_ledger_refuses_a_demand_the_declared_sum_would_admit(tmp_path: Path
     """THE LEDGER DECIDES ON THE MEASURED ROOM, through the one rule, naming what is lacking."""
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
     busy = Reading(cores=8.0, idle_cores=8.0, total_bytes=16 * GB, available_bytes=6 * GB, usage={})
-    big = Demand(1, 4.0, 60, {})
+    big = Demand(cpu=1, mem_gb=4.0), 60
     with (
         pytest.raises(Refused, match=r'lacking mem_gb \(4 asked, 2 free\)'),
-        hold(big, 'big', 0.0, key='k', capacity=_CAP, read=lambda _pids: busy),
+        hold(*big, 'big', 0.0, key='k', capacity=_CAP, read=lambda _pids: busy),
     ):
         pass
-    with hold(Demand(1, 4.0, 60, {}), 'big', 0.0, key='k', capacity=_CAP, read=lambda _pids: _quiet()):
+    with hold(Demand(cpu=1, mem_gb=4.0), 60, 'big', 0.0, key='k', capacity=_CAP, read=lambda _pids: _quiet()):
         pass
 
 

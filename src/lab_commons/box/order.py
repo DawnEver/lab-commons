@@ -31,10 +31,11 @@ import json
 from collections.abc import Sequence
 from dataclasses import replace
 
-from lab_commons.box.demand import GB, Capacity, Demand, Holding
+from lab_commons.box.demand import GB, Capacity, Holding
+from lab_commons.box.demand import seats as seats_of
 from lab_commons.box.supply import Reading, Usage, room
 from lab_commons.compute.admission import admit
-from lab_commons.compute.model import Job, Resources, Supply
+from lab_commons.compute.model import Demand, Job, Resources, Supply
 
 __all__ = ['Asked', 'blocks', 'contends', 'earliest', 'fits']
 
@@ -49,21 +50,20 @@ def _vector(cpu: float, mem_bytes: int, seats: dict[str, int]) -> Resources:
 
 def fits(capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand) -> bool:
     """Whether the one rule admits *demand* on the room *held* leaves in *reading*."""
-    free = room(capacity, held, reading, seats=demand.seats)
-    ask = _vector(demand.cpu, demand.mem_bytes, dict(demand.seats))
-    return bool(admit(Job(repo='', sha='', producer=''), ask, Supply('box', free, free.names | {'cpu'})))
+    free = room(capacity, held, reading, seats=seats_of(demand))
+    return bool(admit(Job(repo='', sha='', producer=''), demand, Supply('box', free, free.names | {'cpu'})))
 
 
-def contends(demand: Demand | Holding, ahead: Asked) -> bool:
-    """Whether an earlier ticket asking *ahead* wants any resource *demand* does; an undeclared one wants all."""
+def contends(holder: Holding, ahead: Asked) -> bool:
+    """Whether an earlier ticket asking *ahead* wants any resource *holder* holds; an undeclared one wants all."""
     cpu, mem_bytes, seats = ahead
     if cpu is None or mem_bytes is None or seats is None:
         return True
     wanted = json.loads(seats)
     return bool(
-        (cpu and demand.cpu)
-        or (mem_bytes and demand.mem_bytes)
-        or any(amount and wanted.get(name) for name, amount in demand.seats.items())
+        (cpu and holder.cpu)
+        or (mem_bytes and holder.mem_bytes)
+        or any(amount and wanted.get(name) for name, amount in holder.seats.items())
     )
 
 
@@ -104,6 +104,6 @@ def blocks(
     cpu, mem_bytes, seats = asked
     if cpu is None or mem_bytes is None or seats is None:
         return True
-    ahead = Demand(cpu=cpu, mem_gb=mem_bytes / GB, wall_s=1, seats=json.loads(seats))  # its wall is not needed
+    ahead = Demand(_vector(cpu, mem_bytes, json.loads(seats)))
     before = earliest(capacity, held, reading, ahead, now)
     return earliest(capacity, [*held, jumper], reading, ahead, now) > before

@@ -36,7 +36,8 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.demand import Demand, ProcessEnd
+from lab_commons.box.demand import ProcessEnd, cores, mem_bytes
+from lab_commons.compute.model import Demand
 from lab_commons.proc import working_set_bytes
 
 if sys.platform != 'win32':
@@ -78,11 +79,11 @@ def scope_argv(systemd_run: str, where: Manager, argv: Sequence[str], demand: De
         '--scope',
         '--quiet',
         '-p',
-        f'MemoryMax={demand.mem_bytes}',
+        f'MemoryMax={mem_bytes(demand)}',
         '-p',
         'MemorySwapMax=0',
         '-p',
-        f'CPUQuota={demand.cpu * 100}%',
+        f'CPUQuota={cores(demand) * 100}%',
         '--',
         *argv,
     ]
@@ -154,20 +155,26 @@ def refusal() -> str | None:
 
 
 def contain(
-    argv: Sequence[str], demand: Demand, cwd: str | None, env: Mapping[str, str] | None, tag: tuple[str, str | None]
+    argv: Sequence[str],
+    demand: Demand,
+    wall_s: int,
+    *,
+    cwd: str | None,
+    env: Mapping[str, str] | None,
+    tag: tuple[str, str | None],
 ) -> ProcessEnd:
-    """Run *argv* enforced to *demand* (the caller checked :func:`refusal`); the group dies with the run."""
+    """Run *argv* enforced to *demand* and *wall_s* (the caller checked :func:`refusal`); its group dies with it."""
     systemd_run = _systemd_run()
     command = list(argv) if systemd_run is None else scope_argv(systemd_run, _here(), argv, demand)
     watch = systemd_run is None
     start = time.monotonic()
     child = _door.popen(command, cwd=cwd, env=None if env is None else dict(env), start_new_session=True)
-    deadline, why, peak = start + demand.wall_s, 'exit', 0
+    deadline, why, peak, limit = start + wall_s, 'exit', 0, mem_bytes(demand)
     while child.poll() is None:
         held = _group_resident(child.pid) if watch else 0
         peak = max(peak, held)
-        if held > demand.mem_bytes or time.monotonic() >= deadline:
-            why = 'memory' if held > demand.mem_bytes else 'wall'
+        if held > limit or time.monotonic() >= deadline:
+            why = 'memory' if held > limit else 'wall'
             _kill_group(child.pid)
             child.wait()
             break

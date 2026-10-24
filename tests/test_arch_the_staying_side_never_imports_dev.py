@@ -1,6 +1,6 @@
 """lab-commons never reaches the development system: no ``dev`` import, no ``dev_lab`` import or launch.
 
-``box``, ``compute``, ``hpc``, ``supervise`` and every top-level module STAY in lab-commons (user ruling
+``box``, ``compute``, ``hpc`` and every top-level module STAY in lab-commons (user ruling
 2026-10-22); ``dev`` moved to dev-lab, which depends on lab-commons. A module here that imports or launches
 the dev system would make the split a cycle, so every reach is refused -- a module-level import, a lazy one
 inside a function, one embedded in a string that runs as ``python -c`` on another host (``hpc/shell.py``'s
@@ -31,8 +31,8 @@ _DEV_IMPORT: Final = re.compile(
     r"|'-m',\s*'(?:dev_lab|lab_commons\.dev)\b"
 )
 
-#: Measured 2026-10-22: 150+ staying modules. A floor, so an empty scan is not a pass.
-_FLOOR: Final = 100
+#: Measured 2026-10-24: 96 staying modules once supervise left. A floor, so an empty scan is not a pass.
+_FLOOR: Final = 80
 
 
 def dev_imports(text: str) -> list[int]:

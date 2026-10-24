@@ -1,7 +1,7 @@
 """A row this code could not have written pins nothing: the planted-claim attack (a consumer SR-20261016-031).
 
 The attack: a local writer plants a claim whose time lies in the future -- a start not yet reached, or a
-deadline past any wall a :class:`Demand` may declare -- beside a LIVE pid, so neither pid liveness nor the
+deadline past any wall a claim may declare -- beside a LIVE pid, so neither pid liveness nor the
 deadline ever reaps it and every seat it names is pinned. The ledger refuses such a row on sight.
 """
 
@@ -19,20 +19,22 @@ from typing import Any
 import pytest
 from _box_fake import quiet
 
-from lab_commons.box import BOX_ENV, WALL_CEILING_S, Capacity, Demand, Refused, hold, holdings
+from lab_commons.box import BOX_ENV, WALL_CEILING_S, Capacity, Refused, hold, holdings
+from lab_commons.box.demand import checked
 from lab_commons.box.ledger import untrusted
+from lab_commons.compute.model import Demand
 from lab_commons.liveness import creation_stamp
 
 _CAP = Capacity(cpu=4.0, mem_bytes=8 * 2**30, seats={'jmag': 1})
 _ON: dict[str, Any] = {'key': 'k', 'capacity': _CAP, 'read': quiet(_CAP)}
-_SEAT = Demand(cpu=0, mem_gb=0, wall_s=60, seats={'jmag': 1})
+_SEAT = Demand({'jmag': 1, 'cpu': 0, 'mem_gb': 0}), 60
 
 
 @pytest.fixture
 def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / 'box.sqlite'
     monkeypatch.setenv(BOX_ENV, str(path))
-    with hold(Demand(1, 1.0, 60, {}), 'schema', queue_s=1, **_ON):
+    with hold(Demand(cpu=1, mem_gb=1.0), 60, 'schema', queue_s=1, **_ON):
         pass
     return path
 
@@ -57,14 +59,14 @@ def _plant(box: Path, *, started: float, deadline: float) -> None:
 def test_a_planted_claim_with_a_future_time_cannot_pin_a_seat(box: Path, started: float, deadline: float) -> None:
     now = time.time()
     _plant(box, started=now + started, deadline=now + deadline)
-    with hold(_SEAT, 'real solve', queue_s=1, **_ON):
+    with hold(*_SEAT, 'real solve', queue_s=1, **_ON):
         assert [row.what for row in holdings()] == ['real solve'], 'the planted row was reaped on sight'
 
 
 def test_planted_control_an_honest_live_claim_still_holds_the_seat(box: Path) -> None:
     now = time.time()
     _plant(box, started=now, deadline=now + 600)
-    with pytest.raises(Refused), hold(_SEAT, 'second', queue_s=0.2, **_ON):
+    with pytest.raises(Refused), hold(*_SEAT, 'second', queue_s=0.2, **_ON):
         pass
 
 
@@ -75,14 +77,14 @@ def test_a_planted_ticket_with_a_future_give_up_does_not_block_the_queue(box: Pa
             'INSERT INTO tickets (pid, created, gives_up, what, cpu, mem_bytes, seats) VALUES (?,?,?,?,?,?,?)',
             (pid, creation_stamp(pid), time.time() + 10 * WALL_CEILING_S, 'planted', None, None, None),
         )
-    with hold(_SEAT, 'real solve', queue_s=1, **_ON):
+    with hold(*_SEAT, 'real solve', queue_s=1, **_ON):
         pass
 
 
 def test_a_wall_or_a_wait_past_the_ceiling_is_refused() -> None:
     with pytest.raises(ValueError, match='wall_s'):
-        Demand(cpu=1, mem_gb=1.0, wall_s=WALL_CEILING_S + 1, seats={})
-    with pytest.raises(ValueError, match='queue_s'), hold(_SEAT, 'w', queue_s=WALL_CEILING_S + 1, **_ON):
+        checked(Demand(cpu=1, mem_gb=1.0), WALL_CEILING_S + 1)
+    with pytest.raises(ValueError, match='queue_s'), hold(*_SEAT, 'w', queue_s=WALL_CEILING_S + 1, **_ON):
         pass
 
 

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from lab_commons.box.demand import Demand
 from lab_commons.compute.graph import Graph, GraphRefused
+from lab_commons.compute.model import Demand
 from lab_commons.compute.unit import Engine, Environment, Output, Unit
 
 ENGINE = Engine.ours('ours.solve', Environment('a' * 40, 'k' * 24))
 
 
 def unit(**inputs: object) -> Unit:
-    return Unit(ENGINE, 'pkg.mod:fn', inputs, ('out',), Demand(1, 0.1, 60, {}))
+    return Unit(ENGINE, 'pkg.mod:fn', inputs, ('out',), Demand(cpu=1, mem_gb=0.1), 60)
 
 
 def chain() -> Graph:

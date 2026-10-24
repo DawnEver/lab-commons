@@ -1,10 +1,10 @@
 """What a run asks for, and how large the box is.
 
-A run DECLARES its demand -- cores, memory, a wall-clock limit and named tool seats -- and every
-field is required: a default would be a number nobody chose, and an undeclared demand is the
-exact defect this package exists to end (jobs claiming what they do not use, or using what they
-never claimed). The declaration is also the run's enforced limit (phase 2), so what is admitted
-is what the run can use and never more.
+A run DECLARES its demand -- a :class:`~lab_commons.compute.model.Demand` of cores, memory and named tool
+seats -- and its wall-clock limit, and the limit is required: a default would be a number nobody
+chose, and an undeclared demand is the exact defect this package exists to end (jobs claiming what
+they do not use, or using what they never claimed). The declaration is also the run's enforced limit
+(phase 2), so what is admitted is what the run can use and never more.
 
 The :class:`Capacity` is the machine's SIZE: total cores and memory from the OS minus the machine file's
 ``[reserve]`` margins, read through :mod:`lab_commons.box.machine` -- the one home of
@@ -28,17 +28,18 @@ from typing import Final
 import lab_commons.launch as _door
 from lab_commons.box.machine import own_reserve, provided, reserve_table
 from lab_commons.compute.durable import durable_text
+from lab_commons.compute.model import Demand
 from lab_commons.config import section
 from lab_commons.outcomes import Status
 from lab_commons.proc import system_memory
 
 __all__ = [
-    'GB', 'LENT_NAME', 'NOT_ADMITTED', 'WALL_CEILING_S', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding',
-    'NotAdmitted',
-    'ProcessEnd', 'Refused', 'declared_seats', 'not_admitted', 'read_ended', 'seat_supply', 'write_ended',
+    'CPU', 'GB', 'LENT_NAME', 'MEM_GB', 'NOT_ADMITTED', 'WALL_CEILING_S', 'Capacity', 'Claim', 'DuplicateKey',
+    'Holding', 'NotAdmitted', 'ProcessEnd', 'Refused', 'checked', 'cores', 'declared_seats', 'mem_bytes',
+    'not_admitted', 'read_ended', 'seat_supply', 'seats', 'write_ended',
 ]  # fmt: skip
 
-#: Bytes in the gigabyte a :class:`Demand` is declared in (binary, as the OS reports totals).
+#: Bytes in the gigabyte a demand's ``mem_gb`` is declared in (binary, as the OS reports totals).
 GB = 2**30
 
 
@@ -63,55 +64,59 @@ class DuplicateKey(Refused):
     """An EXTERNAL claim under the same key is still unresolved: its job must not be submitted twice."""
 
 
-#: The longest wall a :class:`Demand` may declare, and so the furthest future any ledger row may name. A row
+#: The longest wall a claim may declare, and so the furthest future any ledger row may name. A row
 #: past it (or one whose start lies in the future) is one this code never wrote: it is reaped on sight, so a
 #: planted claim beside a live pid cannot pin a seat (a consumer SR-20261016-031).
 WALL_CEILING_S: Final = 7 * 24 * 3600
 
 
-@dataclass(frozen=True)
-class Demand:
-    """A run's declared resources and time limit. No field has a default.
+#: The two names of a :class:`~lab_commons.compute.model.Demand` the box enforces itself; every other name is a seat.
+CPU: Final = 'cpu'
+MEM_GB: Final = 'mem_gb'
 
-    Cores may be 0 for a claim that runs no compute of its own: a vendor GUI preparing a job holds memory and a
-    seat but no core (D10, 2026-10-23). Memory may be 0 only for a claim that holds SEATS alone (an environment, a
-    supervision target). A demand booking nothing at all is refused. A run :func:`~lab_commons.box.run` enforces
-    declares both positive (it refuses otherwise).
+
+def checked(demand: Mapping[str, float], wall_s: int) -> Demand:
+    """*demand* as the box books it, with its time limit *wall_s*: every bad dimension refused at once, by name.
+
+    The run's size is the ONE budget type, :class:`~lab_commons.compute.model.Demand`; the box adds only that its
+    cores and seats are whole and its wall is declared. Cores may be 0 for a claim that runs no compute of its
+    own: a vendor GUI preparing a job holds memory and a seat but no core (D10, 2026-10-23). Memory may be 0 only
+    for a claim that holds SEATS alone (an environment, a supervision target). A demand booking nothing is
+    refused. A run :func:`~lab_commons.box.run` enforces declares both positive (it refuses otherwise).
+
+    Raises:
+        ValueError: naming every bad dimension.
+
     """
+    asked = Demand(demand)
+    wanted = seats(asked)
+    bad = [
+        *(['cpu must be a whole number of cores'] if not float(asked[CPU]).is_integer() else []),
+        *(['mem_gb must be positive'] if asked[CPU] and not asked[MEM_GB] else []),
+        *(['a demand must book something'] if not asked else []),
+        *(['wall_s must be a positive int of seconds'] if not _positive_int(wall_s) else []),
+        *([f'wall_s must not exceed WALL_CEILING_S ({WALL_CEILING_S})'] if _past_ceiling(wall_s) else []),
+        *(f'seats[{name!r}] must be a whole count' for name, count in wanted.items() if count != asked[name]),
+    ]
+    if bad:
+        msg = f'Demand: {"; ".join(bad)}'
+        raise ValueError(msg)
+    return asked
 
-    cpu: int
-    mem_gb: float
-    wall_s: int
-    seats: Mapping[str, int]
 
-    def __post_init__(self) -> None:
-        """Refuse every non-positive dimension at once, by name; 0 cores beside memory or a seat."""
-        seats_only = self.cpu == 0 and self.mem_gb == 0 and any(self.seats.values())
-        coreless = self.cpu == 0 and isinstance(self.mem_gb, int | float) and self.mem_gb > 0
-        bad = [
-            *(
-                ['cpu must be a positive int of cores']
-                if not _positive_int(self.cpu) and not seats_only and not coreless
-                else []
-            ),
-            *(['mem_gb must be positive'] if not isinstance(self.mem_gb, int | float) or self.mem_gb < 0 else []),
-            *(['mem_gb must be positive'] if self.mem_gb == 0 and not seats_only else []),
-            *(['wall_s must be a positive int of seconds'] if not _positive_int(self.wall_s) else []),
-            *([f'wall_s must not exceed WALL_CEILING_S ({WALL_CEILING_S})'] if _past_ceiling(self.wall_s) else []),
-            *(
-                f'seats[{name!r}] must be an int >= 0'
-                for name, count in self.seats.items()
-                if not isinstance(count, int) or isinstance(count, bool) or count < 0
-            ),
-        ]
-        if bad:
-            msg = f'Demand: {"; ".join(bad)}'
-            raise ValueError(msg)
+def cores(demand: Mapping[str, float]) -> int:
+    """The whole cores *demand* books."""
+    return int(demand.get(CPU, 0.0))
 
-    @property
-    def mem_bytes(self) -> int:
-        """The memory limit in bytes, the unit the ledger and the kernel limit share."""
-        return int(self.mem_gb * GB)
+
+def mem_bytes(demand: Mapping[str, float]) -> int:
+    """The memory *demand* books, in bytes: the unit the ledger and the kernel limit share."""
+    return int(demand.get(MEM_GB, 0.0) * GB)
+
+
+def seats(demand: Mapping[str, float]) -> dict[str, int]:
+    """The seats *demand* books: every name but cores and memory, as whole counts."""
+    return {name: int(amount) for name, amount in demand.items() if name not in {CPU, MEM_GB}}
 
 
 def _past_ceiling(wall_s: object) -> bool:
