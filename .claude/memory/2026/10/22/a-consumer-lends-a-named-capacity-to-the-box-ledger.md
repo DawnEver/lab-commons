@@ -1,4 +1,6 @@
 ---
+name: a-consumer-lends-a-named-capacity-to-the-box-ledger
+description: A consumer-declared count (Capacity.lent, e.g. JMAG Job System node slots) is a box ledger resource, freed when its holder dies.
 created: 2026-10-22
 accessed: 2026-10-22
 ---

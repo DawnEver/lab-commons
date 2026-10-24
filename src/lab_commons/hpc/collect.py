@@ -8,7 +8,7 @@ file is an HPC resource, and one file per test file per key measured ~1 M files 
 GLOBAL key hashes the caller's seed (the build keys, the marker expression), ``pyproject.toml`` and every
 ``conftest.py`` -- what can change the ids of a file whose own content did not change. Only files without
 a cached entry are collected, in ONE pytest call; a file that failed to collect is reported and never
-cached. Which keys stay is retention's (``collect-over-budget``, :mod:`lab_commons.dev.retentionplan`). The output is
+cached. Which keys stay is retention's (``collect-over-budget``, :mod:`dev_lab.dev.retentionplan`). The output is
 ``pytest --collect-only -q``'s own shape (ids, then ``ERROR <file>`` lines), written to ``--out`` -- the
 caller ``cat``s it -- so the reader is unchanged.
 

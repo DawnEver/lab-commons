@@ -15,7 +15,7 @@ THE RULE, for every host alike::
 RULE -- :func:`~lab_commons.compute.admission.admit` decides FIT, ``claimable`` walks the order and claims what fits.
 
 THE NUMBERS OF THE ORDER ARE DATA, declared once in ``[tool.lab_commons.schedule]`` and loaded by
-:func:`lab_commons.dev.forgeschedule.load_schedule` into a :class:`Schedule`::
+:func:`dev_lab.dev.forgeschedule.load_schedule` into a :class:`Schedule`::
 
     value = base[class] + boost + aging_rate * wait_hours
     score = weight[repo] * value / expected_cost
@@ -248,9 +248,9 @@ class Candidate:
     origin: str = ''  # the forge login of its PR, request or head commit; '' when unresolved
     origin_host: str = ''  # the host card it says created it; kept only where its origin login vouches for it
     session: str = ''  # the ref it was pushed to (one lane is one session); '' for a request
-    producer: str = ''  # a request's declared producer name (lab_commons.dev.forgerequest); '' for a part
+    producer: str = ''  # a request's declared producer name (dev_lab.dev.forgerequest); '' for a part
     refused: str = ''  # why its own request body is refused (an unvouched host pin); '' when it is not
-    paths: tuple[str, ...] = ()  # the test files a TESTS request names (lab_commons.dev.forgerequest); () else
+    paths: tuple[str, ...] = ()  # the test files a TESTS request names (dev_lab.dev.forgerequest); () else
 
     def __post_init__(self) -> None:
         """Work is always AT a commit: an empty sha is refused here, never carried to a ``statuses/<sha>`` URL."""

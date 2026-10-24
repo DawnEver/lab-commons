@@ -16,7 +16,7 @@ Three sources, one value (:mod:`lab_commons.compute.model`):
 * **slurm account**: ``cpu`` AND ``mem_gb`` over EVERY grant of the account (:func:`account`), plus ``submits``
   -- the job submissions its QOS still accepts (infinite when uncapped) -- and ``files``, what the home's
   FILE quota still takes (user ruling 2026-10-14: an Ada home at its 2,020,000-file limit failed every
-  write while its supply read free cores; the caller reads it, :mod:`lab_commons.dev.diskusage`).
+  write while its supply read free cores; the caller reads it, :mod:`dev_lab.dev.diskusage`).
 
 The readers of the OS are module functions taken as defaults, so a test passes fakes; the arithmetic is pure.
 """
@@ -141,12 +141,14 @@ def account(
 
     The account's OS, ``linux``, counts as many as ``cpu``.
     ``cpu`` per grant is :func:`lab_commons.hpc.plan.headroom` (quota less what is held); ``mem_gb`` the
-    quota's remaining memory, else -- uncapped -- the free memory of the schedulable nodes.
+    quota's remaining memory less every pending task's, else -- uncapped -- the free memory of the schedulable nodes.
     """
     cpu = mem = submits = 0.0
     for snapshot, qos in snapshots:
         cpu += headroom(snapshot)
         left = snapshot.quota.remaining()['mem']
+        if left is not None:  # the ceiling less running, less what pends: a pending task is held, as its cpus are
+            left = max(0.0, left - sum(task.mem_mb for task in snapshot.pending))
         mem += (left if left is not None else sum(n.mem_mb for n in snapshot.nodes if n.schedulable)) / 1024
         room = snapshot.quota.submit_room(qos)
         submits += math.inf if room is None else room

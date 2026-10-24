@@ -11,7 +11,7 @@ in graph order. For each unit:
 3. a stored result for that hash -> CACHED, nothing runs (the store also asks the shared tier);
 4. else :data:`PLACEMENT` decides from ``--where`` and whether this box can run it -- its engine and
    environment are PRESENT here and the box ledger admits its demand: RUN here, OFFER it as a Job to a host
-   that can (the ``offer`` the caller wires: :func:`lab_commons.dev.forgeunit.offer`), or REFUSE by name;
+   that can (the ``offer`` the caller wires: :func:`dev_lab.dev.forgeunit.offer`), or REFUSE by name;
 5. a run calls the unit's entry ``module:function`` as ``entry(inputs, work)`` IN THIS PROCESS (no packing; a
    debugger works) under :func:`lab_commons.box.ledger.hold` at the unit's declared demand; its declared
    outputs in *work* become the result. An exception is a FAILED unit, by name.

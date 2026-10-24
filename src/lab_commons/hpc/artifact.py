@@ -60,7 +60,7 @@ FORMATS: Final[dict[str, str]] = {
     IMAGE: (
         'an image artifact is not built (HPC phase 6 closed, 2026-10-19): uv sync --frozen from the committed '
         'lock already makes the env reproducible, and Ada offers only singularity 3.8.5 as a module '
-        '(docs-src/dev/hpc.md, artifacts); use artifact = "tarball"'
+        '(dev-lab docs-src/dev/hpc.md, artifacts); use artifact = "tarball"'
     ),
 }
 

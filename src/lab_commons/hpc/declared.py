@@ -14,7 +14,7 @@ ONE LIST, PINNED BOTH WAYS: ``tests/test_hpc_declared.py`` derives the set of ``
 spellings in ``src/`` and requires it to equal :data:`KNOWN_TABLES`, so a reader added without its row
 reds there, and a row whose reader is gone reds too. Every reader of a commit being JUDGED -- the need
 vocabulary (:func:`lab_commons.hpc.needsets.read_vocabulary`), the cluster build
-(:func:`lab_commons.hpc.builds.read_builds`) and the part producer (:mod:`lab_commons.dev.platformparts`) --
+(:func:`lab_commons.hpc.builds.read_builds`) and the part producer (:mod:`dev_lab.dev.platformparts`) --
 reads through here.
 
 THE KIT ITSELF IS THE EXCEPTION: no host serves a kit newer than the merged one, so a table the kit's
@@ -55,6 +55,7 @@ KNOWN_TABLES: Final = frozenset(
     {
         'areas',
         'artefacts',
+        'automode',
         'branchset',
         'carry',
         'ci',
@@ -101,8 +102,8 @@ class KitAheadOfItsServer(InvalidDeclaration):
     """
 
 
-#: The ``[project] name`` of the kit itself, PEP 503-normalised.
-_KIT: Final = 'lab-commons'
+#: The ``[project] name`` of the SERVING kit, PEP 503-normalised: dev-lab, whose forge every host serves.
+_KIT: Final = 'dev-lab'
 
 
 def _normalised(name: str) -> str:
@@ -130,11 +131,11 @@ def kit_tables(text: str) -> dict[str, Any]:
     if unknown := sorted(set(declared) - KNOWN_TABLES):
         tables = ', '.join(f'[tool.lab_commons.{name}]' for name in unknown)
         if _normalised(str(data.get('project', {}).get('name', ''))) == _KIT:
-            msg = f'drop {tables} until the kit merges: no host serving lab-commons knows it before then'
+            msg = f'drop {tables} until the kit merges: no host serving dev-lab knows it before then'
             raise KitAheadOfItsServer(msg)
         msg = (
             f'this lab-commons does not know {tables}: it is older than the declaration it reads, and an '
-            f'unknown table is never read as empty -- update the serving checkout of lab-commons'
+            f'unknown table is never read as empty -- update the serving dev-lab checkout and the lab-commons it pins'
         )
         raise OutdatedKit(msg)
     return declared
