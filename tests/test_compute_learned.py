@@ -285,3 +285,23 @@ def test_a_rename_held_by_a_windows_reader_is_retried_until_it_lands(tmp_path, m
     assert target.read_bytes() == b'{}'
     assert not refusals
     assert [p.name for p in tmp_path.iterdir()] == ['t.json'], 'no temp file is left behind'
+
+
+def _item(peak_mb: float, done: int, node: str) -> dict:
+    return {'seconds': {} if done < 0 else {node: 1.0}, 'done': {'done': done, 'wall': 10.0, 'peak_mb': peak_mb}}
+
+
+def test_a_finished_sibling_never_lowers_the_peak_its_files_kill_read_in_the_same_round() -> None:
+    """Within one round a file's peak is the worst of its items, whatever order they fold in.
+
+    Ada 2026-10-24 (motronics #4802): one test of a file was killed at 3447 MB while three sibling items
+    of the same file finished near 1 GB; the last finished one overwrote the kill, and the retry asked 2048M.
+    """
+    for order in ((3447.0, -9), (1000.0, 0)), ((1000.0, 0), (3447.0, -9)):
+        measured = Measured(peaks_mb={'t.py': 500.0})
+        for n, (peak, done) in enumerate(order):
+            measured.learn([f't.py::x{n}'], _item(peak, done, f't.py::x{n}'))
+        assert measured.peaks_mb['t.py'] == 3447.0, f'in either order: {order}'
+    later = Measured(peaks_mb={'t.py': 3447.0})
+    later.learn(['t.py::x'], _item(800.0, 0, 't.py::x'))
+    assert later.peaks_mb['t.py'] == 800.0, 'PLANTED CONTROL: a newer round that finishes still replaces'
