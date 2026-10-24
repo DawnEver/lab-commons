@@ -13,14 +13,12 @@ deadline. A row whose launcher is gone (pid absent, or its creation stamp differ
 pid) or whose deadline passed by more than :data:`GRACE_S` is reaped by the next admission, so
 no crash leaves memory booked.
 
-A WAITER HOLDS NOTHING. It takes a FIFO ticket, carrying its demand, that orders it in the queue and
-counts for nothing in the room. Queueing is STRICT FIFO AMONG CONTENDERS: a ticket is admitted only when
-no earlier live ticket wants a resource it wants (cores, memory, or the same seat), so a large demand is
-never starved by a stream of small ones. A demand wanting nothing the queue ahead waits on -- a seats-only
-environment check, say -- takes nothing any earlier waiter is waiting for, so it passes them. The price
-is head-of-line blocking, and it is bounded on both sides, which is why EVERY WAIT ENDS: the head
-waits at most until the holders' deadlines (each claim ends by then), and every waiter gives up
-at its own ``queue_s`` -- a required argument -- and its ticket is reaped with it.
+A WAITER HOLDS NOTHING. It takes a ticket, carrying its demand, that orders it in the queue and counts for
+nothing in the room. A ticket that fits now is admitted past an earlier one that does not, unless holding it
+would delay that earlier ticket's earliest start (:mod:`lab_commons.box.order`, the one ordering rule: backfill
+by reservation, never starving); a claim holder is ordered behind no waiter. EVERY WAIT ENDS: a ticket waits
+at most until the claims held when it arrived end (each by its deadline), and every waiter gives up at its own
+``queue_s`` -- a required argument -- and its ticket is reaped with it.
 
 A CLAIM MAY OUTLIVE ITS LAUNCHER IN TWO NAMED WAYS, and only those. :func:`hand_over` makes a vendor
 process (a Designer, a solver started outside this tree) the claim's holder: the claim then lives and is
@@ -89,7 +87,8 @@ from lab_commons.box.demand import (
     NotAdmitted,
     Refused,
 )
-from lab_commons.box.supply import Reading, Usage, room
+from lab_commons.box.order import blocks
+from lab_commons.box.supply import Reading, room
 from lab_commons.compute.admission import admit
 from lab_commons.compute.model import Job, Resources, Supply
 from lab_commons.liveness import creation_stamp, still_the_same_process
@@ -213,59 +212,6 @@ def _vector_of(held: Holding) -> Resources:
     return Resources({'cpu': held.cpu, 'mem_gb': held.mem_bytes / GB, **held.seats})
 
 
-def _contends(demand: Demand, ahead: tuple[int | None, int | None, str | None]) -> bool:
-    """Whether an earlier ticket asking *ahead* wants any resource *demand* does; an undeclared one wants all."""
-    cpu, mem_bytes, seats = ahead
-    if cpu is None or mem_bytes is None or seats is None:
-        return True
-    wanted = json.loads(seats)
-    return bool(
-        (cpu and demand.cpu)
-        or (mem_bytes and demand.mem_bytes)
-        or any(amount and wanted.get(name) for name, amount in demand.seats.items())
-    )
-
-
-def _reserved_for(
-    capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand, ahead: Sequence[tuple]
-) -> str | None:
-    """The earlier waiter *demand* must stay behind, else ``None``: FIFO WITH RESERVATION.
-
-    Every earlier ticket that contends is set aside in FULL from the measured room, in order; *demand* passes only
-    if it still fits in what is left. So a waiter is never starved -- nothing later takes what it waits for -- yet a
-    demand wanting none of what that waiter lacks (a coreless Designer stage behind a waiter short of cores, D10)
-    is not held behind it while room for both exists. An undeclared ticket wants everything.
-
-    A waiter the box could not admit even with every claim released (:func:`_reachable`: the load OUTSIDE the
-    ledger leaves too little) reserves nothing while that lasts. No release here can help it, so holding the queue
-    for it only idles the box (measured 2026-10-23: a 45 GB measure under two foreign JMAG solves held the head for
-    its whole wait). It keeps its place and is reserved again the moment that load leaves.
-    """
-    free = room(capacity, held, reading, seats=demand.seats)
-    reserved = Resources()
-    for what, cpu, mem_bytes, seats in ahead:
-        if not _contends(demand, (cpu, mem_bytes, seats)):
-            continue
-        if cpu is None or mem_bytes is None or seats is None:
-            return what
-        wants = Resources({'cpu': cpu, 'mem_gb': mem_bytes / GB, **json.loads(seats)})
-        if not wants <= _reachable(capacity, held, reading, wants.names):
-            continue
-        reserved = reserved + wants
-        if not _vector(demand) <= free - reserved:
-            return what
-    return None
-
-
-def _reachable(capacity: Capacity, held: Sequence[Holding], reading: Reading, seats: Iterable[str]) -> Resources:
-    """The room a new claim would find if every claim on the ledger released now: the box less the load outside it."""
-    used = [reading.usage.get(h.pid, Usage(0, 0.0)) for h in held]
-    cpu = min(reading.idle_cores + sum(u.busy_cores for u in used) - capacity.kept_cpu, capacity.cpu)
-    mem = min(reading.available_bytes + sum(u.resident_bytes for u in used) - capacity.kept_bytes, capacity.mem_bytes)
-    named = {n: capacity.seats.get(n, 1) for n in seats if n not in ('cpu', 'mem_gb')}
-    return Resources({'cpu': max(0.0, cpu), 'mem_gb': max(0, mem) / GB, **named})
-
-
 def _try(
     con: sqlite3.Connection,
     ticket: int,
@@ -276,7 +222,7 @@ def _try(
     reading: Reading,
     tag: tuple[str, str | None],
 ) -> Claim | str:
-    """Inside the write lock: the claim if this ticket heads the queue and the measured room admits it, else why not.
+    """Under the write lock: the claim if the room admits it and no earlier ticket orders it behind, else why not.
 
     *reading* was taken BEFORE the lock (a sample takes a moment, the lock is held for milliseconds); a claim
     that arrived since is in the ledger read here with no usage in it, so it counts in full: a stale reading
@@ -290,18 +236,18 @@ def _try(
             f'{what}: key {tag[0]!r} is held by the external claim {earlier[0]!r}, still unresolved -- release it first'
         )
         raise DuplicateKey(msg)
-    ahead = con.execute(
-        'SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,)
-    ).fetchall()
     held = _read(con)
     refusal = _decide(capacity, held, reading, demand, what)
     if refusal is not None:
         return refusal
-    head = _reserved_for(capacity, held, reading, demand, ahead)
-    if head is not None:
-        return f'queued behind {head!r}, which came first: what it waits for stays reserved for it (FIFO)'
-    deadline = now + demand.wall_s
     pid = os.getpid()
+    if all(h.pid != pid for h in held):  # a holder is never ordered behind a waiter (the 2026-10-19 deadlock)
+        jumper = Holding(what, pid, demand.cpu, demand.mem_bytes, demand.seats, now + demand.wall_s)
+        ahead = con.execute('SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,))
+        for earlier, *asked in ahead.fetchall():
+            if blocks((asked[0], asked[1], asked[2]), jumper, capacity=capacity, held=held, reading=reading, now=now):
+                return f'queued behind {earlier!r}, which came first: holding this would delay its earliest start'
+    deadline = now + demand.wall_s
     cursor = con.execute(
         'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key, fingerprint) '
         'VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -431,8 +377,8 @@ _NO_SHARE: Final = Reading(cores=0.0, idle_cores=0.0, total_bytes=0, available_b
 def stuck_at_head(outcome: str, held: Sequence[Holding], gives_up: float) -> bool:
     """Whether a ticket refused for ROOM (not behind another ticket) cannot fit before it gives up.
 
-    Every holder's deadline falls after *gives_up*, so no claim is due to free its room in time: strict FIFO
-    then holds every later ticket behind one that will wait out its whole limit (issue #5: ~7.7 h, silent).
+    Every holder's deadline falls after *gives_up*, so no claim is due to free its room in time: it waits out its
+    whole limit, and every later ticket that would delay it waits too (issue #5: ~7.7 h, silent).
     """
     return not outcome.startswith('queued behind') and bool(held) and all(h.deadline > gives_up for h in held)
 
@@ -460,7 +406,7 @@ def _wait(
             warned = True
             emit(
                 f'box: STUCK AT THE HEAD -- {what} cannot fit before it gives up at {_when(gives_up)} (every '
-                f'holder runs past it), and every later ticket waits behind it: {outcome}',
+                f'holder runs past it), and every later ticket that would delay it waits behind it: {outcome}',
                 err=True,
             )
         left = gives_up - time.time()

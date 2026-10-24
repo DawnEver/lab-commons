@@ -431,8 +431,8 @@ def test_a_demand_that_contends_for_nothing_ahead_passes_the_queue(box: Path) ->
         assert [row.what for row in holdings()] == ['dep:x']
 
 
-def test_two_cpu_contenders_keep_fifo_order(box: Path) -> None:
-    """PLANTED CONTROL: a later cpu demand never passes an earlier one, however small -- no starvation."""
+def test_a_later_cpu_demand_that_would_delay_an_earlier_fitting_one_waits(box: Path) -> None:
+    """PLANTED CONTROL: the earlier 4-core ticket fits now; 1 core held moves its start to that deadline."""
     _ticket(box, os.getpid(), _demand(cpu=4))
     with (
         pytest.raises(NotAdmitted, match='queued behind'),
@@ -441,15 +441,15 @@ def test_two_cpu_contenders_keep_fifo_order(box: Path) -> None:
         pass
 
 
-def test_a_coreless_stage_passes_a_waiter_blocked_on_cores_when_its_memory_stays_reserved(box: Path) -> None:
-    """D10: a 4-core waiter is set aside in FULL (8 GB - 4 GB leaves 4); a coreless 2 GB stage fits beside it."""
+def test_a_coreless_stage_that_leaves_an_earlier_waiter_room_is_admitted(box: Path) -> None:
+    """D10: a coreless 2 GB stage held beside a 4-core 4 GB waiter leaves its start now (8 GB holds both)."""
     _ticket(box, os.getpid(), _demand(cpu=4, mem_gb=4.0))
     with hold(_demand(cpu=0, mem_gb=2.0, seats={'jmag': 1}), 'prepare', queue_s=0.2, **_ON):
         assert [row.what for row in holdings()] == ['prepare']
 
 
-def test_a_later_stage_never_takes_memory_an_earlier_waiter_needs(box: Path) -> None:
-    """PLANTED CONTROL: 8 GB - the waiter's 4 GB leaves 3 GB short of 5: it queues, so the waiter cannot starve."""
+def test_a_later_stage_that_would_delay_an_earlier_waiter_waits(box: Path) -> None:
+    """PLANTED CONTROL: 5 GB held leaves the 4 GB waiter 3 GB: its start would move later, so the stage queues."""
     _ticket(box, os.getpid(), _demand(cpu=4, mem_gb=4.0))
     with (
         pytest.raises(NotAdmitted, match='queued behind'),
@@ -485,19 +485,19 @@ def _foreign(available_gb: float) -> Callable[[Iterable[int]], Reading]:
     return lambda _pids: Reading(4.0, 4.0, 8 * 2**30, int(available_gb * 2**30))
 
 
-def test_a_waiter_the_foreign_load_makes_unreachable_reserves_nothing(box: Path) -> None:
+def test_a_waiter_the_foreign_load_makes_unreachable_has_no_start_to_protect(box: Path) -> None:
     """MEASURED 2026-10-23: a 45 GB measure under two foreign solves held the head for its whole wait.
 
-    5 GB of the 8 are in use OUTSIDE the ledger, so the 6 GB waiter cannot be admitted by any release here; a
-    later 1 GB demand is admitted beside it instead of idling the box behind it.
+    5 GB of the 8 are in use OUTSIDE the ledger, so no release here admits the 6 GB waiter: its earliest start is
+    never, nothing can delay it, and a later 1 GB demand is admitted instead of idling the box behind it.
     """
     _ticket(box, os.getpid(), _demand(cpu=1, mem_gb=6.0))
     with hold(_demand(cpu=1, mem_gb=1.0), 'small', queue_s=0.2, **{**_ON, 'read': _foreign(3.0)}):
         assert [row.what for row in holdings()] == ['small']
 
 
-def test_a_waiter_the_box_can_reach_still_reserves_its_room(box: Path) -> None:
-    """PLANTED CONTROL: the same waiter on a box with no foreign load is reachable, so it keeps the queue (FIFO)."""
+def test_a_waiter_the_box_can_reach_is_not_delayed_by_a_later_demand(box: Path) -> None:
+    """PLANTED CONTROL: with no foreign load the waiter fits now; 3 GB held would delay it, so the demand queues."""
     _ticket(box, os.getpid(), _demand(cpu=1, mem_gb=6.0))
     with (
         pytest.raises(NotAdmitted, match='queued behind'),
