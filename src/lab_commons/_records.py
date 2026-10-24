@@ -2,7 +2,7 @@
 
 Once the record of the per-box broker's seats (folded into the one box ledger, :mod:`lab_commons.box`,
 D2 2026-10-16); the two writes stayed because their subject is the BYTES a peer reads, not the broker:
-:mod:`lab_commons.supervise.state` publishes its state through :func:`publish`. Every fix this family made
+:mod:`dev_lab.supervise.state` publishes its state through :func:`publish`. Every fix this family made
 here -- the staged-then-linked create, the staged-then-replaced update -- was found by a reader seeing a
 state the writer did not mean to publish.
 """
