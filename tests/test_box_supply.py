@@ -117,7 +117,7 @@ def test_a_nested_ask_beyond_even_the_holders_headroom_still_does_not_fit() -> N
 
 
 def test_a_room_refused_head_ticket_no_deadline_frees_in_time_is_named_stuck() -> None:
-    """PLANTED both ways: stuck when every holder outlives the ticket; not when one is due, nor behind FIFO."""
+    """PLANTED both ways: stuck when every holder outlives the ticket; not when one is due, nor behind a ticket."""
     late = [Holding(what='a', pid=1, cpu=1, mem_bytes=GB, seats={}, deadline=200.0)]
     soon = [*late, Holding(what='b', pid=2, cpu=1, mem_bytes=GB, seats={}, deadline=50.0)]
     assert stuck_at_head('mem_gb lacking', late, gives_up=100.0)
