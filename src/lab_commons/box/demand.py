@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -32,7 +33,8 @@ from lab_commons.outcomes import Status
 from lab_commons.proc import system_memory
 
 __all__ = [
-    'GB', 'NOT_ADMITTED', 'WALL_CEILING_S', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding', 'NotAdmitted',
+    'GB', 'LENT_NAME', 'NOT_ADMITTED', 'WALL_CEILING_S', 'Capacity', 'Claim', 'Demand', 'DuplicateKey', 'Holding',
+    'NotAdmitted',
     'ProcessEnd', 'Refused', 'declared_seats', 'not_admitted', 'read_ended', 'seat_supply', 'write_ended',
 ]  # fmt: skip
 
@@ -156,6 +158,11 @@ def _measured(supply: list[str] | None) -> int | None:
     return int(text) if done.returncode == 0 and text.isdecimal() else None
 
 
+#: A LENT resource's name, ``<kind>:<instance>`` (``jobslot:ws1``): never a machine-file ``[capabilities]``
+#: name.
+LENT_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*:[A-Za-z0-9_.-]+$')
+
+
 @dataclass(frozen=True)
 class Capacity:
     """The machine's SIZE for admitted runs: cores and bytes after the reserve margins, and tool seats.
@@ -169,6 +176,29 @@ class Capacity:
     seats: Mapping[str, int]
     kept_cpu: float = 0.0
     kept_bytes: int = 0
+
+    @classmethod
+    def lent(cls, seats: Mapping[str, int]) -> Capacity:
+        """A capacity of LENT resources alone: counts its consumer declares, no cores or memory.
+
+        A lent name is ``<kind>:<instance>`` (:data:`LENT_NAME`), a shape the machine file's ``[capabilities]``
+        names cannot take, so a lent count has ONE source -- its consumer's table -- and a machine-file
+        declaration of the same name is impossible, not merely refused. The ledger knows nothing of what the
+        resource is; every process claiming it must lend the same count (they read the same table).
+
+        Raises:
+            ValueError: a name is not ``<kind>:<instance>`` or a count is not a positive int.
+
+        """
+        bad = [
+            f'{name!r}={count!r}'
+            for name, count in seats.items()
+            if not LENT_NAME.match(name) or not isinstance(count, int) or isinstance(count, bool) or count < 1
+        ]
+        if bad:
+            msg = f'Capacity.lent: each name must match {LENT_NAME.pattern} and lend a positive int: {", ".join(bad)}'
+            raise ValueError(msg)
+        return cls(cpu=0.0, mem_bytes=0, seats=dict(seats))
 
     @classmethod
     def read(cls) -> Capacity:

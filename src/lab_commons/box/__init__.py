@@ -1,6 +1,7 @@
 """The box: ONE resource manager per machine.
 
-Every run declares its :class:`Demand` (cores, memory, wall time, tool seats); :func:`hold` books
+Every run declares its :class:`Demand` (cores, memory, wall time, tool seats and LENT
+resources, :meth:`Capacity.lent`); :func:`hold` books
 it in the machine's one ledger only when the one rule (:func:`lab_commons.compute.admission.admit`)
 admits it on the MEASURED room (:func:`lab_commons.box.supply.room`) within the machine's :class:`Capacity`,
 and a waiter that cannot fit holds nothing and gives up at its own limit. See
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 from lab_commons.box.demand import (
     GB,
+    LENT_NAME,
     NOT_ADMITTED,
     WALL_CEILING_S,
     Capacity,
@@ -51,6 +53,7 @@ __all__ = [
     'GB',
     'GRACE_S',
     'INSIDE_ENV',
+    'LENT_NAME',
     'NOT_ADMITTED',
     'POLL_S',
     'WALL_CEILING_S',
