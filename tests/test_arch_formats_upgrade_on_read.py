@@ -31,8 +31,8 @@ _VERSION_NAMES: Final = ('SCHEMA', 'SCHEMA_VERSION')
 _TABLE: Final = '_UPGRADES'
 
 #: The versioned formats this tree holds today. A floor, not a count pin: finding fewer means the scan
-#: stopped reading them, which is not a clean tree.
-_FLOOR: Final = 2
+#: stopped reading them, which is not a clean tree. Re-measured 2026-10-25 at 1 after supervise left for dev-lab.
+_FLOOR: Final = 1
 
 #: A format whose upgrade path is OWED by a named lane -- on record, never skipped. A row whose module
 #: complies is a red too (the ratchet's other side): delete it in the merge that brings the upgrade.

@@ -26,8 +26,8 @@ EXEMPT: Final[dict[str, str]] = {
 
 _STAGED: Final = ('staged', 'temp', 'tmp', 'part', 'temporary')
 
-#: Measured 2026-10-23: 150+ modules. A floor, so an empty scan is not a pass.
-SOURCE_FLOOR: Final = 100
+#: Re-measured 2026-10-25: 98 modules after supervise left for dev-lab. A floor, so an empty scan is not a pass.
+SOURCE_FLOOR: Final = 80
 
 
 def hand_rolled(tree: ast.Module) -> list[int]:
