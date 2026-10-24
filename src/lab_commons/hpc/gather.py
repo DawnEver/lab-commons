@@ -229,19 +229,21 @@ def grown_after(
     In a round that ran out of memory, an item left unfinished in a shard that did not time out was killed,
     and each of its files asks :data:`~lab_commons.compute.learned.OOM_GROWTH` times more next round, never
     every later item (Ada 2026-10-19: one heavy file's kill doubled every task of the part). A file whose
-    item finished every id outside an OUT_OF_MEMORY shard is back at its measured peak (:meth:`Measured.learn`
-    keeps it): its growth is dropped.
+    item finished every id outside an OUT_OF_MEMORY shard, and none of whose items was killed, is back at its
+    measured peak (:meth:`Measured.learn` keeps it): its growth is dropped.
     """
     after = dict(grown)
     killed: set[str] = set()  # a file grows ONCE a round, however many of its items were killed
+    finished: set[str] = set()
     for index, item in enumerate(items):
         files = {node.split('::', maxsplit=1)[0] for node in item['ids']}
         shard = states.get(shard_of[index], '')
         if all(node in cells for node in item['ids']) and shard != 'OUT_OF_MEMORY':
-            for name in files:
-                after.pop(name, None)
+            finished |= files
         elif oom and shard != 'TIMEOUT':
             killed |= files
+    for name in finished - killed:  # a kill wins: a finished sibling item never resets its file (Ada 2026-10-24)
+        after.pop(name, None)
     for name in killed:
         after[name] = after.get(name, 1.0) * OOM_GROWTH
     return after
