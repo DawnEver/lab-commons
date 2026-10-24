@@ -116,6 +116,9 @@ class Measured:
     floors: dict[str, float] = field(default_factory=dict)
     overheads: dict[str, float] = field(default_factory=dict)
     peaks_mb: dict[str, float] = field(default_factory=dict)
+    #: The files this instance -- ONE round's fold -- already learned a peak for: within a round a file's peak is
+    #: the worst of its items, so a finished sibling never lowers what a killed one read (Ada 2026-10-24).
+    _round: set[str] = field(default_factory=set, repr=False, compare=False)
 
     @classmethod
     def of(cls, record: dict[str, Any]) -> Measured:
@@ -160,8 +163,9 @@ class Measured:
         if peak is None or (signalled and len(files) > 1):
             return
         for name in files:
-            floor = self.peaks_mb.get(name, 0.0) if signalled else 0.0
+            floor = self.peaks_mb.get(name, 0.0) if signalled or name in self._round else 0.0
             self.peaks_mb[name] = max(floor, float(peak))
+            self._round.add(name)
 
     def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float) -> None:
         """An item killed after *spent* seconds: its first unfinished id ran for what the rest does not explain.

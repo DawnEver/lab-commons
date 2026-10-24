@@ -34,7 +34,7 @@ from lab_commons.hpc import shell, watch
 from lab_commons.hpc.builds import Builds, ItemWall, cargo_target
 from lab_commons.hpc.cluster import SUBMIT_LIMIT, Unreachable
 from lab_commons.hpc.config import Config, Cost, Limits, Policy
-from lab_commons.hpc.gather import gather_run
+from lab_commons.hpc.gather import gather_run, grown_after
 from lab_commons.hpc.grants import Grant, Machine, Session
 from lab_commons.hpc.needsets import BASE, Vocabulary
 from lab_commons.hpc.phases import describe, phases
@@ -462,8 +462,9 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_ungrown_and_never_lowers_a
     known.learn(['a.py::t'], killed)
     assert known.peaks_mb == {'a.py': 3493.0}, 'a kill at a lower limit says nothing new'
     finished = {'seconds': {'a.py::t': 1.0}, 'done': {'done': 0, 'wall': 30.0, 'peak_mb': 700.0}}
-    known.learn(['a.py::t'], finished)
-    assert known.peaks_mb == {'a.py': 700.0}, 'PLANTED CONTROL: a finished item is measured, newer wins'
+    later = Measured.of(known.record())  # the NEXT round's fold; within one round a file keeps its worst item
+    later.learn(['a.py::t'], finished)
+    assert later.peaks_mb == {'a.py': 700.0}, 'PLANTED CONTROL: a finished item is measured, a newer round wins'
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
@@ -1954,3 +1955,14 @@ def test_a_job_slurm_no_longer_holds_does_not_stop_a_withdrawal(monkeypatch: pyt
     refusal[:] = ['scancel: error: Kill job error on job id 100: Access/permission denied']
     with pytest.raises(RuntimeError, match='permission denied'):
         run_module.withdraw_pending('a' * 40, 'base', machine, lambda _grant: runner)
+
+
+def test_a_file_whose_item_was_killed_keeps_growing_though_a_sibling_item_finished() -> None:
+    """Ada 2026-10-24: the finished sibling reset the killed file's growth, so it only ever doubled from 1."""
+    items = [{'ids': ['tests/f.py::a']}, {'ids': ['tests/f.py::b']}]
+    cells = {'tests/f.py::b': {}}
+    after = grown_after(items, cells, {0: 0, 1: 1}, {0: 'OUT_OF_MEMORY', 1: 'COMPLETED'}, {'tests/f.py': 2.0}, oom=True)
+    assert after == {'tests/f.py': 4.0}
+    assert grown_after(items[1:], cells, {0: 1}, {1: 'COMPLETED'}, {'tests/f.py': 2.0}, oom=False) == {}, (
+        'PLANTED CONTROL: a file with no killed item this round is back at its peak'
+    )
