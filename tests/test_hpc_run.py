@@ -11,8 +11,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -24,15 +26,13 @@ import pytest
 from lab_commons.compute import learned
 from lab_commons.compute.learned import Measured
 from lab_commons.config import CONFIG_ENV
-from lab_commons.dev.envkey import env_key
-from lab_commons.dev.forgestatus import CommitStatus
-from lab_commons.dev.githooks import bash_executable
-from lab_commons.dev.platformparts import PartRefusal, part_of, parts_of
+from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc import cluster as cluster_module
+from lab_commons.hpc import run as run_module
 from lab_commons.hpc import shell, watch
-from lab_commons.hpc.builds import Builds, cargo_target
-from lab_commons.hpc.cluster import Unreachable
+from lab_commons.hpc.builds import Builds, ItemWall, cargo_target
+from lab_commons.hpc.cluster import SUBMIT_LIMIT, Unreachable
 from lab_commons.hpc.config import Config, Cost, Limits, Policy
 from lab_commons.hpc.gather import gather_run
 from lab_commons.hpc.grants import Grant, Machine, Session
@@ -74,7 +74,6 @@ from lab_commons.hpc.slurm import parse_snapshot
 from lab_commons.hpc.testcells import TestCell
 from lab_commons.hpc.tree import build_run
 from lab_commons.hpc.watch import PENDING
-from lab_commons.outcomes import Conclusion
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
@@ -164,6 +163,17 @@ def test_a_restarted_item_keeps_only_its_last_attempt_and_a_kept_file_only_its_r
     )
     assert split_streams(text, 'r0') == {0: '{"item": 0, "b": 2}', 1: '{"item": 1, "c": 3}'}
     assert split_streams(text, 'r1') == {}, 'PLANTED CONTROL: a kept file of another round is no stream of this one'
+
+
+def bash_executable() -> str:
+    """Bash: ``PATH`` first, then the one Git for Windows ships beside its ``git``."""
+    if found := shutil.which('bash'):
+        return found
+    git = shutil.which('git')
+    beside = Path(git).resolve().parent.parent / 'bin' / 'bash.exe' if git else None
+    assert beside is not None, 'no bash on PATH and no git to find one beside'
+    assert beside.is_file(), f'no bash on PATH and none at {beside}'
+    return str(beside)
 
 
 def _bash_runner() -> Callable[[str, str | None], str]:
@@ -312,6 +322,37 @@ def test_a_pytest_that_dies_mid_item_names_the_test_it_was_running(
     assert _words(result['cells']) == {ids[0]: 'ok'}
     assert result['done']['done'] == 3
     assert result['started'] == ids[1], 'the plugin streams a START line, so the in-flight id is known'
+
+
+def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hang pytest-timeout is not asked to catch: the runner kills the tree, records a timeout, runs the rest."""
+    runner = _item_runner(tmp_path, monkeypatch)
+    body = (
+        'import subprocess, sys, time\n\n'
+        'def test_a():\n    pass\n\n'
+        'def test_hang():\n'
+        '    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])\n'
+        '    while True:\n        time.sleep(1)\n\n'
+        'def test_c():\n    pass\n'
+    )
+    ids = _tree(tmp_path, body)
+    began = time.monotonic()
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 3)})
+    assert time.monotonic() - began < 60, 'the hang ended within its wall, not at the scheduler limit'
+    assert _words(result['cells']) == {ids[0]: 'ok', ids[1]: 'timeout', ids[2]: 'ok'}, result['tail']
+    assert _whys(result['cells'])[ids[1]].startswith('timeout after 3s')
+    assert ids[1] not in result['seconds'], 'the bound it hit is no measurement of the test'
+    assert result['done'] is not None
+
+
+def test_a_normal_item_under_a_wall_passes_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _item_runner(tmp_path, monkeypatch)
+    ids = _tree(tmp_path, 'def test_a():\n    pass\n\ndef test_b():\n    pass\n')
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 30)})
+    assert _words(result['cells']) == dict.fromkeys(ids, 'ok')
+    assert result['done']['done'] == 0
 
 
 def test_a_round_of_items_leaves_one_file_where_it_left_two_per_item(
@@ -639,8 +680,6 @@ def test_what_is_still_unfinished_after_the_retries_is_infra() -> None:
     words = _words(record['cells'])
     assert words['tests/b.py::t3'] == 'ok', 'what a killed shard finished is kept'
     assert [words[f'tests/b.py::t{n}'] for n in (4, 5)] == ['infra', 'infra'], 'the machine, not the test, said no'
-    with pytest.raises(PartRefusal, match='INCONCLUSIVE'):
-        part_of(record)
 
 
 def test_an_out_of_memory_round_doubles_the_memory_of_the_next() -> None:
@@ -1439,6 +1478,18 @@ def test_every_item_carries_the_timeout_its_scope_declares() -> None:
     assert {i['timeout_s'] for i in incremental.manifests[0]['items']} == {300}
 
 
+def test_every_id_carries_a_wall_derived_from_its_measured_duration() -> None:
+    builds = Builds(install='true', env_key='k1', item_wall=ItemWall(multiple=10, floor_s=60, unmeasured_s=900))
+    history = {'durations': {'tests/a.py::t1': 30.0, 'tests/a.py::t2': 0.1}}
+    fake = FakeRunCluster()
+    spec = RunSpec(sha=SHA, repo_url='u', builds=builds)
+    submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, history=history)
+    walls = {n: s for i in fake.manifests[0]['items'] for n, s in i['walls'].items()}
+    assert walls['tests/a.py::t1'] == 300, 'ten times its measured 30 s'
+    assert walls['tests/a.py::t2'] == 60, 'never under the floor'
+    assert {s for n, s in walls.items() if n not in history['durations']} == {900}, 'unmeasured: the declared default'
+
+
 def test_the_run_state_names_the_build_directories_it_runs_in() -> None:
     """Retention ties ``~/ci/envs/<key>`` and ``~/ci/native/<key>`` to a run only through these keys."""
     builds = Builds(install='true', env_key='k1', native_key='n1')
@@ -1522,7 +1573,7 @@ def test_a_failed_run_build_is_inconclusive(
     assert 'could not find `cargo`' in capsys.readouterr().err
 
 
-# -- carried cells (lab_commons.dev.forgecarry) ------------------------------------------------------
+# -- carried cells (dev_lab.dev.forgecarry) ------------------------------------------------------
 
 A_SHA = 'a' * 40
 OK_CELL: dict[str, object] = {'status': 'ok', 'evidence': 'observed'}
@@ -1551,14 +1602,6 @@ def test_carried_ids_are_never_submitted_and_the_record_names_their_origin() -> 
     assert record['carried'] == {'tests/a.py::t1': A_SHA, 'tests/a.py::t2': A_SHA}, 'an id not collected is not taken'
     assert _words(record['cells'])['tests/a.py::t2'] == 'rejected', 'a carried red stays red'
     assert record['scope'] == FULL, 'a carried run is still the full suite'
-    part = part_of(record)
-    assert (part.ran, part.kept, part.result) == (3, {A_SHA[:12]: 2}, Conclusion.FAIL), (
-        'carried is never counted as run'
-    )
-    assert part.description().endswith(f'kept={A_SHA[:12]}:2')
-    assert (
-        parts_of([CommitStatus(f'tests/{part.platform}', 'failure', part.description(), '')])[0][part.platform] == part
-    )
 
 
 def test_a_run_whose_every_id_is_carried_writes_its_record_without_a_job() -> None:
@@ -1568,7 +1611,6 @@ def test_a_run_whose_every_id_is_carried_writes_its_record_without_a_job() -> No
     assert not fake.manifests, 'nothing was submitted'
     assert state['rounds'] == []
     assert _gather(fake) == state['record']
-    assert part_of(state['record']).ran == 0
 
 
 def test_two_parts_of_one_sha_are_two_runs_with_two_states_and_two_job_names() -> None:
@@ -1729,3 +1771,186 @@ def test_a_run_that_cannot_be_gathered_has_its_live_jobs_cancelled_before_it_is_
     monkeypatch.setattr(watch, 'where', lambda *_a, **_k: SimpleNamespace(describe=lambda: 'pending'))
     assert watch.settle(*args, part='base', sleep=None) == PENDING
     assert not any(command.startswith('scancel') for command in asked), asked
+
+
+def test_a_cancelled_run_scancels_every_band_of_every_round_it_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ada 2026-10-21: a superseded run leaves NO job -- every band of every round, the forge's ids, squeue's by name.
+
+    PLANTED CONTROL: a run with no state and nothing held by name runs no ``scancel`` at all.
+    """
+    asked: list[str] = []
+    held = ['9000\n']
+
+    def runner(command: str, _stdin: object) -> str:
+        asked.append(command)
+        return held[0] if command.startswith('squeue') else ''
+
+    rounds = {'rounds': [{'job_ids': ['100', '101']}, {'job_ids': ['200', '201']}]}
+    monkeypatch.setattr(run_module, 'load_state', lambda *_a, **_k: (rounds, runner))
+    machine = Machine(session=None, grants=(GRANT,))
+    ids = run_module.cancel_run('a' * 40, 'base', machine, lambda _grant: runner, also=('300',))
+    assert ids == ['100', '101', '200', '201', '300', '9000']
+    assert f'scancel {" ".join(ids)}' in asked
+
+    asked.clear()
+    held[0] = ''
+    monkeypatch.setattr(run_module, 'load_state', lambda *_a, **_k: ({'rounds': []}, runner))
+    assert run_module.cancel_run('a' * 40, 'base', machine, lambda _grant: runner) == []
+    assert not any(command.startswith('scancel') for command in asked), asked
+
+
+class _QosFull(FakeRunCluster):
+    """The cluster refuses the SECOND ``sbatch`` of a round on the per-user QOS submit limit (Ada 2026-10-21)."""
+
+    def __call__(self, command: str, stdin: str | None = None) -> str:
+        if 'sbatch' in command and len(_sbatched(self)) == 1:
+            self.calls.append((command, stdin))
+            msg = f'bash exited 1: sbatch: error: {SUBMIT_LIMIT} (Job violates accounting/QOS policy)'
+            raise RuntimeError(msg)
+        return super().__call__(command, stdin)
+
+
+def test_withdrawing_a_superseded_run_scancels_only_its_pending_tasks_and_names_the_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NEWEST-HEAD-ONLY (user ruling 2026-10-22): ``scancel --state=PENDING``, never a bare ``scancel``.
+
+    PLANTED CONTROL: a run with no state and nothing held by name runs no ``scancel`` and reports nothing started.
+    """
+    asked: list[str] = []
+    held = {'squeue -h --me -n run-aaaaaaaaaaaa-base -o %F': '9000\n'}
+
+    def runner(command: str, _stdin: object) -> str:
+        asked.append(command)
+        if ' -t ' in command:
+            return '100\n' if held else ''
+        return held.get(command, '')
+
+    monkeypatch.setattr(run_module, 'load_state', lambda *_a, **_k: ({'rounds': [{'job_ids': ['100']}]}, runner))
+    machine = Machine(session=None, grants=(GRANT,))
+    assert run_module.withdraw_pending('a' * 40, 'base', machine, lambda _grant: runner) == ['100']
+    scancels = [command for command in asked if command.startswith('scancel')]
+    assert scancels == ['scancel --state=PENDING 100 9000'], 'a started task is never cancelled for supersession'
+
+    asked.clear()
+    held.clear()
+    monkeypatch.setattr(run_module, 'load_state', lambda *_a, **_k: ({'rounds': []}, runner))
+    assert run_module.withdraw_pending('a' * 40, 'base', machine, lambda _grant: runner) == []
+    assert not any(command.startswith('scancel') for command in asked), asked
+
+
+def test_a_first_round_refused_on_the_qos_submit_limit_is_no_room_and_its_queued_band_is_cancelled() -> None:
+    """A per-user QOS submit refusal is CAPACITY: :class:`NoRoom` (released open), never a stuck ``bash exited 1``.
+
+    Ada 2026-10-21: one account's run hit the QOS submit limit and alarmed "cannot advance" every tick, holding
+    its claim while four other grants had headroom. The band already queued is cancelled, so the refused
+    round holds no submit slot. PLANTED CONTROL: :func:`test_each_memory_class_is_its_own_array_at_its_own_files_peak`
+    -- the same two bands with room submit both.
+    """
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
+    fake = _QosFull()
+    with pytest.raises(NoRoom, match=SUBMIT_LIMIT):
+        _submit(fake, history=learned.learned('https://g/r.git'))
+    assert len(_sbatched(fake)) == 2
+    assert any(command.startswith('scancel') and '4243' in command for command, _ in fake.calls), fake.calls
+
+
+def test_the_bands_of_a_round_share_one_qos_submit_room() -> None:
+    """Each memory band was planned against the WHOLE submit room, so two bands asked more than the QOS takes.
+
+    Planted: 99 of the ``free`` QOS's 100 submits queued, two bands of one shard each. One fits, two do not:
+    the round is NoRoom before any ``sbatch``. PLANTED CONTROL: the same bands at 98 queued submit both.
+    """
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
+    full = FakeRunCluster(held='@@@ queued\n' + 'free\n' * 99)
+    with pytest.raises(NoRoom):
+        _submit(full, history=learned.learned('https://g/r.git'))
+    assert _sbatched(full) == [], 'nothing queued past the limit'
+    room = FakeRunCluster(held='@@@ queued\n' + 'free\n' * 98)
+    _submit(room, history=learned.learned('https://g/r.git'))
+    assert len(_sbatched(room)) == 2
+
+
+class _RetryQosFull(FakeRunCluster):
+    """Every ``sbatch`` after round 0 is refused on the per-user QOS submit limit while :attr:`full` holds."""
+
+    full = False
+
+    def __call__(self, command: str, stdin: str | None = None) -> str:
+        if 'sbatch' in command and self.full:
+            self.calls.append((command, stdin))
+            msg = f'bash exited 1: sbatch: error: {SUBMIT_LIMIT} (Job violates accounting/QOS policy)'
+            raise RuntimeError(msg)
+        return super().__call__(command, stdin)
+
+
+def _gather_at(fake: FakeRunCluster, minute: float) -> dict | None:
+    return gather_run(SHA, BASE, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, now=lambda: 60.0 * minute)
+
+
+def test_a_retry_round_refused_on_the_qos_submit_limit_waits_in_flight_and_submits_when_the_room_returns() -> None:
+    """A QOS submit refusal at ANY round is capacity: a refused retry round leaves the run in flight.
+
+    Ada 2026-10-21 (motronics #4684): 42 items ran ~6 h, the retry round hit ``QOSMaxSubmitJobPerUserLimit``,
+    and the run settled "ended without a record".
+
+    PLANTED CONTROL: the same refusal lifted at the next tick submits the round and the record keeps every cell.
+    """
+    fake = _RetryQosFull(dies=frozenset({'tests/b.py'}))
+    _submit(fake)
+    fake.full = True
+    assert _gather_at(fake, 0) is None, 'a refused retry is pending, never a raise that settles the run'
+    state = json.loads(fake.state)
+    assert 'record' not in state
+    assert _words(state['cells'])['tests/b.py::t3'] == 'ok', 'what round 0 finished is kept'
+    assert _gather_at(fake, 1) is None, 'still no room: still waiting'
+    assert len(json.loads(fake.state)['rounds']) == 1
+    fake.full = False
+    assert _gather_at(fake, 2) is None, 'the room came back: round 1 is out'
+    assert len(json.loads(fake.state)['rounds']) == 2
+    record = _gather_at(fake, 3)
+    assert record is not None
+    assert set(_words(record['cells']).values()) == {'ok'}
+
+
+def test_a_retry_round_that_never_finds_room_settles_with_what_ran_and_names_the_unrun() -> None:
+    """Past ``policy.stall_minutes`` with no room, the record carries round 0's cells and the waiting ids as unrun.
+
+    PLANTED CONTROL: one minute short of the bound the run is still pending.
+    """
+    fake = _RetryQosFull(dies=frozenset({'tests/b.py'}))
+    _submit(fake)
+    fake.full = True
+    assert _gather_at(fake, 0) is None
+    assert _gather_at(fake, POLICY.stall_minutes - 1) is None
+    record = _gather_at(fake, POLICY.stall_minutes)
+    assert record is not None, 'a record of what DID run, never "no record"'
+    words = _words(record['cells'])
+    assert words['tests/b.py::t3'] == 'ok'
+    assert [words[f'tests/b.py::t{n}'] for n in (4, 5)] == ['infra', 'infra']
+    assert _whys(record['cells'])['tests/b.py::t4'].startswith('never ran: no submit room')
+
+
+def test_a_job_slurm_no_longer_holds_does_not_stop_a_withdrawal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A job Slurm no longer holds is the state a withdrawal or a cancel asks for (Ada 2026-10-23).
+
+    A recorded round's job had finished, ``scancel`` named it ``Invalid job id`` and exited 1,
+    so the superseded run never withdrew and every newer integration head waited behind it.
+
+    PLANTED CONTROL: any other ``scancel`` refusal still raises.
+    """
+    refusal = ['scancel: error: Kill job error on job id 100: Invalid job id specified']
+
+    def runner(command: str, _stdin: object) -> str:
+        if command.startswith('scancel'):
+            raise RuntimeError('bash exited 1: ' + '\n'.join(refusal))
+        return ''
+
+    monkeypatch.setattr(run_module, 'load_state', lambda *_a, **_k: ({'rounds': [{'job_ids': ['100']}]}, runner))
+    machine = Machine(session=None, grants=(GRANT,))
+    assert run_module.withdraw_pending('a' * 40, 'base', machine, lambda _grant: runner) == []
+    assert run_module.cancel_run('a' * 40, 'base', machine, lambda _grant: runner) == ['100']
+
+    refusal[:] = ['scancel: error: Kill job error on job id 100: Access/permission denied']
+    with pytest.raises(RuntimeError, match='permission denied'):
+        run_module.withdraw_pending('a' * 40, 'base', machine, lambda _grant: runner)

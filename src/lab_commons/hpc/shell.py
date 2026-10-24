@@ -98,11 +98,11 @@ _SHA_HEX: Final = 40
 
 
 #: Prints the tree venv's env record as two facts from ONE manifest reading, the fields of
-#: :func:`lab_commons.dev.envkey.env_record`: ``env`` (the key a base part is carried under) and ``resolved``
+#: :func:`lab_commons.envkey.env_record`: ``env`` (the key a base part is carried under) and ``resolved``
 #: (every ``name==version`` it ran against, JSON). Spelled with ``env_manifest``/``env_key`` so a tree whose
 #: resolved kit predates ``env_record`` still reports both. Single quotes only: it runs inside ``python -c "..."``.
 _ENV_FACTS: Final = (
-    'import json; from lab_commons.dev import envkey as k; m = list(k.env_manifest()); '
+    'import json; from lab_commons import envkey as k; m = list(k.env_manifest()); '
     "print(k.env_key(m)); print('resolved=' + json.dumps(m))"
 )
 
@@ -326,7 +326,7 @@ def build_script(spec: RunSpec) -> str:
 
     Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`) and HARDLINKS from it (``UV_LINK_MODE``, declared
     rather than left to uv's platform default): one inode per installed file across every env key, which is what
-    the account's FILE quota counts (:mod:`lab_commons.dev.retentionplan`). A native
+    the account's FILE quota counts (:mod:`dev_lab.dev.retentionplan`). A native
     build's ``CARGO_TARGET_DIR`` is its native key's own (:func:`lab_commons.hpc.builds.cargo_target`, under
     its own ``flock``): a target shared across different native inputs reuses stale artifacts.
     Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).

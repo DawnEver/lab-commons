@@ -1,8 +1,8 @@
 """Tier 1 -- THE PROCESS CENSUS: every live process, with what it executes, how it was invoked and how old it is.
 
 ONE READER OF THE PROCESS TABLE FOR "WHO IS RUNNING WHAT". Two questions need it and neither may need the
-process's cooperation: is a run live in this checkout (:mod:`lab_commons.dev.liverun`), and which run is this
-pid (:mod:`lab_commons.dev.stoprun`). Before 2026-10-19 the second one shelled out to ``Get-CimInstance``
+process's cooperation: is a run live in this checkout (dev-lab's live-run guard), and which run is this
+pid (dev-lab's ``stoprun``). Before 2026-10-19 the second one shelled out to ``Get-CimInstance``
 (about a second per read), which no ``PreToolUse`` hook can pay on every tool call; the Win32 calls below
 answer in milliseconds.
 
@@ -18,7 +18,7 @@ WHAT EACH FIELD IS, READ, never guessed:
   later, with only ``PROCESS_QUERY_LIMITED_INFORMATION``), ``/proc/<pid>/cmdline`` on Linux, ``ps`` on macOS.
 * ``age_s`` -- seconds since the process was created, ``None`` when unreadable.
 
-Stdlib only (``ctypes``), and it never imports ``lab_commons.dev``: a cluster-side reader may use it.
+Stdlib only (``ctypes``), and it never imports dev-lab: a cluster-side reader may use it.
 """
 
 from __future__ import annotations

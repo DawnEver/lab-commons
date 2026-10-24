@@ -15,7 +15,7 @@ THE RULE, for every host alike::
 RULE -- :func:`~lab_commons.compute.admission.admit` decides FIT, ``claimable`` walks the order and claims what fits.
 
 THE NUMBERS OF THE ORDER ARE DATA, declared once in ``[tool.lab_commons.schedule]`` and loaded by
-:func:`lab_commons.dev.forgeschedule.load_schedule` into a :class:`Schedule`::
+:func:`dev_lab.dev.forgeschedule.load_schedule` into a :class:`Schedule`::
 
     value = base[class] + boost + aging_rate * wait_hours
     score = weight[repo] * value / expected_cost
@@ -205,8 +205,14 @@ class Schedule:
     )
     #: Classes whose ref is COALESCED (D6, user ruling 2026-10-17): at most one run per (ref, part) in flight
     #: across the fleet, and the ref's current tip waits behind it -- the next tip is tested as one batch. A
-    #: class absent here (a lane ``branch``, a ``pr`` head) is tested at every pushed sha.
-    coalesce: tuple[str, ...] = (INTEGRATION, FEATURE)
+    #: class absent here (a lane ``branch``) is tested at every pushed sha. A ``pr`` head is coalesced: one PR
+    #: session holds at most one run per part in flight (user ruling 2026-10-22).
+    coalesce: tuple[str, ...] = (INTEGRATION, FEATURE, PR)
+    #: Classes served STRICTLY before every other, in this order, whatever their score (user ruling
+    #: 2026-10-22: on a scarce host the integration branch, then the PRs into it, never pile up behind lanes).
+    served_first: tuple[str, ...] = (INTEGRATION, PR)
+    #: Classes ordered OLDEST FIRST (by when their sha was committed) instead of by score.
+    oldest_first: tuple[str, ...] = (PR,)
     #: The label that makes an open issue a request.
     request_label: str = 'forge:request'
     #: Hours a request may wait unclaimed before its issue is told, ONCE, why the host that saw it did not admit it.
@@ -242,9 +248,15 @@ class Candidate:
     origin: str = ''  # the forge login of its PR, request or head commit; '' when unresolved
     origin_host: str = ''  # the host card it says created it; kept only where its origin login vouches for it
     session: str = ''  # the ref it was pushed to (one lane is one session); '' for a request
-    producer: str = ''  # a request's declared producer name (lab_commons.dev.forgerequest); '' for a part
+    producer: str = ''  # a request's declared producer name (dev_lab.dev.forgerequest); '' for a part
     refused: str = ''  # why its own request body is refused (an unvouched host pin); '' when it is not
-    paths: tuple[str, ...] = ()  # the test files a TESTS request names (lab_commons.dev.forgerequest); () else
+    paths: tuple[str, ...] = ()  # the test files a TESTS request names (dev_lab.dev.forgerequest); () else
+
+    def __post_init__(self) -> None:
+        """Work is always AT a commit: an empty sha is refused here, never carried to a ``statuses/<sha>`` URL."""
+        if not self.sha:
+            msg = f'{self.ref} names no commit sha: a candidate is work at a commit'
+            raise ValueError(msg)
 
     @property
     def key(self) -> str:
@@ -301,7 +313,9 @@ def rank(
     weights: Mapping[str, float] | None = None,
     priority: Callable[[Candidate], bool] = lambda _: False,
 ) -> tuple[Ranked, ...]:
-    """Every candidate scored and ordered: *priority* first, then by score within each.
+    """Every candidate ordered: *priority*, a user boost, ``served_first`` classes in order, then the rest.
+
+    Within a class by score, or oldest first for an ``oldest_first`` class (user ruling 2026-10-22).
 
     *priority* is the ranking host's declared ordering (:mod:`lab_commons.compute.priority`): pure order,
     never a claim on supply.
@@ -323,12 +337,20 @@ def rank(
             ranked,
             key=lambda item: (
                 not item.priority,
-                -item.score,
+                boost_of(item.candidate.labels, schedules[item.candidate.repo]) <= 0,
+                *_tier(item.candidate, schedules[item.candidate.repo], item.score),
                 item.candidate.since,
                 item.candidate.key,
             ),
         )
     )
+
+
+def _tier(candidate: Candidate, schedule: Schedule, score: float) -> tuple[int, float]:
+    """``(strict tier, order within it)``: a ``served_first`` class's index (the rest after), then score or age."""
+    first = schedule.served_first
+    tier = first.index(candidate.kind) if candidate.kind in first else len(first)
+    return tier, candidate.since.timestamp() if candidate.kind in schedule.oldest_first else -score
 
 
 def starved(ranked: Sequence[Ranked], schedules: Mapping[str, Schedule]) -> tuple[Ranked, ...]:

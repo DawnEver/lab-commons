@@ -15,8 +15,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
+from lab_commons.compute.durable import durable_write
 from lab_commons.compute.learned import Measured, Run
-from lab_commons.durable import durable_write
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
 from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, read_stream, split_streams, tagged
@@ -181,7 +181,7 @@ def stream_sources(sha: str, tag: str) -> tuple[str, str]:
 
     A superseded run's finished shards are carried (:func:`held_cells`) long after its tree is garbage, so
     retention keeps the round's stream beside the run state (:func:`kept_text`) before the tree goes
-    (:mod:`lab_commons.dev.retentionplan`): a file is an HPC resource.
+    (:mod:`dev_lab.dev.retentionplan`): a file is an HPC resource.
     """
     return f'{ROOT}/trees/{sha}/.lab-ci/{tag}.jsonl', f'{ROOT}/runs/{sha}/streams.jsonl'
 

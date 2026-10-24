@@ -1,4 +1,4 @@
-"""ONE DOOR REPLACES A STATE FILE: :func:`lab_commons.durable.durable_write` (temp, fsync, ``os.replace``).
+"""ONE DOOR REPLACES A STATE FILE: :func:`lab_commons.compute.durable.durable_write` (temp, fsync, ``os.replace``).
 
 INCIDENT 2026-10-20: a hand-written rewrite (``write_text``) of ``compute-learned/<repo>.json`` was torn to
 5746 NUL bytes when the box's Python was deleted mid-write, and every run died at admission. A site that
@@ -9,22 +9,25 @@ Append-only logs (``os.fsync`` after an append, with a torn-tail repair) are a d
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 from typing import Final
 
 import pytest
-from _arch_corpus import assert_floor, parse, rel, source_modules
 
-DOOR: Final = 'src/lab_commons/durable.py'
+_PKG: Final = Path(__file__).resolve().parents[1] / 'src' / 'lab_commons'
+
+DOOR: Final = 'compute/durable.py'
 
 #: Modules that stage-and-rename by hand, each with the reason the door cannot serve it.
 EXEMPT: Final[dict[str, str]] = {
-    'src/lab_commons/_records.py': 'lock records: publish is link-or-replace that must report a contested rename',
-    'src/lab_commons/hpc/collect.py': 'shipped to the cluster as a standalone stdlib-only script',
+    '_records.py': 'lock records: publish is link-or-replace that must report a contested rename',
+    'hpc/collect.py': 'shipped to the cluster as a standalone stdlib-only script',
 }
 
 _STAGED: Final = ('staged', 'temp', 'tmp', 'part', 'temporary')
 
-SOURCE_FLOOR = 100
+#: Measured 2026-10-23: 150+ modules. A floor, so an empty scan is not a pass.
+SOURCE_FLOOR: Final = 100
 
 
 def hand_rolled(tree: ast.Module) -> list[int]:
@@ -42,11 +45,16 @@ def hand_rolled(tree: ast.Module) -> list[int]:
 
 
 def test_no_module_but_the_door_replaces_a_state_file_by_hand() -> None:
-    modules = source_modules()
-    assert_floor(len(modules), SOURCE_FLOOR, 'kit source')
-    found = {rel(path): lines for path in modules if (lines := hand_rolled(parse(path)))}
+    modules = sorted(p for p in _PKG.rglob('*.py') if '__pycache__' not in p.parts)
+    assert len(modules) >= SOURCE_FLOOR, f'{len(modules)} modules scanned, below the floor {SOURCE_FLOOR}'
+    found = {
+        rel: lines
+        for path in modules
+        if (lines := hand_rolled(ast.parse(path.read_text(encoding='utf-8'))))
+        and (rel := path.relative_to(_PKG).as_posix())
+    }
     raw = {path: lines for path, lines in found.items() if path not in {DOOR, *EXEMPT}}
-    assert raw == {}, f'write these through lab_commons.durable.durable_write: {raw}'
+    assert raw == {}, f'write these through lab_commons.compute.durable.durable_write: {raw}'
     assert sorted(set(EXEMPT) - set(found)) == [], 'an exempt module no longer stages by hand: delete its row'
 
 

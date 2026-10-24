@@ -14,8 +14,11 @@ ONE LIST, PINNED BOTH WAYS: ``tests/test_hpc_declared.py`` derives the set of ``
 spellings in ``src/`` and requires it to equal :data:`KNOWN_TABLES`, so a reader added without its row
 reds there, and a row whose reader is gone reds too. Every reader of a commit being JUDGED -- the need
 vocabulary (:func:`lab_commons.hpc.needsets.read_vocabulary`), the cluster build
-(:func:`lab_commons.hpc.builds.read_builds`) and the part producer (:mod:`lab_commons.dev.platformparts`) --
+(:func:`lab_commons.hpc.builds.read_builds`) and the part producer (:mod:`dev_lab.dev.platformparts`) --
 reads through here.
+
+THE KIT ITSELF IS THE EXCEPTION: no host serves a kit newer than the merged one, so a table the kit's
+own commit declares before it merges is that commit's defect (:class:`KitAheadOfItsServer`), refused on it.
 
 A RETIRED TABLE IS REFUSED THE OTHER WAY ROUND: the declaration is older than the kit, so the message
 names the table's replacement (:data:`lab_commons.hpc.retired.RETIRED`), never "update the kit".
@@ -25,6 +28,7 @@ Standard library only, like the rest of :mod:`lab_commons.hpc`.
 
 from __future__ import annotations
 
+import re
 import shutil
 import tomllib
 from pathlib import Path
@@ -37,6 +41,7 @@ __all__ = [
     'KNOWN_TABLES',
     'REFUSALS',
     'InvalidDeclaration',
+    'KitAheadOfItsServer',
     'OutdatedKit',
     'RetiredTable',
     'kit_tables',
@@ -50,12 +55,14 @@ KNOWN_TABLES: Final = frozenset(
     {
         'areas',
         'artefacts',
+        'automode',
         'branchset',
         'carry',
         'ci',
         'components',
         'dep',
         'doors',
+        'ephemeral_refs',
         'forge',
         'hooks',
         'hpc',
@@ -86,6 +93,23 @@ class InvalidDeclaration(ValueError):
     """A declaration this kit reads and refuses: its fields contradict each other or the kit's domain."""
 
 
+class KitAheadOfItsServer(InvalidDeclaration):
+    """The KIT's own commit declares a table its server does not know: the commit's defect, not the reader's.
+
+    A consumer's unknown table waits for a newer serving kit (:class:`OutdatedKit`). The kit's cannot: every
+    host serves an already-merged kit, so a table the kit's unmerged commit adds is unknown to all of them
+    until it merges, and waiting would leave the PR unclaimed fleet-wide (lab-commons #244, 2026-10-21).
+    """
+
+
+#: The ``[project] name`` of the SERVING kit, PEP 503-normalised: dev-lab, whose forge every host serves.
+_KIT: Final = 'dev-lab'
+
+
+def _normalised(name: str) -> str:
+    return re.sub(r'[-_.]+', '-', name).lower()
+
+
 #: Every refusal of a repo's own declaration: a per-repo step reports the repo and skips it, never crashes.
 REFUSALS: Final = (RetiredTable, OutdatedKit, InvalidDeclaration)
 
@@ -96,17 +120,22 @@ def kit_tables(text: str) -> dict[str, Any]:
     Raises:
         RetiredTable: the text declares a retired table; the message names its replacement.
         OutdatedKit: the text declares a table outside :data:`KNOWN_TABLES`; the message names the remedy.
+        KitAheadOfItsServer: the kit's OWN pyproject does; the message names the remedy at the commit.
 
     """
-    declared: dict[str, Any] = tomllib.loads(text).get('tool', {}).get('lab_commons', {})
+    data = tomllib.loads(text)
+    declared: dict[str, Any] = data.get('tool', {}).get('lab_commons', {})
     retired = [_spelled(name) for name in sorted(declared) if _spelled(name) in RETIRED]
     if retired:
         raise RetiredTable('; '.join(f'{table} is retired: {RETIRED[table]}' for table in retired))
     if unknown := sorted(set(declared) - KNOWN_TABLES):
         tables = ', '.join(f'[tool.lab_commons.{name}]' for name in unknown)
+        if _normalised(str(data.get('project', {}).get('name', ''))) == _KIT:
+            msg = f'drop {tables} until the kit merges: no host serving dev-lab knows it before then'
+            raise KitAheadOfItsServer(msg)
         msg = (
             f'this lab-commons does not know {tables}: it is older than the declaration it reads, and an '
-            f'unknown table is never read as empty -- update the serving checkout of lab-commons'
+            f'unknown table is never read as empty -- update the serving dev-lab checkout and the lab-commons it pins'
         )
         raise OutdatedKit(msg)
     return declared

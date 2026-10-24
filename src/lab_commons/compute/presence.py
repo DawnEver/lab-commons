@@ -14,7 +14,7 @@ A tool is PRESENT on a host only when all four agree:
 4. no real unit on that tool has failed on this host since that smoke (:func:`demote`).
 
 Each step leaves :class:`Evidence` (source, value, time), and the host card shows it
-(:mod:`lab_commons.dev.forgehosts`): the card is the probe's reading, never a declaration. Seat counts
+(:mod:`dev_lab.dev.forgehosts`): the card is the probe's reading, never a declaration. Seat counts
 are the one thing a person declares (:mod:`lab_commons.box.machine`), because no probe can read a licence.
 
 A smoke costs seconds to minutes (MATLAB starting), so a reading is CACHED for :data:`TTL` in
@@ -40,9 +40,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed
 from lab_commons.config import config_path
-from lab_commons.durable import durable_text, read_table
 
 __all__ = [
     'TTL',
@@ -329,7 +329,10 @@ def renew(
         if not stale(one) or not stored[tool].get('present'):
             return one
         required = stored[tool].get('required', 'any')
-        row = probe(tool, checks[tool], _requirement(required), now=at).row()
+        try:
+            row = probe(tool, checks[tool], _requirement(required), now=at).row()
+        except ProbeCrashed:
+            return one  # the probe measured nothing: the stale reading stands, re-probed next time
         stored[tool] = {**row, 'probed': at.isoformat(), 'required': required}
         _save(path, stored)
         return cached(checks={tool: checks[tool]}, state=path, now=at, ttl=ttl)[tool]

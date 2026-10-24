@@ -89,7 +89,7 @@ from lab_commons.box.demand import (
     NotAdmitted,
     Refused,
 )
-from lab_commons.box.supply import Reading, room
+from lab_commons.box.supply import Reading, Usage, room
 from lab_commons.compute.admission import admit
 from lab_commons.compute.model import Job, Resources, Supply
 from lab_commons.liveness import creation_stamp, still_the_same_process
@@ -226,6 +226,46 @@ def _contends(demand: Demand, ahead: tuple[int | None, int | None, str | None]) 
     )
 
 
+def _reserved_for(
+    capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand, ahead: Sequence[tuple]
+) -> str | None:
+    """The earlier waiter *demand* must stay behind, else ``None``: FIFO WITH RESERVATION.
+
+    Every earlier ticket that contends is set aside in FULL from the measured room, in order; *demand* passes only
+    if it still fits in what is left. So a waiter is never starved -- nothing later takes what it waits for -- yet a
+    demand wanting none of what that waiter lacks (a coreless Designer stage behind a waiter short of cores, D10)
+    is not held behind it while room for both exists. An undeclared ticket wants everything.
+
+    A waiter the box could not admit even with every claim released (:func:`_reachable`: the load OUTSIDE the
+    ledger leaves too little) reserves nothing while that lasts. No release here can help it, so holding the queue
+    for it only idles the box (measured 2026-10-23: a 45 GB measure under two foreign JMAG solves held the head for
+    its whole wait). It keeps its place and is reserved again the moment that load leaves.
+    """
+    free = room(capacity, held, reading, seats=demand.seats)
+    reserved = Resources()
+    for what, cpu, mem_bytes, seats in ahead:
+        if not _contends(demand, (cpu, mem_bytes, seats)):
+            continue
+        if cpu is None or mem_bytes is None or seats is None:
+            return what
+        wants = Resources({'cpu': cpu, 'mem_gb': mem_bytes / GB, **json.loads(seats)})
+        if not wants <= _reachable(capacity, held, reading, wants.names):
+            continue
+        reserved = reserved + wants
+        if not _vector(demand) <= free - reserved:
+            return what
+    return None
+
+
+def _reachable(capacity: Capacity, held: Sequence[Holding], reading: Reading, seats: Iterable[str]) -> Resources:
+    """The room a new claim would find if every claim on the ledger released now: the box less the load outside it."""
+    used = [reading.usage.get(h.pid, Usage(0, 0.0)) for h in held]
+    cpu = min(reading.idle_cores + sum(u.busy_cores for u in used) - capacity.kept_cpu, capacity.cpu)
+    mem = min(reading.available_bytes + sum(u.resident_bytes for u in used) - capacity.kept_bytes, capacity.mem_bytes)
+    named = {n: capacity.seats.get(n, 1) for n in seats if n not in ('cpu', 'mem_gb')}
+    return Resources({'cpu': max(0.0, cpu), 'mem_gb': max(0, mem) / GB, **named})
+
+
 def _try(
     con: sqlite3.Connection,
     ticket: int,
@@ -250,13 +290,16 @@ def _try(
             f'{what}: key {tag[0]!r} is held by the external claim {earlier[0]!r}, still unresolved -- release it first'
         )
         raise DuplicateKey(msg)
-    ahead = con.execute('SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,))
-    head = next((row[0] for row in ahead if _contends(demand, row[1:])), None)
-    refusal = _decide(capacity, _read(con), reading, demand, what)
+    ahead = con.execute(
+        'SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,)
+    ).fetchall()
+    held = _read(con)
+    refusal = _decide(capacity, held, reading, demand, what)
     if refusal is not None:
         return refusal
+    head = _reserved_for(capacity, held, reading, demand, ahead)
     if head is not None:
-        return f'queued behind {head!r}, which came first and wants what it wants (strict FIFO)'
+        return f'queued behind {head!r}, which came first: what it waits for stays reserved for it (FIFO)'
     deadline = now + demand.wall_s
     pid = os.getpid()
     cursor = con.execute(

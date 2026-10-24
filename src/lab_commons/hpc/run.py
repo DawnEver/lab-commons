@@ -55,19 +55,20 @@ from __future__ import annotations
 
 import json
 import math
-import shlex
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.learned import Measured
-from lab_commons.hpc.cluster import Runner, Unreachable, probe, submit_bands
+from lab_commons.hpc.builds import ItemWall
+from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import need_sets, needs_of
-from lab_commons.hpc.plan import Plan, allocate, grantable_gb
+from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
     record_of,
     upgraded_state,
@@ -101,6 +102,7 @@ __all__ = [
     'shares_home',
     'submit_round',
     'submit_run',
+    'withdraw_pending',
 ]
 
 
@@ -146,6 +148,39 @@ def save_state(run: Runner, state: dict[str, Any]) -> None:
     run(f'mkdir -p {where} && cat > {where}/state.json', json.dumps(state))
 
 
+@contextmanager
+def _no_room() -> Iterator[None]:
+    """A refusal for want of QOS submits -- planned (:data:`SUBMIT_ROOM_SPENT`) or Slurm's -- as :class:`NoRoom`.
+
+    Ada 2026-10-21: an ``sbatch`` refused on :data:`~lab_commons.hpc.cluster.SUBMIT_LIMIT` stuck its run on
+    ``bash exited 1`` every tick, holding the claim while other grants had headroom. The probe's room can be
+    stale (another session submits between the probe and the ``sbatch``), so the refusal itself is the signal.
+    """
+    try:
+        yield
+    except SubmitLimit as refused:
+        msg = f'the QOS refused the round, so a host with room takes it: {refused}'
+        raise NoRoom(msg) from refused
+    except ValueError as refused:
+        if SUBMIT_ROOM_SPENT not in str(refused):
+            raise
+        msg = f'nothing was submitted: {refused}'
+        raise NoRoom(msg) from refused
+
+
+def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
+    """Each id's wall in seconds: the run's declared :class:`ItemWall` over what the id was MEASURED to take.
+
+    The measurement is the larger of its recorded duration and its floor (a kill's lower bound); an id with
+    neither is unmeasured. A state written before the wall existed gets the declared defaults.
+    """
+    wall = ItemWall(**state.get('item_wall', {}))
+    measured = Measured.of(state.get('measured', {}))
+    seen = {**measured.floors, **{n: max(s, measured.floors.get(n, 0.0)) for n, s in measured.durations.items()}}
+    return {node: wall.bound(seen.get(node)) for node in ids}
+
+
+@_no_room()
 def submit_round(
     state: dict[str, Any],
     pending: list[list[str]],
@@ -205,6 +240,7 @@ def submit_round(
             )
             raise NoRoom(msg)
         local, shards = balance(seconds, plan.shards)
+        snapshots = spend(snapshots, chosen, plan.qos, len(shards))  # the bands of a round share one submit room
         plan = _rewalled(plan, shards, [seconds[i] for i in local], policy, min_minutes)
         base, first = len(order), sum(len(p.shards) for p in plans)
         order += [members[i] for i in local]
@@ -225,7 +261,10 @@ def submit_round(
         raise ValueError(msg)
     pending = [pending[i] for i in order]
     ceiling = {'timeout_s': state['timeout_s']} if state.get('timeout_s') else {}
-    items = [{'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, **ceiling} for i, group in enumerate(pending)]
+    items = [
+        {'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, 'walls': item_walls(group, state), **ceiling}
+        for i, group in enumerate(pending)
+    ]
     sha = state['sha']
     job = JobSpec(
         name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=(ENV,), entry=f'{ITEM_MODULE}:run'
@@ -286,7 +325,7 @@ def submit_run(
 
     *carry*, given the env key the build reported, names the cells earlier runs of THAT env hold for
     ids whose cell cannot have changed (``{node: (plain cell, origin sha, run sha)}``,
-    :func:`lab_commons.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
+    :func:`dev_lab.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
     origin in ``carried`` and never submitted; when nothing is left the record is written at once.
     """
     runners = {g.account: connect(g) for g in machine.grants}
@@ -320,6 +359,7 @@ def submit_run(
         'stamp': stamp or time.strftime('%Y%m%d-%H%M%S'),
         'scope': spec.scope,
         'timeout_s': spec.timeout_s,
+        'item_wall': asdict(spec.builds.item_wall),
         'platform': spec.part,
         'system': told.get('platform', ''),
         'env': told['env'],
@@ -363,8 +403,54 @@ def cancel_run(
 ) -> list[str]:
     """``scancel`` every recorded round of *sha*'s run of *part*, *also*, and any job of its name Slurm holds.
 
-    THE ONE cancel path. Names are its :func:`job_name` and *aliases*; squeue's ``%F`` is the array's own id
-    (``%i`` spells a pending array ``7683032_[12-68%1]``, which ``scancel`` refuses: Ada 2026-10-14).
+    THE DELIBERATE STOP (a user's or integrator's): started tasks die too. Supersession never calls it
+    (:func:`withdraw_pending`).
+    """
+    shell, _names, ids = _run_jobs(sha, part, machine, connect, also=also, aliases=aliases)
+    if ids:
+        scancel(shell, ids)
+    return ids
+
+
+def withdraw_pending(
+    sha: str,
+    part: str,
+    machine: Machine,
+    connect: Callable[[Grant], Runner],
+    *,
+    also: Sequence[str] = (),
+    aliases: Sequence[str] = (),
+) -> list[str]:
+    """Withdraw every NOT-YET-STARTED task of *sha*'s run of *part*; the job ids still started after it.
+
+    NEWEST-HEAD-ONLY (user ruling 2026-10-22): a superseded run loses its pending tasks and keeps its started
+    ones -- ``scancel --state=PENDING`` drops only an array's pending elements, never a running one. ``[]``
+    means nothing of the run is left running.
+    """
+    shell, names, ids = _run_jobs(sha, part, machine, connect, also=also, aliases=aliases)
+    if not ids:
+        return []
+    scancel(shell, ids, '--state=PENDING')
+    return sorted(set(shell(f'squeue -h --me -n {names} -t {_STARTED} -o %F', None).split()))
+
+
+#: The squeue states of a task that has STARTED: supersession never cancels one.
+_STARTED: Final = 'RUNNING,COMPLETING,CONFIGURING,SUSPENDED'
+
+
+def _run_jobs(
+    sha: str,
+    part: str,
+    machine: Machine,
+    connect: Callable[[Grant], Runner],
+    *,
+    also: Sequence[str],
+    aliases: Sequence[str],
+) -> tuple[Runner, str, list[str]]:
+    """The shell, the job names, and every job id of the run: each recorded round, *also*, and squeue's by name.
+
+    Names are its :func:`job_name` and *aliases*; squeue's ``%F`` is the array's own id (``%i`` spells a
+    pending array ``7683032_[12-68%1]``, which ``scancel`` refuses: Ada 2026-10-14).
     """
     try:
         state, _ = load_state(sha, part, machine, {grant.account: connect(grant) for grant in machine.grants})
@@ -376,10 +462,7 @@ def cancel_run(
     shell = connect(machine.grants[0])
     names = ','.join((job_name(sha, part), *aliases))
     held = shell(f'squeue -h --me -n {names} -o %F', None).split()
-    ids = sorted({*recorded, *also, *held})
-    if ids:
-        shell(f'scancel {shlex.join(ids)}', None)
-    return ids
+    return shell, names, sorted({*recorded, *also, *held})
 
 
 def job_name(sha: str, part: str) -> str:

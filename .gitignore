@@ -1,5 +1,5 @@
-# Rendered by lab_commons.dev.famconfig from the family base for .gitignore.
-# Hand edits RED. The base is data in lab_commons.dev._famconfig_rows;
+# Rendered by dev_lab.dev.famconfig from the family base for .gitignore.
+# Hand edits RED. The base is data in dev_lab.dev._famconfig_rows;
 # this repo's own lines are its declared delta. Change one, re-render, commit.
 
 **/.DS_Store
@@ -26,9 +26,9 @@
 /report/
 htmlcov/
 output/
-scratch/
 **/.claude/**
 !**/.claude/settings.json
+!**/.claude/sharp-review.json
 !**/.claude/hooks/
 !**/.claude/hooks/**
 !**/.claude/agents/
@@ -49,8 +49,10 @@ scratch/
 !**/.claude/docs/**
 **/.claude/rules/MEMORY.md
 **/_meta.json
+!**/attic/**
 **/.claude/**/__pycache__/
 **/.claude/**/*.py[cod]
+**/.claude/automode.json
 
 # --- lab-commons delta, 1 of 1 allowed ---
 *.py[cod]

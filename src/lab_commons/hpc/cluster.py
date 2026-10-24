@@ -37,10 +37,12 @@ from lab_commons.outcomes.record import OUTCOME, Event
 
 __all__ = [
     'BUILD_TIMEOUT',
+    'SUBMIT_LIMIT',
     'TERMINAL_OK',
     'NotOnCluster',
     'Runner',
     'Submission',
+    'SubmitLimit',
     'Unreachable',
     'failover_runner',
     'files_of',
@@ -56,6 +58,14 @@ __all__ = [
     'submitter',
     'throttle',
 ]
+
+#: Slurm's refusal of a submit past the per-user QOS ``MaxSubmitPU`` -- a CAPACITY signal, never a failed run.
+SUBMIT_LIMIT: Final = 'QOSMaxSubmitJobPerUserLimit'
+
+
+class SubmitLimit(RuntimeError):
+    """``sbatch`` refused a band on :data:`SUBMIT_LIMIT`; the bands this round already queued were cancelled."""
+
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
 type Runner = Callable[[str, str | None], str]
@@ -123,8 +133,8 @@ def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
     if shutil.which('sbatch') is None:
         msg = (
             'this box has no sbatch: submitting and gathering run ON the cluster login node, where '
-            '`python -m lab_commons.dev.forge serve` produces the part (docs-src/dev/hpc.md, deployment); '
-            'from any machine `python -m lab_commons.dev.forge queue` shows where each run is'
+            '`python -m dev_lab.dev.forge serve` produces the part (dev-lab docs-src/dev/hpc.md, deployment); '
+            'from any machine `python -m dev_lab.dev.forge queue` shows where each run is'
         )
         raise NotOnCluster(msg)
     run = functools.partial(local_runner, timeout=timeout)
@@ -239,7 +249,7 @@ def run_home(job: JobSpec) -> str:
     """Where a job's run directories live: ``~/ci/jobs/<sha>`` for a job at a commit, else ``<workdir>/.lab-hpc``.
 
     A commit's jobs carry the sha in their submit directory, which ``squeue %Z`` reports, so retention reads
-    which artifact a queued or running job needs (:mod:`lab_commons.dev.retentionplan`).
+    which artifact a queued or running job needs (:mod:`dev_lab.dev.retentionplan`).
     """
     return f'~/ci/jobs/{job.sha}' if job.sha else f'{job.workdir.rstrip("/")}/.lab-hpc'
 
@@ -306,6 +316,7 @@ def submit_bands(
     arrays: each *plan* covers its own consecutive shard indices of the one manifest (their shards
     concatenated, in order), and its ``sbatch`` overrides the script's ``--mem``, ``--time``,
     ``--partition`` and ``--qos`` with its own. Returns the run directory and each band's job id, in order.
+    A band refused on :data:`SUBMIT_LIMIT` cancels the bands already queued and raises :class:`SubmitLimit`.
     """
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
@@ -324,13 +335,37 @@ def submit_bands(
             *([f'--qos={plan.qos}'] if plan.qos else []),
         ]
         array = _array_spec(indices, plan.throttle)
-        out = run(f'cd {quoted} && sbatch --parsable {" ".join(own)} --array={array} job.sh', None)
+        try:
+            out = run(f'cd {quoted} && sbatch --parsable {" ".join(own)} --array={array} job.sh', None)
+        except RuntimeError as refused:
+            if SUBMIT_LIMIT not in str(refused):
+                raise
+            if job_ids:  # a round is whole or not at all: the bands it queued would hold submit slots
+                run(f'scancel {" ".join(job_ids)}', None)
+            raise SubmitLimit(str(refused)) from refused
         job_id = out.strip().split(';')[0]
         if not job_id.isdigit():
             msg = f'sbatch did not return a job id: {out!r}'
             raise RuntimeError(msg)
         job_ids.append(job_id)
     return run_dir, job_ids
+
+
+#: ``scancel``'s line for an id Slurm no longer holds: a job already gone is what a cancel asks for.
+_GONE: Final = 'Invalid job id specified'
+
+
+def scancel(shell: Runner, ids: Sequence[str], *flags: str) -> None:
+    """``scancel`` *ids*; an id Slurm no longer holds is not a refusal (Ada 2026-10-23), any other line is.
+
+    ``scancel`` still signals every id it holds when one of them is gone, and exits 1 for the gone one.
+    """
+    try:
+        shell(shlex.join(('scancel', *flags, *ids)), None)
+    except RuntimeError as refused:
+        errors = [line for line in str(refused).splitlines() if 'error' in line]
+        if not errors or any(_GONE not in line for line in errors):
+            raise
 
 
 def throttle(run: Runner, job_id: str, tasks: int) -> None:

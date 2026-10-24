@@ -10,6 +10,7 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     artifact_paths = ["cases"]                              # what a job reads beside them (lab_commons.hpc.artifact)
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
     timeout_s = { incremental = 300, full = 3000 }          # pytest --timeout per run scope (absent: the repo's own)
+    item_wall = { multiple = 10, floor_s = 300, unmeasured_s = 3600 }  # per-test kill bound (these are the defaults)
 
 A venv lives in ``~/ci/envs/<env key>`` and a native build in ``~/ci/native/<native key>``; each sha is
 only a ``git worktree`` whose ``source_roots`` reach the venv through ``PYTHONPATH`` -- no per-sha
@@ -30,6 +31,7 @@ the first, because the venv was keyed by the tree alone.
 from __future__ import annotations
 
 import hashlib
+import math
 import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -43,6 +45,7 @@ __all__ = [
     'INCREMENTAL',
     'SCOPES',
     'Builds',
+    'ItemWall',
     'builds_at',
     'key_of',
     'read_builds',
@@ -57,6 +60,27 @@ _KEY_HEX: Final = 24
 FULL: Final = 'full'
 INCREMENTAL: Final = 'incremental'
 SCOPES: Final = (FULL, INCREMENTAL)
+
+
+@dataclass(frozen=True)
+class ItemWall:
+    """THE PER-TEST WALL the item runner enforces from OUTSIDE pytest (:mod:`lab_commons.hpc.pytest_item`).
+
+    pytest-timeout runs inside the test's interpreter and cannot interrupt a C loop holding the GIL. Measured
+    on Ada: a test spun at 100% CPU for 20 h, and a verdict waited 4 h on two hung items under a 21 h Slurm
+    limit. A test with a measured duration is bounded at ``multiple`` times it, never under ``floor_s``; one
+    never measured gets ``unmeasured_s``. These defaults are the one place the numbers live.
+    """
+
+    multiple: float = 10.0
+    floor_s: int = 300
+    unmeasured_s: int = 3600
+
+    def bound(self, measured_s: float | None) -> int:
+        """Whole seconds a test of measured duration *measured_s* (``None``: never measured) may run."""
+        if measured_s is None:
+            return self.unmeasured_s
+        return max(self.floor_s, math.ceil(self.multiple * measured_s))
 
 
 @dataclass(frozen=True)
@@ -75,6 +99,22 @@ class Builds:
     timeout_s: dict[str, int] = field(default_factory=dict)
     #: Repository paths a job's artifact carries beside the source roots (:mod:`lab_commons.hpc.artifact`).
     artifact_paths: tuple[str, ...] = ()
+    #: The per-test wall the item runner kills a hung test at (:class:`ItemWall`).
+    item_wall: ItemWall = field(default_factory=ItemWall)
+
+
+_ITEM_WALL_KEYS: Final = frozenset({'multiple', 'floor_s', 'unmeasured_s'})
+
+
+def _item_wall(raw: dict[str, object]) -> ItemWall:
+    """The ``item_wall`` table; an unknown key or a non-positive number is refused by name."""
+    bad = set(raw) - _ITEM_WALL_KEYS or any(
+        isinstance(v, bool) or not isinstance(v, int | float) or v <= 0 for v in raw.values()
+    )
+    if bad:
+        msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: keys {sorted(_ITEM_WALL_KEYS)}, values positive numbers'
+        raise InvalidDeclaration(msg)
+    return ItemWall(**raw)  # type: ignore[arg-type]
 
 
 def read_builds(text: str) -> Builds:
@@ -90,6 +130,7 @@ def read_builds(text: str) -> Builds:
         native_inputs=tuple(native.get('inputs', ())),
         native_build=str(native.get('build', '')),
         timeout_s=dict(raw.get('timeout_s', {})),
+        item_wall=_item_wall(dict(raw.get('item_wall', {}))),
     )
     bad = {k: v for k, v in builds.timeout_s.items() if k not in SCOPES or not isinstance(v, int) or v <= 0}
     if bad:

@@ -7,7 +7,7 @@ of its markers name a resource, once, with the ONE producer of a part::
 
     [tool.lab_commons.tests]
     resources = ["femm", "jmag", "windows"]                   # markers naming a resource
-    produce = ["-m", "lab_commons.dev.verify", "--part", "{part}"]   # argv after the venv python
+    produce = ["-m", "dev_lab.dev.verify", "--part", "{part}"]   # argv after the venv python
 
 PARTS ARE DERIVED, NEVER DECLARED. A test's need-set is the declared resources whose markers it carries;
 the suite is partitioned by need-set and each distinct need-set is ONE part, its status context
@@ -46,6 +46,7 @@ __all__ = [
     'needs_of',
     'part_name',
     'read_vocabulary',
+    'scarce_parts',
     'selecting',
     'vocabulary_at',
 ]
@@ -65,6 +66,8 @@ class Vocabulary:
     """The resource markers one commit declares, sorted."""
 
     resources: tuple[str, ...] = ()
+    #: The resources a scarce host holds (``scarce``, a subset): a PR needs such a part only where its diff reaches it.
+    scarce: tuple[str, ...] = ()
 
 
 def part_name(needs: Iterable[str]) -> str:
@@ -86,6 +89,11 @@ def needs_of(part: str) -> frozenset[str]:
     return frozenset(names)
 
 
+def scarce_parts(parts: Iterable[str], scarce: Collection[str]) -> frozenset[str]:
+    """The parts of *parts* whose need-set holds a *scarce* resource (``[tool.lab_commons.tests] scarce``)."""
+    return frozenset(part for part in parts if needs_of(part) & set(scarce))
+
+
 def read_vocabulary(text: str) -> Vocabulary:
     """The resource markers pyproject *text* declares; absent is none, a malformed list is refused naming the fix."""
     value = kit_tables(text).get('tests', {}).get('resources', [])
@@ -95,7 +103,14 @@ def read_vocabulary(text: str) -> Vocabulary:
     if BASE in value or len(set(value)) != len(value):
         msg = f'{_TABLE} resources = {value!r}: distinct names, and never {BASE!r} (the part of no resource)'
         raise ValueError(msg)
-    return Vocabulary(tuple(sorted(value)))
+    scarce = kit_tables(text).get('tests', {}).get('scarce', [])
+    if not isinstance(scarce, list) or not set(scarce) <= set(value) or len(set(scarce)) != len(scarce):
+        msg = (
+            f'{_TABLE} scarce = {scarce!r}: distinct names among its resources {sorted(value)} '
+            '(dev_lab.dev.forgescarce)'
+        )
+        raise ValueError(msg)
+    return Vocabulary(tuple(sorted(value)), tuple(sorted(scarce)))
 
 
 def vocabulary_at(repo: Path, sha: str) -> Vocabulary:

@@ -1,7 +1,7 @@
 """ONE TEST'S RESULT -- a :class:`~lab_commons.outcomes.Cell` under its declared Expectation.
 
 Every reader of a test run reads this shape: a local run's per-worker :class:`~lab_commons.outcomes.Record`
-(:mod:`lab_commons.dev.test_outcomes`), a cluster item's stream line (:mod:`lab_commons.hpc.pytest_item`),
+(:mod:`dev_lab.dev.test_outcomes`), a cluster item's stream line (:mod:`lab_commons.hpc.pytest_item`),
 a run's state and its run record (:mod:`lab_commons.hpc.records`). The plain form is the cell's own
 (:meth:`~lab_commons.outcomes.Cell.to_plain`) plus ``expectation`` when the test declares one (an xfail
 declares ``REJECTED``), so a stream line IS a plain test cell with its id beside it.
