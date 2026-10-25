@@ -508,3 +508,27 @@ def test_a_waiter_the_box_can_reach_is_not_delayed_by_a_later_demand(box: Path) 
         hold(*_demand(cpu=1, mem_gb=3.0), 'small', queue_s=0.2, **{**_ON, 'read': _foreign(8.0)}),
     ):
         pass
+
+
+def test_a_liveness_probe_runs_outside_the_write_lock(box: Path, tmp_path: Path) -> None:
+    """2026-10-24, motronics Luce maps: 7 of 8 maps stopped on ``database is locked``.
+
+    The reaper ran each external claim's probe (up to PROBE_S) INSIDE ``BEGIN IMMEDIATE``, so N gone clients held
+    the write lock N x PROBE_S, past every other process's busy timeout. The probe here asks for that lock itself.
+    """
+    locked = tmp_path / 'locked'
+    probe = [
+        sys.executable,
+        '-c',
+        (
+            'import pathlib, sqlite3\n'
+            f'con = sqlite3.connect({str(box)!r}, timeout=0.2, isolation_level=None)\n'
+            'try:\n    con.execute("BEGIN IMMEDIATE"); con.execute("ROLLBACK")\n'
+            f'except sqlite3.OperationalError:\n    pathlib.Path({str(locked)!r}).touch()\n'
+        ),
+    ]
+    _external_client(box, 'study', 'proj/study-1', probe)
+    with hold(*_demand(), 'other', queue_s=1, **{**_ON, 'key': 'proj/study-2'}):
+        pass
+    assert not locked.exists(), 'the probe ran while the reaper held the write lock'
+    assert 'study' in [r.what for r in holdings()], 'PLANTED CONTROL: an alive probe keeps the claim'
