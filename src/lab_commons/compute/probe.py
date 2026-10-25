@@ -115,10 +115,11 @@ def box(
     *read* is the OS reader (default: :meth:`~lab_commons.box.supply.Reading.now`); the room is
     :func:`~lab_commons.box.supply.room`, the formula the ledger itself admits by.
     """
-    free = room(capacity, holdings, read([one.pid for one in holdings]))
+    _, present = seated(capacity.seats, held=[one.seats for one in holdings], presence=presence)
+    free = room(capacity, holdings, read([one.pid for one in holdings]), seats=present)
     cpu, mem_gb = free['cpu'], free['mem_gb']
     system = os_name(platform)
-    counts, present = seated(capacity.seats, held=[one.seats for one in holdings], presence=presence)
+    counts = Resources({name: free[name] for name in present})
     measured = Resources({'cpu': cpu, 'mem_gb': mem_gb, system: cpu}) + counts
     return Supply(scope, measured, present | measured.names | {system})
 

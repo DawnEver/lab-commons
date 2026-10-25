@@ -33,6 +33,11 @@ it with the taker -- a scheduler deciding to start a run -- and the run it spawn
 moves to the run's pid with no second admission, so a run its scheduler admitted is never refused by the same
 box a moment later, and it is released when the run ends (or reaped with whichever process holds it).
 
+A PERSON'S USE IS A DECLARED CLAIM (ruling 2026-10-25), never a reservation in configuration: :func:`declare`
+writes a row for work no process of ours runs -- a person at Designer, a session -- with an EMPTY probe, so it
+lives until its wall deadline or :func:`release`, whoever declared it exits. It is recorded, not admitted: the
+person's work runs regardless, and every admission after it (a forge hold) gets only the room outside it.
+
 AN EXTERNAL CLAIM'S KEY IS EXCLUSIVE: while a persisted claim under *key* lives, a new :func:`hold` under
 the same key is refused at once with :class:`~lab_commons.box.demand.DuplicateKey` -- a study whose earlier
 job is unresolved is not submitted twice. Each :class:`~lab_commons.box.demand.Holding` carries its ``id``,
@@ -101,8 +106,8 @@ from lab_commons.log import emit
 Read = Callable[[Iterable[int]], Reading]
 
 __all__ = [
-    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'adopted', 'box_path', 'hand_over', 'hold',
-    'holdings', 'persist', 'release', 'take', 'untrusted',
+    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'adopted', 'box_path', 'declare', 'hand_over',
+    'hold', 'holdings', 'persist', 'release', 'take', 'untrusted',
 ]  # fmt: skip
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
@@ -176,7 +181,12 @@ def _reap(con: sqlite3.Connection, now: float, dead: frozenset[int] = frozenset(
 
 
 def _alive(probe: Sequence[str]) -> bool:
-    """Whether an external job's liveness *probe* says it still runs: exit 0. A probe that cannot say keeps it."""
+    """Whether an external job's liveness *probe* says it still runs: exit 0. A probe that cannot say keeps it.
+
+    An EMPTY probe is a declared claim's (:func:`declare`): it lives until its deadline.
+    """
+    if not probe:
+        return True
     try:
         return _door.run(list(probe), capture_output=True, timeout=PROBE_S, check=False).returncode == 0
     except subprocess.TimeoutExpired:
@@ -200,6 +210,36 @@ def persist(claim: Claim, probe: Sequence[str]) -> None:
     _update(claim, 'UPDATE claims SET kept = 1, probe = ? WHERE id = ?', json.dumps(list(probe)))
 
 
+def declare(demand: Mapping[str, float], wall_s: int, why: str, *, owner: str) -> Claim:
+    """Record *owner*'s declared use of *demand* for *wall_s* seconds, run by no process of ours; see the module.
+
+    Raises:
+        ValueError: *demand* or *wall_s* is malformed (:func:`~lab_commons.box.demand.checked`).
+
+    """
+    demand = checked(demand, wall_s)
+    now = time.time()
+    pid = os.getpid()
+    with closing(_connect()) as con, _immediate(con):
+        cursor = con.execute(
+            'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key, kept, probe) '
+            'VALUES (?,?,?,?,?,?,?,?,?,1,?)',
+            (
+                pid,
+                creation_stamp(pid),
+                cores(demand),
+                mem_bytes(demand),
+                _seats(demand),
+                now + wall_s,
+                now,
+                f'{owner}: {why}',
+                f'declared:{owner}',
+                '[]',
+            ),
+        )
+    return Claim(int(cursor.lastrowid or 0), now + wall_s)
+
+
 def release(claim: Claim) -> None:
     """Drop *claim* now, on terminal evidence of the job it holds for."""
     _update(claim, 'DELETE FROM claims WHERE id = ?')
@@ -221,7 +261,10 @@ def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, deman
         for h in held
         if (amount := _vector_of(h)[name])
     ]
-    return f'{verdict.why}; ' + (', '.join(holders) or 'held by nobody on the ledger -- the rest is in use outside it')
+    why_blind = {**reading.unseen, **capacity.blind}
+    blind = [f'{name} is not measured: {why_blind[name]}' for name in verdict.lacking if name in why_blind]
+    outside = 'held by nobody on the ledger -- the rest is in use outside it'
+    return f'{verdict.why}; ' + ', '.join([*holders, *blind] or [outside])
 
 
 def _vector_of(held: Holding) -> Resources:
@@ -320,7 +363,11 @@ def hold(
         return
     capacity = Capacity.read() if capacity is None else capacity
     size = Resources(
-        {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: capacity.seats.get(n, 1) for n in seats(demand)}}
+        {
+            'cpu': capacity.cpu,
+            'mem_gb': capacity.mem_bytes / GB,
+            **{n: capacity.seats.get(n, 1) for n in seats(demand)},
+        }
     )
     never = admit(Job(repo='', sha='', producer=what), demand, Supply('box', size, size.names | {'cpu'}))
     if not never:

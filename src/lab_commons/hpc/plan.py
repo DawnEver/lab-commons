@@ -169,13 +169,10 @@ def make_plan(
     policy: Policy,
     limits: Limits,
     seconds: Sequence[float] | None = None,
-    min_minutes: float = 0.0,
 ) -> Plan:
     """Decide shards, partition and throttle for *n_items* -- see the module docstring.
 
     *seconds* is each item's measured time (``cost.seconds`` where absent); the margin is ``policy.safety``.
-    *min_minutes* is the least wall a task may ask for -- a retry after a TIMEOUT -- held to each
-    candidate's ceiling; the candidates granting the longest wall are preferred.
     """
     if seconds is not None and len(seconds) != n_items:
         msg = f'{len(seconds)} measured times for {n_items} items'
@@ -206,7 +203,7 @@ def make_plan(
             continue
         ceiling = _ceiling(snapshot, name, qos)
         at_once = min(allowed, snapshot.quota.qos_max_jobs.get(qos) or allowed)
-        shards, minutes = one_wave(padded, policy, room, at_once=at_once, ceiling=ceiling, min_minutes=min_minutes)
+        shards, minutes = one_wave(padded, policy, room, at_once=at_once, ceiling=ceiling)
         if ceiling is not None and minutes > ceiling:
             refusals.append(f'{name}: a {minutes}-min shard exceeds its {ceiling:.0f}-min ceiling')
             continue
@@ -214,9 +211,7 @@ def make_plan(
     if not options:
         msg = f'no candidate partition can take this work: {"; ".join(refusals)}'
         raise ValueError(msg)
-    longest = max(o[3] for o in options)
-    holds = [o for o in options if o[3] == longest] if min_minutes else options
-    _, qos, chosen, minutes, _ = next((o for o in holds if free_slots(snapshot, (o[0],), cost) > 0), holds[0])
+    _, qos, chosen, minutes, _ = next((o for o in options if free_slots(snapshot, (o[0],), cost) > 0), options[0])
     partitions = tuple(o[0] for o in options if o[1] == qos and (o[4] is None or o[4] >= minutes))
     shards = tuple(chosen)
     max_jobs = snapshot.quota.qos_max_jobs.get(qos)
@@ -295,7 +290,6 @@ def plan_on(
     session: Session | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
-    min_minutes: float = 0.0,
 ) -> Plan:
     """*grant*'s plan for *n_items* on its headroom, stamped with the session tag and the grant's set-up.
 
@@ -319,7 +313,6 @@ def plan_on(
             policy=policy,
             limits=Limits(cpus=room),
             seconds=seconds,
-            min_minutes=min_minutes,
         )
     except ValueError as refused:
         msg = f'{grant.name}: {refused}'
@@ -338,7 +331,6 @@ def allocate(
     session: Session | None,
     policy: Policy,
     seconds: Sequence[float] | None = None,
-    min_minutes: float = 0.0,
     paging: Paging | None = None,
     rerun_safe: bool = False,
 ) -> tuple[Grant, Plan]:
@@ -369,7 +361,6 @@ def allocate(
                 session=session,
                 policy=policy,
                 seconds=seconds,
-                min_minutes=min_minutes,
             )
         except ValueError as refused:
             refusals.append(str(refused))

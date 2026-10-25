@@ -167,19 +167,20 @@ class Measured:
             self.peaks_mb[name] = max(floor, float(peak))
             self._round.add(name)
 
-    def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float) -> None:
+    def killed(self, ids: Sequence[str], folded: dict[str, Any], spent: float, *, timed_out: bool = False) -> None:
         """An item killed after *spent* seconds: its first unfinished id ran for what the rest does not explain.
 
         Pytest runs an item's ids in the order given, so the first id without a cell is the one the
         kill interrupted. It took at least *spent* minus the finished ids' durations and the files' known
-        overheads; that is its FLOOR. The ids after it never started and keep their estimate.
+        overheads; that is its FLOOR -- twice that when the wall cut it (*timed_out*): it would not have finished
+        within it. The ids after it never started and keep their estimate.
         """
         rest = [n for n in ids if n not in folded['cells']]
         if not rest or spent <= 0:
             return
         files = dict.fromkeys(_file(n) for n in ids)
         explained = sum(folded['seconds'].values()) + sum(self.overheads.get(f, 0.0) for f in files)
-        floor = round(spent - explained, 3)
+        floor = round((spent - explained) * (2 if timed_out else 1), 3)
         if floor > 0:
             self.floors[rest[0]] = max(self.floors.get(rest[0], 0.0), floor)
 

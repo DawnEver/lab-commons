@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
@@ -92,6 +92,7 @@ def fold(
     shards: Sequence[Sequence[int]],
     walls: Sequence[float],
     alone: Mapping[int, int] | None = None,
+    timed_out: Collection[int] = (),
 ) -> tuple[list[list[str]], bool, float]:
     """Record one round's streams; return the unfinished ids, halved, whether an item was KILLED, and busy seconds.
 
@@ -118,12 +119,19 @@ def fold(
     Measured 2026-10-11: a shard killed after 7 s was charged its whole 216-min PLANNED wall, so one id
     carried a 12960 s floor it never ran. That time goes to
     :meth:`Measured.killed`, so the id the kill interrupted is never re-priced below it.
+
+    A TIMEOUT PRICES THE ID IT CUT, NEVER THE RUN. In a shard of *timed_out* (Slurm said TIMEOUT) the cut
+    id asks twice what it ran, so its retry outlives the wall that cut it; every other item keeps its own
+    learned duration. Ada 2026-10-25: a run-wide floor of twice the last wall compounded round after round
+    (1.4 h -> 45 h), landed every band on defq and blocked backfill.
     """
     pending: list[list[str]] = []
     limits = alone or {}
     killed = False
     folds = [read_stream(streams.get(index, ''), item['ids']) for index, item in enumerate(items)]
     spent = _killed_after(folds, shards, walls)
+    shard_of = {i: n for n, (a, b) in enumerate(shards) for i in range(a, b)}
+    cut = set(timed_out)
     for index, (item, folded) in enumerate(zip(items, folds, strict=True)):
         group = item['ids']
         cells.update({node: _plain(line) for node, line in folded['cells'].items()})
@@ -142,7 +150,7 @@ def fold(
             after = [n for n in rest if n != hit]
             pending += [after] if after else []
             continue
-        measured.killed(group, folded, spent.get(index, 0.0))
+        measured.killed(group, folded, spent.get(index, 0.0), timed_out=shard_of.get(index) in cut)
         if len(rest) == 1 and index in limits:
             peak = (folded['done'] or {}).get('peak_mb')
             cells[rest[0]] = _cell(

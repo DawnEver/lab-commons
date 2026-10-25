@@ -21,12 +21,12 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.machine import own_reserve, provided, reserve_table
+from lab_commons.box.machine import own_reserve, provided, reserve_table, watched
 from lab_commons.compute.durable import durable_text
 from lab_commons.compute.model import Demand
 from lab_commons.config import section
@@ -136,17 +136,24 @@ def declared_seats() -> dict[str, int]:
 SUPPLY_S = 10.0
 
 
-def seat_supply() -> dict[str, int]:
-    """Each ``[capabilities]`` tool's seats as MEASURED (D3): its ``supply`` probe's count, else its declaration.
+def seat_supply() -> tuple[dict[str, int], dict[str, str]]:
+    """Each ``[capabilities]`` tool's seats as MEASURED (D3): ``(sizes, blind)``.
 
     A ``supply`` argv prints the TOTAL seats this box may lend (a vendor's licence count, say) as one integer;
-    the ledger subtracts what its claims hold. A probe that fails, times out or prints no count cannot say,
-    and the declared ``seats`` stand in for it.
+    the ledger subtracts what its claims hold. No probe: the declared ``seats`` are the size. A probe that fails,
+    times out or prints no count CANNOT SAY: its tool keeps its declared size but is *blind* -- ``{tool: why}``
+    -- and :func:`lab_commons.box.supply.room` lends none of it (a vacuous green is the family's worst defect).
     """
-    return {
-        name: _measured(facts.get('supply')) or int(facts.get('seats', 1))
-        for name, facts in provided(section('capabilities')).items()
-    }
+    sizes: dict[str, int] = {}
+    blind: dict[str, str] = {}
+    for name, facts in provided(section('capabilities')).items():
+        declared = int(facts.get('seats', 1))
+        probe = facts.get('supply')
+        count = _measured(probe)
+        if probe and count is None:
+            blind[name] = f'its supply probe {probe[0]!r} failed, timed out or printed no count'
+        sizes[name] = count if count is not None else declared
+    return sizes, blind
 
 
 def _measured(supply: list[str] | None) -> int | None:
@@ -173,7 +180,10 @@ class Capacity:
     """The machine's SIZE for admitted runs: cores and bytes after the reserve margins, and tool seats.
 
     ``kept_cpu`` and ``kept_bytes`` are those margins themselves, kept free above what the OS reads in use
-    now (:func:`lab_commons.box.supply.room`); a size given by hand keeps none.
+    now (:func:`lab_commons.box.supply.room`); a size given by hand keeps none. ``watched`` names the seats whose
+    use is OBSERVED in the process
+    table (``[capabilities.<name>] in_use``), so a reading that did not observe one lends none of it; ``blind``
+    names each seat whose supply probe could not say, and why (:func:`seat_supply`): it lends none either.
     """
 
     cpu: float
@@ -181,6 +191,8 @@ class Capacity:
     seats: Mapping[str, int]
     kept_cpu: float = 0.0
     kept_bytes: int = 0
+    watched: tuple[str, ...] = ()
+    blind: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def lent(cls, seats: Mapping[str, int]) -> Capacity:
@@ -214,13 +226,17 @@ class Capacity:
             raise RuntimeError(msg)
         cores = float(os.cpu_count() or 1)
         total = {'cpu': cores, 'mem_gb': memory.total_bytes / GB}
-        kept = own_reserve(total, reserve_table(section('reserve')))
+        reserve = reserve_table(section('reserve'))
+        kept = own_reserve(total, reserve)
+        sizes, blind = seat_supply()
         return cls(
             cpu=cores - kept['cpu'],
             mem_bytes=int(memory.total_bytes - kept['mem_gb'] * GB),
-            seats=seat_supply(),
+            seats=sizes,
             kept_cpu=kept['cpu'],
             kept_bytes=int(kept['mem_gb'] * GB),
+            watched=tuple(sorted(watched(provided(section('capabilities'))))),
+            blind=blind,
         )
 
 
