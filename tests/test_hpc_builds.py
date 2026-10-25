@@ -62,6 +62,26 @@ def test_the_declaration_is_read_once_and_refuses_a_shared_venv_without_source_r
         read_builds('[tool.lab_commons.hpc]\ndependency_inputs = ["uv.lock"]\n')
 
 
+def _shared(install: str) -> str:
+    text = f'[tool.lab_commons.hpc]\ninstall = "{install}"\ndependency_inputs = ["uv.lock"]\nsource_roots = ["src"]\n'
+    return read_builds(text).install
+
+
+def test_a_shared_venv_holds_dependencies_only_so_each_tree_imports_its_own_project() -> None:
+    """A shared venv's install never carries the project, which would point into one tree.
+
+    Measured 2026-10-25 (numerics-lab #33): an editable project install in a SHARED venv points at the tree that
+    built it, so every later sha reusing the venv imported -- or failed to import -- the FIRST tree's project.
+    """
+    assert _shared('uv sync --frozen --extra dev') == 'uv sync --frozen --extra dev --no-install-project'
+    declared = 'uv sync --frozen --no-install-project --extra dev'
+    assert _shared(declared) == declared
+    # planted control: a venv per commit belongs to its one tree, so its project install stays as declared
+    assert read_builds('[tool.lab_commons.hpc]\ninstall = "uv sync"\n').install == 'uv sync'
+    with pytest.raises(ValueError, match='dependencies only'):
+        _shared('pip install -e .')
+
+
 def test_a_new_sha_with_unchanged_inputs_keeps_both_keys_and_a_changed_input_moves_only_its_own(repo: Path) -> None:
     first = _commit(repo, {'pyproject.toml': PYPROJECT, 'uv.lock': 'a', 'src/m.py': '1', 'rust/lib.rs': 'r'})
     source_only = _commit(repo, {'src/m.py': '2'})
