@@ -140,8 +140,25 @@ _IMPOSSIBLE: Final = (
 )
 
 
-def _reap(con: sqlite3.Connection, now: float) -> None:
-    """Delete every claim and ticket whose process is gone or time is up; an external claim when its probe says so."""
+def _dead_externals(con: sqlite3.Connection, now: float) -> frozenset[int]:
+    """OUTSIDE the write lock: the external claims whose client is gone and whose liveness probe says the job is gone.
+
+    A probe may take :data:`PROBE_S`; run under ``BEGIN IMMEDIATE`` it held the lock N x PROBE_S, past every other
+    process's busy timeout (2026-10-24: 7 of 8 motronics loss maps stopped on ``database is locked``).
+    """
+    rows = con.execute('SELECT id, pid, created, deadline + ?, probe FROM claims WHERE probe IS NOT NULL', (GRACE_S,))
+    return frozenset(
+        row_id
+        for row_id, pid, created, end, probe in rows.fetchall()
+        if end >= now and not still_the_same_process(pid, created) and not _alive(json.loads(probe))
+    )
+
+
+def _reap(con: sqlite3.Connection, now: float, dead: frozenset[int] = frozenset()) -> None:
+    """Delete every claim and ticket whose process is gone or time is up; an external claim its probe found *dead*.
+
+    No probe runs here: this runs under the write lock, and *dead* was asked before it (:func:`_dead_externals`).
+    """
     claims, tickets = _IMPOSSIBLE
     con.execute(claims, (now, GRACE_S, now, WALL_CEILING_S, GRACE_S))
     con.execute(tickets, (now, WALL_CEILING_S, GRACE_S))
@@ -151,7 +168,7 @@ def _reap(con: sqlite3.Connection, now: float) -> None:
             if end >= now and still_the_same_process(pid, created):
                 continue
             external = table == 'claims' and row_id in probes
-            if end < now or not external or not _alive(json.loads(probes[row_id])):
+            if end < now or not external or row_id in dead:
                 con.execute(delete, (row_id,))
 
 
@@ -221,6 +238,7 @@ def _try(
     *,
     reading: Reading,
     tag: tuple[str, str | None],
+    dead: frozenset[int] = frozenset(),
 ) -> Claim | str:
     """Under the write lock: the claim if the room admits it and no earlier ticket orders it behind, else why not.
 
@@ -229,7 +247,7 @@ def _try(
     only ever lends less.
     """
     now = time.time()
-    _reap(con, now)
+    _reap(con, now, dead)
     earlier = con.execute('SELECT what FROM claims WHERE key = ? AND probe IS NOT NULL', (tag[0],)).fetchone()
     if earlier is not None:
         msg = (
@@ -398,8 +416,9 @@ def _wait(
     warned = False
     while True:
         reading = _NO_SHARE if not demand.cpu and not demand.mem_bytes else read([h.pid for h in _read(con)])
+        dead = _dead_externals(con, time.time())
         with _immediate(con):
-            outcome = _try(con, ticket, capacity, demand, what, reading=reading, tag=tag)
+            outcome = _try(con, ticket, capacity, demand, what, reading=reading, tag=tag, dead=dead)
         if isinstance(outcome, Claim):
             return outcome
         if not warned and stuck_at_head(outcome, _read(con), gives_up):
