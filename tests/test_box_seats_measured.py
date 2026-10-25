@@ -4,7 +4,9 @@ A person on a workstation starts a JMAG solve from Designer or the Scheduler, ou
 see that seat taken. So a ``[capabilities.<name>] in_use = { process = [...] }`` row names the solver images the
 OS process table is counted by, and the free count is
 
-    declared seats - max(seats held by ledger claims, seats observed in use) - [reserve] seat_margin.<name>
+    declared seats - max(seats held by ledger claims, seats observed in use)
+
+No seat is kept back for people (ruling 2026-10-25): a person DECLARES a claim (``box claim``) like any consumer.
 
 MAX, not sum: a ledger claim's own solver is also a process the table shows. An observation that cannot be
 read lends NOTHING for that seat and says why -- a vacuous green is the family's worst defect.
@@ -25,12 +27,11 @@ from lab_commons.compute.probe import box
 _JMAG = {'jmag': ('jam.exe', 'jam_c.exe')}
 
 
-def _cap(*, seats: int = 4, margin: int = 0, watch: bool = True) -> Capacity:
+def _cap(*, seats: int = 4, watch: bool = True) -> Capacity:
     return Capacity(
         cpu=7.0,
         mem_bytes=12 * GB,
         seats={'jmag': seats},
-        kept_seats={'jmag': margin} if margin else {},
         watched=frozenset({'jmag'}) if watch else frozenset(),
     )
 
@@ -45,7 +46,7 @@ def _held(n: int) -> list[Holding]:
 
 
 def test_a_quiet_watched_box_lends_its_declared_seats() -> None:
-    """PLANTED CONTROL: nobody solves, nothing held, no margin -- the measured count IS the declaration."""
+    """PLANTED CONTROL: nobody solves, nothing held -- the measured count IS the declaration."""
     assert room(_cap(), [], _reading(0))['jmag'] == 4
 
 
@@ -61,12 +62,6 @@ def test_a_claims_own_solver_is_not_counted_twice() -> None:
 def test_the_larger_of_held_and_observed_counts() -> None:
     assert room(_cap(), _held(1), _reading(3))['jmag'] == 1
     assert room(_cap(), _held(3), _reading(1))['jmag'] == 1
-
-
-def test_the_seat_margin_is_never_lent() -> None:
-    assert room(_cap(margin=2), [], _reading(0))['jmag'] == 2
-    assert room(_cap(margin=2), [], _reading(1))['jmag'] == 1
-    assert room(_cap(margin=2), [], _reading(3))['jmag'] == 0
 
 
 def test_an_unreadable_observation_lends_nothing_and_says_why() -> None:
@@ -109,18 +104,17 @@ def test_observe_names_an_unreadable_table() -> None:
 def test_the_forge_box_supply_counts_the_same_seats() -> None:
     supply = box(
         'ws1',
-        capacity=_cap(margin=2),
+        capacity=_cap(),
         read=lambda _pids: _reading(1),
         platform='win32',
         presence={'jmag': Presence('jmag', present=True)},
     )
-    assert supply.resources['jmag'] == 1
+    assert supply.resources['jmag'] == 3
 
 
-def test_the_machine_file_spells_the_observation_and_the_margin() -> None:
+def test_the_machine_file_spells_the_observation() -> None:
     table = {'jmag': {'seats': 4, 'in_use': {'process': ['jam.exe', 'Jam_C.exe']}}, 'workstation': {}}
     assert watched(provided(table)) == {'jmag': ('jam.exe', 'jam_c.exe')}
-    assert reserve_table({'seat_margin': {'jmag': 2}}).seat_margin == {'jmag': 2}
 
 
 @pytest.mark.parametrize(
@@ -132,7 +126,7 @@ def test_a_malformed_observation_is_refused(row: dict[str, object]) -> None:
         provided({'jmag': row})
 
 
-@pytest.mark.parametrize('margin', [{'jmag': -1}, {'jmag': 1.5}, {'Bad': 1}, 2])
-def test_a_malformed_seat_margin_is_refused(margin: object) -> None:
-    with pytest.raises(ValueError, match='seat_margin'):
-        reserve_table({'seat_margin': margin})
+def test_no_seat_is_reserved_for_people() -> None:
+    """``seat_margin`` is deleted (ruling 2026-10-25): a machine file still naming it is refused, not obeyed."""
+    with pytest.raises(ValueError, match="unknown key 'seat_margin'"):
+        reserve_table({'seat_margin': {'jmag': 2}})

@@ -180,8 +180,8 @@ class Capacity:
     """The machine's SIZE for admitted runs: cores and bytes after the reserve margins, and tool seats.
 
     ``kept_cpu`` and ``kept_bytes`` are those margins themselves, kept free above what the OS reads in use
-    now (:func:`lab_commons.box.supply.room`); a size given by hand keeps none. ``kept_seats`` is the
-    ``[reserve] seat_margin``, never lent; ``watched`` names the seats whose use is OBSERVED in the process
+    now (:func:`lab_commons.box.supply.room`); a size given by hand keeps none. ``watched`` names the seats whose
+    use is OBSERVED in the process
     table (``[capabilities.<name>] in_use``), so a reading that did not observe one lends none of it; ``blind``
     names each seat whose supply probe could not say, and why (:func:`seat_supply`): it lends none either.
     """
@@ -191,7 +191,6 @@ class Capacity:
     seats: Mapping[str, int]
     kept_cpu: float = 0.0
     kept_bytes: int = 0
-    kept_seats: Mapping[str, int] = field(default_factory=dict)
     watched: tuple[str, ...] = ()
     blind: Mapping[str, str] = field(default_factory=dict)
 
@@ -236,7 +235,6 @@ class Capacity:
             seats=sizes,
             kept_cpu=kept['cpu'],
             kept_bytes=int(kept['mem_gb'] * GB),
-            kept_seats=dict(reserve.seat_margin),
             watched=tuple(sorted(watched(provided(section('capabilities'))))),
             blind=blind,
         )

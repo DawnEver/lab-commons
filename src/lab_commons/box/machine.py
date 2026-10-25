@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Final
 
 __all__ = [
@@ -38,15 +38,15 @@ _WHERE: Final = 'the machine file'
 
 @dataclass(frozen=True)
 class ReserveTable:
-    """The machine file's ``[reserve]``: the margins this box keeps for its own user.
+    """The machine file's ``[reserve]``: OS HEADROOM kept free above what the OS reads in use now.
 
-    ``seat_margin`` is ``{tool: seats}`` never lent, the same kind as ``cpu_margin``: a workstation's own user
-    keeps them above what the OS shows in use (``seat_margin = { jmag = 2 }``).
+    It is not a reservation for people (ruling 2026-10-25): a person's or a session's use is DECLARED as an
+    ordinary claim on the ledger (``python -m lab_commons.box claim``), and use nobody declared that the OS
+    measures already counts. The margin only keeps the OS itself responsive: 1 core and 10% of memory.
     """
 
     cpu_margin: float = DEFAULT_CPU_MARGIN
     mem_margin: float = DEFAULT_MEM_MARGIN
-    seat_margin: Mapping[str, int] = field(default_factory=dict)
 
 
 def reserve_table(table: Mapping[str, Any]) -> ReserveTable:
@@ -54,28 +54,15 @@ def reserve_table(table: Mapping[str, Any]) -> ReserveTable:
     unknown = sorted(set(table) - set(ReserveTable.__dataclass_fields__))
     cpu = table.get('cpu_margin', DEFAULT_CPU_MARGIN)
     mem = table.get('mem_margin', DEFAULT_MEM_MARGIN)
-    seat = table.get('seat_margin', {})
     bad = [
         *(f'unknown key {key!r}' for key in unknown),
         *(['cpu_margin must be >= 0 cores'] if not isinstance(cpu, int | float) or cpu < 0 else []),
         *(['mem_margin must be a fraction in [0, 1]'] if not isinstance(mem, int | float) or not 0 <= mem <= 1 else []),
-        *([] if _counts(seat) else [f'seat_margin must map {RESOURCE_NAME.pattern} to an int >= 0']),
     ]
     if bad:
         msg = f'{_WHERE} [reserve]: {"; ".join(bad)}'
         raise ValueError(msg)
-    return ReserveTable(float(cpu), float(mem), dict(seat))
-
-
-def _counts(table: object) -> bool:
-    return isinstance(table, dict) and all(
-        isinstance(name, str) and RESOURCE_NAME.match(name) and _whole(count) and count >= 0
-        for name, count in table.items()
-    )
-
-
-def _whole(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    return ReserveTable(float(cpu), float(mem))
 
 
 def own_reserve(total: Mapping[str, float], table: ReserveTable) -> dict[str, float]:

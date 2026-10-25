@@ -17,7 +17,7 @@ A TOOL SEAT IS SUPPLY LIKE A CORE (2026-10-25). Its size is its tool's supply as
 the running processes of those images are its seats in use now, so a solve a person starts outside the ledger
 takes its seat. Then
 
-    seats free = size - max(held by claims, observed in use) - [reserve] seat_margin
+    seats free = size - max(held by claims, observed in use)
 
 MAX, not sum: a claim's own solver is a process the table shows too. An observation that could not be read
 (:attr:`Reading.unseen`), or a supply probe that could not say (:attr:`Capacity.blind`), lends none of its seat,
@@ -163,4 +163,4 @@ def _seats_left(name: str, capacity: Capacity, held: Sequence[Holding], reading:
         if name in reading.unseen or name not in reading.seats_in_use:
             return 0
         claimed = max(claimed, reading.seats_in_use[name])
-    return capacity.seats.get(name, 1) - claimed - capacity.kept_seats.get(name, 0)
+    return capacity.seats.get(name, 1) - claimed
