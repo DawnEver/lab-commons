@@ -117,6 +117,23 @@ def _item_wall(raw: dict[str, object]) -> ItemWall:
     return ItemWall(**raw)  # type: ignore[arg-type]
 
 
+_NO_PROJECT: Final = '--no-install-project'
+
+
+def _dependencies_only(install: str) -> str:
+    """*install* for a venv SHARED across shas: dependencies only, the project always from the run's own tree.
+
+    An editable project install points into the tree that built the venv, so every later sha reusing it
+    imports -- or fails to import -- that first tree's project (measured 2026-10-25, numerics-lab #33). Only a
+    ``uv sync`` can be told so; any other command is refused rather than trusted.
+    """
+    words = install.split()
+    if words[:2] != ['uv', 'sync']:
+        msg = f'[tool.lab_commons.hpc] install {install!r}: a shared venv holds dependencies only -- use uv sync'
+        raise InvalidDeclaration(msg)
+    return install if _NO_PROJECT in words else f'{install} {_NO_PROJECT}'
+
+
 def read_builds(text: str) -> Builds:
     """The ``[tool.lab_commons.hpc]`` declaration of pyproject *text*; absent is an empty :class:`Builds`."""
     raw = kit_tables(text).get('hpc', {})
@@ -139,6 +156,8 @@ def read_builds(text: str) -> Builds:
     if builds.dependency_inputs and not builds.source_roots:
         msg = '[tool.lab_commons.hpc] dependency_inputs needs source_roots: a shared venv holds no sha source'
         raise InvalidDeclaration(msg)
+    if builds.dependency_inputs and builds.install:
+        builds = replace(builds, install=_dependencies_only(builds.install))
     if bool(builds.native_inputs) != bool(builds.native_build):
         msg = '[tool.lab_commons.hpc] native needs both inputs and build'
         raise InvalidDeclaration(msg)
