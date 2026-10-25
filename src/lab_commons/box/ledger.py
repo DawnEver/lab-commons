@@ -221,7 +221,9 @@ def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, deman
         for h in held
         if (amount := _vector_of(h)[name])
     ]
-    return f'{verdict.why}; ' + (', '.join(holders) or 'held by nobody on the ledger -- the rest is in use outside it')
+    blind = [f'{name} in use is unknown: {reading.unseen[name]}' for name in verdict.lacking if name in reading.unseen]
+    outside = 'held by nobody on the ledger -- the rest is in use outside it'
+    return f'{verdict.why}; ' + ', '.join([*holders, *blind] or [outside])
 
 
 def _vector_of(held: Holding) -> Resources:
@@ -320,7 +322,11 @@ def hold(
         return
     capacity = Capacity.read() if capacity is None else capacity
     size = Resources(
-        {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: capacity.seats.get(n, 1) for n in seats(demand)}}
+        {
+            'cpu': capacity.cpu,
+            'mem_gb': capacity.mem_bytes / GB,
+            **{n: capacity.seats.get(n, 1) - capacity.kept_seats.get(n, 0) for n in seats(demand)},
+        }
     )
     never = admit(Job(repo='', sha='', producer=what), demand, Supply('box', size, size.names | {'cpu'}))
     if not never:

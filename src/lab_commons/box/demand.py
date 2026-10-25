@@ -21,12 +21,12 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
-from lab_commons.box.machine import own_reserve, provided, reserve_table
+from lab_commons.box.machine import own_reserve, provided, reserve_table, watched
 from lab_commons.compute.durable import durable_text
 from lab_commons.compute.model import Demand
 from lab_commons.config import section
@@ -173,7 +173,9 @@ class Capacity:
     """The machine's SIZE for admitted runs: cores and bytes after the reserve margins, and tool seats.
 
     ``kept_cpu`` and ``kept_bytes`` are those margins themselves, kept free above what the OS reads in use
-    now (:func:`lab_commons.box.supply.room`); a size given by hand keeps none.
+    now (:func:`lab_commons.box.supply.room`); a size given by hand keeps none. ``kept_seats`` is the
+    ``[reserve] seat_margin``, never lent; ``watched`` names the seats whose use is OBSERVED in the process
+    table (``[capabilities.<name>] in_use``), so a reading that did not observe one lends none of it.
     """
 
     cpu: float
@@ -181,6 +183,8 @@ class Capacity:
     seats: Mapping[str, int]
     kept_cpu: float = 0.0
     kept_bytes: int = 0
+    kept_seats: Mapping[str, int] = field(default_factory=dict)
+    watched: tuple[str, ...] = ()
 
     @classmethod
     def lent(cls, seats: Mapping[str, int]) -> Capacity:
@@ -214,13 +218,16 @@ class Capacity:
             raise RuntimeError(msg)
         cores = float(os.cpu_count() or 1)
         total = {'cpu': cores, 'mem_gb': memory.total_bytes / GB}
-        kept = own_reserve(total, reserve_table(section('reserve')))
+        reserve = reserve_table(section('reserve'))
+        kept = own_reserve(total, reserve)
         return cls(
             cpu=cores - kept['cpu'],
             mem_bytes=int(memory.total_bytes - kept['mem_gb'] * GB),
             seats=seat_supply(),
             kept_cpu=kept['cpu'],
             kept_bytes=int(kept['mem_gb'] * GB),
+            kept_seats=dict(reserve.seat_margin),
+            watched=tuple(sorted(watched(provided(section('capabilities'))))),
         )
 
 
