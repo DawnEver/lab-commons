@@ -122,7 +122,7 @@ class Executor(Protocol):
         """Every unit's outcome, by name."""
 
 
-#: The box ledger's ``hold``: ``hold(demand, what, queue_s, *, key=unit hash)``.
+#: The box ledger's ``hold``: ``hold(demand, wall_s, what, queue_s, *, key=unit hash)``.
 Hold = Callable[..., AbstractContextManager[Any]]
 #: Offers a unit as a Job: ``offer(unit, unit_hash, files) -> job id``.
 Offer = Callable[[Unit, str, Mapping[str, Path]], str]
@@ -271,7 +271,7 @@ class LocalExecutor:
         started = _now()
         durable_write(intent, json.dumps({'name': name, 'host': self.host, 'started': started}).encode())
         inputs = {key: files.get(key, value) for key, value in unit.inputs.items()}
-        with self.hold(unit.demand, f'unit {name}', self.queue_s, key=unit_hash) as claim:
+        with self.hold(unit.demand, unit.wall_s, f'unit {name}', self.queue_s, key=unit_hash) as claim:
             if isinstance(claim, Claim):
                 self._claims.add(claim)
             if self._cancel.is_set():

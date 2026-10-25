@@ -347,6 +347,17 @@ def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
     assert result['done'] is not None
 
 
+def test_a_test_that_declares_a_longer_timeout_outlives_the_measured_wall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A test's own ``@pytest.mark.timeout`` is a declared duration: the outer wall never cuts it shorter."""
+    runner = _item_runner(tmp_path, monkeypatch)
+    body = 'import time\n\nimport pytest\n\n@pytest.mark.timeout(30)\ndef test_slow():\n    time.sleep(4)\n'
+    ids = _tree(tmp_path, body)
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 1)})
+    assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
+
+
 def test_a_normal_item_under_a_wall_passes_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _item_runner(tmp_path, monkeypatch)
     ids = _tree(tmp_path, 'def test_a():\n    pass\n\ndef test_b():\n    pass\n')

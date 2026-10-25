@@ -6,7 +6,7 @@ what the OS has free now, less what the claims already held have not taken yet, 
 margin (D2, D3 2026-10-16). There is no second fit rule here.
 
 A CLAIM EXISTS ONLY FOR A RUNNING PROCESS. It is written when the launcher is admitted, deleted
-when it leaves, and equals the run's declared :class:`~lab_commons.box.demand.Demand` -- which
+when it leaves, and equals the run's declared :class:`~lab_commons.compute.model.Demand` -- which
 phase 2 makes the kernel limit of that process. A claim therefore cannot be idle-but-held: what
 it reserves is exactly what its process is allowed to use, and it ends no later than its
 deadline. A row whose launcher is gone (pid absent, or its creation stamp differs: a recycled
@@ -65,7 +65,7 @@ import os
 import sqlite3
 import subprocess
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from typing import Final
@@ -81,16 +81,19 @@ from lab_commons.box.demand import (
     WALL_CEILING_S,
     Capacity,
     Claim,
-    Demand,
     DuplicateKey,
     Holding,
     NotAdmitted,
     Refused,
+    checked,
+    cores,
+    mem_bytes,
+    seats,
 )
 from lab_commons.box.order import blocks
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.admission import admit
-from lab_commons.compute.model import Job, Resources, Supply
+from lab_commons.compute.model import Demand, Job, Resources, Supply
 from lab_commons.liveness import creation_stamp, still_the_same_process
 from lab_commons.log import emit
 
@@ -202,18 +205,14 @@ def release(claim: Claim) -> None:
     _update(claim, 'DELETE FROM claims WHERE id = ?')
 
 
-def _vector(demand: Demand) -> Resources:
-    return Resources({'cpu': demand.cpu, 'mem_gb': demand.mem_bytes / GB, **demand.seats})
-
-
 def _when(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat(timespec='seconds')
 
 
 def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand, what: str) -> str | None:
     """``None`` when THE RULE admits *demand* on the measured room, else why not -- naming each lacking holder."""
-    free = room(capacity, held, reading, seats=demand.seats, asker=os.getpid())
-    verdict = admit(Job(repo='', sha='', producer=what), _vector(demand), Supply('box', free, free.names | {'cpu'}))
+    free = room(capacity, held, reading, seats=seats(demand), asker=os.getpid())
+    verdict = admit(Job(repo='', sha='', producer=what), demand, Supply('box', free, free.names | {'cpu'}))
     if verdict:
         return None
     holders = [
@@ -234,8 +233,9 @@ def _try(
     ticket: int,
     capacity: Capacity,
     demand: Demand,
-    what: str,
     *,
+    wall_s: int,
+    what: str,
     reading: Reading,
     tag: tuple[str, str | None],
     dead: frozenset[int] = frozenset(),
@@ -260,21 +260,21 @@ def _try(
         return refusal
     pid = os.getpid()
     if all(h.pid != pid for h in held):  # a holder is never ordered behind a waiter (the 2026-10-19 deadlock)
-        jumper = Holding(what, pid, demand.cpu, demand.mem_bytes, demand.seats, now + demand.wall_s)
+        jumper = Holding(what, pid, cores(demand), mem_bytes(demand), seats(demand), now + wall_s)
         ahead = con.execute('SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,))
         for earlier, *asked in ahead.fetchall():
             if blocks((asked[0], asked[1], asked[2]), jumper, capacity=capacity, held=held, reading=reading, now=now):
                 return f'queued behind {earlier!r}, which came first: holding this would delay its earliest start'
-    deadline = now + demand.wall_s
+    deadline = now + wall_s
     cursor = con.execute(
         'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key, fingerprint) '
         'VALUES (?,?,?,?,?,?,?,?,?,?)',
         (
             pid,
             creation_stamp(pid),
-            demand.cpu,
-            demand.mem_bytes,
-            json.dumps(dict(demand.seats)),
+            cores(demand),
+            mem_bytes(demand),
+            _seats(demand),
             deadline,
             now,
             what,
@@ -287,7 +287,8 @@ def _try(
 
 @contextmanager
 def hold(
-    demand: Demand,
+    demand: Mapping[str, float],
+    wall_s: int,
     what: str,
     queue_s: float,
     *,
@@ -298,13 +299,14 @@ def hold(
     fingerprint: str | None = None,
     outside: bool = False,
 ) -> Iterator[Claim]:
-    """Hold *demand* on this box for the ``with`` body; wait for room at most *queue_s* seconds.
+    """Hold *demand* on this box for the ``with`` body, ending by *wall_s*; wait for room at most *queue_s* seconds.
 
     *capacity* is the box's size (default: :meth:`Capacity.read`), *read* the OS reader the room is measured
     with (default: :meth:`Reading.now`). *key* (the caller's opaque identity of WHAT runs) and *fingerprint*
     (its hash of the code the run depends on) are stored on the row unparsed, for the caller's learning.
 
     Raises:
+        ValueError: *demand* or *wall_s* is malformed (:func:`~lab_commons.box.demand.checked`).
         Refused: at once when *demand* exceeds the box's size (it can never fit), else when
             *queue_s* ran out -- naming what is lacking, its holders and their deadlines.
 
@@ -312,14 +314,15 @@ def hold(
     if not 0 <= queue_s <= WALL_CEILING_S:
         msg = f'{what}: queue_s must lie in [0, WALL_CEILING_S={WALL_CEILING_S}], got {queue_s}'
         raise ValueError(msg)
-    if INSIDE_ENV in os.environ and not outside and not any(demand.seats.values()):
+    demand = checked(demand, wall_s)
+    if INSIDE_ENV in os.environ and not outside and not seats(demand):
         yield Claim(0, float('inf'))  # this tree's enclosing claim already holds it
         return
     capacity = Capacity.read() if capacity is None else capacity
     size = Resources(
-        {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: capacity.seats.get(n, 1) for n in demand.seats}}
+        {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: capacity.seats.get(n, 1) for n in seats(demand)}}
     )
-    never = admit(Job(repo='', sha='', producer=what), _vector(demand), Supply('box', size, size.names | {'cpu'}))
+    never = admit(Job(repo='', sha='', producer=what), demand, Supply('box', size, size.names | {'cpu'}))
     if not never:
         msg = f'{what}: larger than this box, refused at once -- {never.why}'
         raise Refused(msg)
@@ -330,7 +333,7 @@ def hold(
             ticket = int(
                 con.execute(
                     'INSERT INTO tickets (pid, created, gives_up, what, cpu, mem_bytes, seats) VALUES (?,?,?,?,?,?,?)',
-                    (pid, creation_stamp(pid), gives_up, what, demand.cpu, demand.mem_bytes, _seats(demand)),
+                    (pid, creation_stamp(pid), gives_up, what, cores(demand), mem_bytes(demand), _seats(demand)),
                 ).lastrowid
                 or 0
             )
@@ -340,6 +343,7 @@ def hold(
                 ticket,
                 capacity=capacity,
                 demand=demand,
+                wall_s=wall_s,
                 what=what,
                 read=read,
                 tag=(key, fingerprint),
@@ -356,7 +360,15 @@ def hold(
                 con.execute('DELETE FROM claims WHERE id = ? AND kept = 0', (claim.id,))
 
 
-def take(demand: Demand, what: str, *, key: str, capacity: Capacity | None = None, read: Read = Reading.now) -> Claim:
+def take(
+    demand: Mapping[str, float],
+    wall_s: int,
+    what: str,
+    *,
+    key: str,
+    capacity: Capacity | None = None,
+    read: Read = Reading.now,
+) -> Claim:
     """Admit *demand* NOW (one look, no wait) and keep the claim past this call, for a run that :func:`adopted` it.
 
     The claim lives with this process until the run adopts it, :func:`release` drops it, or this process dies.
@@ -365,7 +377,7 @@ def take(demand: Demand, what: str, *, key: str, capacity: Capacity | None = Non
         NotAdmitted: the measured room does not admit it now -- nothing is held.
 
     """
-    with hold(demand, what, 0.0, key=key, capacity=capacity, read=read) as claim:
+    with hold(demand, wall_s, what, 0.0, key=key, capacity=capacity, read=read) as claim:
         _update(claim, 'UPDATE claims SET kept = 1 WHERE id = ?')
     return claim
 
@@ -407,6 +419,7 @@ def _wait(
     *,
     capacity: Capacity,
     demand: Demand,
+    wall_s: int,
     what: str,
     read: Read,
     tag: tuple[str, str | None],
@@ -415,10 +428,10 @@ def _wait(
 ) -> Claim:
     warned = False
     while True:
-        reading = _NO_SHARE if not demand.cpu and not demand.mem_bytes else read([h.pid for h in _read(con)])
+        reading = _NO_SHARE if not cores(demand) and not mem_bytes(demand) else read([h.pid for h in _read(con)])
         dead = _dead_externals(con, time.time())
         with _immediate(con):
-            outcome = _try(con, ticket, capacity, demand, what, reading=reading, tag=tag, dead=dead)
+            outcome = _try(con, ticket, capacity, demand, wall_s=wall_s, what=what, reading=reading, tag=tag, dead=dead)
         if isinstance(outcome, Claim):
             return outcome
         if not warned and stuck_at_head(outcome, _read(con), gives_up):
@@ -436,4 +449,4 @@ def _wait(
 
 
 def _seats(demand: Demand) -> str:
-    return json.dumps(dict(demand.seats))
+    return json.dumps(seats(demand))

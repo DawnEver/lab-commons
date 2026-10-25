@@ -1,38 +1,14 @@
-"""What a fake box run leaves behind: the ``--outcome`` record a spawned ``python -m lab_commons.box run`` writes.
+"""A fake box for the box and compute tests.
 
-Shared by the producer tests (``test_dev_forgeserve.py``, ``test_dev_forgecarry.py``,
-``test_dev_forgerequest.py``) and the supervise runner fakes, each standing in for the box CLI: the caller
-reads the box's decision from this record, never from the exit code.
+Here only :func:`quiet`, the OS reader of an otherwise idle box, is shared by the box and compute tests.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
-from pathlib import Path
+from collections.abc import Callable, Iterable
 
-from lab_commons.box import Capacity, ProcessEnd, Refused, write_ended
+from lab_commons.box import Capacity
 from lab_commons.box.supply import Reading
-from lab_commons.supervise.process.base import Ran
-
-
-def ended(code: int, reason: str = 'exit') -> ProcessEnd:
-    """The ProcessEnd of a boxed child that exited *code*, ended by *reason* (``exit``, ``memory`` or ``wall``)."""
-    return ProcessEnd(code, reason, 0, 0.0, 0.0, 'fake', 'k', None)
-
-
-def record(argv: Sequence[str], what: ProcessEnd | Refused | None) -> None:
-    """Write *what* where the box argv *argv* names its ``--outcome``; ``None`` writes nothing (a crashed box)."""
-    if what is not None:
-        path = Path(argv[list(argv).index('--outcome') + 1])
-        path.parent.mkdir(parents=True, exist_ok=True)  # beside a tree the fake never built
-        write_ended(path, what)
-
-
-def boxed_as_run(argv: Sequence[str], ran: Ran) -> Ran:
-    """*ran*, after recording the child's own exit when *argv* is a box run (``--outcome`` in it); else as is."""
-    if '--outcome' in argv:
-        record(argv, ended(ran.code))
-    return ran
 
 
 def quiet(capacity: Capacity) -> Callable[[Iterable[int]], Reading]:

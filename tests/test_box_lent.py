@@ -12,13 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box import BOX_ENV, Capacity, Demand, NotAdmitted, hold, holdings, take
+from lab_commons.box import BOX_ENV, Capacity, NotAdmitted, hold, holdings, take
+from lab_commons.compute.model import Demand
 
 _SLOTS = Capacity.lent({'jobslot:ws1': 2})
 
 
 def _slot(name: str = 'jobslot:ws1') -> Demand:
-    return Demand(cpu=0, mem_gb=0, wall_s=600, seats={name: 1})
+    return Demand({name: 1, 'cpu': 0, 'mem_gb': 0}), 600
 
 
 @pytest.fixture
@@ -41,13 +42,13 @@ def test_a_seats_only_claim_never_samples_the_os() -> None:
         msg = 'a seats-only decision read the OS'
         raise AssertionError(msg)
 
-    with hold(_slot(), 'w', 0, key='k', capacity=_SLOTS, read=refuse):  # type: ignore[arg-type]
+    with hold(*_slot(), 'w', 0, key='k', capacity=_SLOTS, read=refuse):  # type: ignore[arg-type]
         assert [h.seats for h in holdings()] == [{'jobslot:ws1': 1}]
 
 
 def _racer(path: str, peak: Queue[int]) -> None:
     os.environ[BOX_ENV] = path
-    with hold(_slot(), f'racer-{os.getpid()}', 60, key='k', capacity=_SLOTS, poll_s=0.02):
+    with hold(*_slot(), f'racer-{os.getpid()}', 60, key='k', capacity=_SLOTS, poll_s=0.02):
         peak.put(sum(h.seats.get('jobslot:ws1', 0) for h in holdings()))
         time.sleep(0.1)
 
@@ -66,8 +67,9 @@ def test_processes_sharing_a_lent_capacity_never_exceed_it(box: Path) -> None:
 
 _TAKER = """
 import sys, time
-from lab_commons.box import Capacity, Demand, take
-take(Demand(cpu=0, mem_gb=0, wall_s=600, seats={'jobslot:ws1': 2}), 'taker', key='k',
+from lab_commons.box import Capacity, take
+from lab_commons.compute.model import Demand
+take(Demand({'jobslot:ws1': 2, 'cpu': 0, 'mem_gb': 0}), 600, 'taker', key='k',
      capacity=Capacity.lent({'jobslot:ws1': 2}))
 print('held', flush=True)
 time.sleep(600)
@@ -81,9 +83,9 @@ def test_a_killed_holder_frees_its_lent_slots() -> None:
         assert taker.stdout is not None
         assert taker.stdout.readline().strip() == 'held'
         with pytest.raises(NotAdmitted):
-            take(_slot(), 'blocked', key='k', capacity=_SLOTS)  # PLANTED CONTROL: both slots are held
+            take(*_slot(), 'blocked', key='k', capacity=_SLOTS)  # PLANTED CONTROL: both slots are held
     finally:
         taker.kill()
         taker.wait(30)
-    with hold(_slot(), 'after', 1, key='k', capacity=_SLOTS):
+    with hold(*_slot(), 'after', 1, key='k', capacity=_SLOTS):
         assert [h.what for h in holdings()] == ['after']

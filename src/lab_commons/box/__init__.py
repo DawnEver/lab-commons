@@ -1,10 +1,10 @@
 """The box: ONE resource manager per machine.
 
-Every run declares its :class:`Demand` (cores, memory, wall time, tool seats and LENT
+Every run declares its :class:`~lab_commons.compute.model.Demand` (cores, memory, tool seats and LENT
 resources, :meth:`Capacity.lent`); :func:`hold` books
 it in the machine's one ledger only when the one rule (:func:`lab_commons.compute.admission.admit`)
 admits it on the MEASURED room (:func:`lab_commons.box.supply.room`) within the machine's :class:`Capacity`,
-and a waiter that cannot fit holds nothing and gives up at its own limit. See
+with its declared wall-clock limit, and a waiter that cannot fit holds nothing and gives up at its own limit. See
 :mod:`lab_commons.box.ledger` for why a claim cannot be idle-but-held and why every wait ends, and
 :func:`run` (:mod:`lab_commons.box.run`) for how an admitted run is held to exactly its claim.
 """
@@ -18,7 +18,6 @@ from lab_commons.box.demand import (
     WALL_CEILING_S,
     Capacity,
     Claim,
-    Demand,
     DuplicateKey,
     Holding,
     NotAdmitted,
@@ -59,7 +58,6 @@ __all__ = [
     'WALL_CEILING_S',
     'Capacity',
     'Claim',
-    'Demand',
     'DuplicateKey',
     'Holding',
     'NotAdmitted',

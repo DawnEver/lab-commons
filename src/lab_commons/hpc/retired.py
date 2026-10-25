@@ -84,7 +84,7 @@ RETIRED: Final[dict[str, str]] = {
     # Outcome is the task-result word lab_commons.outcomes owns (plan A1.8, 2026-10-18).
     'retention.Outcome': 'dev_lab.dev.retention.Freed',
     'box.Outcome': 'lab_commons.box.ProcessEnd (its .status maps a kill onto lab_commons.outcomes.Status)',
-    'deploy.Outcome': 'lab_commons.supervise.deploy.PhaseResult (its .status reads OK or ERROR)',
+    'deploy.Outcome': 'dev_lab.supervise.deploy.PhaseResult (its .status reads OK or ERROR)',
     'execute.Outcome': 'lab_commons.compute.execute.Settled',
     'verdict.Outcome': 'lab_commons.outcomes.Conclusion (same tokens: pass, fail, inconclusive)',
     'forgestatus.Status': 'dev_lab.dev.forgestatus.CommitStatus (a forge commit-status record, not a task result)',

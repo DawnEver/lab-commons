@@ -23,14 +23,16 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
+from typing import Protocol
 
 from lab_commons.box import _linux, _win
-from lab_commons.box.demand import Capacity, Demand, ProcessEnd, Refused
+from lab_commons.box.demand import MEM_GB, Capacity, ProcessEnd, Refused, checked, cores, seats
 from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, adopted, hold
 from lab_commons.box.supply import Reading
+from lab_commons.compute.model import Demand
 
 __all__ = ['BLAS_THREAD_VARS', 'command', 'run']
 
@@ -45,14 +47,31 @@ BLAS_THREAD_VARS: tuple[str, ...] = (
     'NUMEXPR_NUM_THREADS',
 )
 
-#: One backend per platform that has one: ``contain(argv, demand, cwd, env, (key, fingerprint)) -> ProcessEnd``.
-Contain = Callable[[Sequence[str], Demand, str | None, Mapping[str, str] | None, tuple[str, str | None]], ProcessEnd]
+
+class Contain(Protocol):
+    """One backend per platform that has one."""
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        demand: Demand,
+        wall_s: int,
+        *,
+        cwd: str | None,
+        env: Mapping[str, str] | None,
+        tag: tuple[str, str | None],
+    ) -> ProcessEnd:
+        """Run *argv* held to *demand* and *wall_s* in *cwd* with *env*; *tag* is ``(key, fingerprint)``."""
+        ...
+
+
 _ENFORCERS: dict[str, Contain] = {'win32': _win.contain, 'linux': _linux.contain}
 
 
 def run(
     argv: Sequence[str],
-    demand: Demand,
+    demand: Mapping[str, float],
+    wall_s: int,
     what: str,
     queue_s: float,
     *,
@@ -64,7 +83,7 @@ def run(
     read: Read = Reading.now,
     claim: int = 0,
 ) -> ProcessEnd:
-    """Admit *demand* (waiting at most *queue_s*), run *argv* enforced to it, release, report.
+    """Admit *demand* (waiting at most *queue_s*), run *argv* enforced to it and to *wall_s*, release, report.
 
     A nonzero *claim* is a ledger row the caller already :func:`~lab_commons.box.ledger.take`-s at exactly
     *demand*: the run ADOPTS it (:func:`~lab_commons.box.ledger.adopted`) and is never admitted a second time.
@@ -81,25 +100,27 @@ def run(
     if not argv:
         msg = f'{what}: an empty argv names nothing to run'
         raise ValueError(msg)
-    if demand.cpu < 1 or demand.mem_gb <= 0:
+    demand = checked(demand, wall_s)
+    if cores(demand) < 1 or not demand[MEM_GB]:
         msg = f'{what}: a run is enforced to positive cores and memory, not a seat-only claim'
         raise ValueError(msg)
     contain = _enforcer()
-    cores = str(demand.cpu)
-    pools = dict.fromkeys(BLAS_THREAD_VARS, cores)
-    inside = {**(os.environ if env is None else env), **pools, INSIDE_ENV: key, CPU_ENV: cores}
+    width = str(cores(demand))
+    pools = dict.fromkeys(BLAS_THREAD_VARS, width)
+    inside = {**(os.environ if env is None else env), **pools, INSIDE_ENV: key, CPU_ENV: width}
     held = (
         adopted(claim)
         if claim
-        else hold(demand, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint)
+        else hold(demand, wall_s, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint)
     )
     with held:
-        return contain(argv, demand, cwd, inside, (key, fingerprint))
+        return contain(argv, demand, wall_s, cwd=cwd, env=inside, tag=(key, fingerprint))
 
 
 def command(
     argv: Sequence[str],
-    demand: Demand,
+    demand: Mapping[str, float],
+    wall_s: int,
     queue_s: float,
     *,
     key: str,
@@ -109,7 +130,7 @@ def command(
     capacity: Capacity | None = None,
     claim: int = 0,
 ) -> list[str]:
-    """*argv* spelled as ``python -m lab_commons.box run ... -- argv``: the CLI that runs it enforced to *demand*.
+    """*argv* as ``python -m lab_commons.box run ... -- argv``: the CLI that runs it enforced to *demand* and *wall_s*.
 
     For a caller that streams the child's output itself: both streams stay the child's and so does the
     exit code. How the BOX ended it is the record at *outcome*, read back with
@@ -119,13 +140,14 @@ def command(
     against that ONE reading and never re-derives a size from its own cwd or machine file; ``None`` lets the
     child read this box (:meth:`Capacity.read`). A nonzero *claim* (``--claim``) is the row the child adopts.
     """
-    seats = [f'--seat={name}={count}' for name, count in sorted(demand.seats.items()) if count]
+    demand = checked(demand, wall_s)
+    booked = [f'--seat={name}={count}' for name, count in sorted(seats(demand).items())]
     marks = ['--fingerprint', fingerprint] if fingerprint else []
     marks += ['--claim', str(claim)] if claim else []
     marks += ['--capacity', json.dumps(asdict(capacity), sort_keys=True)] if capacity is not None else []
-    limits = ['--cpu', str(demand.cpu), '--mem-gb', f'{demand.mem_gb:g}', '--wall', str(demand.wall_s)]
+    limits = ['--cpu', str(cores(demand)), '--mem-gb', f'{demand[MEM_GB]:g}', '--wall', str(wall_s)]
     return [
-        sys.executable, '-m', 'lab_commons.box', 'run', *limits, '--queue-s', f'{queue_s:g}', *seats,
+        sys.executable, '-m', 'lab_commons.box', 'run', *limits, '--queue-s', f'{queue_s:g}', *booked,
         '--key', key, *marks, '--what', what, '--outcome', str(outcome), '--', *argv,
     ]  # fmt: skip
 

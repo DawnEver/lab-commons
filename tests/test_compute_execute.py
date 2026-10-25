@@ -18,7 +18,6 @@ from _box_fake import quiet
 from test_compute_store import Shared
 
 from lab_commons.box import BOX_ENV, Capacity
-from lab_commons.box.demand import Demand
 from lab_commons.box.ledger import hold, holdings
 from lab_commons.compute import execute as execute_module
 from lab_commons.compute.execute import (
@@ -36,13 +35,14 @@ from lab_commons.compute.execute import (
     presence_check,
 )
 from lab_commons.compute.graph import Graph
+from lab_commons.compute.model import Demand
 from lab_commons.compute.presence import Evidence, Presence
 from lab_commons.compute.store import ResultStore
 from lab_commons.compute.unit import Engine, Environment, Output, Unit
 
 ENV = Environment('a' * 40, 'k' * 24)
 DIRTY = Environment('a' * 40, 'k' * 24, 'd' * 64)
-SMALL = Demand(1, 0.1, 60, {})
+SMALL = Demand(cpu=1, mem_gb=0.1)
 CALLS: list[str] = []
 
 
@@ -97,12 +97,14 @@ def march(_inputs: Mapping[str, Any], work: Path) -> None:
 
 
 def unit(fn: str, *, env: Environment = ENV, demand: Demand = SMALL, **inputs: object) -> Unit:
-    return Unit(Engine.ours('t.solve', env), f'{__name__}:{fn}', inputs, ('out',), demand)
+    return Unit(Engine.ours('t.solve', env), f'{__name__}:{fn}', inputs, ('out',), demand, 60)
 
 
 @contextmanager
-def free_hold(demand: Demand, what: str, queue_s: float, *, key: str, held: list[Demand]) -> Iterator[None]:
-    assert (what, queue_s, len(key)) == (what, queue_s, 64)
+def free_hold(
+    demand: Demand, wall_s: int, what: str, queue_s: float, *, key: str, held: list[Demand]
+) -> Iterator[None]:
+    assert (wall_s, what, queue_s, len(key)) == (60, what, queue_s, 64)
     held.append(demand)
     yield
 
@@ -233,7 +235,7 @@ def test_a_unit_larger_than_the_box_is_offered(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'box.sqlite'))
     box = Capacity(cpu=2, mem_bytes=4 << 30, kept_cpu=0, kept_bytes=0, seats={})
     real = partial(hold, capacity=box, read=quiet(box))
-    big = unit('write', demand=Demand(64, 1.0, 60, {}), n=1)
+    big = unit('write', demand=Demand(cpu=64, mem_gb=1.0), n=1)
     fits = unit('write', n=2)
     here = executor(tmp_path / 'h', hold=real)
     got = here.run(Graph({'big': big, 'fits': fits}))
@@ -298,7 +300,7 @@ def test_ready_units_the_ledger_admits_run_at_once(tmp_path: Path, monkeypatch: 
 
 def test_one_seat_serialises_two_seat_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     SPANS.clear()
-    seat = Demand(1, 0.1, 60, {'jmag': 1})
+    seat = Demand({'jmag': 1, 'cpu': 1, 'mem_gb': 0.1})
     graph = Graph({'a': unit('nap', demand=seat, tag='a'), 'b': unit('nap', demand=seat, tag='b')})
     assert {o.state for o in ledger_executor(tmp_path, monkeypatch, {'jmag': 1}).run(graph).values()} == {RAN}
     assert not _overlap('a', 'b')  # the ledger, not a pool size, bounds a vendor's concurrency
