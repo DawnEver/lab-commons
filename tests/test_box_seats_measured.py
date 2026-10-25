@@ -82,6 +82,15 @@ def test_a_reading_that_never_observed_a_watched_seat_lends_nothing() -> None:
     assert room(_cap(), [], Reading(8.0, 8.0, 16 * GB, 16 * GB))['jmag'] == 0
 
 
+def test_a_blind_supply_probe_lends_nothing_and_the_refusal_says_why() -> None:
+    capacity = Capacity(cpu=7.0, mem_bytes=12 * GB, seats={'jmag': 4}, blind={'jmag': 'its supply probe failed'})
+    reading = Reading(8.0, 8.0, 16 * GB, 16 * GB)
+    assert room(capacity, [], reading)['jmag'] == 0
+    why = _decide(capacity, [], reading, Demand({'cpu': 1, 'mem_gb': 1, 'jmag': 1}), 'forge jmag')
+    assert why is not None
+    assert 'supply probe failed' in why
+
+
 def test_an_unwatched_seat_stays_declared_less_held() -> None:
     assert room(_cap(watch=False), _held(1), Reading(8.0, 8.0, 16 * GB, 16 * GB))['jmag'] == 3
 

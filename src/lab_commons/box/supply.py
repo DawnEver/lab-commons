@@ -12,15 +12,16 @@ size less every declaration (:class:`~lab_commons.box.demand.Capacity` less the 
 before a claim showed its load never lends what a declaration already owns.
 
 A TOOL SEAT IS SUPPLY LIKE A CORE (2026-10-25). Its size is its tool's supply as its own probe measures it
-(:func:`lab_commons.box.demand.seat_supply`; the declared ``[capabilities]`` count when there is no probe or it
-cannot say, 1 when undeclared). A seat whose row declares ``in_use = { process = [images] }`` is also OBSERVED:
+(:func:`lab_commons.box.demand.seat_supply`; the declared ``[capabilities]`` count when there is no probe,
+1 when undeclared). A seat whose row declares ``in_use = { process = [images] }`` is also OBSERVED:
 the running processes of those images are its seats in use now, so a solve a person starts outside the ledger
 takes its seat. Then
 
     seats free = size - max(held by claims, observed in use) - [reserve] seat_margin
 
 MAX, not sum: a claim's own solver is a process the table shows too. An observation that could not be read
-lends none of its seat, naming why (:attr:`Reading.unseen`).
+(:attr:`Reading.unseen`), or a supply probe that could not say (:attr:`Capacity.blind`), lends none of its seat,
+naming why.
 
 :func:`room` is the one formula, read by the ledger (:func:`lab_commons.box.ledger.hold`) and by the
 forge's box supply (:func:`lab_commons.compute.probe.box`); :meth:`Reading.now` is the one OS reader.
@@ -156,6 +157,8 @@ def room(
 def _seats_left(name: str, capacity: Capacity, held: Sequence[Holding], reading: Reading) -> int:
     """The module docstring's seat formula for *name*; 0 when it is watched and was not observed."""
     claimed = sum(h.seats.get(name, 0) for h in held)
+    if name in capacity.blind:
+        return 0
     if name in capacity.watched:
         if name in reading.unseen or name not in reading.seats_in_use:
             return 0

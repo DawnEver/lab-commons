@@ -221,7 +221,8 @@ def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, deman
         for h in held
         if (amount := _vector_of(h)[name])
     ]
-    blind = [f'{name} in use is unknown: {reading.unseen[name]}' for name in verdict.lacking if name in reading.unseen]
+    why_blind = {**reading.unseen, **capacity.blind}
+    blind = [f'{name} is not measured: {why_blind[name]}' for name in verdict.lacking if name in why_blind]
     outside = 'held by nobody on the ledger -- the rest is in use outside it'
     return f'{verdict.why}; ' + ', '.join([*holders, *blind] or [outside])
 

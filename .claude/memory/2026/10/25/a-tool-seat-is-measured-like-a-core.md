@@ -20,3 +20,8 @@ outside the ledger (Designer, Scheduler, jam.exe) was invisible, so a forge jmag
 - JMAG images (motronics `hamilton/adapters/jmag/processes.py`, checked against the install 2026-09-19): the
   solver family is `jam.exe`, `jam_c.exe`, `jam_intel_mpi_b.exe`, `jam_intel_mpi_c.exe`; `execsolver.exe`
   launches `jam.exe` (counting both would count one solve twice); `scheduler.exe` and `designer.exe` are not seats.
+- A `supply` probe that fails, times out or prints no count NO LONGER falls back to the declared `seats`
+  (coordinator, aligned with `DESIGN-one-resource-path`): `seat_supply()` returns `(sizes, blind)`; the tool
+  keeps its declared size (so it queues rather than "larger than this box") but `Capacity.blind` makes `room`
+  lend 0 and `ledger._decide` names the reason. `in_use` is the second declared key on the SAME capability row,
+  read beside `seat_supply` -- one seats path, no parallel reader.
