@@ -281,6 +281,38 @@ def pytest_configure(config: _Configured) -> None:
     _RESOURCES.update(declared_resources(Path(config.rootpath) / 'pyproject.toml'))
 
 
+class _Marker(Protocol):
+    args: tuple[object, ...]
+    kwargs: Mapping[str, object]
+
+
+class _Marked(Protocol):
+    nodeid: str
+
+    def get_closest_marker(self, name: str) -> _Marker | None:
+        """The nearest marker named *name*, or ``None``."""
+
+
+class _Collected(Protocol):
+    items: list[_Marked]
+
+
+def declared_timeout(item: _Marked) -> float | None:
+    """The seconds a test's own ``@pytest.mark.timeout`` declares; ``None`` when it declares none."""
+    marker = item.get_closest_marker('timeout')
+    if marker is None:
+        return None
+    value = marker.args[0] if marker.args else marker.kwargs.get('timeout')
+    return float(value) if isinstance(value, int | float) and value > 0 else None
+
+
+def pytest_collection_finish(session: _Collected) -> None:
+    """Append the DECLARED timeouts of the selected ids: the outer wall never cuts a test below its own."""
+    declared = {item.nodeid: s for item in session.items if (s := declared_timeout(item)) is not None}
+    if declared:
+        _append({'declared': declared})
+
+
 def pytest_runtest_logstart(nodeid: str) -> None:
     """Append a START line before the test's setup, so an exit before its outcome still names the id it hit."""
     _append({'start': nodeid})
@@ -343,6 +375,8 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
             continue
         if 'start' in line:
             started = canonical(line['start'], expected)
+            continue
+        if 'id' not in line:  # a ``declared`` line feeds the wall, not the cells
             continue
         node = canonical(line['id'], expected)
         if node not in expected:
@@ -445,7 +479,7 @@ class _Watch:
     """
 
     def __init__(self, target: str, index: int, ids: list[str], walls: Mapping[str, float]) -> None:
-        self.target, self.index, self.expected, self.walls = target, index, set(ids), walls
+        self.target, self.index, self.expected, self.walls = target, index, set(ids), dict(walls)
         self.offset = os.stat(target).st_size  # noqa: PTH116 -- os, not pathlib: see _write
         self.reported: set[str] = set()
         self.inflight: str | None = None
@@ -472,7 +506,11 @@ class _Watch:
                 continue
             if not isinstance(line, dict) or line.get('item') != self.index:
                 continue
-            if 'start' in line:
+            if 'declared' in line:  # a test's own timeout raises its wall, never lowers it
+                for node, seconds in line['declared'].items():
+                    key = canonical(node, self.expected)
+                    self.walls[key] = max(float(self.walls.get(key, 0.0)), float(seconds))
+            elif 'start' in line:
                 self.inflight, self.since = canonical(line['start'], self.expected), time.monotonic()
             elif 'id' in line:
                 self.reported.add(canonical(line['id'], self.expected))
