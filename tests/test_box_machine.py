@@ -56,19 +56,23 @@ def test_a_seat_count_is_measured_by_its_supply_probe_over_the_declaration(
     _capabilities(
         tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(2)")}\n[capabilities.femm]\n'
     )
-    assert seat_supply() == {'jmag': 2, 'femm': 1}, 'measured beats declared; no probe falls back to the declaration'
+    assert seat_supply() == ({'jmag': 2, 'femm': 1}, {}), 'measured beats declared; no probe is the declaration'
     assert Capacity.read().seats == {'jmag': 2, 'femm': 1}
 
 
-def test_a_supply_probe_that_cannot_say_falls_back_to_the_declaration(
+def test_a_supply_probe_that_cannot_say_lends_nothing_and_says_why(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A failed probe is NOT the declaration: the seat keeps its size but is blind, and room lends none of it."""
     _capabilities(
         tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("import sys; sys.exit(3)")}\n'
     )
-    assert seat_supply() == {'jmag': 5}
+    sizes, blind = seat_supply()
+    assert sizes == {'jmag': 5}
+    assert 'supply probe' in blind['jmag']
+    assert Capacity.read().blind == blind
     _capabilities(tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(chr(120))")}\n')
-    assert seat_supply() == {'jmag': 5}, 'PLANTED CONTROL: output that is no count is no measurement'
+    assert 'jmag' in seat_supply()[1], 'PLANTED CONTROL: output that is no count is no measurement'
 
 
 def test_a_malformed_supply_is_refused_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

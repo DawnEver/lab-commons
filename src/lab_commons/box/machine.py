@@ -21,6 +21,7 @@ __all__ = [
     'own_reserve',
     'provided',
     'reserve_table',
+    'watched',
 ]
 
 #: Cores kept free above what the box's own user is using now (measured, :mod:`lab_commons.box.supply`).
@@ -37,7 +38,12 @@ _WHERE: Final = 'the machine file'
 
 @dataclass(frozen=True)
 class ReserveTable:
-    """The machine file's ``[reserve]``: the margins this box keeps for its own user."""
+    """The machine file's ``[reserve]``: OS HEADROOM kept free above what the OS reads in use now.
+
+    It is not a reservation for people (ruling 2026-10-25): a person's or a session's use is DECLARED as an
+    ordinary claim on the ledger (``python -m lab_commons.box claim``), and use nobody declared that the OS
+    measures already counts. The margin only keeps the OS itself responsive: 1 core and 10% of memory.
+    """
 
     cpu_margin: float = DEFAULT_CPU_MARGIN
     mem_margin: float = DEFAULT_MEM_MARGIN
@@ -73,7 +79,8 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """The machine file's ``[capabilities]``: ``{name: facts}``; a malformed row is refused by name.
 
     ``seats`` is the DECLARED count (default 1); ``supply``, when given, is the argv of the probe that MEASURES it
-    (:func:`lab_commons.box.demand.seat_supply`).
+    (:func:`lab_commons.box.demand.seat_supply`); ``in_use = { process = [images] }``, when given, names the process
+    images whose running count is the seats in use NOW (:func:`watched`, :func:`lab_commons.box.supply.observe`).
     """
     out: dict[str, dict[str, Any]] = {}
     for name, facts in table.items():
@@ -85,5 +92,19 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         if not isinstance(supply, list) or not all(isinstance(arg, str) for arg in supply):
             msg = f'{_WHERE}: [capabilities.{name}] supply must be an argv list of strings printing the seat count'
             raise ValueError(msg)
+        in_use = facts.get('in_use', {'process': ['-']})
+        images = in_use.get('process') if isinstance(in_use, dict) and set(in_use) == {'process'} else None
+        if not isinstance(images, list) or not images or not all(isinstance(i, str) and i for i in images):
+            msg = f'{_WHERE}: [capabilities.{name}] in_use must be {{ process = ["<image>.exe", ...] }}, non-empty'
+            raise ValueError(msg)
         out[name] = dict(facts)
     return out
+
+
+def watched(capabilities: Mapping[str, Mapping[str, Any]]) -> dict[str, tuple[str, ...]]:
+    """``{tool: images}`` for each :func:`provided` row declaring ``in_use``: the images, lower-cased."""
+    return {
+        name: tuple(image.lower() for image in facts['in_use']['process'])
+        for name, facts in capabilities.items()
+        if 'in_use' in facts
+    }
