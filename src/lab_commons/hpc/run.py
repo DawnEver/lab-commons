@@ -27,9 +27,9 @@ choose its ids. Only a DECIDED cell is an answer (:mod:`lab_commons.hpc.testcell
 A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its test cells as they happen
 (:mod:`lab_commons.hpc.pytest_item`); the run reads the streams, not the shards' end-of-run files.
 An item whose stream never closed is unfinished: its unreported ids are re-submitted, split in halves,
-for up to :data:`RETRIES` more rounds -- a round after a ``TIMEOUT`` asks for at least twice the minutes
-(held to the partition's ceiling, preferring one that holds them all), and the id a kill interrupted is
-priced at no less than the time it was given (:meth:`lab_commons.compute.learned.Measured.killed`) -- and
+for up to :data:`RETRIES` more rounds -- the id a kill interrupted is priced at no less than the
+time it was given, twice that when its shard hit the wall (:meth:`lab_commons.compute.learned.Measured.killed`),
+and every other item keeps its own learned duration: a ``TIMEOUT`` never raises the wall of the run -- and
 only what is still unfinished after that is ``INFRA``. An item that closed without reporting an id
 recorded it ``PENDING``: never reported.
 
@@ -208,7 +208,6 @@ def submit_round(
     classes: dict[int, list[int]] = {}
     for index, gb in enumerate(held):
         classes.setdefault(learned.memory_band(gb), []).append(index)
-    min_minutes = state.get('min_minutes', 0.0)
     chosen: Grant | None = None
     order: list[int] = []
     plans: list[Plan] = []
@@ -229,7 +228,6 @@ def submit_round(
             seconds=seconds,
             paging=machine.paging,
             rerun_safe=True,  # a forge test part reruns to the same verdict
-            min_minutes=min_minutes,
         )
         if not state['rounds'] and plan.room == 0:
             needs = needs_of(state['platform'])
@@ -241,7 +239,7 @@ def submit_round(
             raise NoRoom(msg)
         local, shards = balance(seconds, plan.shards)
         snapshots = spend(snapshots, chosen, plan.qos, len(shards))  # the bands of a round share one submit room
-        plan = _rewalled(plan, shards, [seconds[i] for i in local], policy, min_minutes)
+        plan = _rewalled(plan, shards, [seconds[i] for i in local], policy)
         base, first = len(order), sum(len(p.shards) for p in plans)
         order += [members[i] for i in local]
         plans.append(replace(plan, shards=tuple((a + base, b + base) for a, b in plan.shards)))
@@ -294,15 +292,13 @@ def submit_round(
     }
 
 
-def _rewalled(
-    plan: Plan, shards: tuple[tuple[int, int], ...], seconds: list[float], policy: Policy, min_minutes: float
-) -> Plan:
-    """*plan* over the balanced *shards*: its wall the slowest padded shard, never under *min_minutes*.
+def _rewalled(plan: Plan, shards: tuple[tuple[int, int], ...], seconds: list[float], policy: Policy) -> Plan:
+    """*plan* over the balanced *shards*: its wall the slowest padded shard.
 
     Never longer than the plan's own wall, which the partition ceiling already held.
     """
     slowest = max(sum(seconds[a:b]) for a, b in shards) * policy.safety
-    minutes = min(plan.minutes, max(1, math.ceil(slowest / 60), math.ceil(min_minutes)))
+    minutes = min(plan.minutes, max(1, math.ceil(slowest / 60)))
     waves = plan.makespan_minutes // plan.minutes
     return replace(plan, shards=shards, minutes=minutes, makespan_minutes=waves * minutes)
 
