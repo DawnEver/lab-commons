@@ -94,8 +94,9 @@ The plug -- lab-commons `resource.Provider`, two methods, nothing else:
 
 ```python
 class Provider(Protocol):
-    names: frozenset[str]                       # the resource names it supplies, each in KINDS
-    def measure(self, scope: str) -> Supply: ...                       # supply NOW for that kind's formula
+    names: frozenset[str]  # the resource names it supplies, each in KINDS
+
+    def measure(self, scope: str) -> Supply: ...  # supply NOW for that kind's formula
     def enforce(self, scope: str, claim: Claim) -> ContextManager[Actual]: ...  # run within the claim; yield the actual
 ```
 
