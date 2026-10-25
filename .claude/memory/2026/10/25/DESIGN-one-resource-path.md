@@ -1,6 +1,6 @@
 ---
 name: DESIGN-one-resource-path
-description: Every consumer of every resource -- forge parts, box runs, HPC jobs, campaigns, agent sessions, model calls -- goes through one path: declared demand, measured supply, one admission rule, enforced limit, recorded actual, learned next demand. Three kinds (occupancy, consumable, persistent) differ only in how supply is computed and when it returns.
+description: Every consumer of every resource -- forge parts, box runs, HPC jobs, campaigns, program workloads that call a model through an API key -- goes through one path: declared demand, measured supply, one admission rule, enforced limit, recorded actual, learned next demand. Three kinds (occupancy, consumable, persistent) differ only in how supply is computed and when it returns.
 metadata:
   type: project
 created: 2026-10-25
@@ -50,7 +50,7 @@ name -> kind; an unknown name is refused, `UNSUPPORTED-RAISES`).
 Consequences, stated once:
 
 - CONSUMABLE admission is the same rule: `cap <= balance - sum(held caps)`. A held cap is a promise, so two
-  sessions cannot both be admitted against the last million tokens. At run end the ledger turns the cap
+  workloads cannot both be admitted against the last million tokens. At run end the ledger turns the cap
   into a CHARGE of the actual and releases the rest.
 - PROVIDER REPORT IS TRUTH, LOCAL LEDGER IS THE FAST STOP (ai-lab ruling 2026-10-24, generalized). The plug's
   `measure` returns `cap - max(reported, local)` -- concretely `reported_used(t_r) + local_charges(after t_r)`
@@ -76,7 +76,7 @@ nothing, and no scope has a "wall supply" to compare against. Wall is the TIME A
 - it DERIVES consumable charges: `core_h = cpu * wall_s / 3600` is the cap a cluster run asks; its actual is
   `cpu_s / 3600`. Where wall-time itself is budgeted (a box's daily share), the consumable is `wall_h`, a
   vector entry derived from `wall_s` by the engine -- declared once, never typed twice.
-- for a CONSUMABLE-only claim (a session, a model call) wall is still required: it is how a held cap is
+- for a CONSUMABLE-only claim (a program workload, a model call) wall is still required: it is how a held cap is
   returned when the holder dies (reap at deadline), the same liveness rule as everywhere else.
 
 So the claim is `Claim(demand: Demand, wall_s: int, what, key)`; nothing else.
@@ -117,8 +117,14 @@ The providers, by repo:
 
 Consumers only declare: a forge part (`Demand` from learned + its declared needs), an HPC job (same,
 `core_h` derived from cpu x wall), a box run, a campaign (sum of its units' demands, each unit its own
-claim -- a campaign holds nothing itself), an AGENT SESSION (`tokens` cap + `wall_s`), a MODEL CALL
-(`tokens` cap; claimed WITHIN its session's claim when it has one, else directly on the key scope).
+claim -- a campaign holds nothing itself), a PROGRAM WORKLOAD that calls a model through an API key (an
+AI-driven optimization run, an `ai-lab review`: `tokens` cap + `wall_s`), and each MODEL CALL inside it
+(`tokens` cap, drawn WITHIN its workload's claim).
+
+AGENT SESSIONS ARE NOT CONSUMERS (user ruling 2026-10-25). Claude/codex sessions and their sub-agents run on
+the SUBSCRIPTION quota, which is not ours to meter: they declare no `tokens` demand, hold no claim on a key
+scope, and nothing counts or caps them. Their local compute (a test run, a build) still goes through the
+path as an ordinary box run. The `tokens` kind exists only for API-KEY spend by program workloads.
 
 ### ai-lab's token cap is a plug, not a special case
 
@@ -126,11 +132,11 @@ claim -- a campaign holds nothing itself), an AGENT SESSION (`tokens` cap + `wal
   becomes `measure`, `budget.charge` becomes the engine's charge from `Actual`, the
   `tokens-<date>.jsonl` file becomes ledger rows. `DailyTokenCapReached` becomes the engine's one refusal
   (`NotAdmitted` naming `tokens (asked, free)`).
-- A session is admitted iff its cap fits the key's balance less every held session cap; its calls draw
-  from the session's cap (a child ledger row keyed by the parent claim), so a session can never overspend
-  its own admission and the key can never be over-promised.
-- SUB-AGENT CONCURRENCY IS NOT A RESOURCE (user ruling). Each sub-agent is a session claim on the same key;
-  how many run at once is whatever the balance admits. No counter, no semaphore, no `max_agents` anywhere.
+- A program workload is admitted iff its cap fits the key's balance less every held workload cap; its
+  calls draw from the workload's cap (a child ledger row keyed by the parent claim), so a workload can never
+  overspend its own admission and the key can never be over-promised.
+- Agent sessions and sub-agents are outside this kind entirely (subscription quota, see section 4): no
+  counter, no semaphore, no `max_agents`, no token claim anywhere for them.
 - Key slots (`ai_lab/client.py:34-42`) stay: a slot is a SCOPE, and falling to the next slot is choosing the
   next scope whose supply admits the claim -- the same walk `claimable` does over hosts.
 
@@ -206,17 +212,17 @@ providers' `measure`.
 
 P2 -- consumables. Tokens (ai-lab), `core_h` and `submits` (Slurm), `forge_requests` (dev-lab). Delete
 `ai_lab.budget` ledger, `daily_budget_core_h`/`over_budget`, `standing()` core-hours. The token JSONL is
-not migrated (a day's window; it expires). Tests: a session whose cap exceeds the key balance is refused
+not migrated (a day's window; it expires). Tests: a program workload whose cap exceeds the key balance is refused
 before any request is sent; a provider report larger than the local ledger lowers the balance; two
-concurrent sessions cannot together exceed the balance; N sub-agents admitted equals what the balance
-admits (no concurrency constant exists -- census test greps for one).
+concurrent workloads cannot together exceed the balance; a Claude Code or codex session declares no tokens and is
+never refused or counted (census test: no session id, LAB_SESSION or agent launcher reaches the tokens provider).
 
 P3 -- persistent. Disk/files/venvs/worktrees providers on workstations and Slurm homes; worktree and venv
 creation declare a footprint claim persisted with a liveness probe; retention becomes reclaim only.
 Tests: creation past quota refused naming `files (asked, free)`; a footprint whose owner died is reaped
 and its supply returns; a live one is never reaped.
 
-P4 -- learned for every name. `compute.learned` records the `Actual` of every kind (tokens per session
+P4 -- learned for every name. `compute.learned` records the `Actual` of every kind (tokens per program workload
 kind, core-hours per part, footprint per env) and serves the next demand; repo data holds only priors.
 Test: every consumer `Demand(` call site is in a named set that reads `learned` or the repo prior table
 (census), and a run's next demand reflects its last actual.
