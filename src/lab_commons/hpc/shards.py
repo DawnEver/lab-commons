@@ -81,18 +81,15 @@ def one_wave(
     *,
     at_once: int,
     ceiling: float | None,
-    min_minutes: float,
 ) -> tuple[list[tuple[int, int]], int]:
     """Shards no more than run *at_once*, so the makespan IS the wall; more only when *ceiling* forces it.
 
     Measured 2026-10-10: a round planned 24 shards of 21 min for 17 concurrent tasks -- a 42-min makespan
     under a 21-min wall, so every task was killed at half the time the round itself expected to take.
     A second wave buys nothing a longer wall does not, and the longer wall is what a slow id needs.
-    *min_minutes* (a retry after a TIMEOUT) raises the wall, held to *ceiling*.
     """
     cap = at_once if room is None else min(room, at_once)
     shards = _shards(padded, policy, cap)
     if ceiling is not None and _wall(padded, shards) > ceiling:
         shards = _shards(padded, policy, room)
-    floor = min_minutes if ceiling is None else min(min_minutes, ceiling)
-    return shards, max(_wall(padded, shards), math.ceil(floor))
+    return shards, _wall(padded, shards)

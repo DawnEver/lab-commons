@@ -1196,11 +1196,30 @@ def test_a_file_whose_costly_id_dies_is_replanned_with_more_wall_than_it_died_at
     assert second['minutes'] * 60 >= 60.0, 'the retry is never sized shorter than the 60 s sacct says it died at'
 
 
-def test_a_timeout_round_asks_the_next_for_twice_the_minutes() -> None:
-    record = _run(FakeRunCluster(dies=frozenset({'tests/b.py'}), peak_mb=512.0))
+def test_a_timeout_doubles_the_floor_of_the_id_it_cut_and_nothing_else() -> None:
+    """Ada 2026-10-25: a TIMEOUT doubled the wall of EVERY later band of the run (1.4 h -> 45 h on defq).
+
+    PLANTED CONTROL: the same shard ended by anything but its wall charges the cut id its plain floor.
+    """
+    items = [{'ids': ['h.py::hung']}, {'ids': ['f.py::f1', 'f.py::f2']}]
+
+    def floors(timed_out: set[int]) -> dict[str, float]:
+        measured = Measured()
+        fold(items, {}, {}, measured, shards=[(0, 2)], walls=[1000.0], timed_out=timed_out)
+        return measured.floors
+
+    assert floors(set()) == {'h.py::hung': 1000.0}
+    assert floors({0}) == {'h.py::hung': 2000.0}, 'the id the wall cut asks twice what it ran; f never started'
+
+
+def test_a_timeout_round_prices_its_item_not_the_run() -> None:
+    """One hung id among fast ones: the retry wall follows the learned durations, never a run-wide doubling."""
+    fake = FakeRunCluster(dies=frozenset({'tests/b.py'}), peak_mb=512.0)
+    record = _run(fake)
     first, second = record['rounds']
-    assert second['minutes'] >= 2 * first['minutes']
+    assert second['minutes'] < first['minutes'], 'the fast leftovers ask what they were measured to take'
     assert second['mem_mb'] == first['mem_mb'], 'a timeout is not a memory problem'
+    assert 'min_minutes' not in json.loads(fake.state), 'no run-wide wall floor is kept'
 
 
 def test_a_retry_prices_its_unmeasured_file_at_the_measured_siblings_median() -> None:
@@ -1213,27 +1232,19 @@ def test_a_retry_prices_its_unmeasured_file_at_the_measured_siblings_median() ->
     assert (first['mem_mb'], second['mem_mb']) == (1024, 2048 * 1.5), 'a timeout adds nothing; the evidence does'
 
 
-def test_a_retry_wall_is_held_to_a_partition_that_allows_it() -> None:
+def test_a_long_item_is_held_to_a_partition_that_allows_it() -> None:
     snap = parse_snapshot(IDLE)
 
-    def plan(min_minutes: float) -> Plan:
+    def plan(seconds: float) -> Plan:
         return make_plan(
-            4,
-            Cost(seconds=60),
-            snap,
-            cluster=GRANT.cluster(),
-            policy=Policy(),
-            limits=Limits(),
-            min_minutes=min_minutes,
+            4, Cost(seconds=60), snap, cluster=GRANT.cluster(), policy=Policy(), limits=Limits(), seconds=[seconds] * 4
         )
 
-    assert plan(0).partitions == ('shortq', 'defq')
-    assert plan(0).minutes < 60
-    asked = plan(5 * 60)
-    assert asked.minutes == 5 * 60, 'the retry gets the minutes it asked for'
-    beyond = plan(3 * 24 * 60)
-    assert beyond.minutes == 2 * 24 * 60, "held to the longest ceiling on offer: the free QOS's two days"
-    assert beyond.partitions == ('defq',), 'only a partition whose ceiling holds the wall is named'
+    assert plan(60).partitions == ('shortq', 'defq')
+    assert plan(60).minutes < 60
+    long = plan(24 * 3600)
+    assert long.minutes >= 24 * 60, 'the item gets the minutes it was measured to take'
+    assert long.partitions == ('defq',), 'only a partition whose ceiling holds the wall is named'
 
 
 def test_round_zero_packs_measured_files_into_one_item() -> None:

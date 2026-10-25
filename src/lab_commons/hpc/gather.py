@@ -90,6 +90,7 @@ def gather_run(
         shards=planned['shards'],
         walls=walls,
         alone={i: band_of[shard_of[i]]['mem_mb'] for i in oomed if band_of[shard_of[i]]['at_ceiling']},
+        timed_out={n for n, s in states.items() if s == 'TIMEOUT'},
     )
     planned['clock'] = round_clock(clocks, busy)
     planned['walls_s'] = walls
@@ -98,8 +99,6 @@ def gather_run(
     timed_out = 'TIMEOUT' in states.values()
     oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
     state['grown'] = grown_after(current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom)
-    if timed_out:
-        state['min_minutes'] = 2 * planned['minutes']
     if pending and (len(state['rounds']) <= RETRIES or (oom and current['ceiling'])):
         grant = next(g for g in machine.grants if g.account == account)
         snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
