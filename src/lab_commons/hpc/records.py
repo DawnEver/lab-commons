@@ -79,6 +79,10 @@ def _plain(line: dict[str, Any]) -> dict[str, Any]:
     return one.to_plain()
 
 
+#: How far under its limit a TIMEOUT shard's sacct wall may read: Slurm's kill is not to the second.
+_KILL_SLACK_S: Final = 60.0
+
+
 def _cell(status: Status, kind: str, text: str) -> dict[str, Any]:
     return TestCell(Cell(status, reason=Reason(kind, text))).to_plain()
 
@@ -93,6 +97,7 @@ def fold(
     walls: Sequence[float],
     alone: Mapping[int, int] | None = None,
     timed_out: Collection[int] = (),
+    tops: Mapping[int, float] | None = None,
 ) -> tuple[list[list[str]], bool, float]:
     """Record one round's streams; return the unfinished ids, halved, whether an item was KILLED, and busy seconds.
 
@@ -124,6 +129,12 @@ def fold(
     id asks twice what it ran, so its retry outlives the wall that cut it; every other item keeps its own
     learned duration. Ada 2026-10-25: a run-wide floor of twice the last wall compounded round after round
     (1.4 h -> 45 h), landed every band on defq and blocked backfill.
+
+    A TIMEOUT AT THE LONGEST WALL IS FINAL. *tops* maps a shard to the longest wall any open partition
+    granted when it was planned (seconds). A kill at a wall says only "needs more than the wall"; a shard
+    that ran that long cannot be given more, so its cut id is ``TIMEOUT`` by id with the wall as its reason
+    and is never re-queued -- and a cut below it learns its floor held to that wall, never 2x past it.
+    Ada 2026-10-26: two ids cut after ~1 day each learned 48 h floors, to hold defq 48 h and then retry.
     """
     pending: list[list[str]] = []
     limits = alone or {}
@@ -150,7 +161,16 @@ def fold(
             after = [n for n in rest if n != hit]
             pending += [after] if after else []
             continue
-        measured.killed(group, folded, spent.get(index, 0.0), timed_out=shard_of.get(index) in cut)
+        shard = shard_of.get(index)
+        top = (tops or {}).get(shard) if shard is not None else None
+        measured.killed(group, folded, spent.get(index, 0.0), timed_out=shard in cut, top=top)
+        if shard in cut and top is not None and walls[shard] >= top - _KILL_SLACK_S:
+            cells[rest[0]] = _cell(
+                Status.TIMEOUT, 'timeout', f'cut at {top / 60:.0f} min, the longest wall any partition grants'
+            )
+            rest = rest[1:]
+            pending += [rest] if rest else []
+            continue
         if len(rest) == 1 and index in limits:
             peak = (folded['done'] or {}).get('peak_mb')
             cells[rest[0]] = _cell(
