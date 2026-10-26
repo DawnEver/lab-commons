@@ -79,3 +79,16 @@ Statuses: `<lab-commons venv> C:/Users/linxu/.claude-evans/jobs/00353973/tmp/fai
 `cells.py <sha> tests/base`. Push: motronics `sh scripts/hooks/with-retry.sh push`, others
 `<dev-lab venv> -m dev_lab.dev.netverb -- git push`. Close superseded: `-m dev_lab.dev.forge pr close-superseded N --by M`.
 Worktrees holding the unpushed work: `motronics-studio/.claude/worktrees/integ-*`, `dev-lab/.claude/worktrees/{next-integrator,review-redesign}`.
+
+## 6. Update, evening 2026-10-24 (decision rows 81-93)
+
+- LANDED: dev-lab #35 (d720e99); lab-commons #354 OOM retry asks more (4dba818); dev-lab break-glass relock onto it (68cac18).
+- OPEN: dev-lab #41 review redesign (base green); ai-lab #40 review slices (workstation red was a local integ/relock branch, removed; needs a re-run).
+- motronics #4802: first full verdict, 45 cells red that IM has green; fix agent on worktree `pr-units-step4`, unpushed.
+- motronics #4694: our 14 fixes merged into the F7 session head and pushed as 543062fba3 (worktree-scoped hooks); verdict pending; review held (5.9 MB).
+- pr/im-declarations-green: 16 declaration fixes + causes 2-5 + numerical 6-8, unpushed (waits on #4802).
+- Ada accounts NOT yet on dev-lab 68cac18: the deploy loop was reaped for low G memory. Rerun
+  `C:/Users/linxu/.claude-evans/jobs/00353973/tmp/cut/deploy_devlab.sh` per account when memory allows.
+- Shared motronics hooks need NO reinstall: `dev_lab.dev.hook_install --install` in a linked worktree is worktree-scoped.
+- User questions still open: ngspice on Ada; lock-freshness at push; CNT two-airgap band test; full-ring polar block tests;
+  dependency pins; `vendor=jmag` reference meaning; lab-commons stage-memory design.
