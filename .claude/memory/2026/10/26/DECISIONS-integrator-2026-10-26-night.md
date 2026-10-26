@@ -19,3 +19,8 @@ metadata: {session: "https://claude.ai/code/session_014RWx71JHHMuBkrNmbYQkkA"}
 | 6 | Hand relocks of motronics dropped: relocking is the forge's own `pr/relock-*` job; PR heads whose lock/fresh failed get `dep --lock-upgrade` on the branch | one party owns freshness |
 | 7 | dev-lab integrate/main's five reds (surface budget, venv spelling, floor re-measure, provenance rows, private markers in memory) fixed on their own PR | every dev-lab PR was red on them |
 | 8 | Review step to run on any host that can run the review command, not only the poller | the pollers (Ada) have no ai_lab, G has it but never polls: no head was ever reviewed |
+| 9 | dev-lab #456: the five integrate/main reds plus `rustup check` exit 100 read as an answer | rustup exits 100 when an update is available (Ada, rustup 1.29): lock/fresh, the integrate/main relock and every auto-sync on Ada failed on it |
+| 10 | motronics #4636 (field-circuit) merged with integrate/main by hand: `params.toml` sizing block = branch's machine units (ruling 2026-10-26) + IM's six-row R spread | NEWER-STRUCTURE; the sector-share line has no meaning in machine units |
+| 11 | motronics #4664 (hairpin) NOT merged by the integrator | a live session (worktree `resync-4664`) pushed it at 23:27; its owner syncs it |
+| 12 | Local private-marker hits outside `.claude/memory` (README, docs, src) left untouched | this box's denylist is wider than the forge host's; whether they are leaks is the user's call |
+| 13 | Every motronics base run is INCONCLUSIVE: collection aborts on "108 heavy test files state no reason"; fix delegated on `pr/heavy-census-states-every-reason` | the producer exits 3 before any test runs, so no motronics PR can merge |
