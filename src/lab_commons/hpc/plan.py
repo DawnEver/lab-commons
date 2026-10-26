@@ -160,6 +160,42 @@ def _ceiling(snapshot: Snapshot, partition: str, qos: str) -> float | None:
     return min(values) if values else None
 
 
+def _open(snapshot: Snapshot, cluster: Cluster) -> tuple[list[tuple[str, str, int | None, float | None]], list[str]]:
+    """The candidates open to a submit now -- ``(name, qos, submit room, ceiling)`` -- and why the rest are not."""
+    open_, refusals = [], []
+    for name in cluster.partitions or tuple(snapshot.partitions):
+        part = snapshot.partitions.get(name)
+        if part is None or not part.up:
+            refusals.append(f'{name}: not up')
+            continue
+        qos = cluster.qos.get(name, snapshot.quota.default_qos)
+        if part.allow_qos and qos not in part.allow_qos:
+            refusals.append(f'{name}: qos {qos!r} not allowed')
+            continue
+        room = snapshot.quota.submit_room(qos)
+        if room == 0:
+            refusals.append(f'{name}: qos {qos!r} {SUBMIT_ROOM_SPENT}')
+            continue
+        open_.append((name, qos, room, _ceiling(snapshot, name, qos)))
+    return open_, refusals
+
+
+def _held(seconds: Sequence[float], policy: Policy, ceilings: Sequence[float | None]) -> list[float]:
+    """Each item's padded seconds, never past the longest wall an open candidate grants.
+
+    An estimate past every ceiling is a guess, never a need: a kill's floor is twice what the id ran
+    (:meth:`~lab_commons.compute.learned.Measured.killed`) and the margin multiplies it again. Measured
+    2026-10-26 (Ada): an id priced 48 h padded to a 4321-min shard that neither shortq (720) nor defq
+    (2880) holds, and every motronics run stuck at "no grant can take this work". Held to the longest
+    ceiling, the id gets the most any partition gives; past that its wall cuts it and its cell says so.
+    """
+    padded = [s * policy.safety for s in seconds]
+    if not ceilings or None in ceilings:
+        return padded
+    top = max(c for c in ceilings if c is not None) * 60
+    return [min(p, top) for p in padded]
+
+
 def make_plan(
     n_items: int,
     cost: Cost,
@@ -184,24 +220,10 @@ def make_plan(
     if allowed < 1:
         msg = f'the quota ceiling of account {snapshot.quota.account!r} cannot fit even one item of {cost}'
         raise ValueError(msg)
-    padded = [s * policy.safety for s in (seconds or [cost.seconds] * n_items)]
-    candidates = cluster.partitions or tuple(snapshot.partitions)
+    open_, refusals = _open(snapshot, cluster)
+    padded = _held(seconds or [cost.seconds] * n_items, policy, [o[3] for o in open_])
     options = []
-    refusals = []
-    for name in candidates:
-        part = snapshot.partitions.get(name)
-        if part is None or not part.up:
-            refusals.append(f'{name}: not up')
-            continue
-        qos = cluster.qos.get(name, snapshot.quota.default_qos)
-        if part.allow_qos and qos not in part.allow_qos:
-            refusals.append(f'{name}: qos {qos!r} not allowed')
-            continue
-        room = snapshot.quota.submit_room(qos)
-        if room == 0:
-            refusals.append(f'{name}: qos {qos!r} {SUBMIT_ROOM_SPENT}')
-            continue
-        ceiling = _ceiling(snapshot, name, qos)
+    for name, qos, room, ceiling in open_:
         at_once = min(allowed, snapshot.quota.qos_max_jobs.get(qos) or allowed)
         shards, minutes = one_wave(padded, policy, room, at_once=at_once, ceiling=ceiling)
         if ceiling is not None and minutes > ceiling:
