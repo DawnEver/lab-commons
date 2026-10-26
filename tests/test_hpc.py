@@ -108,10 +108,22 @@ def test_a_long_shard_skips_partitions_whose_ceiling_it_breaks() -> None:
     assert plan.partitions[0] == 'shortq'  # devq's 1 h ceiling cannot hold a 4.5 h shard
     plan = make_plan(10, Cost(seconds=20 * 3600), snap, cluster=CLUSTER, policy=Policy(), limits=Limits())
     assert plan.partitions[0] == 'defq'
-    with pytest.raises(ValueError, match='no candidate partition can take'):
-        make_plan(
-            10, Cost(seconds=40 * 3600), snap, cluster=CLUSTER, policy=Policy(), limits=Limits()
-        )  # beyond the 2-day free QOS
+
+
+def test_an_item_priced_past_every_ceiling_gets_the_longest_wall_never_a_stuck_refusal() -> None:
+    """Measured 2026-10-26 (Ada): an id cut after a day carried a 48 h floor, padded to a 4321-min shard.
+
+    shortq (720) and defq under the free QOS (2880) both refused it, and every run stuck "cannot advance".
+    The item is held to the longest ceiling an open candidate grants. PLANTED CONTROL: a shard of
+    short items that fits keeps its own measured wall, and the partition too short for the long item
+    is still never asked.
+    """
+    snap = parse_snapshot(IDLE_CALLER)
+    seconds = [172_840.0] + [60.0] * 9
+    plan = make_plan(10, Cost(), snap, cluster=CLUSTER, policy=Policy(), limits=Limits(), seconds=seconds)
+    assert (plan.partitions, plan.minutes) == (('defq',), 2 * 24 * 60)
+    short = make_plan(10, Cost(), snap, cluster=CLUSTER, policy=Policy(), limits=Limits(), seconds=[60.0] * 10)
+    assert short.minutes < 2 * 24 * 60
 
 
 def test_a_held_quota_throttles_by_the_headroom_and_records_that_none_is_left() -> None:
