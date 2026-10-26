@@ -69,18 +69,27 @@ class ItemWall:
     pytest-timeout runs inside the test's interpreter and cannot interrupt a C loop holding the GIL. Measured
     on Ada: a test spun at 100% CPU for 20 h, and a verdict waited 4 h on two hung items under a 21 h Slurm
     limit. A test with a measured duration is bounded at ``multiple`` times it, never under ``floor_s``; one
-    never measured gets ``unmeasured_s``. These defaults are the one place the numbers live.
+    never measured gets ``unmeasured_s``; NO test gets more than ``ceiling_s``. These defaults are the one place
+    the numbers live.
+
+    THE CEILING, and why a measurement cannot lift it: a "measurement" includes a kill's FLOOR, which every wall
+    kill doubles (:meth:`lab_commons.compute.learned.Measured.killed`), so ``multiple`` times it grows without
+    bound. Ada 2026-10-24..26: eight forge jobs each held a core 34-41 h on one hung winding test whose wall read
+    776553..1051465 s -- nine to twelve days, past every Slurm limit, so the runner's kill never fired. Two hours
+    is twenty times the slowest test the motronics suite measured passing (~11 min) and a fraction of any shard's
+    wall; a test needing more is a test to split, not a node to hold.
     """
 
     multiple: float = 10.0
     floor_s: int = 300
     unmeasured_s: int = 3600
+    ceiling_s: int = 7200
 
     def bound(self, measured_s: float | None) -> int:
         """Whole seconds a test of measured duration *measured_s* (``None``: never measured) may run."""
         if measured_s is None:
-            return self.unmeasured_s
-        return max(self.floor_s, math.ceil(self.multiple * measured_s))
+            return min(self.ceiling_s, self.unmeasured_s)
+        return min(self.ceiling_s, max(self.floor_s, math.ceil(self.multiple * measured_s)))
 
 
 @dataclass(frozen=True)
@@ -103,18 +112,22 @@ class Builds:
     item_wall: ItemWall = field(default_factory=ItemWall)
 
 
-_ITEM_WALL_KEYS: Final = frozenset({'multiple', 'floor_s', 'unmeasured_s'})
+_ITEM_WALL_KEYS: Final = frozenset({'multiple', 'floor_s', 'unmeasured_s', 'ceiling_s'})
 
 
 def _item_wall(raw: dict[str, object]) -> ItemWall:
-    """The ``item_wall`` table; an unknown key or a non-positive number is refused by name."""
+    """The ``item_wall`` table; an unknown key, a non-positive number or a floor past the ceiling is refused."""
     bad = set(raw) - _ITEM_WALL_KEYS or any(
         isinstance(v, bool) or not isinstance(v, int | float) or v <= 0 for v in raw.values()
     )
     if bad:
         msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: keys {sorted(_ITEM_WALL_KEYS)}, values positive numbers'
         raise InvalidDeclaration(msg)
-    return ItemWall(**raw)  # type: ignore[arg-type]
+    wall = ItemWall(**raw)  # type: ignore[arg-type]
+    if wall.floor_s > wall.ceiling_s:
+        msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: floor_s may not pass ceiling_s'
+        raise InvalidDeclaration(msg)
+    return wall
 
 
 _NO_PROJECT: Final = '--no-install-project'
