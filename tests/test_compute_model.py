@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from lab_commons.compute.admission import Admission, admit, claimable
+from lab_commons.compute.admission import Admission, admit
 from lab_commons.compute.model import (
     Demand,
     Job,
@@ -93,28 +93,3 @@ def test_running_work_is_subtracted() -> None:
     supply = _supply(cpu=8)
     assert not admit(PLAIN_JOB, Demand(cpu=4), supply, running=(Resources(cpu=6),))
     assert admit(PLAIN_JOB, Demand(cpu=4), supply, running=(Resources(cpu=4),))  # CONTROL
-
-
-# --- claimable -----------------------------------------------------------------------------------------
-
-
-def _job(name: str) -> Job:
-    return Job('o/r', name.ljust(40, '0'), 'pytest', frozenset())
-
-
-def test_claim_in_rank_order_skipping_a_non_fit() -> None:
-    """Rank order is authoritative; a job that does not fit is skipped and lower-ranked smaller ones still claim."""
-    ranked = [
-        (_job('a'), Demand(cpu=4)),
-        (_job('big'), Demand(cpu=8)),
-        (_job('c'), Demand(cpu=3)),
-        (_job('d'), Demand(cpu=2)),
-    ]
-    got = claimable(ranked, _supply(cpu=8))
-    assert [job.sha[:3] for job, _ in got] == ['a00', 'c00']
-
-
-def test_claim_counts_what_already_runs() -> None:
-    ranked = [(_job('a'), Demand(cpu=4)), (_job('b'), Demand(cpu=4))]
-    assert len(claimable(ranked, _supply(cpu=8))) == 2  # CONTROL
-    assert len(claimable(ranked, _supply(cpu=8), running=(Resources(cpu=1),))) == 1

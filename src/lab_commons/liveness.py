@@ -12,7 +12,7 @@ other.
 * **2026-09-03 -- a job outliving its driver.** ``lab_commons.resources`` recorded ``os.getpid()``,
   the PYTHON CLIENT's id. A client gave up, its ``finally`` released the seat, and the vendor
   executable ran on for another hour with six live processes still eating the box. Its remedy was
-  :class:`~lab_commons.resources.JobHandle` -- move the claim onto the JOB, which means recording a
+  :class:`~lab_commons.resources.dimensions.JobHandle` -- move the claim onto the JOB, which means recording a
   pid that is NOT this interpreter's. A kernel fd lock structurally cannot express that: the fd
   dies with the interpreter.
 

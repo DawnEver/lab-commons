@@ -23,10 +23,8 @@ from lab_commons.box.demand import (
     NotAdmitted,
     ProcessEnd,
     Refused,
-    declared_seats,
     not_admitted,
     read_ended,
-    seat_supply,
     write_ended,
 )
 from lab_commons.box.ledger import (
@@ -38,6 +36,7 @@ from lab_commons.box.ledger import (
     adopted,
     box_path,
     declare,
+    external,
     hand_over,
     hold,
     holdings,
@@ -68,7 +67,7 @@ __all__ = [
     'box_path',
     'command',
     'declare',
-    'declared_seats',
+    'external',
     'hand_over',
     'hold',
     'holdings',
@@ -77,7 +76,6 @@ __all__ = [
     'read_ended',
     'release',
     'run',
-    'seat_supply',
     'take',
     'write_ended',
 ]

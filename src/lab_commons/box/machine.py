@@ -79,7 +79,7 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """The machine file's ``[capabilities]``: ``{name: facts}``; a malformed row is refused by name.
 
     ``seats`` is the DECLARED count (default 1); ``supply``, when given, is the argv of the probe that MEASURES it
-    (:func:`lab_commons.box.demand.seat_supply`); ``in_use = { process = [images] }``, when given, names the process
+    (:func:`lab_commons.box.providers.seat_sizes`); ``in_use = { process = [images] }``, when given, names the process
     images whose running count is the seats in use NOW (:func:`watched`, :func:`lab_commons.box.supply.observe`).
     """
     out: dict[str, dict[str, Any]] = {}

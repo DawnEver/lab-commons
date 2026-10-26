@@ -51,10 +51,10 @@ from lab_commons.hpc.grants import COMMENT_PREFIX, Grant, Paging, Session
 from lab_commons.hpc.region import free_mem_mb, may_place
 from lab_commons.hpc.shards import one_wave
 from lab_commons.hpc.slurm import Snapshot
-from lab_commons.resources import CPU, GPU, MEMORY
+from lab_commons.resources.dimensions import CPU, GPU, MEMORY
 from lab_commons.width import fits
 
-#: Slurm reports memory in MiB; :data:`~lab_commons.resources.MEMORY` counts bytes.
+#: Slurm reports memory in MiB; :data:`~lab_commons.resources.dimensions.MEMORY` counts bytes.
 MIB: Final = 1024**2
 
 #: A partition's refusal when its QOS takes no more submits from the caller (:meth:`Quota.submit_room` is 0).

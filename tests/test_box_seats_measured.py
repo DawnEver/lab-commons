@@ -19,10 +19,10 @@ import pytest
 from lab_commons.box import GB, Capacity, Holding
 from lab_commons.box.ledger import _decide
 from lab_commons.box.machine import provided, reserve_table, watched
+from lab_commons.box.providers import box_engine
 from lab_commons.box.supply import Reading, observe, room
 from lab_commons.compute.model import Demand
 from lab_commons.compute.presence import Presence
-from lab_commons.compute.probe import box
 
 _JMAG = {'jmag': ('jam.exe', 'jam_c.exe')}
 
@@ -102,14 +102,10 @@ def test_observe_names_an_unreadable_table() -> None:
 
 
 def test_the_forge_box_supply_counts_the_same_seats() -> None:
-    supply = box(
-        'ws1',
-        capacity=_cap(),
-        read=lambda _pids: _reading(1),
-        platform='win32',
-        presence={'jmag': Presence('jmag', present=True)},
+    engine = box_engine(
+        capacity=_cap(), read=lambda _pids: _reading(1), presence={'jmag': Presence('jmag', present=True)}
     )
-    assert supply.resources['jmag'] == 3
+    assert engine.available('box').resources['jmag'] == 3
 
 
 def test_the_machine_file_spells_the_observation() -> None:

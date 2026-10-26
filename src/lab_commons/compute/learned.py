@@ -500,14 +500,15 @@ def cluster_demand(
     part never claims it.
 
     A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key. It also asks the
-    ``files`` it leaves in the home (measured, else :data:`CLUSTER_PRIOR`'s), against the account's file headroom.
+    ``files`` it leaves in the home (measured, else :data:`CLUSTER_PRIOR`'s), against the account's file headroom,
+    and the one ``submits`` its run takes of the account's QOS.
     """
     item, cut = cost or Cost(), policy or Policy()
 
     def ask(needs: frozenset[str]) -> Demand:
         run = run_of(repo_url, SLURM, needs) or CLUSTER_PRIOR
         memory = task_gb(run.peak_mem_gb, prior_gb=item.mem_gb, safety=cut.safety)
-        return Demand({**run.demand(needs), 'mem_gb': memory, 'files': run.files or CLUSTER_PRIOR.files})
+        return Demand({**run.demand(needs), 'mem_gb': memory, 'files': run.files or CLUSTER_PRIOR.files, 'submits': 1})
 
     return ask
 

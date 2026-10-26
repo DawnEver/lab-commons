@@ -47,7 +47,6 @@ __all__ = [
     'expected_cost',
     'rank',
     'starved',
-    'submitted',
     'total',
     'value',
 ]
@@ -157,13 +156,6 @@ class Job:
     sha: str
     producer: str
     needs: frozenset[str] = frozenset()
-
-
-def submitted(demand: Mapping[str, float], supply: Supply) -> Demand:
-    """*demand* taking one submission where *supply* counts them (a cluster account); else unchanged."""
-    if 'submits' not in supply.present:
-        return Demand(demand)
-    return Demand({**demand, 'submits': max(1.0, demand.get('submits', 0.0))})
 
 
 # --- the order ------------------------------------------------------------------------------------------

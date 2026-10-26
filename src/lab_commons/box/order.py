@@ -33,13 +33,15 @@ from dataclasses import replace
 
 from lab_commons.box.demand import GB, Capacity, Holding
 from lab_commons.box.demand import seats as seats_of
-from lab_commons.box.supply import Reading, Usage, room
-from lab_commons.compute.admission import admit
-from lab_commons.compute.model import Demand, Job, Resources, Supply
+from lab_commons.box.providers import measured
+from lab_commons.box.supply import Reading, Usage
+from lab_commons.compute.model import Demand, Resources
+from lab_commons.resources.engine import admits
 
 __all__ = ['Asked', 'blocks', 'contends', 'earliest', 'fits']
 
-#: An earlier ticket's ask as its row stores it: cores, memory bytes, seats JSON; NULL on a pre-demand row.
+#: An earlier ticket's ask as its row stores it: cores, memory bytes, the seats JSON of every other amount by name;
+#: NULL on a pre-demand row.
 Asked = tuple[int | None, int | None, str | None]
 
 
@@ -49,9 +51,10 @@ def _vector(cpu: float, mem_bytes: int, seats: dict[str, int]) -> Resources:
 
 
 def fits(capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand) -> bool:
-    """Whether the one rule admits *demand* on the room *held* leaves in *reading*."""
-    free = room(capacity, held, reading, seats=seats_of(demand))
-    return bool(admit(Job(repo='', sha='', producer=''), demand, Supply('box', free, free.names | {'cpu'})))
+    """Whether the engine's rule admits *demand* on what the box measured in *reading* less *held*."""
+    supply = measured(capacity, held, reading, seats=seats_of(demand))
+    running = [_vector(h.cpu, h.mem_bytes, dict(h.seats)) for h in held]
+    return bool(admits(supply.resources, demand, present=supply.present, running=running))
 
 
 def contends(holder: Holding, ahead: Asked) -> bool:

@@ -1,9 +1,9 @@
 """The ONE ledger of running claims on this machine, and the bounded wait to hold one.
 
-THE DECISION IS THE ONE RULE ON THE MEASURED ROOM. A claim is written when
-:func:`lab_commons.compute.admission.admit` admits its demand against :func:`lab_commons.box.supply.room` --
-what the OS has free now, less what the claims already held have not taken yet, less the ``[reserve]``
-margin (D2, D3 2026-10-16). There is no second fit rule here.
+THE DECISION IS THE ENGINE'S RULE ON WHAT THE BOX'S PROVIDERS MEASURED. A claim is written when
+:func:`lab_commons.resources.admits` admits its demand on :func:`lab_commons.box.providers.measured` -- the box
+less what is used outside the ledger -- less every claim held (D2, D3 2026-10-16; one resource path P1,
+2026-10-26). There is no second fit rule here, and nothing is held back by configuration for anyone.
 
 A CLAIM EXISTS ONLY FOR A RUNNING PROCESS. It is written when the launcher is admitted, deleted
 when it leaves, and equals the run's declared :class:`~lab_commons.compute.model.Demand` -- which
@@ -32,6 +32,10 @@ A CLAIM MAY BE TAKEN BY ONE PROCESS AND RUN BY ANOTHER: :func:`take` admits it a
 it with the taker -- a scheduler deciding to start a run -- and the run it spawns :func:`adopted` it: the row
 moves to the run's pid with no second admission, so a run its scheduler admitted is never refused by the same
 box a moment later, and it is released when the run ends (or reaped with whichever process holds it).
+
+AN EXTERNAL JOB ON THIS BOX IS A CLAIM OF ITS REAL LOAD: :func:`external` admits a vendor scheduler's job that runs
+HERE (a JMAG Job System job on this node) at the cores, memory, seat and lent slot it takes, and persists it with
+its liveness probe -- so every later admission sees that load as held, not as a surprise in the OS reading.
 
 A PERSON'S USE IS A DECLARED CLAIM (ruling 2026-10-25), never a reservation in configuration: :func:`declare`
 writes a row for work no process of ours runs -- a person at Designer, a session -- with an EMPTY probe, so it
@@ -70,8 +74,9 @@ import os
 import sqlite3
 import subprocess
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Final
 
@@ -96,18 +101,16 @@ from lab_commons.box.demand import (
     seats,
 )
 from lab_commons.box.order import blocks
-from lab_commons.box.supply import Reading, room
-from lab_commons.compute.admission import admit
-from lab_commons.compute.model import Demand, Job, Resources, Supply
+from lab_commons.box.providers import Read, measured, size
+from lab_commons.box.supply import Reading
+from lab_commons.compute.model import Demand, Resources
 from lab_commons.liveness import creation_stamp, still_the_same_process
 from lab_commons.log import emit
-
-#: The OS reader a decision measures with: the claim pids in, a :class:`~lab_commons.box.supply.Reading` out.
-Read = Callable[[Iterable[int]], Reading]
+from lab_commons.resources.engine import admits
 
 __all__ = [
-    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'adopted', 'box_path', 'declare', 'hand_over',
-    'hold', 'holdings', 'persist', 'reap', 'release', 'take', 'untrusted',
+    'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Read', 'adopted', 'box_path', 'declare',
+    'external', 'hand_over', 'hold', 'holdings', 'persist', 'reap', 'release', 'take', 'untrusted',
 ]  # fmt: skip
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
@@ -259,9 +262,9 @@ def _when(epoch: float) -> str:
 
 
 def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand, what: str) -> str | None:
-    """``None`` when THE RULE admits *demand* on the measured room, else why not -- naming each lacking holder."""
-    free = room(capacity, held, reading, seats=seats(demand), asker=os.getpid())
-    verdict = admit(Job(repo='', sha='', producer=what), demand, Supply('box', free, free.names | {'cpu'}))
+    """``None`` when THE RULE admits *demand* on the box's measure less every claim, else why not, naming holders."""
+    supply = measured(capacity, held, reading, seats=seats(demand), asker=os.getpid())
+    verdict = admits(supply.resources, demand, present=supply.present, running=[_vector_of(h) for h in held], what=what)
     if verdict:
         return None
     holders = [
@@ -371,14 +374,8 @@ def hold(
         yield Claim(0, float('inf'))  # this tree's enclosing claim already holds it
         return
     capacity = Capacity.read() if capacity is None else capacity
-    size = Resources(
-        {
-            'cpu': capacity.cpu,
-            'mem_gb': capacity.mem_bytes / GB,
-            **{n: capacity.seats.get(n, 1) for n in seats(demand)},
-        }
-    )
-    never = admit(Job(repo='', sha='', producer=what), demand, Supply('box', size, size.names | {'cpu'}))
+    whole = size(capacity, seats(demand))
+    never = admits(whole.resources, demand, present=whole.present, what=what)
     if not never:
         msg = f'{what}: larger than this box, refused at once -- {never.why}'
         raise Refused(msg)
@@ -435,6 +432,49 @@ def take(
     """
     with hold(demand, wall_s, what, 0.0, key=key, capacity=capacity, read=read) as claim:
         _update(claim, 'UPDATE claims SET kept = 1 WHERE id = ?')
+    return claim
+
+
+def external(
+    demand: Mapping[str, float],
+    wall_s: int,
+    what: str,
+    *,
+    key: str,
+    probe: Sequence[str],
+    lent: Mapping[str, int] | None = None,
+    queue_s: float = 0.0,
+    capacity: Capacity | None = None,
+    read: Read = Reading.now,
+) -> Claim:
+    """Hold an EXTERNAL job that runs on THIS box at its real load, kept past this call until the job ends.
+
+    A vendor scheduler's job on this node -- a JMAG Job System job, say -- takes cores, memory, a tool seat and one
+    of the scheduler's slots, and no process of ours runs it. Its *demand* says so (``{'cpu': cores_per_job,
+    'mem_gb': ..., 'jmag': 1, 'jobslot:<node>': 1}``); a slot is LENT by *lent* (``{'jobslot:<node>': slots}``, its
+    consumer's one count, :meth:`~lab_commons.box.Capacity.lent`) beside the box's own size. It is admitted like any
+    hold -- the engine's rule on the box's providers, waiting at most *queue_s* -- then persisted with its liveness
+    *probe* (an argv; exit 0 while the job lives): it is held until :func:`release` on terminal evidence, its
+    deadline, or -- once this process is gone -- the probe saying the job is gone. *key* names the job: a second
+    claim under a live key is refused (:class:`~lab_commons.box.demand.DuplicateKey`).
+
+    Until the job's own process is known its cores count IN FULL as held (the reading attributes no use to this
+    claim), so the box lends less while the job runs, never more; :func:`hand_over` to the solver's pid, once
+    known, attributes its measured use to the claim, which then also lives while that process does.
+
+    Raises:
+        ValueError: *demand*, *wall_s* or *lent* is malformed, or *probe* is empty.
+        Refused: the box can never admit it (:class:`~lab_commons.box.demand.NotAdmitted`: no room in *queue_s*).
+
+    """
+    if not probe:
+        msg = f'{what}: an external job needs a liveness probe -- a claim without one is a declared claim (declare)'
+        raise ValueError(msg)
+    whole = Capacity.read() if capacity is None else capacity
+    if lent:
+        whole = replace(whole, seats={**whole.seats, **Capacity.lent(lent).seats})
+    with hold(demand, wall_s, what, queue_s, key=key, capacity=whole, read=read, outside=True) as claim:
+        persist(claim, probe)
     return claim
 
 

@@ -19,7 +19,7 @@ from lab_commons.box import GRACE_S, holdings
 from lab_commons.box._store import box_path, connect
 from lab_commons.compute.model import Resources, Supply
 from lab_commons.config import config_path
-from lab_commons.resource import KINDS, Actual, Claim, Engine, Kind, NotAdmitted, charged, kind_of
+from lab_commons.resources import KINDS, Actual, Claim, Engine, Kind, NotAdmitted, charged, kind_of
 
 _SCOPE = 'fake'
 

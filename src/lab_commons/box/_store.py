@@ -98,8 +98,14 @@ def connect() -> sqlite3.Connection:
 
 
 #: Columns added after the file format was first written, per table: (name, its fixed definition).
+#:
+#: THE FILE IS SHARED BY EVERY lab-commons VERSION ON THE BOX, so its schema only ever GROWS: a new table, or a new
+#: column that is nullable or has a default. Never a rename, a drop or a type change -- an older reader on the same
+#: box would fail on its next open (2026-10-26: a ``seats`` -> ``amounts`` rename stopped every older process on
+#: the box). ``test_box_store_is_additive`` refuses any other DDL. So a column keeps its first name: ``seats`` holds
+#: EVERY amount but cores and memory, by name -- tool seats, lent slots, OS, consumables.
 #: A ticket's demand is NULL on a ticket written before it was declared: such a ticket contends for everything.
-#: A claim written before :mod:`lab_commons.resource` named scopes and kinds is the box's, OCCUPANCY, windowless.
+#: A claim written before :mod:`lab_commons.resources` named scopes and kinds is the box's, OCCUPANCY, windowless.
 _ADDED: Final = {
     'claims': (
         ('kept', 'kept INTEGER NOT NULL DEFAULT 0'),
@@ -127,7 +133,7 @@ def immediate(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 def read(con: sqlite3.Connection) -> list[Holding]:
     """Every claim row of the BOX scope on *con*, oldest first, as :class:`~lab_commons.box.demand.Holding`.
 
-    A row :mod:`lab_commons.resource` wrote for another scope (an API key, a cluster account) holds nothing here.
+    A row :mod:`lab_commons.resources` wrote for another scope (an API key, a cluster account) holds nothing here.
     """
     rows = con.execute(
         "SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe, kept FROM claims WHERE scope = 'box' "
