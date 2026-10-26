@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.box import Capacity, seat_supply
+from lab_commons.box import Capacity
 from lab_commons.box.machine import DEFAULT_CPU_MARGIN, DEFAULT_MEM_MARGIN, own_reserve, provided, reserve_table
+from lab_commons.box.providers import seat_sizes
 
 
 def test_the_own_reserve_is_the_declared_margin_capped_at_the_box() -> None:
@@ -56,7 +57,7 @@ def test_a_seat_count_is_measured_by_its_supply_probe_over_the_declaration(
     _capabilities(
         tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(2)")}\n[capabilities.femm]\n'
     )
-    assert seat_supply() == ({'jmag': 2, 'femm': 1}, {}), 'measured beats declared; no probe is the declaration'
+    assert seat_sizes() == ({'jmag': 2, 'femm': 1}, {}), 'measured beats declared; no probe is the declaration'
     assert Capacity.read().seats == {'jmag': 2, 'femm': 1}
 
 
@@ -67,15 +68,15 @@ def test_a_supply_probe_that_cannot_say_lends_nothing_and_says_why(
     _capabilities(
         tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("import sys; sys.exit(3)")}\n'
     )
-    sizes, blind = seat_supply()
+    sizes, blind = seat_sizes()
     assert sizes == {'jmag': 5}
     assert 'supply probe' in blind['jmag']
     assert Capacity.read().blind == blind
     _capabilities(tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(chr(120))")}\n')
-    assert 'jmag' in seat_supply()[1], 'PLANTED CONTROL: output that is no count is no measurement'
+    assert 'jmag' in seat_sizes()[1], 'PLANTED CONTROL: output that is no count is no measurement'
 
 
 def test_a_malformed_supply_is_refused_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _capabilities(tmp_path, monkeypatch, '[capabilities.jmag]\nsupply = "lmstat"\n')
     with pytest.raises(ValueError, match=r'capabilities\.jmag.*supply'):
-        seat_supply()
+        seat_sizes()

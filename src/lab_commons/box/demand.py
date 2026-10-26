@@ -19,13 +19,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Final
 
-import lab_commons.launch as _door
 from lab_commons.box.machine import own_reserve, provided, reserve_table, watched
 from lab_commons.compute.durable import durable_text
 from lab_commons.compute.model import Demand
@@ -35,8 +33,8 @@ from lab_commons.proc import system_memory
 
 __all__ = [
     'CPU', 'GB', 'LENT_NAME', 'MEM_GB', 'NOT_ADMITTED', 'WALL_CEILING_S', 'Capacity', 'Claim', 'DuplicateKey',
-    'Holding', 'NotAdmitted', 'ProcessEnd', 'Refused', 'checked', 'cores', 'declared_seats', 'mem_bytes',
-    'not_admitted', 'read_ended', 'seat_supply', 'seats', 'write_ended',
+    'Holding', 'NotAdmitted', 'ProcessEnd', 'Refused', 'checked', 'cores', 'mem_bytes', 'not_admitted', 'read_ended',
+    'seats', 'write_ended',
 ]  # fmt: skip
 
 #: Bytes in the gigabyte a demand's ``mem_gb`` is declared in (binary, as the OS reports totals).
@@ -70,7 +68,8 @@ class DuplicateKey(Refused):
 WALL_CEILING_S: Final = 7 * 24 * 3600
 
 
-#: The two names of a :class:`~lab_commons.compute.model.Demand` the box enforces itself; every other name is a seat.
+#: The two names of a :class:`~lab_commons.compute.model.Demand` the box ENFORCES on its run (a kernel limit); every
+#: other name is counted on the ledger and held for the run (its kind: :func:`lab_commons.resources.kind_of`).
 CPU: Final = 'cpu'
 MEM_GB: Final = 'mem_gb'
 
@@ -127,49 +126,6 @@ def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def declared_seats() -> dict[str, int]:
-    """The machine file's ``[capabilities]`` as ``{tool: seats}`` (default 1): what a box AND an account lend."""
-    return {name: int(facts.get('seats', 1)) for name, facts in provided(section('capabilities')).items()}
-
-
-#: Seconds a seat-supply probe may take before its tool falls back to the declared count.
-SUPPLY_S = 10.0
-
-
-def seat_supply() -> tuple[dict[str, int], dict[str, str]]:
-    """Each ``[capabilities]`` tool's seats as MEASURED (D3): ``(sizes, blind)``.
-
-    A ``supply`` argv prints the TOTAL seats this box may lend (a vendor's licence count, say) as one integer;
-    the ledger subtracts what its claims hold. No probe: the declared ``seats`` are the size. A probe that fails,
-    times out or prints no count CANNOT SAY: its tool keeps its declared size but is *blind* -- ``{tool: why}``
-    -- and :func:`lab_commons.box.supply.room` lends none of it (a vacuous green is the family's worst defect).
-    """
-    sizes: dict[str, int] = {}
-    blind: dict[str, str] = {}
-    for name, facts in provided(section('capabilities')).items():
-        declared = int(facts.get('seats', 1))
-        probe = facts.get('supply')
-        count = _measured(probe)
-        if probe and count is None:
-            blind[name] = f'its supply probe {probe[0]!r} failed, timed out or printed no count'
-        sizes[name] = count if count is not None else declared
-    return sizes, blind
-
-
-def _measured(supply: list[str] | None) -> int | None:
-    """The count *supply* prints, or ``None`` when there is no probe or it cannot say."""
-    if not supply:
-        return None
-    try:
-        done = _door.run(
-            supply, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=SUPPLY_S, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    text = done.stdout.strip()
-    return int(text) if done.returncode == 0 and text.isdecimal() else None
-
-
 #: A LENT resource's name, ``<kind>:<instance>`` (``jobslot:ws1``): never a machine-file ``[capabilities]``
 #: name.
 LENT_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*:[A-Za-z0-9_.-]+$')
@@ -183,7 +139,8 @@ class Capacity:
     now (:func:`lab_commons.box.supply.room`); a size given by hand keeps none. ``watched`` names the seats whose
     use is OBSERVED in the process
     table (``[capabilities.<name>] in_use``), so a reading that did not observe one lends none of it; ``blind``
-    names each seat whose supply probe could not say, and why (:func:`seat_supply`): it lends none either.
+    names each seat whose supply probe could not say, and why (:func:`lab_commons.box.providers.seat_sizes`): it lends
+    none either.
     """
 
     cpu: float
@@ -219,7 +176,9 @@ class Capacity:
 
     @classmethod
     def read(cls) -> Capacity:
-        """The OS totals less the machine file's ``[reserve]``, plus its tools' MEASURED seats (:func:`seat_supply`)."""
+        """The OS totals less the machine file's ``[reserve]``, plus its tools' MEASURED seats (the one seat reader)."""
+        from lab_commons.box.providers import seat_sizes  # noqa: PLC0415 -- the providers measure on this Capacity
+
         memory = system_memory()
         if memory is None:
             msg = 'the box cannot read this machine total memory, so it has no capacity to admit against'
@@ -228,7 +187,7 @@ class Capacity:
         total = {'cpu': cores, 'mem_gb': memory.total_bytes / GB}
         reserve = reserve_table(section('reserve'))
         kept = own_reserve(total, reserve)
-        sizes, blind = seat_supply()
+        sizes, blind = seat_sizes()
         return cls(
             cpu=cores - kept['cpu'],
             mem_bytes=int(memory.total_bytes - kept['mem_gb'] * GB),

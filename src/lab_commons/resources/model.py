@@ -3,7 +3,9 @@
 A kind is a property of a resource NAME, declared once here (:data:`KINDS`); it decides only when a held amount
 returns. OCCUPANCY returns at run end, CONSUMABLE turns its held cap into a charge of the actual at run end and
 returns the rest, PERSISTENT returns only when reaped (its owner is gone). A tool seat is OCCUPANCY by being a
-machine file ``[capabilities]`` tool -- the one place tool names are declared. Any other name is refused.
+machine file ``[capabilities]`` tool or a tool the family can probe (:data:`~lab_commons.compute.toolchecks.CHECKS`),
+and so is a LENT name ``<kind>:<instance>`` (:data:`~lab_commons.box.demand.LENT_NAME`, a JMAG Job System slot).
+Any other name is refused.
 """
 
 from __future__ import annotations
@@ -15,9 +17,10 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from lab_commons.box.demand import WALL_CEILING_S
+from lab_commons.box.demand import LENT_NAME, WALL_CEILING_S
 from lab_commons.box.machine import provided
 from lab_commons.compute.model import Demand, Resources, Supply
+from lab_commons.compute.toolchecks import CHECKS
 from lab_commons.config import section
 
 __all__ = ['KINDS', 'Actual', 'Claim', 'Kind', 'Provider', 'kind_of']
@@ -42,7 +45,7 @@ KINDS: Final[Mapping[str, Kind]] = MappingProxyType(
 
 
 def kind_of(name: str) -> Kind:
-    """The kind of resource *name*: :data:`KINDS`, else OCCUPANCY for a ``[capabilities]`` tool.
+    """The kind of resource *name*: :data:`KINDS`, else OCCUPANCY for a tool seat or a lent name.
 
     Raises:
         ValueError: *name* has no kind (UNSUPPORTED-RAISES).
@@ -50,9 +53,9 @@ def kind_of(name: str) -> Kind:
     """
     if name in KINDS:
         return KINDS[name]
-    if name in provided(section('capabilities')):
+    if LENT_NAME.match(name) or name in CHECKS or name in provided(section('capabilities')):
         return Kind.OCCUPANCY
-    msg = f'resource {name!r} has no kind: not in lab_commons.resource.KINDS nor a [capabilities] tool'
+    msg = f'resource {name!r} has no kind: not in KINDS, a [capabilities] or checked tool, nor <kind>:<instance>'
     raise ValueError(msg)
 
 

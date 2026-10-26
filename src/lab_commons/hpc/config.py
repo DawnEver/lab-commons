@@ -36,9 +36,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.resources import CPU, GPU, MEMORY
+from lab_commons.resources.dimensions import CPU, GPU, MEMORY
 
-#: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.resources.MEMORY` counts bytes.
+#: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.resources.dimensions.MEMORY` counts bytes.
 GIB: Final = 1024**3
 
 __all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'load_config']
@@ -68,7 +68,7 @@ class Cost:
             raise ValueError(msg)
 
     def demands(self) -> dict[str, float]:
-        """The cost in :data:`lab_commons.resources.DIMENSIONS` units -- what :func:`lab_commons.width.fits` reads."""
+        """The cost in :data:`~lab_commons.resources.dimensions.DIMENSIONS` units (read by `width.fits`)."""
         return {CPU.name: self.cpus, MEMORY.name: self.mem_gb * GIB, GPU.name: self.gpus}
 
 

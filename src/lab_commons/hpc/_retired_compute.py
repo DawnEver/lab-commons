@@ -38,10 +38,10 @@ COMPUTE: Final[dict[str, str]] = {
     'BOTH_GAPS': 'famtests.depdoor.UNDECLARED_GAPS',
     # What a host or account can take is its measured Supply (design: one admission, migration step 2, 2026-10-13).
     # The type is matched by its uses, not the bare word, which the ratchet prose uses in its plain sense.
-    'Headroom(': 'lab_commons.compute.model.Supply (from lab_commons.compute.probe)',
+    'Headroom(': 'lab_commons.compute.model.Supply (measured by a provider, lab_commons.box.providers)',
     ': Headroom': 'lab_commons.compute.model.Supply',
     ', Headroom': 'lab_commons.compute.model.Supply',
-    'box_headroom': 'lab_commons.compute.probe.box (free cores, memory, OS and tools measured now)',
+    'box_headroom': 'lab_commons.box.providers.box_engine(...).available (what lies outside the ledger now)',
     'no free core': "the admission's lacking resource: 'not admitted: lacking cpu' (compute.admission.admit)",
     # A tick claims in rank order WHILE JOBS ADMIT, several per host (design: one admission, step 6, 2026-10-13).
     'OUTRANKED': (
@@ -70,7 +70,7 @@ COMPUTE: Final[dict[str, str]] = {
     '--own-weight': 'nothing: the box keeps its [reserve] margins for its own user; favour work with [priority]',
     '[[hpc.grant]] cpus': ('nothing: admission fits each job against what the account has free now -- delete the line'),
     # A box job's cpu was capped at the box's because its cpu was wall x cores; it is now measured (2026-10-13).
-    'model.fitted': 'nothing: a demand is what the job measured (lab_commons.proccpu.TreeCpu); compute.model.submitted',
+    'model.fitted': 'nothing: a demand is what the job measured (lab_commons.proccpu.TreeCpu)',
     # A carry is derived from each test's footprint, never declared per repo (2026-10-13).
     'inert_globs': 'dev_lab.dev.footprint.Footprints (the footprint of each test file, derived at the judged sha)',
     'parts] inert': (
@@ -85,7 +85,7 @@ COMPUTE: Final[dict[str, str]] = {
     ),
     '[tool.lab_commons.capabilities]': (
         '[tool.lab_commons.tests] resources = [<marker>, ...] -- every resource is equal; which host has one is '
-        "its machine file's [capabilities.<name>] and the probes (lab_commons.compute.probe)"
+        "its machine file's [capabilities.<name>] and the seat provider (lab_commons.box.providers.ToolSeats)"
     ),
     # A resource is a host CAPABILITY boundary: the checkout, node and codex live on the same hosts, so they are
     # one resource, and three parts queued three times on one host (user directive 2026-10-19).
@@ -175,12 +175,25 @@ COMPUTE: Final[dict[str, str]] = {
     # The box's decision is a RECORD, never a sentinel exit code a child could also choose (SR-20261015-002).
     'lab_commons.box.REFUSED': 'lab_commons.box.read_ended (the --outcome record: a Refused when nothing ran)',
     'lab_commons.box.KILLED': 'lab_commons.box.read_ended (the --outcome record: a ProcessEnd whose killed is true)',
-    'free_cores(': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
-    'available_mem_gb': 'lab_commons.box.supply.room (the measured room, read by the ledger and compute.probe.box)',
+    'free_cores(': 'lab_commons.box.supply.room (the measured room, read by lab_commons.box.providers)',
+    'available_mem_gb': 'lab_commons.box.supply.room (the measured room, read by lab_commons.box.providers)',
     # ONE fit rule (compute.admission.admit) decides on the MEASURED room; the ledger HOLDS a claim (D2, D3).
     'lab_commons.box.admit': 'lab_commons.box.hold (books a claim the one rule admits on the measured room)',
-    'lab_commons.box.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
-    'demand.fits': 'lab_commons.compute.admission.admit on lab_commons.box.supply.room',
+    'lab_commons.box.fits': 'lab_commons.resources.admits on lab_commons.box.providers.measured',
+    'demand.fits': 'lab_commons.resources.admits on lab_commons.box.providers.measured',
     # ONE concurrency mechanism (user ruling 2026-10-18): an in-flight run holds a seat on the box ledger.
     'claim_path': 'dev_lab.dev.inflight.seat / leader_run (the leader holds a seat on lab_commons.box)',
+    # ONE RESOURCE PATH P1 (2026-10-26): occupancy goes through the engine; one seat reader; no inline Supply.
+    'STATED_ONLY': 'nothing: a name is metered where a provider on its scope supplies it (lab_commons.resources)',
+    'compute.model import submitted': 'nothing: a cluster demand declares its submits (compute.learned.cluster_demand)',
+    'seat_supply': 'lab_commons.box.providers.seat_sizes (the one seat reader)',
+    'declared_seats': 'lab_commons.box.providers.ToolSeats (sizes from seat_sizes, presence from compute.presence)',
+    'probe.seated': 'lab_commons.box.providers.ToolSeats',
+    'probe import tools': 'lab_commons.box.providers.ToolSeats',
+    'probe.box(': 'lab_commons.box.providers.box_engine(...).available',
+    'probe import account': 'lab_commons.hpc.provider.SlurmAccount',
+    'probe.account(': 'lab_commons.hpc.provider.SlurmAccount',
+    'compute.admission import claimable': 'nothing: the forge claim pass walks its order through lab_commons.resources',
+    'lab_commons.resource.': 'lab_commons.resources. (one package: the engine, its kinds and the dimensions)',
+    'from lab_commons.resource import': 'from lab_commons.resources import',
 }

@@ -3,22 +3,19 @@
 A job is admitted when every resource it needs is present on the scope and its demand fits the scope's
 supply less what already runs there. Nothing is reserved, lent or preempted (user ruling 2026-10-14):
 what a box has is what its ledger can still admit (:mod:`lab_commons.box`), and priority is ordering only
-(:mod:`lab_commons.compute.priority`).
+(:mod:`lab_commons.compute.priority`). A name is metered exactly where a provider on the scope supplies it: a
+demand naming one the supply does not count finds 0 of it and is refused, naming it. Nobody calls :func:`admit` but
+the engine (:func:`lab_commons.resources.engine.admits`).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Final
 
 from lab_commons.compute.model import Job, Resources, Supply, total
 
-#: Demands a supply meters only when it lists them present: a box, or a fixture, that states no ``files``
-#: refuses nothing on files, so the file prior never makes its parts unclaimable (2026-10-14).
-STATED_ONLY: Final = frozenset({'files'})
-
-__all__ = ['STATED_ONLY', 'Admission', 'admit', 'claimable']
+__all__ = ['Admission', 'admit']
 
 
 @dataclass(frozen=True)
@@ -53,31 +50,8 @@ def admit(
     if missing:
         return Admission(admitted=False, lacking=missing)
     free = supply.resources - total(running)
-    # a quantity metered only where a supply STATES it: a supply that names no ``files`` refuses nothing on files
-    want = Resources({k: v for k, v in demand.items() if k not in STATED_ONLY or k in supply.present})
+    want = Resources(demand)
     if want <= free:
         return Admission(admitted=True)
     short = want.short_of(free)
     return Admission(admitted=False, lacking=short, numbers=tuple((n, want[n], free[n]) for n in short))
-
-
-def claimable(
-    ranked: Sequence[tuple[Job, Mapping[str, float]]],
-    supply: Supply,
-    *,
-    running: Sequence[Mapping[str, float]] = (),
-) -> list[tuple[Job, Admission]]:
-    """The jobs to claim and how each is admitted, walking *ranked* in its order and adding each claim to what runs.
-
-    RANK ORDER IS AUTHORITATIVE, AND A NON-FIT DOES NOT STOP THE WALK: a job that does not fit is
-    skipped and lower-ranked jobs that do fit are still claimed, so a large job never idles a host
-    that has room for smaller ones. (Its starvation, if it lasts, is named by what it lacks.)
-    """
-    taken: list[Mapping[str, float]] = list(running)
-    claimed = []
-    for job, demand in ranked:
-        verdict = admit(job, demand, supply, running=taken)
-        if verdict:
-            claimed.append((job, verdict))
-            taken.append(Resources(demand))
-    return claimed

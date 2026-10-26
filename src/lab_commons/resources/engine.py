@@ -10,6 +10,16 @@ see the same free amount. A held consumable cap is a promise: it counts until th
 A consumable's WINDOW is the machine file's ``[resources.<name>] window`` (``"1d"``, ``"12h"``, ``"30m"``,
 ``"45s"``); a consumable claimed without one is refused. The provider's ``measure`` computes the balance
 (cap less used in the window), reading the engine's local spend with :func:`charged`.
+
+A PROVIDER MEASURES ITS SCOPE LESS WHAT IS USED OUTSIDE THE LEDGER; the engine subtracts what the ledger holds.
+So every consumer gets only what lies outside every declared claim -- a person's ``box claim`` included -- and
+nothing is held back by configuration: no seat margin, no share for people (user ruling 2026-10-26). A scope is
+measured BEFORE the write lock (a box reading samples the OS for a moment); a claim written since counts in full,
+so a stale measure only ever lends less.
+
+THE RULE ITSELF is :func:`admits`, the one door onto :func:`lab_commons.compute.admission.admit`: every admission
+in the family -- the engine's, the box ledger's queue, the forge's claim pass -- calls it with what its scope's
+providers measured, and nothing else builds a :class:`~lab_commons.compute.model.Supply` but a provider's measure.
 """
 
 from __future__ import annotations
@@ -19,21 +29,20 @@ import os
 import re
 import sqlite3
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 from typing import Final
 
 from lab_commons.box._store import connect, immediate
 from lab_commons.box.demand import GB, NOT_ADMITTED, NotAdmitted
-from lab_commons.box.ledger import reap as reap_ledger
 from lab_commons.compute.admission import Admission, admit
 from lab_commons.compute.model import Job, Resources, Supply, total
 from lab_commons.config import section
 from lab_commons.liveness import creation_stamp
-from lab_commons.resource.model import Actual, Claim, Kind, Provider, kind_of
+from lab_commons.resources.model import Actual, Claim, Kind, Provider, kind_of
 
-__all__ = ['Engine', 'Held', 'charged', 'window_s']
+__all__ = ['Engine', 'Held', 'admits', 'charged', 'window_s']
 
 _UNITS: Final = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
 _WINDOW: Final = re.compile(r'^(?P<n>\d+(?:\.\d+)?)(?P<unit>[smhd])$')
@@ -52,6 +61,29 @@ def window_s(name: str) -> tuple[str, float]:
         msg = f'consumable {name!r} needs a machine file [resources.{name}] window like "1d", got {spelled!r}'
         raise ValueError(msg)
     return spelled, float(parsed['n']) * _UNITS[parsed['unit']]
+
+
+def admits(
+    free: Mapping[str, float],
+    demand: Mapping[str, float],
+    *,
+    present: Collection[str] | None = None,
+    needs: Collection[str] = frozenset(),
+    running: Iterable[Mapping[str, float]] = (),
+    what: str = '',
+) -> Admission:
+    """THE RULE on a scope whose providers measured *free* with the names *present* (default: those it counts).
+
+    *needs* must be present and *demand* fit *free* less *running*; *what* names the asker in the verdict.
+    """
+    counted = Resources(free)
+    listed = counted.names | frozenset(present or ())
+    return admit(
+        Job(repo='', sha='', producer=what, needs=frozenset(needs)),
+        demand,
+        Supply('', counted, listed),
+        running=running,
+    )
 
 
 def charged(scope: str, name: str, *, now: float | None = None) -> float:
@@ -115,15 +147,22 @@ class Engine:
         )
         return Supply(scope, vector, frozenset().union(*(m.present for m in measured)))
 
-    def free(self, scope: str) -> Resources:
-        """What *scope* could admit now: its supply less every claim still held on it."""
+    def available(self, scope: str) -> Supply:
+        """What *scope* could admit now: its supply less every claim still held on it, its present names kept."""
+        measured = self.supply(scope)
         with closing(connect()) as con:
-            return self.supply(scope).resources - total(_held(con, scope))
+            left = measured.resources - total(_held(con, scope))
+        return Supply(scope, left, measured.present)
+
+    def free(self, scope: str) -> Resources:
+        """What *scope* could admit now, as amounts (:meth:`available`)."""
+        return self.available(scope).resources
 
     def claimable(self, scope: str, claim: Claim) -> Admission:
         """THE RULE on *scope* now for *claim*, holding nothing."""
+        measured = self.supply(scope)
         with closing(connect()) as con:
-            return self._admit(con, scope, claim)
+            return self._admit(con, measured, claim)
 
     @contextmanager
     def claim(self, scope: str, claim: Claim, *, probe: Sequence[str] = ()) -> Iterator[Held]:
@@ -162,6 +201,8 @@ class Engine:
 
     def reap(self, *, now: float | None = None) -> None:
         """Drop every row whose holder is gone or deadline passed (the ledger reap), and each charge past its window."""
+        from lab_commons.box.ledger import reap as reap_ledger  # noqa: PLC0415 -- the ledger admits through admits()
+
         now = time.time() if now is None else now
         reap_ledger(now)
         with closing(connect()) as con, immediate(con):
@@ -173,9 +214,13 @@ class Engine:
             raise ValueError(msg)
         return self._providers[scope]
 
-    def _admit(self, con: sqlite3.Connection, scope: str, claim: Claim) -> Admission:
-        return admit(
-            Job(repo='', sha='', producer=claim.what), claim.demand, self.supply(scope), running=_held(con, scope)
+    def _admit(self, con: sqlite3.Connection, measured: Supply, claim: Claim) -> Admission:
+        return admits(
+            measured.resources,
+            claim.demand,
+            present=measured.present,
+            running=_held(con, measured.scope),
+            what=claim.what,
         )
 
     def _hold(self, scope: str, claim: Claim, probe: Sequence[str]) -> Held:
@@ -188,9 +233,10 @@ class Engine:
             msg = f'{claim.what}: its consumables declare different windows -- claim them apart'
             raise ValueError(msg)
         self.reap()
+        measured = self.supply(scope)
         now, pid = time.time(), os.getpid()
         with closing(connect()) as con, immediate(con):
-            verdict = self._admit(con, scope, claim)
+            verdict = self._admit(con, measured, claim)
             if not verdict:
                 msg = f'{claim.what}: {NOT_ADMITTED} on {scope} -- {verdict.why}'
                 raise NotAdmitted(msg)

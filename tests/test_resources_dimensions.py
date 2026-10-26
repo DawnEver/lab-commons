@@ -7,7 +7,7 @@ its behaviour -- seats, a dead holder, a job outliving its client, a bounded wai
 
 import pytest
 
-from lab_commons.resources import (
+from lab_commons.resources.dimensions import (
     CPU,
     DIMENSIONS,
     DISK,

@@ -89,9 +89,10 @@ The base installation is the standard library alone. Select capabilities explici
   `process_tree(pid)` and `kill_process_tree(pid)`. stdlib `ctypes` only, never `psutil` — an
   optional dependency makes a ceiling that silently stops being enforced on some machines, which
   is worse than no ceiling because it is believed. Unreadable is always distinct from zero.
-- `lab_commons.resources` (**tier 1**) — resource DIMENSIONS as data (`seats`/`memory`/`cpu`
-  enforced; `wallclock`/`disk`/`gpu` carrying the shape with nothing able to check them), the vocabulary
-  a Slurm plan and `lab_commons.width.fits` read.
+- `lab_commons.resources` — the ONE resource path: kinds (`KINDS`), `Claim`, the `Provider` plug and the
+  engine whose `admits` is the only caller of the admission rule; providers live beside what they measure
+  (`lab_commons.box.providers`, `lab_commons.hpc.provider`). `resources.dimensions` (**tier 1**) keeps the
+  DIMENSIONS a Slurm plan and `lab_commons.width.fits` read.
 - `lab_commons.box` (**tier 1**) — the ONE ledger per machine: a run DECLARES cores, memory, a wall and
   tool seats, is admitted by the one rule (`compute.admission.admit`) on the MEASURED room
   (`box.supply.room`: free now, less what held claims have not taken yet, less the `[reserve]` margin),

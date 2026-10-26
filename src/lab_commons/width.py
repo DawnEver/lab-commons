@@ -5,7 +5,7 @@ ONE QUESTION, ONE ANSWER. A cluster node's free cores and memory and a scheduler
 over the dimensions both sides name. (A box no longer sizes a pool here: what runs on a box is a claim
 the one ledger admits, :mod:`lab_commons.box`.)
 
-KEYED BY :data:`lab_commons.resources.DIMENSIONS`, in their units (memory in bytes). Memory-first is not a
+KEYED BY :data:`lab_commons.resources.dimensions.DIMENSIONS`, in their units (memory in bytes). Memory-first is not a
 special case: memory
 is a dimension like any other, and ``min`` is what makes the tightest one win.
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from lab_commons.resources import DIMENSIONS
+from lab_commons.resources.dimensions import DIMENSIONS
 
 __all__ = ['fits']
 
@@ -29,7 +29,7 @@ def fits(capacity: Mapping[str, float | None], demand: Mapping[str, float]) -> i
     times, because an unread capacity is not an unlimited one.
 
     Raises:
-        ValueError: a demand names a dimension :data:`~lab_commons.resources.DIMENSIONS` does not, or
+        ValueError: a demand names a dimension :data:`~lab_commons.resources.dimensions.DIMENSIONS` does not, or
             no dimension constrains it at all (the width would be unbounded).
 
     """

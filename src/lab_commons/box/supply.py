@@ -12,7 +12,7 @@ size less every declaration (:class:`~lab_commons.box.demand.Capacity` less the 
 before a claim showed its load never lends what a declaration already owns.
 
 A TOOL SEAT IS SUPPLY LIKE A CORE (2026-10-25). Its size is its tool's supply as its own probe measures it
-(:func:`lab_commons.box.demand.seat_supply`; the declared ``[capabilities]`` count when there is no probe,
+(:func:`lab_commons.box.providers.seat_sizes`; the declared ``[capabilities]`` count when there is no probe,
 1 when undeclared). A seat whose row declares ``in_use = { process = [images] }`` is also OBSERVED:
 the running processes of those images are its seats in use now, so a solve a person starts outside the ledger
 takes its seat. Then
@@ -24,7 +24,7 @@ MAX, not sum: a claim's own solver is a process the table shows too. An observat
 naming why.
 
 :func:`room` is the one formula, read by the ledger (:func:`lab_commons.box.ledger.hold`) and by the
-forge's box supply (:func:`lab_commons.compute.probe.box`); :meth:`Reading.now` is the one OS reader.
+box's providers (:mod:`lab_commons.box.providers`); :meth:`Reading.now` is the one OS reader.
 """
 
 from __future__ import annotations
