@@ -358,6 +358,28 @@ def test_a_test_that_declares_a_longer_timeout_outlives_the_measured_wall(
     assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
 
 
+def test_a_test_spinning_inside_c_with_the_gil_held_is_killed_at_its_wall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A native loop that never yields to the interpreter is killed from outside (Ada 2026-10-24..26).
+
+    pytest-timeout, declared here at 2 s, cannot fire: catastrophic regex backtracking is one C call holding the GIL.
+    """
+    runner = _item_runner(tmp_path, monkeypatch)
+    body = (
+        'import re\n\nimport pytest\n\n'
+        '@pytest.mark.timeout(2)\n'
+        'def test_spin():\n    re.match(r"(a+)+$", "a" * 64 + "b")\n\n'
+        'def test_after():\n    pass\n'
+    )
+    ids = _tree(tmp_path, body)
+    began = time.monotonic()
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 4)})
+    assert time.monotonic() - began < 60, 'killed from outside at its wall, not left to the scheduler limit'
+    assert _words(result['cells']) == {ids[0]: 'timeout', ids[1]: 'ok'}, result['tail']
+    assert _whys(result['cells'])[ids[0]].startswith('timeout after 4s')
+
+
 def test_a_normal_item_under_a_wall_passes_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _item_runner(tmp_path, monkeypatch)
     ids = _tree(tmp_path, 'def test_a():\n    pass\n\ndef test_b():\n    pass\n')
