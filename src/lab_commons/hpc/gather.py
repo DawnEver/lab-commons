@@ -91,6 +91,7 @@ def gather_run(
         walls=walls,
         alone={i: band_of[shard_of[i]]['mem_mb'] for i in oomed if band_of[shard_of[i]]['at_ceiling']},
         timed_out={n for n, s in states.items() if s == 'TIMEOUT'},
+        tops={n: band['top_minutes'] * 60 for n, band in band_of.items() if band.get('top_minutes')},
     )
     planned['clock'] = round_clock(clocks, busy)
     planned['walls_s'] = walls

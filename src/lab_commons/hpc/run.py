@@ -251,6 +251,7 @@ def submit_round(
                 'minutes': plan.minutes,
                 'throttle': plan.throttle,
                 'at_ceiling': at_ceiling,
+                'top_minutes': plan.top_minutes,
             }
         )
         unmeasured |= set(guessed)
