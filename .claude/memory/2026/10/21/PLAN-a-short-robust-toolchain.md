@@ -132,3 +132,24 @@ P1 first: every later PR stalls on today's chain otherwise. P2 is the largest ch
 measured (no forbidden edge exists today). P3-P6 run alongside P2. The cut-over is one date, no
 compatibility layer; the only data the two tool versions share on cut-over day is the box ledger, which is
 versioned beforehand.
+
+## 6. Amendments 2026-10-26 (integrator, for the user's review; status against the phases)
+
+Status: P2 cut-over and P4 are done. P1, P3, P5, P6 are partial; P0 recorded but never computed.
+Each amendment resolves a place where this plan and a later user ruling, or the shipped practice, disagree.
+
+| # | plan text | conflict | proposed resolution |
+|---|---|---|---|
+| A1 | P1: "a coalesced ref's superseded run is cancelled even if started" | user ruling 2026-10-24 (B): started shards of a superseded run DRAIN, because the carry takes their finished cells | keep the ruling; the plan line becomes "a superseded run's pending parts are withdrawn; its started shards drain under the stall watchdog and the per-test wall ceiling (dev-lab 68349be, lab-commons 70111a2)" |
+| A2 | P2: "rendered family files are generated at bootstrap and not committed, except .gitignore" | every repo commits `.claude/hooks/deny-rules.json` and `.claude/settings.json`; a hook must be live in a fresh clone before any bootstrap runs (the guard protects the bootstrap itself) | proposed: keep the agent-guard files COMMITTED (they are the guard of the first command), render-checked by the guard famtest; every other rendered family file follows the plan (generated, not committed) |
+| A3 | P2: dev-lab tables renamed `[tool.dev_lab.*]` | not done; `[tool.lab_commons.*]` still names dev-lab's tables (review, integrator, branchset, hooks, tests, hpc) | do it as written, in one merge per repo, no read-time upgrade (names match reality) |
+| A4 | P2: "the machine tool self-updates each forge tick" | Ada's dev-lab checkout refreshes per tick, its venv only on redeploy (three manual redeploys on 2026-10-26) | the kit tick rebuilds the kit venv when its lock key moved (the deploy's own keyed build, reused) |
+| A5 | P3: local keeps only irreversible-harm and second-scale checks; branch set on the forge only (ruling 2026-10-24) | the forge judged only PR heads, so 38 lane/feat branches without a PR reached motronics origin; the push-time ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES returned (dev-lab d38e583, user challenged) | branch namespace is an irreversible-harm check (a pushed ref is public), so it stays local; P3's guard-by-guard review uses the P0 fire/false-positive rates |
+| A6 | P5: "a large share of the Windows fleet can be RESERVED for one task (owner, share, end time)" | user rulings 2026-10-25/26: no fixed reservation; people declare use with `box claim`; seat_margin and any "share" deleted | replace with: a task declares its use as a `box claim` (cpu, mem, seats, wall, why); the forge uses only what lies outside declared claims |
+| A7 | P5: "integrator back door: one named back door, who/why recorded on the PR" | in practice the integrator lands rounds by a `Break-Glass:` merge trailer on integrate/main; nothing is recorded on the PRs it carries | the back door is the Break-Glass merge; its merge also posts one comment on each PR it carries (who, why, merge sha) |
+| A8 | P5: `forge try <paths>` | not built | build after #413 P1 (it is a demand on the engine that never waits) |
+| A9 | P6: hand registries become derived | provenance, adoption, placement and guard pins were edited by hand several times on 2026-10-26 | derive them; the rule-vs-mechanism census (every `NOT ENFORCED` / "enforced by X" claim checked against code) runs with it |
+
+Order now: P0 baseline computed -> P1 session identity + one PR per session -> P3 guard review on P0 rates ->
+P5 (#413 P1-P4, forge try) -> P6 (derived registries, forge regroup, rule census). Review redesign
+(tagged/blocking findings, security part, declared risk tiers, recurring findings -> rules) runs alongside.
