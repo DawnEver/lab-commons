@@ -92,3 +92,20 @@ confirmed. ai-lab runtime (`Documents/PEMC/ai-lab/.claude/worktrees/runtime`, al
 - **Where a check runs follows what it depends on**: a per-head property is a forge step, never a test
   shard on compute nodes.
 - **Rule text vs mechanism**: verify a "NOT ENFORCED" or "enforced by X" claim against code before citing it.
+
+## 6. Final state when the user stopped the session (2026-10-26 evening)
+
+- Final relock onto dev-lab 7ef2cd9 / lab-commons b90efec: LANDED for ai-lab 6f9c308, numerics-lab 556b615,
+  optimi-lab 4926de5 (tests/architecture verify passed).
+- NOT landed, committed locally on `pr/relock-final-2026-10-26` (worktree `.claude/worktrees/relock-final`):
+  lab-commons be740b0 (its whole-suite verify failed; the narrowed `tests/test_arch_*` run never finished --
+  re-verify, then land), wdg-lab ef8e7d59 (verify inconclusive: box queue; re-verify, then land).
+  motronics: relock edits uncommitted in its `relock-final` worktree (lock only; `rust-toolchain.toml` is a
+  CRLF-only diff, never commit it) -- redo the relock fresh rather than trust the stale tree.
+- Abandon (never merge): every `pr/adopt-security-check` branch (security is a forge step now) and the
+  dev-lab worktree branches already merged today. The relock agent was stopped; no verify run is alive.
+- The relock agent was flagged "Security Weaken" by the harness; its diff was reviewed: guard rule rename
+  REVIEW-HOLD-VIA-TAKEOVER -> REVIEW-STATUS-VIA-DOORS (pattern WIDER), registry name
+  PR-REVIEW-IS-ADVISORY -> PR-REVIEW-BLOCKS-ON-HIGH-OR-SECURITY, metrics module path, probe log root. No rule
+  was loosened or removed.
+- Ada: all six accounts on dev-lab 7ef2cd9. ai-lab runtime on 8f97653 with its dependency sync owed.
