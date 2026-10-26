@@ -1212,6 +1212,48 @@ def test_a_timeout_doubles_the_floor_of_the_id_it_cut_and_nothing_else() -> None
     assert floors({0}) == {'h.py::hung': 2000.0}, 'the id the wall cut asks twice what it ran; f never started'
 
 
+_TOP_S: Final = 2880 * 60.0  # defq, the longest wall any Ada partition grants
+
+
+def test_a_timeout_at_the_longest_ceiling_is_final_and_names_the_wall() -> None:
+    """Ada 2026-10-26: two ids cut after ~1 day learned 48 h floors and would hold defq 48 h, then retry.
+
+    A wall that is already the most any partition gives cannot be bought again: the cut id is a TIMEOUT
+    cell naming the wall, never re-queued; the ids after it never started and still run.
+    PLANTED CONTROL: the same cut on a shorter wall re-queues the id, to run at a longer one.
+    """
+    items = [{'ids': ['h.py::hung', 'h.py::after']}]
+
+    def cut(wall: float) -> tuple[list[list[str]], dict[str, dict], Measured]:
+        measured, cells = Measured(), {}
+        pending, _, _ = fold(items, {}, cells, measured, shards=[(0, 1)], walls=[wall], timed_out={0}, tops={0: _TOP_S})
+        return pending, cells, measured
+
+    pending, cells, _ = cut(_TOP_S + 5)
+    assert pending == [['h.py::after']], 'the cut id is not re-queued; the id after it never ran'
+    assert cells['h.py::hung']['status'] == 'timeout'
+    assert '2880 min' in json.dumps(cells['h.py::hung']), 'the cell names the wall it was cut at'
+
+    pending, cells, measured = cut(720 * 60.0)
+    assert pending == [['h.py::hung'], ['h.py::after']], 'a shortq cut gets its retry at a longer wall'
+    assert 'h.py::hung' not in cells
+    assert measured.floors == {'h.py::hung': 1440 * 60.0}
+
+
+def test_a_timeout_below_the_top_learns_a_floor_held_to_the_top() -> None:
+    """Twice what it ran, never past the longest ceiling: 2x beyond it is a guess no partition can host."""
+    measured = Measured()
+    items = [{'ids': ['h.py::hung']}]
+    fold(items, {}, {}, measured, shards=[(0, 1)], walls=[100000.0], timed_out={0}, tops={0: _TOP_S})
+    assert measured.floors == {'h.py::hung': _TOP_S}
+
+
+def test_a_plan_records_the_longest_ceiling_it_could_have_asked() -> None:
+    snap = parse_snapshot(IDLE)
+    plan = make_plan(1, Cost(seconds=60), snap, cluster=GRANT.cluster(), policy=Policy(), limits=Limits())
+    assert plan.top_minutes == 2880
+
+
 def test_a_timeout_round_prices_its_item_not_the_run() -> None:
     """One hung id among fast ones: the retry wall follows the learned durations, never a run-wide doubling."""
     fake = FakeRunCluster(dies=frozenset({'tests/b.py'}), peak_mb=512.0)

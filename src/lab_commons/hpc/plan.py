@@ -41,7 +41,7 @@ from the cluster) has free, bounded by the tasks still to run.
 from __future__ import annotations
 
 import math
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -99,6 +99,9 @@ class Plan:
     setup: tuple[str, ...] = ()
     #: Tasks of this cost the account's headroom holds NOW (:func:`quota_slots` of what is left); ``None`` unread.
     room: int | None = None
+    #: The longest wall (minutes) any open candidate granted when planned; ``None`` when one is unbounded or unread.
+    #: A shard cut at it cannot be given more (:func:`lab_commons.hpc.records.fold`).
+    top_minutes: float | None = None
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""
@@ -190,10 +193,14 @@ def _held(seconds: Sequence[float], policy: Policy, ceilings: Sequence[float | N
     ceiling, the id gets the most any partition gives; past that its wall cuts it and its cell says so.
     """
     padded = [s * policy.safety for s in seconds]
-    if not ceilings or None in ceilings:
-        return padded
-    top = max(c for c in ceilings if c is not None) * 60
-    return [min(p, top) for p in padded]
+    top = _top(ceilings)
+    return padded if top is None else [min(p, top * 60) for p in padded]
+
+
+def _top(ceilings: Iterable[float | None]) -> float | None:
+    """The longest of these walls (minutes); ``None`` when there is none or one is unbounded."""
+    walls = list(ceilings)
+    return None if not walls or None in walls else max(c for c in walls if c is not None)
 
 
 def make_plan(
@@ -254,6 +261,7 @@ def make_plan(
         free_slots=free,
         makespan_minutes=math.ceil(len(shards) / running) * minutes,
         room=now,
+        top_minutes=_top(o[3] for o in open_),
     )
 
 
