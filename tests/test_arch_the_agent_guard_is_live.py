@@ -35,7 +35,7 @@ _SHIPPED: Final = frozenset(
         'PUSH-REMOTE-DELETE',
         'RECURSIVE-GREP',
         'REPORTS-LIVE-IN-MEMORY',
-        'REVIEW-HOLD-VIA-TAKEOVER',
+        'REVIEW-STATUS-VIA-DOORS',
         'SUBAGENT-NO-PUSH',
         'TREE-HAS-A-LIVE-RUN',
         'WORKTREE-BASE-IS-EXPLICIT',
