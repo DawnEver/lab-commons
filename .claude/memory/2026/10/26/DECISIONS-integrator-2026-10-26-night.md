@@ -24,3 +24,5 @@ metadata: {session: "https://claude.ai/code/session_014RWx71JHHMuBkrNmbYQkkA"}
 | 11 | motronics #4664 (hairpin) NOT merged by the integrator | a live session (worktree `resync-4664`) pushed it at 23:27; its owner syncs it |
 | 12 | Local private-marker hits outside `.claude/memory` (README, docs, src) left untouched | this box's denylist is wider than the forge host's; whether they are leaks is the user's call |
 | 13 | Every motronics base run is INCONCLUSIVE: collection aborts on "108 heavy test files state no reason"; fix delegated on `pr/heavy-census-states-every-reason` | the producer exits 3 before any test runs, so no motronics PR can merge |
+| 14 | G's serve kit (forge-home `repos/dev-lab`) tracks `pr/forge-host-bootstrap-1026` = #453 + #456 + #455 + #457 merged; switch it to `integrate/main` once all four land | the PRs that make reviewing possible need a review to merge; only a host already running them can give it |
+| 15 | #4636 over-cap review taken over by the integrator: round 1, no blocking finding (8 non-blocking), hold released | user ruling 2026-10-26: over-cap heads are the integrator's |
