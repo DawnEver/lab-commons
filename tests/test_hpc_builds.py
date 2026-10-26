@@ -182,6 +182,23 @@ def test_the_per_scope_timeout_is_declared_data_and_an_unknown_scope_is_refused(
         read_builds('[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {full = 0}\n')
 
 
+def test_no_test_wall_passes_the_declared_ceiling_however_inflated_its_measurement() -> None:
+    """Ada 2026-10-24..26: eight forge jobs held a core 34-41 h each on ONE test whose wall read 776553..1051465 s.
+
+    The wall was ``multiple`` times a learned kill floor that every wall kill had doubled; nothing capped it, so
+    the item runner's kill could never fire before Slurm's. The ceiling holds every wall, measured or not.
+    """
+    wall = ItemWall(multiple=10, floor_s=300, unmeasured_s=3600, ceiling_s=7200)
+    assert wall.bound(104799.0) == 7200, 'the measured floor of the incident, held to the ceiling'
+    assert wall.bound(60.0) == 600, 'a sane measurement is untouched'
+    assert ItemWall().bound(1e9) == ItemWall().ceiling_s
+    text = '[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {ceiling_s = 1800}\n'
+    assert read_builds(text).item_wall.ceiling_s == 1800
+    assert read_builds(text).item_wall.bound(None) == 1800, 'the unmeasured default is held too'
+    with pytest.raises(ValueError, match='ceiling_s'):
+        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {ceiling_s = 200}\n')
+
+
 def test_the_per_test_wall_is_declared_data_with_one_set_of_defaults() -> None:
     text = '[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {multiple = 5, floor_s = 120}\n'
     assert read_builds(text).item_wall == ItemWall(multiple=5, floor_s=120)

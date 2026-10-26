@@ -116,7 +116,7 @@ _ITEM_WALL_KEYS: Final = frozenset({'multiple', 'floor_s', 'unmeasured_s', 'ceil
 
 
 def _item_wall(raw: dict[str, object]) -> ItemWall:
-    """The ``item_wall`` table; an unknown key, a non-positive number or a bound past the ceiling is refused."""
+    """The ``item_wall`` table; an unknown key, a non-positive number or a floor past the ceiling is refused."""
     bad = set(raw) - _ITEM_WALL_KEYS or any(
         isinstance(v, bool) or not isinstance(v, int | float) or v <= 0 for v in raw.values()
     )
@@ -124,8 +124,8 @@ def _item_wall(raw: dict[str, object]) -> ItemWall:
         msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: keys {sorted(_ITEM_WALL_KEYS)}, values positive numbers'
         raise InvalidDeclaration(msg)
     wall = ItemWall(**raw)  # type: ignore[arg-type]
-    if max(wall.floor_s, wall.unmeasured_s) > wall.ceiling_s:
-        msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: floor_s and unmeasured_s may not pass ceiling_s'
+    if wall.floor_s > wall.ceiling_s:
+        msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: floor_s may not pass ceiling_s'
         raise InvalidDeclaration(msg)
     return wall
 
