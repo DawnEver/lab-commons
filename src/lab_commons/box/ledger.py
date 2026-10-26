@@ -107,7 +107,7 @@ Read = Callable[[Iterable[int]], Reading]
 
 __all__ = [
     'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'adopted', 'box_path', 'declare', 'hand_over',
-    'hold', 'holdings', 'persist', 'release', 'take', 'untrusted',
+    'hold', 'holdings', 'persist', 'reap', 'release', 'take', 'untrusted',
 ]  # fmt: skip
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
@@ -160,6 +160,15 @@ def _dead_externals(con: sqlite3.Connection, now: float) -> frozenset[int]:
         for row_id, pid, created, end, probe in rows.fetchall()
         if end >= now and not still_the_same_process(pid, created) and not _alive(json.loads(probe))
     )
+
+
+def reap(now: float | None = None) -> None:
+    """Reap the ledger as of *now* (default: now): every row whose holder is gone, probe failed or deadline passed."""
+    now = time.time() if now is None else now
+    with closing(_connect()) as con:
+        dead = _dead_externals(con, now)
+        with _immediate(con):
+            _reap(con, now, dead)
 
 
 def _reap(con: sqlite3.Connection, now: float, dead: frozenset[int] = frozenset()) -> None:

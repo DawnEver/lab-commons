@@ -31,7 +31,11 @@ CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     cpu INTEGER NOT NULL, mem_bytes INTEGER NOT NULL, seats TEXT NOT NULL,
     deadline REAL NOT NULL, started REAL NOT NULL, what TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT,
-    kept INTEGER NOT NULL DEFAULT 0, probe TEXT);
+    kept INTEGER NOT NULL DEFAULT 0, probe TEXT,
+    scope TEXT NOT NULL DEFAULT 'box', kind TEXT NOT NULL DEFAULT 'occupancy', window TEXT);
+CREATE TABLE IF NOT EXISTS charges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, name TEXT NOT NULL, amount REAL NOT NULL,
+    at REAL NOT NULL, window_s REAL NOT NULL, what TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER NOT NULL, created INTEGER,
     gives_up REAL NOT NULL, what TEXT NOT NULL, cpu INTEGER, mem_bytes INTEGER, seats TEXT);
@@ -95,8 +99,15 @@ def connect() -> sqlite3.Connection:
 
 #: Columns added after the file format was first written, per table: (name, its fixed definition).
 #: A ticket's demand is NULL on a ticket written before it was declared: such a ticket contends for everything.
+#: A claim written before :mod:`lab_commons.resource` named scopes and kinds is the box's, OCCUPANCY, windowless.
 _ADDED: Final = {
-    'claims': (('kept', 'kept INTEGER NOT NULL DEFAULT 0'), ('probe', 'probe TEXT')),
+    'claims': (
+        ('kept', 'kept INTEGER NOT NULL DEFAULT 0'),
+        ('probe', 'probe TEXT'),
+        ('scope', "scope TEXT NOT NULL DEFAULT 'box'"),
+        ('kind', "kind TEXT NOT NULL DEFAULT 'occupancy'"),
+        ('window', 'window TEXT'),
+    ),
     'tickets': (('cpu', 'cpu INTEGER'), ('mem_bytes', 'mem_bytes INTEGER'), ('seats', 'seats TEXT')),
 }
 
@@ -114,9 +125,13 @@ def immediate(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 
 def read(con: sqlite3.Connection) -> list[Holding]:
-    """Every claim row on *con*, oldest first, as :class:`~lab_commons.box.demand.Holding`."""
+    """Every claim row of the BOX scope on *con*, oldest first, as :class:`~lab_commons.box.demand.Holding`.
+
+    A row :mod:`lab_commons.resource` wrote for another scope (an API key, a cluster account) holds nothing here.
+    """
     rows = con.execute(
-        'SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe, kept FROM claims ORDER BY id'
+        "SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe, kept FROM claims WHERE scope = 'box' "
+        'ORDER BY id'
     ).fetchall()
     return [
         Holding(
