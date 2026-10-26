@@ -314,8 +314,8 @@ wheels = [
 
 [[package]]
 name = "dev-lab"
-version = "0.0.1.dev1557+gea264f873"
-source = { git = "https://gitea.mingyangbao.site/Tianjie-Zou-Team/dev-lab.git?branch=integrate%2Fmain#ea264f8730bca92d176ec8efc36dd4d6eb30ccc7" }
+version = "0.0.1.dev1559+gc9eaa7f1b"
+source = { git = "https://gitea.mingyangbao.site/Tianjie-Zou-Team/dev-lab.git?branch=integrate%2Fmain#c9eaa7f1b3586128930be1c2608d514eb7a39e6a" }
 dependencies = [
     { name = "commitizen" },
     { name = "lab-commons", extra = ["io", "paths", "structured", "units"] },
