@@ -50,35 +50,9 @@ __all__ = [
 
 _GIT: Final = shutil.which('git') or 'git'
 
-#: Every ``[tool.lab_commons.<table>]`` this kit reads.
-KNOWN_TABLES: Final = frozenset(
-    {
-        'areas',
-        'artefacts',
-        'automode',
-        'branchset',
-        'carry',
-        'ci',
-        'components',
-        'dep',
-        'doors',
-        'ephemeral_refs',
-        'forge',
-        'hooks',
-        'hpc',
-        'integrator',
-        'parts',
-        'placement',
-        'requests',
-        'review',
-        'schedule',
-        'stoprun',
-        'tests',
-        'tools',
-        'verify',
-        'worktrees',
-    }
-)
+#: Every ``[tool.lab_commons.<table>]`` this kit reads. dev-lab's own tables live under ``[tool.dev_lab]``
+#: (plan A3 2026-10-27) and are refused here by name (:data:`lab_commons.hpc.retired.MOVED_TABLES`).
+KNOWN_TABLES: Final = frozenset({'artefacts', 'hpc', 'schedule', 'tests', 'tools'})
 
 
 class OutdatedKit(ValueError):

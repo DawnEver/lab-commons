@@ -14,7 +14,7 @@ Where things live:
 - Mechanism, how-to, integration and refusals with their remedies: dev-lab's `docs-src/dev/` (start at `index.md`).
 - Family project files (`.gitignore`, `.gitattributes`, `.rgignore`, `Makefile`): this repo's delta is
   `tests/_famconfig_delta.py`; re-render with `python -m dev_lab.dev.famfiles --deltas tests/_famconfig_delta.py`.
-  Workflows: `[tool.lab_commons.ci]` in `pyproject.toml`, rendered by `python -m dev_lab.dev.ciworkflows render`.
+  Workflows: `[tool.dev_lab.ci]` in `pyproject.toml`, rendered by `python -m dev_lab.dev.ciworkflows render`.
 
 Doors:
 

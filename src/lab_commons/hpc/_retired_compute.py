@@ -75,7 +75,7 @@ COMPUTE: Final[dict[str, str]] = {
     'inert_globs': 'dev_lab.dev.footprint.Footprints (the footprint of each test file, derived at the judged sha)',
     'parts] inert': (
         'nothing: what a change reaches is derived per test (dev_lab.dev.footprint); declare only what a '
-        'module reads by path, [tool.lab_commons.carry.reads] -- delete the key'
+        'module reads by path, [tool.dev_lab.carry.reads] -- delete the key'
     ),
     'grant.cpus': 'lab_commons.hpc.plan.headroom(snapshot) (a grant carries no share)',
     # One need vocabulary: a test marks the resources it needs, and its part is its need-set (compute step 3).

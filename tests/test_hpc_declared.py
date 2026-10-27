@@ -9,8 +9,16 @@ from pathlib import Path
 import pytest
 
 from lab_commons.hpc.builds import read_builds
-from lab_commons.hpc.declared import KNOWN_TABLES, InvalidDeclaration, KitAheadOfItsServer, OutdatedKit, kit_tables
+from lab_commons.hpc.declared import (
+    KNOWN_TABLES,
+    InvalidDeclaration,
+    KitAheadOfItsServer,
+    OutdatedKit,
+    RetiredTable,
+    kit_tables,
+)
 from lab_commons.hpc.needsets import read_vocabulary
+from lab_commons.hpc.retired import MOVED_TABLES
 
 SRC = Path(__file__).resolve().parents[1] / 'src' / 'lab_commons'
 
@@ -60,8 +68,16 @@ def test_the_kit_declaring_an_unknown_table_is_its_own_commits_defect() -> None:
 
 def test_a_known_declaration_reads_and_an_absent_one_is_empty() -> None:
     """PLANTED CONTROL: the refusal is about an UNKNOWN table, not about any table."""
-    assert kit_tables(NEWER.replace('tomorrow', 'verify')).keys() == {'tests', 'verify'}
+    assert kit_tables(NEWER.replace('tomorrow', 'tools')).keys() == {'tests', 'tools'}
     assert kit_tables('[project]\nname = "x"\n') == {}
+
+
+@pytest.mark.parametrize('table', MOVED_TABLES)
+def test_a_table_moved_to_dev_lab_is_refused_naming_its_new_home(table: str) -> None:
+    """Plan A3 (2026-10-27): no fallback reads the old namespace, so declaring it there is refused, never ignored."""
+    assert table not in KNOWN_TABLES
+    with pytest.raises(RetiredTable, match=rf'\[tool\.dev_lab\.{table}\]'):
+        kit_tables(NEWER.replace('tomorrow', table))
 
 
 def test_the_known_tables_are_exactly_the_ones_this_kit_spells() -> None:
@@ -77,7 +93,7 @@ def test_the_known_tables_are_exactly_the_ones_this_kit_spells() -> None:
         if path.name not in {'declared.py', 'retired.py', '_retired_compute.py'}  # the retired tables, by name
         for name in re.findall(r'tool\.lab_commons\.([a-z_]+)', path.read_text(encoding='utf-8'))
     }
-    assert len(spelled) >= 15, 'a floor: an empty scan reads exactly like agreement'
+    assert len(spelled) >= 5, 'a floor (the five staying tables, plan A3): an empty scan reads exactly like agreement'
     assert spelled == KNOWN_TABLES
 
 
