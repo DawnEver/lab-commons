@@ -19,9 +19,15 @@ from typing import Final
 
 from lab_commons.hpc._retired_compute import COMPUTE
 
-__all__ = ['RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys', 'retired_in']
+__all__ = ['MOVED_TABLES', 'RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys', 'retired_in']
 
 _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (dev_lab/dev/githooks/base.toml)'
+
+#: The tables dev-lab alone reads, moved to ``[tool.dev_lab]`` with no fallback (plan A3 2026-10-27).
+MOVED_TABLES: Final = (
+    'areas', 'automode', 'branchset', 'carry', 'ci', 'components', 'dep', 'doors', 'ephemeral_refs', 'forge',
+    'hooks', 'integrator', 'parts', 'placement', 'requests', 'review', 'stoprun', 'verify', 'worktrees',
+)  # fmt: skip
 
 #: Retired spelling -> its replacement. Keys are matched as plain substrings of tracked text.
 RETIRED: Final[dict[str, str]] = {
@@ -43,8 +49,8 @@ RETIRED: Final[dict[str, str]] = {
     # The forge only orchestrates (plan step 5, 2026-10-20): the review is the repo's declared command, run in the
     # integration step on whichever host runs it; the forge holds no model client, prompt or key.
     'pr_review': 'nothing: the review runs inside the integration step (dev_lab.dev.forgereview.step)',
-    'forgereview.anthropic': '[tool.lab_commons.review] command (the method chooses provider and model)',
-    'forgereview import anthropic': '[tool.lab_commons.review] command (the method chooses provider and model)',
+    'forgereview.anthropic': '[tool.dev_lab.review] command (the method chooses provider and model)',
+    'forgereview import anthropic': '[tool.dev_lab.review] command (the method chooses provider and model)',
     'ReviewKeyMissing': 'nothing: the review command reads its own key (ai_lab)',
     'forgereview.review_key': 'nothing: the review command reads its own key (ai_lab)',
     # The forge-sync watch set was named for git's upstream, another thing (2026-10-21): a sync merges FROM it.
@@ -144,9 +150,7 @@ RETIRED: Final[dict[str, str]] = {
     'run submit --install': "the commit's [tool.lab_commons.hpc] install, read at --sha",
     'run submit --needs': "the commit's [tool.lab_commons.hpc] needs, read at --sha",
     # Git hooks are TOML run by one runner in the repo venv (user ruling 2026-10-11): no pre-commit framework.
-    '.pre-commit-config.yaml': (
-        '[[tool.lab_commons.hooks.<stage>]] in pyproject.toml over dev_lab/dev/githooks/base.toml'
-    ),
+    '.pre-commit-config.yaml': ('[[tool.dev_lab.hooks.<stage>]] in pyproject.toml over dev_lab/dev/githooks/base.toml'),
     'PRE_COMMIT_REMOTE_BRANCH': "git's pre-push lines on stdin (dev_lab.dev.githooks.runner.parse_push_lines)",
     'PRE_COMMIT_FROM_REF': "the remote sha of git's pre-push lines on stdin",
     'PRE_COMMIT_TO_REF': "the local sha of git's pre-push lines on stdin",
@@ -189,7 +193,7 @@ RETIRED: Final[dict[str, str]] = {
     # Issues never rot (user ruling 2026-10-15): every tidy rule is on, forge serve runs it, a kind is a Marker.
     'forgetidy.SUBJECT': 'dev_lab.dev.forgepulls.Marker.TIDY (every marker kind is a Marker member)',
     'forgeintegration.SUBJECT': 'dev_lab.dev.forgepulls.Marker.INTEGRATION (every marker kind is a Marker member)',
-    'hygiene.any': 'nothing: every forge tidy rule is on; a repo only tunes [tool.lab_commons.forge.issue_hygiene]',
+    'hygiene.any': 'nothing: every forge tidy rule is on; a repo only tunes [tool.dev_lab.forge.issue_hygiene]',
     'run by `forge integration`': 'forge serve runs forge tidy on every host every tick (dev_lab.dev.forgeserve)',
     # A lock-consuming door is judged against the COMMITTED lock: the old name described the untracked era.
     'REVERTS': 'UNLOCKED (dev_lab.dev.installdoor.Delivery.UNLOCKED)',
@@ -222,6 +226,10 @@ RETIRED: Final[dict[str, str]] = {
     'read_reasons': 'dev_lab.dev.test_outcomes.read_cells (a reason travels in its cell)',
     'OutcomeRecorder': 'dev_lab.dev.test_outcomes.CellRecorder',
     'outcome_of(': 'lab_commons.hpc.pytest_item.judged (the one pytest mapping, to a plain test cell)',
+    **{
+        f'[tool.lab_commons.{table}]': f'[tool.dev_lab.{table}] (plan A3: a table only dev-lab reads)'
+        for table in MOVED_TABLES
+    },
 }
 
 #: THE RETIRED PER-TEST WORDS, and only for LIVE state -- a cluster run's ``state.json`` and the stream of a
