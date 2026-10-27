@@ -320,3 +320,44 @@ def test_gather_without_wait_gathers_at_once_and_wait_belongs_to_gather(
         with pytest.raises(SystemExit):
             cli.main([verb, '-c', 'j.toml', '--wait'])
         assert '--wait belongs to gather' in capsys.readouterr().err
+
+
+#: The paid account: same cluster facts, but every partition asked for under the 7-day ``costed`` QOS.
+COSTED = Grant(
+    user='pay',
+    hosts=('pay',),
+    slurm_account='acct-free',
+    partitions=('shortq', 'defq'),
+    qos={'shortq': 'costed', 'defq': 'costed'},
+    costed=True,
+)
+#: Padded (x1.5) to 4320 min: past the free QOS's 2-day (2880-min) ceiling, inside the costed 7 days.
+LONG = Cost(cpus=1, mem_gb=2, seconds=3 * 24 * 3600 / 1.5)
+
+
+def _paid(*, near_up: bool = True) -> tuple[Machine, dict[str, _Login]]:
+    logins = {'near': _Login('near', up=near_up), 'pay': _Login('pay')}
+    return Machine(session=None, grants=(NEAR, COSTED)), logins
+
+
+def test_a_job_free_grants_hold_never_touches_a_costed_grant(tmp_path: Path) -> None:
+    machine, logins = _paid()
+    placed = jobs.plan_job(_config(tmp_path), 2000, machine, _reach(logins))
+    assert [p.grant for p in placed] == [NEAR]
+    # Planted control: the costed grant alone CAN take this work -- free was chosen, not forced.
+    alone = Machine(session=None, grants=(COSTED,))
+    assert [p.grant for p in jobs.plan_job(_config(tmp_path), 2000, alone, _reach(logins))] == [COSTED]
+
+
+def test_a_wall_past_every_free_ceiling_runs_on_the_costed_grant(tmp_path: Path) -> None:
+    machine, logins = _paid()
+    placed = jobs.plan_job(_config(tmp_path, LONG), 4, machine, _reach(logins))
+    assert [p.grant for p in placed] == [COSTED]
+    assert placed[0].plan.qos == 'costed'
+    assert placed[0].plan.minutes >= 4320
+
+
+def test_a_free_grant_outage_never_falls_through_to_a_costed_grant(tmp_path: Path) -> None:
+    machine, logins = _paid(near_up=False)
+    with pytest.raises(ValueError, match='no free grant answers'):
+        jobs.plan_job(_config(tmp_path), 4, machine, _reach(logins))

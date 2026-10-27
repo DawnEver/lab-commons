@@ -32,6 +32,7 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     partitions = ["shortq", "defq"]               # optional cluster facts: candidates, in preference order
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
     setup = ["module load git/2.42.0"]   # optional: run first in every array task
+    costed = false                       # optional; true when this account's compute COSTS MONEY
 
     [hpc.paging]                         # optional; undeclared, placement ignores size and region
     page_cpus = 8                        # one page: a SMALL task fits it
@@ -42,6 +43,12 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
 PAGING IS OS MEMORY MANAGEMENT OVER THE POOL (user design 2026-10-17). Tasks are page-sized so free memory
 is never shattered into holes no task fits; the emptiest account is the large-job region, borrowed only by
 small movable tasks, and drained -- never killed -- while a large job waits (:func:`lab_commons.hpc.region.region`).
+
+A COSTED GRANT RUNS ONLY WHAT NO FREE GRANT CAN HOLD (user ruling 2026-10-27). Work is spanned over the
+free grants alone; only when they cannot hold its wall -- the span refuses, or an item's padded wall exceeds
+every free partition+QOS ceiling (2 days on Ada's ``free`` QOS) -- is it spanned over the costed grants alone,
+never a mix. A free-grant OUTAGE is not that: with free grants declared and none answering, the work is
+refused rather than billed (:func:`lab_commons.hpc.jobs.tiered`).
 
 ``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster.s
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
@@ -163,6 +170,8 @@ class Grant:
     partitions: tuple[str, ...] = ()
     qos: dict[str, str] = field(default_factory=dict)
     setup: tuple[str, ...] = ()
+    #: This account's compute costs money: it runs only work no free grant can hold.
+    costed: bool = False
 
     def __post_init__(self) -> None:
         """A grant names who, where and which account."""

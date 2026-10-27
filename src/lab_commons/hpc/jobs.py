@@ -95,17 +95,48 @@ def _answering(grants: tuple[Grant, ...], reach: Reach) -> list[tuple[Grant, Any
     return found
 
 
+def tiered(
+    config: Config, n_items: int, grants: tuple[Grant, ...], *, machine: Machine, reach: Reach
+) -> tuple[Placement, ...]:
+    """Span over the free grants of *grants*; over the costed ones only for a wall no free grant can hold.
+
+    Costed and free never share a span. Free placements stand unless the span refuses or an item's padded
+    wall exceeds their longest ceiling (``top_minutes``). When *machine* declares a free grant and none of
+    *grants* answers, that is an outage, not a wall: refused, never billed.
+    """
+
+    def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
+        return span(
+            n_items,
+            config.cost,
+            candidates,
+            session=machine.session,
+            policy=config.policy,
+            paging=machine.paging,
+            rerun_safe=config.job.rerun_safe,
+        )
+
+    free = _answering(tuple(g for g in grants if not g.costed), reach)
+    costed = [g for g in grants if g.costed]
+    if not free and any(not g.costed for g in machine.grants):
+        msg = 'no free grant answers; a costed grant runs only a wall no free grant can hold, never an outage'
+        raise ValueError(msg)
+    if free:
+        try:
+            placed = over(free)
+        except ValueError:
+            if not costed:
+                raise
+        else:
+            wall = config.cost.seconds * config.policy.safety
+            if not costed or all(p.plan.top_minutes is None or wall <= p.plan.top_minutes * 60 for p in placed):
+                return placed
+    return over(_answering(tuple(costed), reach))
+
+
 def plan_job(config: Config, n_items: int, machine: Machine, reach: Reach) -> tuple[Placement, ...]:
     """Where *n_items* of *config* would run now."""
-    return span(
-        n_items,
-        config.cost,
-        _answering(machine.grants, reach),
-        session=machine.session,
-        policy=config.policy,
-        paging=machine.paging,
-        rerun_safe=config.job.rerun_safe,
-    )
+    return tiered(config, n_items, machine.grants, machine=machine, reach=reach)
 
 
 def _place(
@@ -129,15 +160,7 @@ def _place(
         if not usable:
             msg = 'no grant can take this work: ' + '; '.join(why)
             raise ValueError(msg)
-        placements = span(
-            len(items),
-            config.cost,
-            _answering(tuple(usable), reach),
-            session=machine.session,
-            policy=config.policy,
-            paging=machine.paging,
-            rerun_safe=config.job.rerun_safe,
-        )
+        placements = tiered(config, len(items), tuple(usable), machine=machine, reach=reach)
         failed = []
         for placement in placements:
             if ensure is None:
