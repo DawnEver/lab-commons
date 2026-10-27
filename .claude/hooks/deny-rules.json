@@ -122,9 +122,9 @@
     "reason": "REPORTS-LIVE-IN-MEMORY: a written report (audit, analysis, design, plan, findings) is not regenerable, and output/ holds only what a program can regenerate.\nWrite it as a dated memory entry: .claude/memory/<yyyy>/<mm>/<dd>/<slug>.md with the MEMORY-SHAPE frontmatter (name, description, created, accessed, tags, metadata).\ndetails: docs-src/dev/refusals.md#reports-live-in-memory (lab-commons)"
   },
   {
-    "name": "REVIEW-HOLD-VIA-TAKEOVER",
-    "pattern": "\\bdev_lab\\.dev\\.forge\\s+status\\s+post\\b(?=[^\\n]*\\btests/review-hold\\b)",
+    "name": "REVIEW-STATUS-VIA-DOORS",
+    "pattern": "\\bdev_lab\\.dev\\.forge\\s+status\\s+post\\b(?=[^\\n]*\\btests/review(?:-hold)?\\b)",
     "matches": "argument",
-    "reason": "REVIEW-HOLD-VIA-TAKEOVER: a raw post on tests/review-hold releases an over-cap head with no review behind it.\nRun the reviewed door, which posts the findings and only then releases: python -m dev_lab.dev.forge review takeover <sha> (list held heads: forge review held).\ndetails: docs-src/dev/refusals.md#review-hold-via-takeover (lab-commons)"
+    "reason": "REVIEW-STATUS-VIA-DOORS: a raw post on tests/review-hold or tests/review releases a head with no review or reason behind it.\nRun the reviewed door, which posts the findings and only then releases: {python} -m dev_lab.dev.forge review takeover <sha> (list held heads: {python} -m dev_lab.dev.forge review held); for a blocking finding, {python} -m dev_lab.dev.forge review dispose <pr> <finding-id> --why \"<reason>\".\ndetails: docs-src/dev/refusals.md#review-status-via-doors (lab-commons)"
   }
 ]
