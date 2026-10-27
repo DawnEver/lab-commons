@@ -197,7 +197,7 @@ def _held(seconds: Sequence[float], policy: Policy, ceilings: Sequence[float | N
     """Each item's padded seconds, never past the longest wall an open candidate grants.
 
     An estimate past every ceiling is a guess, never a need: a kill's floor is twice what the id ran
-    (:meth:`~lab_commons.compute.learned.Measured.killed`) and the margin multiplies it again. Measured
+    (:meth:`~lab_commons.compute.measured.Measured.killed`) and the margin multiplies it again. Measured
     2026-10-26 (Ada): an id priced 48 h padded to a 4321-min shard that neither shortq (720) nor defq
     (2880) holds, and every motronics run stuck at "no grant can take this work". Held to the longest
     ceiling, the id gets the most any partition gives; past that its wall cuts it and its cell says so.

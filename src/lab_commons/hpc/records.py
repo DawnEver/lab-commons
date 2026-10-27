@@ -16,7 +16,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
 from lab_commons.compute.durable import durable_write
-from lab_commons.compute.learned import Measured, Run
+from lab_commons.compute.learned import Run
+from lab_commons.compute.measured import Measured
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
 from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, read_stream, split_streams, tagged

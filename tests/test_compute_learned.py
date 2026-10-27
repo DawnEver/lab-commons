@@ -10,7 +10,8 @@ import pytest
 from lab_commons.compute import learned
 from lab_commons.compute.admission import admit
 from lab_commons.compute.durable import durable_write
-from lab_commons.compute.learned import OOM_GROWTH, Measured, Run
+from lab_commons.compute.learned import OOM_GROWTH, Run
+from lab_commons.compute.measured import Measured
 from lab_commons.compute.model import Demand, Job, Resources, Supply
 
 REPO = 'https://g/r.git'
@@ -97,7 +98,7 @@ def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
 def test_a_cluster_part_demands_the_memory_one_task_of_its_plan_asks() -> None:
     """Measured 2026-10-16: admitted at a 13 GB run peak, the part was SUBMITTED at 352 GB a task.
 
-    The demand is :func:`learned.task_gb` of the peak -- the plan's own formula -- and a known larger ask
+    The demand is :func:`~.measured.task_gb` of the peak -- the plan's own formula -- and a known larger ask
     (:func:`learned.record_ask`) raises it. PLANTED CONTROL: a smaller ask never lowers it.
     """
     learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=13.0, cpu_s=89875.0, wall_s=8616.0))

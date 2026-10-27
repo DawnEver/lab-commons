@@ -24,7 +24,7 @@ from typing import ClassVar, Final
 import pytest
 
 from lab_commons.compute import learned
-from lab_commons.compute.learned import Measured
+from lab_commons.compute.measured import Measured, memory_band
 from lab_commons.config import CONFIG_ENV
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
@@ -1144,7 +1144,7 @@ def test_packing_groups_files_of_one_memory_class_so_a_heavy_file_never_sizes_a_
     assert measured.pack(files, cost, budget=60.0) == [['a.py::t', 'h.py::t', 'b.py::t']], 'PLANTED CONTROL'
 
     def band(ids: list[str]) -> int:
-        return learned.memory_band(measured.item_gb(ids, cost, policy))
+        return memory_band(measured.item_gb(ids, cost, policy))
 
     items = measured.pack(files, cost, budget=60.0, band=band)
     assert items == [['a.py::t', 'b.py::t'], ['h.py::t']]

@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from lab_commons.compute import learned
-from lab_commons.compute.learned import Measured
+from lab_commons.compute.measured import Measured, memory_band
 from lab_commons.hpc.config import Cost, Policy
 
 _COST, _POLICY = Cost(seconds=120, mem_gb=0.1), Policy(safety=1.0)
@@ -53,7 +52,7 @@ def test_packing_never_lets_accumulation_climb_more_than_one_memory_class() -> N
     files = [[f'{f}::t'] for f in peaks]
 
     def band(ids: list[str]) -> int:
-        return learned.memory_band(measured.item_gb(ids, cost, policy))
+        return memory_band(measured.item_gb(ids, cost, policy))
 
     assert {band(ids) for ids in files} == {0}
     assert len(measured.pack(files, cost, budget=1e9)) == 1, 'PLANTED CONTROL: time alone packs them all'

@@ -34,11 +34,8 @@ from typing import Any, Final
 
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.measured import (
-    ACCUMULATED_CLASSES,
-    TIMEOUT_GROWTH,
     Measured,
     file_of,
-    memory_band,
     task_gb,
 )
 from lab_commons.compute.model import Demand
@@ -47,7 +44,6 @@ from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.needsets import needs_of
 
 __all__ = [
-    'ACCUMULATED_CLASSES',
     'BOX_HEADROOM',
     'BOX_WALL_S',
     'CLUSTER_PRIOR',
@@ -56,8 +52,6 @@ __all__ = [
     'PART_FILES',
     'PART_WIDTH',
     'SLURM',
-    'TIMEOUT_GROWTH',
-    'Measured',
     'Run',
     'box_demand',
     'cluster_demand',
@@ -69,14 +63,12 @@ __all__ = [
     'learn_peaks',
     'learn_record',
     'learned',
-    'memory_band',
     'part_files',
     'record_ask',
     'record_run',
     'request_demand',
     'run_of',
     'selection_gb',
-    'task_gb',
     'worker_gb',
 ]
 

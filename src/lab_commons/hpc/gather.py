@@ -14,7 +14,8 @@ from dataclasses import replace
 from typing import Any
 
 from lab_commons.compute import learned
-from lab_commons.compute.learned import OOM_GROWTH, Measured
+from lab_commons.compute.learned import OOM_GROWTH
+from lab_commons.compute.measured import Measured
 from lab_commons.hpc.cluster import Runner, probe, throttle
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.grants import Grant, Machine

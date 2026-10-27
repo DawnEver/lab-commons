@@ -65,7 +65,7 @@ from dataclasses import asdict, replace
 from typing import Any, Final
 
 from lab_commons.compute import learned
-from lab_commons.compute.learned import Measured
+from lab_commons.compute.measured import Measured, memory_band
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
@@ -198,7 +198,7 @@ def submit_round(
 
     EACH ITEM ASKS ITS OWN MEMORY (:meth:`Measured.item_gb`: its files' learned peaks accumulated, times the safety,
     times this run's growth of a file whose item was OOM-killed), held to the most any grant gives. A Slurm array
-    asks one memory for all its tasks, so items are grouped by memory class (:func:`learned.memory_band`) and
+    asks one memory for all its tasks, so items are grouped by memory class (:func:`memory_band`) and
     each class is its own array of one manifest (:func:`submit_bands`). The heaviest class picks the grant;
     the others plan on it, since the tree lives in its home.
     """
@@ -210,7 +210,7 @@ def submit_round(
     held = [ask if grantable is None else min(ask, grantable) for ask in asks]
     classes: dict[int, list[int]] = {}
     for index, gb in enumerate(held):
-        classes.setdefault(learned.memory_band(gb), []).append(index)
+        classes.setdefault(memory_band(gb), []).append(index)
     chosen: Grant | None = None
     order: list[int] = []
     plans: list[Plan] = []
@@ -379,7 +379,7 @@ def submit_run(
     measured = Measured.of(state['measured'])
 
     def band(ids: list[str]) -> int:
-        return learned.memory_band(measured.item_gb(ids, cost, policy))
+        return memory_band(measured.item_gb(ids, cost, policy))
 
     pending = measured.pack(files, cost, item_seconds(policy), band)
     if not pending:  # every id was carried or handed: the record needs no job
