@@ -33,7 +33,7 @@ from lab_commons.hpc.artifact import enter_lines, require
 from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, submit
 from lab_commons.hpc.config import Config
 from lab_commons.hpc.grants import Grant, Machine
-from lab_commons.hpc.plan import Plan
+from lab_commons.hpc.plan import Plan, Unplaceable, plan_on
 from lab_commons.hpc.run import ACTIVE
 from lab_commons.hpc.sacct import shard_states
 from lab_commons.hpc.span import Placement, span
@@ -95,14 +95,41 @@ def _answering(grants: tuple[Grant, ...], reach: Reach) -> list[tuple[Grant, Any
     return found
 
 
+def _holding(
+    config: Config, n_items: int, answering: list[tuple[Grant, Any]], machine: Machine
+) -> tuple[list[tuple[Grant, Any]], str]:
+    """The answering grants whose ceiling holds the padded wall, and why each other one does not.
+
+    Judged per grant, never on a span's pick: a wall clamped to a SHORT ceiling plans a shorter makespan,
+    so the span would prefer the grant that cuts the work.
+    """
+    wall = config.cost.seconds * config.policy.safety
+    holders, why = [], []
+    for grant, snapshot in answering:
+        try:
+            plan = plan_on(grant, snapshot, n_items, config.cost, session=machine.session, policy=config.policy)
+        except Unplaceable as refused:
+            why.append(str(refused))
+            continue
+        if plan.top_minutes is None or wall <= plan.top_minutes * 60:
+            holders.append((grant, snapshot))
+        else:
+            why.append(
+                f'{grant.name}: a {wall / 60:.0f}-min padded wall exceeds its {plan.top_minutes:.0f}-min ceiling'
+            )
+    return holders, '; '.join(why) or 'no free grant answers'
+
+
 def tiered(
     config: Config, n_items: int, grants: tuple[Grant, ...], *, machine: Machine, reach: Reach
 ) -> tuple[Placement, ...]:
-    """Span over the free grants of *grants*; over the costed ones only for a wall no free grant can hold.
+    """Span over the free candidates in *grants*; over the costed ones only for work the free TIER cannot hold.
 
-    Costed and free never share a span. Free placements stand unless the span refuses or an item's padded
-    wall exceeds their longest ceiling (``top_minutes``). When *machine* declares a free grant and none of
-    *grants* answers, that is an outage, not a wall: refused, never billed.
+    The free tier is every free grant *machine* declares, candidate or not: a free grant ``_place`` dropped
+    for another reason still says whether the work needs money. Costed is used only when EVERY free grant
+    answered and none holds the work -- the span refuses for room (:class:`Unplaceable`) or the padded wall
+    exceeds every free ceiling. A silent free grant refuses rather than bills; costed and free never share a
+    span; any other ``ValueError`` is the request's defect and propagates.
     """
 
     def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
@@ -116,22 +143,34 @@ def tiered(
             rerun_safe=config.job.rerun_safe,
         )
 
-    free = _answering(tuple(g for g in grants if not g.costed), reach)
     costed = [g for g in grants if g.costed]
-    if not free and any(not g.costed for g in machine.grants):
-        msg = 'no free grant answers; a costed grant runs only a wall no free grant can hold, never an outage'
-        raise ValueError(msg)
-    if free:
-        try:
-            placed = over(free)
-        except ValueError:
-            if not costed:
-                raise
-        else:
-            wall = config.cost.seconds * config.policy.safety
-            if not costed or all(p.plan.top_minutes is None or wall <= p.plan.top_minutes * 60 for p in placed):
-                return placed
-    return over(_answering(tuple(costed), reach))
+    tier = [g for g in machine.grants if not g.costed]
+    if not tier:
+        return over(_answering(tuple(costed), reach))
+    answering = _answering(tuple(tier), reach)
+    silent = [g.name for g in tier if all(g is not a for a, _ in answering)]
+    holders, reason = _holding(config, n_items, answering, machine)
+    if holders:
+        mine = [(g, s) for g, s in holders if g in grants]
+        if not mine:
+            msg = 'the free tier holds this work but none of its grants is a candidate; costed is not for that'
+            raise ValueError(msg)
+        return over(mine)
+    if not costed:
+        mine = [(g, s) for g, s in answering if g in grants]
+        if not mine:
+            raise Unplaceable(reason)
+        return over(mine)
+    if silent:
+        msg = (
+            f'{reason}; free grant(s) {", ".join(silent)} silent -- a costed grant never pays for unreachable free room'
+        )
+        raise Unplaceable(msg)
+    paid = _answering(tuple(costed), reach)
+    if not paid:
+        msg = f'{reason}; no costed grant answers'
+        raise Unplaceable(msg)
+    return over(paid)
 
 
 def plan_job(config: Config, n_items: int, machine: Machine, reach: Reach) -> tuple[Placement, ...]:

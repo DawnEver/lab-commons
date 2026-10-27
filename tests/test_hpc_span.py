@@ -17,7 +17,7 @@ from lab_commons.hpc.cluster import Unreachable
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine, Session
 from lab_commons.hpc.jobs import Gathered, built_config, gather_job, retry_job, status_job, submit_job
-from lab_commons.hpc.plan import FILES_PER_RUN, plan_on
+from lab_commons.hpc.plan import FILES_PER_RUN, Unplaceable, plan_on
 from lab_commons.hpc.slurm import parse_inodes, parse_snapshot
 from lab_commons.hpc.span import span, split
 from lab_commons.outcomes.record import Event
@@ -361,3 +361,43 @@ def test_a_free_grant_outage_never_falls_through_to_a_costed_grant(tmp_path: Pat
     machine, logins = _paid(near_up=False)
     with pytest.raises(ValueError, match='no free grant answers'):
         jobs.plan_job(_config(tmp_path), 4, machine, _reach(logins))
+
+
+#: A second free account whose 7-day QOS WOULD hold a 3-day wall -- when it answers.
+FREE7 = Grant(user='b', hosts=('b',), slurm_account='acct-free', partitions=('defq',), qos={'defq': 'costed'})
+
+
+def test_a_free_grant_dropped_from_the_candidates_is_not_an_outage(tmp_path: Path) -> None:
+    """``_place`` drops a grant whose tree cannot be built: costed still takes only a wall free cannot hold."""
+    machine, logins = _paid()
+    with pytest.raises(ValueError, match='free tier holds this work'):
+        jobs.tiered(_config(tmp_path), 4, (COSTED,), machine=machine, reach=_reach(logins))
+    placed = jobs.tiered(_config(tmp_path, LONG), 4, (COSTED,), machine=machine, reach=_reach(logins))
+    assert [p.grant for p in placed] == [COSTED]
+
+
+def test_a_silent_free_grant_is_never_billed_for(tmp_path: Path) -> None:
+    logins = {'near': _Login('near'), 'b': _Login('b', up=False), 'pay': _Login('pay')}
+    machine = Machine(session=None, grants=(NEAR, FREE7, COSTED))
+    with pytest.raises(Unplaceable, match='silent'):
+        jobs.plan_job(_config(tmp_path, LONG), 4, machine, _reach(logins))
+    # Planted control: with B answering, B holds the wall and costed is still untouched.
+    logins['b'] = _Login('b')
+    assert [p.grant for p in jobs.plan_job(_config(tmp_path, LONG), 4, machine, _reach(logins))] == [FREE7]
+
+
+def test_a_refusal_that_is_not_about_room_never_spills_to_costed(tmp_path: Path) -> None:
+    machine, logins = _paid()
+    with pytest.raises(ValueError, match='nothing to plan') as refused:
+        jobs.plan_job(_config(tmp_path), 0, machine, _reach(logins))
+    assert not isinstance(refused.value, Unplaceable)
+    assert 'pay@' not in str(refused.value)
+
+
+def test_a_wall_refusal_with_costed_down_names_the_free_tier_reason(tmp_path: Path) -> None:
+    machine, logins = _paid()
+    logins['pay'] = _Login('pay', up=False)
+    with pytest.raises(Unplaceable, match=r'ceiling.*no costed grant answers'):
+        jobs.plan_job(_config(tmp_path, LONG), 4, machine, _reach(logins))
+    with pytest.raises(Unplaceable, match=r'headroom.*no costed grant answers'):
+        jobs.plan_job(_config(tmp_path, Cost(cpus=500, mem_gb=2, seconds=600)), 4, machine, _reach(logins))

@@ -60,11 +60,21 @@ MIB: Final = 1024**2
 #: A partition's refusal when its QOS takes no more submits from the caller (:meth:`Quota.submit_room` is 0).
 SUBMIT_ROOM_SPENT: Final = 'submit limit already reached'
 
+
+class Unplaceable(ValueError):
+    """No room: no headroom, quota, partition wall or inodes for the work -- never a malformed request.
+
+    The one refusal a costed grant may answer (:func:`lab_commons.hpc.jobs.tiered`); any other ``ValueError``
+    is a defect in the request and propagates as itself.
+    """
+
+
 __all__ = [
     'FILES_PER_RUN',
     'MIB',
     'SUBMIT_ROOM_SPENT',
     'Plan',
+    'Unplaceable',
     'allocate',
     'free_slots',
     'grantable_gb',
@@ -226,7 +236,7 @@ def make_plan(
     allowed = quota_slots(snapshot, cost, limits)
     if allowed < 1:
         msg = f'the quota ceiling of account {snapshot.quota.account!r} cannot fit even one item of {cost}'
-        raise ValueError(msg)
+        raise Unplaceable(msg)
     open_, refusals = _open(snapshot, cluster)
     padded = _held(seconds or [cost.seconds] * n_items, policy, [o[3] for o in open_])
     options = []
@@ -239,7 +249,7 @@ def make_plan(
         options.append((name, qos, shards, minutes, ceiling))
     if not options:
         msg = f'no candidate partition can take this work: {"; ".join(refusals)}'
-        raise ValueError(msg)
+        raise Unplaceable(msg)
     _, qos, chosen, minutes, _ = next((o for o in options if free_slots(snapshot, (o[0],), cost) > 0), options[0])
     partitions = tuple(o[0] for o in options if o[1] == qos and (o[4] is None or o[4] >= minutes))
     shards = tuple(chosen)
@@ -333,7 +343,7 @@ def plan_on(
             f'{grant.name}: headroom {room} CPU < {cost.cpus} per item '
             f'(quota {snapshot.quota.cpus}, held {held or "nothing"})'
         )
-        raise ValueError(msg)
+        raise Unplaceable(msg)
     try:
         plan = make_plan(
             n_items,
@@ -346,10 +356,10 @@ def plan_on(
         )
     except ValueError as refused:
         msg = f'{grant.name}: {refused}'
-        raise ValueError(msg) from refused
+        raise type(refused)(msg) from refused
     if snapshot.inodes_free is not None and snapshot.inodes_free < FILES_PER_RUN:
         msg = f'{grant.name}: the home has {snapshot.inodes_free} free inodes, the array writes {FILES_PER_RUN}'
-        raise ValueError(msg)
+        raise Unplaceable(msg)
     return replace(plan, comment=COMMENT_PREFIX + session.name if session else '', setup=grant.setup)
 
 
@@ -380,7 +390,7 @@ def allocate(
     snapshots = [snapshot for _, snapshot in candidates]
     capped = session_room(session, snapshots, cost)
     options: list[tuple[bool, float, float, int, int, Grant, Plan]] = []
-    refusals = []
+    refusals, roomless = [], True
     for order, (grant, snapshot) in enumerate(candidates):
         try:
             plan = plan_on(
@@ -394,6 +404,7 @@ def allocate(
             )
         except ValueError as refused:
             refusals.append(str(refused))
+            roomless = roomless and isinstance(refused, Unplaceable)
             continue
         if paging is not None and not may_place(order, plan.minutes, cost, snapshots, paging, rerun_safe=rerun_safe):
             refusals.append(f'{grant.name}: the large-job region')
@@ -406,7 +417,7 @@ def allocate(
         options.append((*rank, grant, plan))
     if not options:
         msg = 'no grant can take this work: ' + '; '.join(refusals or ['this machine holds no grant'])
-        raise ValueError(msg)
+        raise (Unplaceable if refusals and roomless else ValueError)(msg)
     *_, grant, plan = min(options, key=lambda o: o[:5])
     return grant, plan
 
