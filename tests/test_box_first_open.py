@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -12,10 +13,11 @@ from pathlib import Path
 import pytest
 
 from lab_commons.box import BOX_ENV
-from lab_commons.box._store import connect
+from lab_commons.box._store import _SCHEMA, connect
 
 _N = 8
-_TABLES = {'claims', 'tickets'}
+#: The tables the store's own schema declares -- read from it, so a new table never stales this test.
+_TABLES = set(re.findall(r'CREATE TABLE IF NOT EXISTS (\w+)', _SCHEMA))
 
 
 def _schema() -> set[str]:
@@ -54,7 +56,7 @@ def test_a_fresh_ledger_opened_from_many_threads_at_once_never_locks(
 
 _CHILD = """
 import sys, time
-from lab_commons.box._store import connect
+from lab_commons.box._store import _SCHEMA, connect
 start = float(sys.argv[1])
 while time.time() < start:
     pass
