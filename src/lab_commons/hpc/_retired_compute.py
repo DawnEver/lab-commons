@@ -93,6 +93,9 @@ COMPUTE: Final[dict[str, str]] = {
     'mark.node': 'pytest.mark.workstation (dev_lab.dev.workstation.WORKSTATION)',
     'mark.codex': 'pytest.mark.workstation (dev_lab.dev.workstation.WORKSTATION)',
     'capabilities.dev_checkout': '[capabilities.workstation] (dev_lab.dev.workstation.WORKSTATION)',
+    'capabilities.node': '[capabilities.workstation] (dev_lab.dev.workstation.WORKSTATION)',
+    # A capability is a resource a part NEEDS; where a runtime lives is a host path, not a resource (2026-10-28).
+    'capabilities.ai_lab': '[runtimes.ai_lab] python (dev_lab.dev.forgereview.RUNTIMES_TABLE)',
     'tests/dev_checkout': 'tests/workstation (the one part of the workstation resource)',
     'tests/codex': 'tests/workstation (the one part of the workstation resource)',
     'tests/node': 'tests/workstation (the one part of the workstation resource)',

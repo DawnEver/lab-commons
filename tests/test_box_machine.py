@@ -41,6 +41,15 @@ def test_a_malformed_capability_is_refused_by_name(table: dict[str, object]) -> 
         provided(table)
 
 
+@pytest.mark.parametrize(
+    ('name', 'remedy'), [('dev_checkout', 'workstation'), ('node', 'workstation'), ('ai_lab', 'runtimes')]
+)
+def test_a_retired_capability_is_refused_by_name_with_its_remedy(name: str, remedy: str) -> None:
+    """No alias: a host still declaring a retired name is told what replaced it, never read as a resource."""
+    with pytest.raises(ValueError, match=rf'\[capabilities\.{name}\] is retired: .*{remedy}'):
+        provided({'workstation': {}, name: {}})
+
+
 def _capabilities(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
     config = tmp_path / 'config.toml'
     monkeypatch.setenv('LAB_COMMONS_CONFIG', str(config))

@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
+from lab_commons.hpc._retired_compute import COMPUTE
+
 __all__ = [
     'DEFAULT_CPU_MARGIN',
     'DEFAULT_MEM_MARGIN',
@@ -76,7 +78,10 @@ def own_reserve(total: Mapping[str, float], table: ReserveTable) -> dict[str, fl
 
 
 def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """The machine file's ``[capabilities]``: ``{name: facts}``; a malformed row is refused by name.
+    """The machine file's ``[capabilities]``: ``{name: facts}``; a malformed or RETIRED row is refused by name.
+
+    A retired name (``capabilities.<name>`` in :mod:`lab_commons.hpc._retired_compute`) is never read as a resource:
+    no alias, the refusal names what replaced it.
 
     ``seats`` is the DECLARED count (default 1); ``supply``, when given, is the argv of the probe that MEASURES it
     (:func:`lab_commons.box.providers.seat_sizes`); ``in_use = { process = [images] }``, when given, names the process
@@ -84,6 +89,9 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """
     out: dict[str, dict[str, Any]] = {}
     for name, facts in table.items():
+        if (remedy := COMPUTE.get(f'capabilities.{name}')) is not None:
+            msg = f'{_WHERE}: [capabilities.{name}] is retired: {remedy} -- delete the table'
+            raise ValueError(msg)
         seats = facts.get('seats', 1) if isinstance(facts, dict) else None
         if not RESOURCE_NAME.match(name) or not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
             msg = f'{_WHERE}: [capabilities.{name}] must be a table named {RESOURCE_NAME.pattern}, seats a positive int'
