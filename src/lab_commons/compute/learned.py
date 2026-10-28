@@ -44,13 +44,17 @@ from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.needsets import needs_of
 
 __all__ = [
+    'ASKED',
     'BOX_HEADROOM',
     'BOX_WALL_S',
     'CLUSTER_PRIOR',
+    'EXITED',
     'LOCAL',
+    'MEMORY_KILLED',
     'OOM_GROWTH',
     'PART_FILES',
     'PART_WIDTH',
+    'PRICED_ENDINGS',
     'SLURM',
     'Run',
     'box_demand',
@@ -74,6 +78,24 @@ __all__ = [
 
 #: How much more memory a run asks after an OUT_OF_MEMORY -- the next round's request and a killed peak's floor.
 OOM_GROWTH: Final = 2
+
+#: A run that ENDED BY ITSELF (``ProcessEnd.reason`` ``exit``): the one ending whose peak is a price.
+EXITED: Final = 'exit'
+
+#: The box ended the tree AT its declared memory (``ProcessEnd.reason`` ``memory``): the declaration was too small.
+MEMORY_KILLED: Final = 'memory'
+
+#: A floor raised by an ask that could not be placed (:func:`record_ask`), not by a run.
+ASKED: Final = 'ask'
+
+#: THE ENDINGS A ROW MAY PRICE FROM. A run stopped any other way -- the box's wall, ``timeout``'s SIGTERM (exit 124),
+#: a Ctrl-C, a crash -- was stopped MID-CLIMB: its peak is a LOWER bound of its need and says nothing of how much
+#: more it would have taken, so it is not a price and is never written (it may not even raise one: a raised floor
+#: is a refusal of the next run for memory it was never shown to need -- 2026-10-26, 23-26 GB learned from
+#: timed-out runs refused every later run of their shape). A MEMORY kill is the exception because the BOX chose
+#: the limit: the need is proven past it, so it grows a floor by :data:`OOM_GROWTH`. A row WITHOUT an ending
+#: (written before rows carried one) cannot be told from a timeout's and is read as unmeasured.
+PRICED_ENDINGS: Final = frozenset({EXITED, MEMORY_KILLED, ASKED})
 
 # --- per job: (producer, need-set) -> Run --------------------------------------------------------------
 
@@ -176,19 +198,46 @@ def learn_peaks(repo: str, peaks_mb: Mapping[str, float]) -> Path:
     return _write(repo, {**table, 'peaks_mb': {**table.get('peaks_mb', {}), **peaks_mb}})
 
 
-def record_run(repo: str, producer: str, needs: Iterable[str], run: Run, *, killed: bool = False) -> Path:
-    """Keep what one finished job of *repo* measured under ``(producer, needs)``.
+def _priced(row: Mapping[str, Any] | None) -> Run | None:
+    """The :class:`Run` a stored row prices, or ``None`` for a row whose ending is not in :data:`PRICED_ENDINGS`."""
+    if row is None or row.get('ended') not in PRICED_ENDINGS:
+        return None
+    return Run(**{name: value for name, value in row.items() if name != 'ended'})
 
-    A *killed* run's peak is the limit it died at, not its need: it is grown by :data:`OOM_GROWTH` and
-    never lowers a peak already known (the module docstring).
+
+def _row(run: Run, ended: str) -> dict[str, Any]:
+    return {**asdict(run), 'ended': ended}
+
+
+def record_run(
+    repo: str, producer: str, needs: Iterable[str], run: Run, *, ended: str | None = None, killed: bool | None = None
+) -> Path:
+    """Keep what one job of *repo* measured under ``(producer, needs)``, if how it *ended* makes it a price.
+
+    *ended* is :attr:`lab_commons.box.ProcessEnd.reason`'s vocabulary and must be said: a caller that does not
+    know how its run ended has a run that did not exit by itself. :data:`EXITED` replaces the row;
+    :data:`MEMORY_KILLED` grows the peak it died at by :data:`OOM_GROWTH`, never lowering a known one; any other
+    ending writes nothing (:data:`PRICED_ENDINGS`).
+
+    *killed* is dev-lab's spelling until it passes *ended* (``forgeproduce.learn_box_run``,
+    ``verifybox.learn_ended``): ``True`` reads as :data:`MEMORY_KILLED`, ``False`` as :data:`EXITED`.
     """
+    if (ended is None) == (killed is None):
+        msg = f'record_run says how {producer!r} ended exactly once: ended=, got ended={ended!r} killed={killed!r}'
+        raise TypeError(msg)
+    if ended is None:
+        ended = MEMORY_KILLED if killed else EXITED
+    path = _path(repo)
+    if ended not in (EXITED, MEMORY_KILLED):
+        return path
     table = learned(repo)
     runs = dict(table.get('runs', {}))
     key = _key(producer, needs)
-    if killed:
-        known = float(runs.get(key, {}).get('peak_mem_gb', 0.0))
-        run = Run(max(known, run.peak_mem_gb * OOM_GROWTH), run.cpu_s, run.wall_s, run.files)
-    runs[key] = asdict(run)
+    if ended == MEMORY_KILLED:
+        known = _priced(runs.get(key))
+        floor = 0.0 if known is None else known.peak_mem_gb
+        run = Run(max(floor, run.peak_mem_gb * OOM_GROWTH), run.cpu_s, run.wall_s, run.files)
+    runs[key] = _row(run, ended)
     return _write(repo, {**table, 'runs': runs})
 
 
@@ -201,15 +250,14 @@ def record_ask(repo: str, producer: str, needs: Iterable[str], ask_gb: float, *,
     table = learned(repo)
     runs = dict(table.get('runs', {}))
     key = _key(producer, needs)
-    known = Run(**runs[key]) if key in runs else CLUSTER_PRIOR
-    runs[key] = asdict(Run(max(known.peak_mem_gb, ask_gb / safety), known.cpu_s, known.wall_s, known.files))
+    known = _priced(runs.get(key)) or CLUSTER_PRIOR
+    runs[key] = _row(Run(max(known.peak_mem_gb, ask_gb / safety), known.cpu_s, known.wall_s, known.files), ASKED)
     return _write(repo, {**table, 'runs': runs})
 
 
 def run_of(repo: str, producer: str, needs: Iterable[str]) -> Run | None:
-    """The last run of ``(producer, needs)`` measured for *repo*, or ``None``."""
-    found = learned(repo).get('runs', {}).get(_key(producer, needs))
-    return None if found is None else Run(**found)
+    """The last run of ``(producer, needs)`` measured for *repo* with a priced ending, or ``None``."""
+    return _priced(learned(repo).get('runs', {}).get(_key(producer, needs)))
 
 
 def demand(repo: str, producer: str, needs: Iterable[str], *, prior: Run) -> Demand:
