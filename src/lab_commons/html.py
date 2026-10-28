@@ -12,16 +12,20 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cache
 from html import escape
+from importlib.resources import files
 from pathlib import Path
 from urllib.parse import quote
 
 from lab_commons.compute.durable import durable_write
 
 __all__ = [
+    'NAVIGATION_ID',
     'ReportIdentity',
     'html_document',
     'key_value_table',
+    'navigation_script',
     'relative_asset_url',
     'script_json',
     'write_html_report',
@@ -35,6 +39,18 @@ _DEVICE_NAMES = frozenset(
 )
 _MAX_FILENAME_BYTES = 255
 _KIND_SEPARATOR = '--'
+
+#: The JSON block the packaged navigation script reads its config from.
+NAVIGATION_ID = 'lab-navigation'
+_NAV_REQUIRED = {
+    'mount': 'id',
+    'status': 'id',
+    'label': 'text',
+    'title': 'text',
+    'page_size': 'count',
+    'orders': 'orders',
+}
+_NAV_OPTIONAL = {'scroll_to': 'id', 'collapse_below_px': 'count'}
 
 
 def _validate_name(value: str) -> None:
@@ -101,6 +117,38 @@ def script_json(value: object) -> str:
     )
 
 
+@cache
+def navigation_script() -> str:
+    """The packaged browser script defining ``LabNavigation`` (runs at view time; no engine here)."""
+    return files('lab_commons').joinpath('html_assets', 'navigation.js').read_text(encoding='utf-8')
+
+
+def _nav_value_ok(kind: str, value: object) -> bool:
+    if kind == 'id':
+        return isinstance(value, str) and bool(_SCRIPT_ID.fullmatch(value))
+    if kind == 'text':
+        return isinstance(value, str) and bool(value)
+    if kind == 'count':
+        return type(value) is int and value > 0
+    ids = [order.get('id') for order in value if isinstance(order, Mapping)] if isinstance(value, list) else []
+    return (
+        bool(value)
+        and len(ids) == len(value) == len(set(ids))
+        and all(set(order) == {'id', 'label'} and _nav_value_ok('id', order['id']) for order in value)
+        and all(_nav_value_ok('text', order['label']) for order in value)
+    )
+
+
+def _check_navigation(config: Mapping[str, object]) -> None:
+    kinds = {**_NAV_REQUIRED, **_NAV_OPTIONAL}
+    unknown = set(config) - set(kinds)
+    missing = set(_NAV_REQUIRED) - set(config)
+    bad = sorted(key for key in set(config) & set(kinds) if not _nav_value_ok(kinds[key], config[key]))
+    if unknown or missing or bad:
+        message = f'invalid navigation config: unknown {sorted(unknown)}, missing {sorted(missing)}, malformed {bad}'
+        raise ValueError(message)
+
+
 def html_document(
     title: str,
     body_html: str,
@@ -108,6 +156,7 @@ def html_document(
     css: str = '',
     javascript: str = '',
     json_data: Mapping[str, object] | None = None,
+    navigation: Mapping[str, object] | None = None,
 ) -> str:
     """Wrap trusted producer markup and safe data in one UTF-8 HTML document.
 
@@ -117,6 +166,12 @@ def html_document(
         css: Trusted inline CSS without style tags.
         javascript: Trusted application code without script tags.
         json_data: Data blocks keyed by explicit, validated script element identities.
+        navigation: Optional grouped-navigation config: ``mount``/``status`` element ids,
+            ``label``, ``title``, ``page_size``, ``orders`` (``[{'id', 'label'}]``), and
+            optionally ``scroll_to`` and ``collapse_below_px``. Embedded as the
+            :data:`NAVIGATION_ID` block with :func:`navigation_script` ahead of
+            ``javascript``, which calls ``LabNavigation.start(hooks)`` with its items and
+            ``group``/``groupTitle``/``itemTitle``/``show`` hooks.
 
     Returns:
         A standalone document shell; asset or plotting dependencies remain explicit
@@ -124,7 +179,15 @@ def html_document(
 
     """
     blocks = []
-    for identity, value in (json_data or {}).items():
+    data = dict(json_data or {})
+    if navigation is not None:
+        _check_navigation(navigation)
+        if NAVIGATION_ID in data:
+            message = f'{NAVIGATION_ID} is reserved for the navigation config'
+            raise ValueError(message)
+        data[NAVIGATION_ID] = navigation
+        javascript = f'{navigation_script()}\n{javascript}'
+    for identity, value in data.items():
         if not isinstance(identity, str) or not _SCRIPT_ID.fullmatch(identity):
             message = f'invalid JSON script element identity: {identity!r}'
             raise ValueError(message)
