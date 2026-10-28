@@ -28,7 +28,9 @@ A KILLED SHARD COSTS ONLY WHAT IT DID NOT FINISH. Every item streams its test ce
 (:mod:`lab_commons.hpc.pytest_item`); the run reads the streams, not the shards' end-of-run files.
 An item whose stream never closed is unfinished: its unreported ids are re-submitted, split in halves,
 for up to :data:`RETRIES` more rounds -- the id a kill interrupted is priced at no less than the
-time it was given, twice that when its shard hit the wall (:meth:`lab_commons.compute.learned.Measured.killed`),
+time it was given; when its shard hit the wall the killed item's unfinished ids together price at no less
+than twice the time it was given, held to the longest partition wall
+(:meth:`lab_commons.compute.measured.Measured.killed`),
 and every other item keeps its own learned duration: a ``TIMEOUT`` never raises the wall of the run -- and
 only what is still unfinished after that is ``INFRA``. An item that closed without reporting an id
 recorded it ``PENDING``: never reported.
@@ -44,7 +46,8 @@ halves the killed items, so they end. A lone test still killed at the ceiling is
 THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
 minus its tests', i.e. interpreter and imports) and ``peaks_mb`` (per file); the next run reads them
 back (``history``), so an item's time is its file's overhead plus its ids' durations, an item's memory
-is its own files' worst measured peak times ``policy.safety`` -- items grouped by memory class, one array
+is its own files' peaks ACCUMULATED in one process (:meth:`~lab_commons.compute.measured.Measured.item_gb`) times
+``policy.safety`` -- items grouped by memory class, one array
 per class (:func:`submit_round`) -- and ``cost`` is the fallback only for a file never measured -- named
 in the plan as ``unmeasured``. EVERY FOLDED ROUND is learned (:mod:`lab_commons.compute.learned`), not only
 the record: measured 2026-10-13 on Ada, nine downstream runs were each superseded before their record, so
@@ -62,7 +65,7 @@ from dataclasses import asdict, replace
 from typing import Any, Final
 
 from lab_commons.compute import learned
-from lab_commons.compute.learned import Measured
+from lab_commons.compute.measured import Measured, memory_band
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
@@ -193,9 +196,9 @@ def submit_round(
 ) -> None:
     """Plan and submit round ``len(state['rounds'])`` of *pending* among the grants of *snapshots*.
 
-    EACH ITEM ASKS ITS OWN MEMORY (:meth:`Measured.item_gb`: its files' learned peaks times the safety, times
-    this run's growth of a file whose item was OOM-killed), held to the most any grant gives. A Slurm array
-    asks one memory for all its tasks, so items are grouped by memory class (:func:`learned.memory_band`) and
+    EACH ITEM ASKS ITS OWN MEMORY (:meth:`Measured.item_gb`: its files' learned peaks accumulated, times the safety,
+    times this run's growth of a file whose item was OOM-killed), held to the most any grant gives. A Slurm array
+    asks one memory for all its tasks, so items are grouped by memory class (:func:`memory_band`) and
     each class is its own array of one manifest (:func:`submit_bands`). The heaviest class picks the grant;
     the others plan on it, since the tree lives in its home.
     """
@@ -207,7 +210,7 @@ def submit_round(
     held = [ask if grantable is None else min(ask, grantable) for ask in asks]
     classes: dict[int, list[int]] = {}
     for index, gb in enumerate(held):
-        classes.setdefault(learned.memory_band(gb), []).append(index)
+        classes.setdefault(memory_band(gb), []).append(index)
     chosen: Grant | None = None
     order: list[int] = []
     plans: list[Plan] = []
@@ -376,7 +379,7 @@ def submit_run(
     measured = Measured.of(state['measured'])
 
     def band(ids: list[str]) -> int:
-        return learned.memory_band(measured.item_gb(ids, cost, policy))
+        return memory_band(measured.item_gb(ids, cost, policy))
 
     pending = measured.pack(files, cost, item_seconds(policy), band)
     if not pending:  # every id was carried or handed: the record needs no job

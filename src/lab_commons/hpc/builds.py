@@ -73,7 +73,7 @@ class ItemWall:
     the numbers live.
 
     THE CEILING, and why a measurement cannot lift it: a "measurement" includes a kill's FLOOR, which every wall
-    kill doubles (:meth:`lab_commons.compute.learned.Measured.killed`), so ``multiple`` times it grows without
+    kill doubles (:meth:`lab_commons.compute.measured.Measured.killed`), so ``multiple`` times it grows without
     bound. Ada 2026-10-24..26: eight forge jobs each held a core 34-41 h on one hung winding test whose wall read
     776553..1051465 s -- nine to twelve days, past every Slurm limit, so the runner's kill never fired. Two hours
     is twenty times the slowest test the motronics suite measured passing (~11 min) and a fraction of any shard's

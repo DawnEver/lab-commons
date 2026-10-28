@@ -59,7 +59,7 @@ COMPUTE: Final[dict[str, str]] = {
     'carries its headroom': 'carries its supply',
     # One measured demand table for every host: per test and per (producer, need-set) job (compute step 4).
     'lab_commons.hpc.learned': 'lab_commons.compute.learned (the one measured demand table)',
-    'lab_commons.hpc.measured': 'lab_commons.compute.learned.Measured',
+    'lab_commons.hpc.measured': 'lab_commons.compute.measured.Measured',
     'hpc-learned': 'compute-learned (beside the machine config, lab_commons.compute.learned.directory)',
     'lab_commons.hpc.outstanding': 'dev_lab.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
     # A host's own user is served by its own reserve, and an account is divided by reservations (2026-10-13).
