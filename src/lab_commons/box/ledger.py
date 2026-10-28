@@ -16,9 +16,9 @@ no crash leaves memory booked.
 A WAITER HOLDS NOTHING. It takes a ticket, carrying its demand, that orders it in the queue and counts for
 nothing in the room. A ticket that fits now is admitted past an earlier one that does not, unless holding it
 would delay that earlier ticket's earliest start (:mod:`lab_commons.box.order`, the one ordering rule: backfill
-by reservation, never starving); a claim holder is ordered behind no waiter. EVERY WAIT ENDS: a ticket waits
-at most until the claims held when it arrived end (each by its deadline), and every waiter gives up at its own
-``queue_s`` -- a required argument -- and its ticket is reaped with it.
+by reservation, never starving); a claim holder is ordered behind no waiter that wants what it holds. EVERY
+WAIT ENDS: a ticket waits at most until the claims held when it arrived end (each by its deadline), and every
+waiter gives up at its own ``queue_s`` -- a required argument -- and its ticket is reaped with it.
 
 A CLAIM MAY OUTLIVE ITS LAUNCHER IN TWO NAMED WAYS, and only those. :func:`hand_over` makes a vendor
 process (a Designer, a solver started outside this tree) the claim's holder: the claim then lives and is
@@ -100,7 +100,7 @@ from lab_commons.box.demand import (
     mem_bytes,
     seats,
 )
-from lab_commons.box.order import blocks
+from lab_commons.box.order import Asked, blocks, contends
 from lab_commons.box.providers import Read, measured, size
 from lab_commons.box.supply import Reading
 from lab_commons.compute.model import Demand, Resources
@@ -314,12 +314,18 @@ def _try(
     if refusal is not None:
         return refusal
     pid = os.getpid()
-    if all(h.pid != pid for h in held):  # a holder is never ordered behind a waiter (the 2026-10-19 deadlock)
-        jumper = Holding(what, pid, cores(demand), mem_bytes(demand), seats(demand), now + wall_s)
-        ahead = con.execute('SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,))
-        for earlier, *asked in ahead.fetchall():
-            if blocks((asked[0], asked[1], asked[2]), jumper, capacity=capacity, held=held, reading=reading, now=now):
-                return f'queued behind {earlier!r}, which came first: holding this would delay its earliest start'
+    mine = [h for h in held if h.pid == pid]
+    jumper = Holding(what, pid, cores(demand), mem_bytes(demand), seats(demand), now + wall_s)
+    ahead = con.execute('SELECT what, cpu, mem_bytes, seats FROM tickets WHERE id < ? ORDER BY id', (ticket,))
+    for earlier, *row in ahead.fetchall():
+        asked: Asked = (row[0], row[1], row[2])
+        # A holder is never ordered behind a waiter wanting what it holds (the 2026-10-19 deadlock). Holding only
+        # what the waiter does not want -- a seat -- is no reason to pass it (2026-10-28: a measure holding a
+        # 0-memory seat passed a JMAG ticket waiting on memory five times in a row).
+        if any(contends(h, asked) for h in mine):
+            continue
+        if blocks(asked, jumper, capacity=capacity, held=held, reading=reading, now=now):
+            return f'queued behind {earlier!r}, which came first: holding this would delay its earliest start'
     deadline = now + wall_s
     cursor = con.execute(
         'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key, fingerprint) '

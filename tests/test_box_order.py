@@ -151,3 +151,27 @@ def test_a_seat_only_ticket_is_untouched_by_memory_contention(box: Path, other: 
         hold(*seat, 'slot-late', queue_s=0.2, **_ON),
     ):
         pass
+
+
+def test_a_seat_holder_queues_behind_a_head_its_memory_would_delay(box: Path, other: int) -> None:
+    """PLANTED (2026-10-28 live): a process holding only a seat is no holder of the head's memory.
+
+    A gate measure held a 0-memory seat claim, then asked 8.1 GB; the holder exemption let five measures in a row
+    pass a JMAG ticket waiting on memory. When the long holder ends early, the head goes in before any arrival.
+    """
+    holder = _claim(box, other, mem_gb=4.0, ends_in=_HOLDER_S)  # a 12 h-style deadline that ends early
+    _ticket(box, other, _demand(mem_gb=6.0)[0])
+    seat = Demand({'jmag': 1, 'cpu': 0, 'mem_gb': 0.0}), int(_HOLDER_S * 2)
+    with hold(*seat, 'seat', queue_s=0.2, **_ON):
+        with (
+            pytest.raises(NotAdmitted, match="queued behind 'big'"),
+            hold(*_demand(mem_gb=3.0, wall_s=int(_HOLDER_S * 2)), 'measure', queue_s=0.2, **_ON),
+        ):
+            pass
+        with sqlite3.connect(box) as con:
+            con.execute('DELETE FROM claims WHERE id = ?', (holder,))
+        with (
+            pytest.raises(NotAdmitted, match="queued behind 'big'"),
+            hold(*_demand(mem_gb=6.0, wall_s=int(_HOLDER_S * 2)), 'next measure', queue_s=0.2, **_ON),
+        ):
+            pass

@@ -18,8 +18,10 @@ protect, and blocks nobody until it has one); and a HOLDER is never ordered behi
 
 A HOLDER NEVER WAITS BEHIND A WAITER (the 2026-10-19 deadlock): a process holding a claim whose nested
 request queued behind a waiter needing that claim's memory waited until its own deadline. A ticket of a
-process that holds a claim is ordered by nothing -- it is admitted as soon as it fits. That passing is
-bounded too: a holder stops being one when its claims end, and no new holder appears but by this rule.
+process that holds a claim is not ordered behind a waiter that CONTENDS with one of its claims -- it is admitted
+as soon as it fits. That passing is bounded too: a holder stops being one when its claims end. Holding what the
+waiter does not want (a seat-only claim) passes nothing: a gate run holding a 0-memory seat claim passed a JMAG
+ticket waiting on memory five times in a row (2026-10-28), each a fresh 12 h deadline, and the head never ran.
 
 Contention is per resource (:func:`contends`): a ticket wanting nothing an earlier one wants -- a seats-only
 check, another seat -- is never ordered behind it.
