@@ -10,6 +10,8 @@ import json
 import os
 import sqlite3
 import stat
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -87,14 +89,44 @@ def connect() -> sqlite3.Connection:
     for one in (path.parent, path):
         _refuse_untrusted(one)
     con = sqlite3.connect(path, timeout=_LOCK_S, isolation_level=None)
-    con.execute('PRAGMA journal_mode=WAL')
-    con.executescript(_SCHEMA)
-    for table, added in _ADDED.items():
-        columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
-        for name, spelled in added:
-            if name not in columns:  # a ledger file written before the column existed: the schema moves forward
-                con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
+    try:
+        with _FIRST_OPEN:  # threads of one process queue here; other processes are met by the retry below
+            _set_up(con)
+    except BaseException:
+        con.close()
+        raise
     return con
+
+
+#: Serialises this process's ledger set-up; a fresh file's WAL switch otherwise races itself.
+_FIRST_OPEN: Final = threading.Lock()
+
+
+def _set_up(con: sqlite3.Connection) -> None:
+    """Switch *con*'s file to WAL and move its schema forward, waiting out a concurrent opener.
+
+    ``PRAGMA journal_mode=WAL`` on a fresh file needs an exclusive lock and SQLite does not run the busy
+    handler for it, so a second opener sees ``database is locked`` at once: it is retried here, bounded by
+    the same :data:`_LOCK_S` a transaction waits. The DDL runs in one ``BEGIN IMMEDIATE`` so two processes
+    cannot both see a column missing and both add it.
+    """
+    gives_up = time.monotonic() + _LOCK_S
+    while True:
+        try:
+            con.execute('PRAGMA journal_mode=WAL')
+            break
+        except sqlite3.OperationalError as exc:
+            if ('locked' not in str(exc) and 'busy' not in str(exc)) or time.monotonic() >= gives_up:
+                raise
+            time.sleep(0.01)
+    with immediate(con):
+        for statement in filter(str.strip, _SCHEMA.split(';')):
+            con.execute(statement)
+        for table, added in _ADDED.items():
+            columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
+            for name, spelled in added:
+                if name not in columns:  # a ledger file written before the column existed: the schema moves forward
+                    con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
 
 
 #: Columns added after the file format was first written, per table: (name, its fixed definition).
