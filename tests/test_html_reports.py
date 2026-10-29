@@ -216,7 +216,7 @@ import importlib.abc
 import sys
 class RefuseHeavy(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'numpy','matplotlib','bokeh','downstream_pkg'}:
+        if fullname.split('.')[0] in {'numpy','matplotlib','bokeh','wdg_lab','motronics'}:
             raise RuntimeError('unexpected dependency: '+fullname)
 sys.meta_path.insert(0, RefuseHeavy())
 from lab_commons.html import ReportIdentity, html_document
