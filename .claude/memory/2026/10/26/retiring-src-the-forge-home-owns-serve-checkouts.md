@@ -17,7 +17,7 @@ metadata: {}
 
 ## Why ~/src existed
 
-- `dev_lab.dev.workstation deploy --root` defaulted to `~/src`; `[serve] root = "C:\Users\linxu\src"` in the
+- `dev_lab.dev.workstation deploy --root` defaulted to `~/src`; `[serve] root = "C:\Users\<user>\src"` in the
   machine file. The `lab-forge-serve` Task's action had drifted to `~/src/lab-commons/.venv/pythonw.exe`
   (a lab-commons dev venv as the kit) -> ImportError `declared_seats` every tick; G has posted no tick since
   10-22 (gap A4). Sessions also edited in `~/src`, so it held unique work.
@@ -25,7 +25,7 @@ metadata: {}
 ## Rescued before removal
 
 - Unpushed branches fetched into the PEMC clones as `src-rescue/<branch>` (dev-lab, lab-commons, optimi-lab,
-  wdg-lab); `pr/adopt-security-check` abandoned per the handoff. dev-lab cloned to `Documents/PEMC/dev-lab`
+  another consumer); `pr/adopt-security-check` abandoned per the handoff. dev-lab cloned to `Documents/PEMC/dev-lab`
   (PEMC had none); its scratch P0 baseline files copied.
 - 21 `output/logs` trees (mains + worktrees) copied with no-clobber into `PEMC/<repo>/output/logs`.
 - Uncommitted integrator rows 124-126 committed here (e149610).
@@ -37,11 +37,11 @@ metadata: {}
   serve interpreter must be `<home>/repos/dev-lab`; planted-control arch test refuses `home()/'src'`. 95 passed.
 - lab-commons #464: relock dev-lab 7ef2cd9 (handoff section 6) + these rows. base and security success;
   review errored (only G has `[capabilities.ai_lab]`).
-- wdg-lab #392: same relock; local verify inconclusive (connection checkout absent, box memory exhausted).
-- motronics #4943: `[tool.dev_lab.security]` exclude `attic`, ignore `S311` (the red on integrate/main
+- another consumer: same relock; local verify inconclusive (connection checkout absent, box memory exhausted).
+- a consumer PR: `[tool.dev_lab.security]` exclude `attic`, ignore `S311` (the red on integrate/main
   dff9324515: 28 attic + 4 S311). Per-site noqa is refused by the repo ruff (RUF100). Open question for
   dev-lab: the table is read from integrate/main, so the first exemption PR is judged by the table it adds.
-- Motronics relock is the forge's (`dev_lab.dev.relock`), not a hand job.
+- A consumer relock is the forge's (`dev_lab.dev.relock`), not a hand job.
 
 ## Blocked, and the remaining steps
 

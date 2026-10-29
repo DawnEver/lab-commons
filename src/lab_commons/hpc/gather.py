@@ -52,7 +52,7 @@ def gather_run(
 
     A retry round the QOS has no submit room for (:class:`~lab_commons.hpc.run.NoRoom`) is CAPACITY, never a
     settled run: the folded round's cells stay, the unfinished items wait in ``state['waiting']``, and each
-    later gather tries the submit again. Ada 2026-10-21 (motronics #4684): 42 items finished over ~6 h, the
+    later gather tries the submit again. Ada 2026-10-21 (a downstream run): 42 items finished over ~6 h, the
     retry round hit ``QOSMaxSubmitJobPerUserLimit``, and the run was released "ended without a record". A wait
     past ``policy.stall_minutes`` settles with what DID run, the waiting ids named unrun.
     """

@@ -20,7 +20,7 @@ THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 2. **Partitions** -- every candidate whose time ceiling (partition AND QOS) holds the shard's padded wall
    time is admissible; the first, in the caller's order, with a free slot now (else the first) fixes the
    QOS, and the plan asks for EVERY admissible candidate under that QOS as one ``--partition=a,b``, so
-   Slurm starts each task wherever it fits first. Measured 2026-10-10: array 7660516 named ``shortq``
+   Slurm starts each task wherever it fits first. Measured 2026-10-10: array 1000001 named ``shortq``
    alone and pended for hours while ``defq``, declared beside it, had idle nodes. One ``sbatch`` carries
    one ``--qos``, so a candidate needing another QOS is never merged in.
 3. **Throttle** -- concurrent tasks = the account's HEADROOM now (its ceiling less what every job of the
@@ -199,7 +199,7 @@ def _held(seconds: Sequence[float], policy: Policy, ceilings: Sequence[float | N
     An estimate past every ceiling is a guess, never a need: a kill's floor is twice what the id ran
     (:meth:`~lab_commons.compute.measured.Measured.killed`) and the margin multiplies it again. Measured
     2026-10-26 (Ada): an id priced 48 h padded to a 4321-min shard that neither shortq (720) nor defq
-    (2880) holds, and every motronics run stuck at "no grant can take this work". Held to the longest
+    (2880) holds, and every downstream run stuck at "no grant can take this work". Held to the longest
     ceiling, the id gets the most any partition gives; past that its wall cuts it and its cell says so.
     """
     padded = [s * policy.safety for s in seconds]

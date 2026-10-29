@@ -248,7 +248,7 @@ class Measured:
         distinct peak's growth over the base, times the safety, never under ``cost.mem_gb``. Equal peaks count
         ONCE: a finished multi-file item teaches its one read to every file (:meth:`learn`), one measurement.
         Upper-bounded, not averaged -- modules imported by two files are paid once and counted twice -- because
-        dev-lab #493 (ezzls2, 7 days) measured the worst-file ask too SMALL: ~10 tasks a run killed at 1-2 GB
+        dev-lab #493 (one account, 7 days) measured the worst-file ask too SMALL: ~10 tasks a run killed at 1-2 GB
         running 8-121 files with learned peaks of 0.5-0.8 GB. :meth:`pack` bounds the sum it makes.
         """
         growth, floor_mb = grown or {}, cost.mem_gb * _MB_PER_GB / policy.safety

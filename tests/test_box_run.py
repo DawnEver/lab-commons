@@ -120,10 +120,10 @@ def test_root_scopes_in_the_system_manager_and_a_user_in_its_delegated_one() -> 
 
 def test_only_the_jobs_own_cgroup_makes_a_slurm_run() -> None:
     """Measured on an Ada compute node (cgroup v1): ``freezer:/slurm/uid_<n>/job_<id>/step_0``."""
-    inside = '10:freezer:/slurm/uid_80178097/job_7695270/step_0\n11:cpu,cpuacct:/user.slice\n'
-    assert in_slurm_job('7695270', inside)
-    assert not in_slurm_job('7695270', '11:cpu,cpuacct:/user.slice\n'), 'an inherited id on a login node'
-    assert not in_slurm_job('769527', inside), 'another job id is not a prefix match'
+    inside = '10:freezer:/slurm/uid_1000/job_1000002/step_0\n11:cpu,cpuacct:/user.slice\n'
+    assert in_slurm_job('1000002', inside)
+    assert not in_slurm_job('1000002', '11:cpu,cpuacct:/user.slice\n'), 'an inherited id on a login node'
+    assert not in_slurm_job('100000', inside), 'another job id is not a prefix match'
     assert not in_slurm_job(None, inside), 'PLANTED CONTROL: no id, no job'
 
 

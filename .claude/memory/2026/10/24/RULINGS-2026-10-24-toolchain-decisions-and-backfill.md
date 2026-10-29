@@ -5,12 +5,12 @@ type: decision
 
 # User rulings 2026-10-24: every open toolchain decision, and backfill over strict FIFO
 
-Context: `HANDOFF-integrator-toolchain-refactor.md` (same day) section 4. Principles applied: first principles, no
+Context: the integrator handoff of the same day (section 4; not kept in this tree). Principles applied: first principles, no
 historical baggage, Occam, one source of truth, layered decoupling, names match, no backward compatibility.
 
 ## Rulings (all user-approved)
 
-1. Reinstall motronics' shared `.git/hooks` from dev-lab NOW, not at #4802 landing.
+1. Reinstall a consumer's shared `.git/hooks` from dev-lab NOW, not at #4802 landing.
 2. Lock freshness and branchset leave the local pre-push entirely and run on the forge only; auto-sync relocks.
    No "not behind integrate/main" half-gate kept locally.
 3. Dependency pins: `test_no_source_claims_a_dependency_pin` wins. uv.lock is the one version fact; pyproject
