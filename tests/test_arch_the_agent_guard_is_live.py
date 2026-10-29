@@ -33,6 +33,7 @@ _SHIPPED: Final = frozenset(
         'PUSH-FORCE',
         'PUSH-NO-VERIFY',
         'PUSH-REMOTE-DELETE',
+        'RECURSIVE-DELETE',
         'RECURSIVE-GREP',
         'REPORTS-LIVE-IN-MEMORY',
         'STATUS-VIA-DOORS',
