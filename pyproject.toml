@@ -19,7 +19,7 @@ dev = ["dev-lab"]
 
 [tool.uv.sources]
 # integrate/main until dev-lab main carries the split; then drop `branch`.
-dev-lab = { git = "https://gitea.mingyangbao.site/Tianjie-Zou-Team/dev-lab.git", branch = "integrate/main" }
+dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", branch = "integrate/main" }
 
 [tool.uv]
 # dev-lab's own source pins lab-commons to its git integrate/main; HERE lab-commons is this checkout, so no
