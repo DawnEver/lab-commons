@@ -252,16 +252,11 @@ ignore = [
 ]
 
 # THIS REPO'S CI, as TOML: rendered to .github/workflows/ by `python -m dev_lab.dev.ciworkflows render`
-# (the family base is dev_lab/dev/ci_base.toml). ci.yml is the base caller, pointed at the reusable
-# workflow beside it; python-verify.yml is THE family CI definition, which every repo's ci.yml calls.
-[tool.dev_lab.ci."ci.yml".jobs.verify]
-uses = "./.github/workflows/python-verify.yml"
+# (the family base is dev_lab/dev/ci_base.toml). ci.yml takes the base as is: the one PR lifecycle
+# (parts, part, absent-parts, security, review, merge-ready, promote).
+[tool.dev_lab.ci."ci.yml"]
 
-[tool.dev_lab.ci."ci.yml".jobs.verify.with]
-runner-os = '["ubuntu-latest", "windows-latest", "macos-latest"]'
-extras = "viz-mpl viz-bokeh"
-guard-targets = "adoption"
-
+# The reusable python-verify.yml is no longer called by ci.yml; it stays declared until its retirement.
 [tool.dev_lab.ci."python-verify.yml"]
 name = "Python verify (reusable)"
 
