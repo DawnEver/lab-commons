@@ -37,5 +37,5 @@ transport opening, B, C, D, E's no-cache half, F.
   local-path submodule -- was invisible to upstream's own submodule test, which opened the transport in its
   environment. The test now pins git's default (`protocol.file.allow=user`) and only the fixture's
   `submodule add` opens it: red without `_dep_network`'s `-c protocol.file.allow=always`, green with it.
-- Every `motronics` in the lane's prose became `a consumer` (upstream 95523ad: no tracked file names a private
+- Every consumer name in the lane's prose became `a consumer` (upstream 95523ad: no tracked file names a private
   value); this file was renamed for the same reason.

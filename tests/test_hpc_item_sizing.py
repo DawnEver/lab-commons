@@ -1,6 +1,6 @@
 """An item is ONE pytest process over all its files: its memory and its wall are sized as a whole.
 
-dev-lab #493 (ezzls2, 7 days): ~10 tasks a run of motronics ``base`` died at 1-2 GB running 8-121 files whose
+dev-lab #493 (one account, 7 days): ~10 tasks a downstream ``base`` run died at 1-2 GB running 8-121 files whose
 learned peaks were 0.5-0.8 GB -- the ask was the heaviest file's, the process held them all. And a TIMEOUT
 raised only the id the wall cut, so an item killed at 57 min was re-asked short and killed again at 110 min.
 """

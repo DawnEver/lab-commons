@@ -1839,7 +1839,7 @@ def test_a_run_that_cannot_be_gathered_has_its_live_jobs_cancelled_before_it_is_
 
     def runner(command: str, _stdin: object) -> str:
         asked.append(command)
-        return '7738129\n' if command.startswith('squeue') else ''
+        return '1000003\n' if command.startswith('squeue') else ''
 
     machine = Machine(session=None, grants=(GRANT,))
     sha = 'a' * 40
@@ -1851,7 +1851,7 @@ def test_a_run_that_cannot_be_gathered_has_its_live_jobs_cancelled_before_it_is_
     monkeypatch.setattr(watch, 'gather_run', unreadable)
     args = ([sha], machine, lambda _grant: runner, Config(), tmp_path)
     assert watch.settle(*args, part='base', sleep=None) == 1
-    assert 'scancel 7738129' in asked, 'a dropped run leaves no live job'
+    assert 'scancel 1000003' in asked, 'a dropped run leaves no live job'
 
     asked.clear()
     monkeypatch.setattr(watch, 'gather_run', lambda *_a, **_k: None)
@@ -1978,7 +1978,7 @@ def _gather_at(fake: FakeRunCluster, minute: float) -> dict | None:
 def test_a_retry_round_refused_on_the_qos_submit_limit_waits_in_flight_and_submits_when_the_room_returns() -> None:
     """A QOS submit refusal at ANY round is capacity: a refused retry round leaves the run in flight.
 
-    Ada 2026-10-21 (motronics #4684): 42 items ran ~6 h, the retry round hit ``QOSMaxSubmitJobPerUserLimit``,
+    Ada 2026-10-21 (a downstream run): 42 items ran ~6 h, the retry round hit ``QOSMaxSubmitJobPerUserLimit``,
     and the run settled "ended without a record".
 
     PLANTED CONTROL: the same refusal lifted at the next tick submits the round and the record keeps every cell.
