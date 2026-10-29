@@ -86,7 +86,7 @@ def test_a_demand_for_nothing_is_still_refused() -> None:
 
 @pytest.mark.usefixtures('box')
 def test_a_coreless_claim_is_admitted_while_another_claim_holds_every_core() -> None:
-    """D10 (motronics, 2026-10-23): a held solver claim never queues a stage that asks no core."""
+    """D10 (a downstream repo, 2026-10-23): a held solver claim never queues a stage that asks no core."""
     with (
         hold(*_demand(cpu=4, mem_gb=1.0), 'solver', queue_s=0.2, **_ON),
         hold(*_demand(cpu=0, mem_gb=1.0, seats={'jmag': 1}), 'prepare', queue_s=0.2, **{**_ON, 'key': 'p'}),
@@ -511,7 +511,7 @@ def test_a_waiter_the_box_can_reach_is_not_delayed_by_a_later_demand(box: Path) 
 
 
 def test_a_liveness_probe_runs_outside_the_write_lock(box: Path, tmp_path: Path) -> None:
-    """2026-10-24, motronics Luce maps: 7 of 8 maps stopped on ``database is locked``.
+    """2026-10-24, a downstream repo's loss maps: 7 of 8 maps stopped on ``database is locked``.
 
     The reaper ran each external claim's probe (up to PROBE_S) INSIDE ``BEGIN IMMEDIATE``, so N gone clients held
     the write lock N x PROBE_S, past every other process's busy timeout. The probe here asks for that lock itself.

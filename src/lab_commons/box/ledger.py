@@ -155,7 +155,7 @@ def _dead_externals(con: sqlite3.Connection, now: float) -> frozenset[int]:
     """OUTSIDE the write lock: the external claims whose client is gone and whose liveness probe says the job is gone.
 
     A probe may take :data:`PROBE_S`; run under ``BEGIN IMMEDIATE`` it held the lock N x PROBE_S, past every other
-    process's busy timeout (2026-10-24: 7 of 8 motronics loss maps stopped on ``database is locked``).
+    process's busy timeout (2026-10-24: 7 of 8 downstream loss maps stopped on ``database is locked``).
     """
     rows = con.execute('SELECT id, pid, created, deadline + ?, probe FROM claims WHERE probe IS NOT NULL', (GRACE_S,))
     return frozenset(

@@ -297,7 +297,7 @@ def _item(peak_mb: float, done: int, node: str) -> dict:
 def test_a_finished_sibling_never_lowers_the_peak_its_files_kill_read_in_the_same_round() -> None:
     """Within one round a file's peak is the worst of its items, whatever order they fold in.
 
-    Ada 2026-10-24 (motronics #4802): one test of a file was killed at 3447 MB while three sibling items
+    Ada 2026-10-24 (a downstream run): one test of a file was killed at 3447 MB while three sibling items
     of the same file finished near 1 GB; the last finished one overwrote the kill, and the retry asked 2048M.
     """
     for order in ((3447.0, -9), (1000.0, 0)), ((1000.0, 0), (3447.0, -9)):
