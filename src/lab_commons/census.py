@@ -12,7 +12,8 @@ WHAT EACH FIELD IS, READ, never guessed:
   ``python.exe`` launcher stays alive for its child's whole life, so its image names the venv); on Linux
   ``argv[0]`` made absolute against ``/proc/<pid>/cwd``, falling back to ``/proc/<pid>/exe`` -- a venv's
   ``python`` is a SYMLINK and the kernel's ``exe`` resolves through it to the base interpreter, losing the
-  venv. ``''`` when it cannot be read (another user's process, a protected one, macOS). An unreadable
+  venv; on macOS the same ``argv[0]`` rule against the ``lsof`` cwd. ``''`` when it cannot be read (another
+  user's process, a protected one, a bare name on macOS). An unreadable
   executable is NOT evidence of anything, so a reader must not treat it as a match.
 * ``command_line`` -- ``NtQueryInformationProcess(ProcessCommandLineInformation)`` on Windows (8.1 and
   later, with only ``PROCESS_QUERY_LIMITED_INFORMATION``), ``/proc/<pid>/cmdline`` on Linux, ``ps`` on macOS.
@@ -25,14 +26,13 @@ from __future__ import annotations
 
 import ctypes
 import os
-import shutil
+import posixpath
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import lab_commons.launch as _door
-from lab_commons import proc
+from lab_commons import _proc_darwin, proc
 
 __all__ = ['Process', 'processes']
 
@@ -53,7 +53,7 @@ class Process:
     executable: str
     command_line: str
     age_s: float | None
-    #: The working directory, ``''`` when unreadable: the PEB on Windows, ``/proc/<pid>/cwd`` on Linux.
+    #: The working directory, ``''`` when unreadable: the PEB (Windows), ``/proc/<pid>/cwd`` (Linux), ``lsof`` (macOS).
     cwd: str = ''
 
 
@@ -63,7 +63,7 @@ def processes() -> tuple[Process, ...]:
         return _windows()
     if sys.platform.startswith('linux'):
         return _linux()
-    return _ps()
+    return _darwin()
 
 
 class _UnicodeString(ctypes.Structure):
@@ -193,23 +193,39 @@ def _age_linux(pid: int, uptime: float | None, ticks: int) -> float | None:
     return None if uptime is None or started is None else max(0.0, uptime - started / ticks)
 
 
-def _ps() -> tuple[Process, ...]:
-    """macOS: ``ps`` reports pid, ppid, elapsed seconds and the command line; the image stays unread."""
-    done = _door.run(
-        [shutil.which('ps') or 'ps', '-ww', '-A', '-o', 'pid=,ppid=,etime=,args='],
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-        errors='replace',
-        check=False,
-        timeout=60,
-    )
+def _darwin() -> tuple[Process, ...]:
+    """macOS: one ``ps`` snapshot (pid, ppid, elapsed, command line) and one ``lsof`` for every cwd."""
+    table = _proc_darwin._tool('ps', '-ww', '-A', '-o', 'pid=,ppid=,etime=,args=')  # noqa: SLF001 -- the one tool runner
+    if table is None:
+        return ()
+    cwds = _lsof_cwds(_proc_darwin._tool('lsof', '-a', '-d', 'cwd', '-F', 'pn') or '')  # noqa: SLF001
     out = []
-    for line in done.stdout.splitlines():
-        pid, ppid, elapsed, *args = [*line.split(None, 3), '', '', ''][:4]
+    for line in table.splitlines():
+        pid, ppid, elapsed, args = [*line.split(None, 3), '', '', ''][:4]
         if pid.isdigit() and ppid.isdigit():
-            out.append(Process(int(pid), int(ppid), '', ''.join(args), _etime(elapsed)))
+            cwd = cwds.get(int(pid), '')
+            out.append(Process(int(pid), int(ppid), _invoked_posix(cwd, args), args, _etime(elapsed), cwd))
     return tuple(out)
+
+
+def _lsof_cwds(text: str) -> dict[int, str]:
+    """``lsof -F pn`` field lines (``p<pid>`` then ``n<path>``) -> ``{pid: cwd}``."""
+    cwds: dict[int, str] = {}
+    pid = None
+    for line in text.splitlines():
+        if line.startswith('p') and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith('n') and pid is not None:
+            cwds[pid] = line[1:]
+    return cwds
+
+
+def _invoked_posix(cwd: str, args: str) -> str:
+    """``argv[0]`` made absolute against *cwd*, symlinks KEPT; ``''`` when no path names it."""
+    argv0 = args.split(None, 1)[0] if args.strip() else ''
+    if argv0.startswith('/'):
+        return posixpath.normpath(argv0)
+    return posixpath.normpath(posixpath.join(cwd, argv0)) if '/' in argv0 and cwd else ''
 
 
 def _etime(text: str) -> float | None:
