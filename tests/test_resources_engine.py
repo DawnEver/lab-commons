@@ -18,6 +18,7 @@ import pytest
 from lab_commons.box import GRACE_S, holdings
 from lab_commons.box._store import box_path, connect
 from lab_commons.compute.model import Resources, Supply
+from lab_commons.compute.probe import OS_NAMES
 from lab_commons.config import config_path
 from lab_commons.resources import KINDS, Actual, Claim, Engine, Kind, NotAdmitted, charged, kind_of
 
@@ -92,6 +93,12 @@ def test_a_name_without_a_kind_or_a_second_provider_of_one_name_is_refused() -> 
         kind_of('unicorns')
     with pytest.raises(ValueError, match='cpu'):
         Engine({_SCOPE: [_Fake('cpu', 1, 1), _Fake('cpu', 1, 1)]})
+
+
+@pytest.mark.parametrize('os_resource', sorted(OS_NAMES.values()))
+def test_every_os_a_box_can_supply_has_a_kind(os_resource: str) -> None:
+    # a box supplies its OS as a resource (BoxOS): while 'macos' had no kind, a macOS box built no engine
+    assert kind_of(os_resource) is Kind.OCCUPANCY
 
 
 def test_a_consumable_without_a_declared_window_is_refused() -> None:
