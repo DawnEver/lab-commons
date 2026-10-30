@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from lab_commons.compute.measured import TIMEOUT_GROWTH, Measured, file_of, memory_band
+from lab_commons.compute.measured import OOM_GROWTH, TIMEOUT_GROWTH, Measured, file_of, memory_band
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.pytest_item import read_stream
 
@@ -168,3 +168,32 @@ def test_an_id_that_finishes_drops_its_peak_floor() -> None:
     measured.learn([_SDM], read_stream(stream, [_SDM]))
     assert measured.id_peaks_mb == {_FEA: 3000.0}
     assert measured.peaks_mb == {file_of(_SDM): 5000.0}
+
+
+def test_a_one_file_oom_kill_floors_its_files_peak_at_the_limit_grown() -> None:
+    """Run 4fb97faa904f: a one-file kill taught the ~limit it read, so the next run asked limit x 1.5 and died again.
+
+    The read is the limit the cgroup killed at, not the need: the file's floor is that times ``OOM_GROWTH``.
+    """
+    ids = [_FEA, _SDM]
+    measured = Measured(peaks_mb={file_of(_SDM): 900.0})
+    measured.learn(ids, _killed_at_498s(ids, peak_mb=1351.0))
+    assert measured.peaks_mb == {file_of(_SDM): 1351.0 * OOM_GROWTH}
+    known = Measured(peaks_mb={file_of(_SDM): 4000.0})
+    known.learn(ids, _killed_at_498s(ids, peak_mb=1351.0))
+    assert known.peaks_mb == {file_of(_SDM): 4000.0}, 'PLANTED CONTROL: a kill below a known peak lowers nothing'
+
+
+def test_a_multi_file_oom_kill_floors_only_its_cut_id() -> None:
+    """Which file held the memory is unknown, but the id in flight is known: it alone carries the grown limit."""
+    other = 'tests/unit/workflow/test_cogging.py::test_cogging'
+    ids = [_FEA, _SDM, other]
+    measured = Measured(peaks_mb={file_of(_SDM): 900.0, file_of(other): 300.0})
+    measured.learn(ids, _killed_at_498s(ids, peak_mb=2048.0))
+    assert measured.id_peaks_mb == {_SDM: 2048.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {file_of(_SDM): 900.0, file_of(other): 300.0}, 'no file is priced by the kill'
+    policy = Policy(safety=1.0)
+    assert measured.item_gb([_FEA], _COST, policy) == pytest.approx(900.0 / 1024, rel=1e-12, abs=0.0), (
+        'PLANTED CONTROL: the finished sibling keeps its file peak'
+    )
+    assert measured.item_gb([_SDM], _COST, policy) == pytest.approx(2048.0 * OOM_GROWTH / 1024, rel=1e-12, abs=0.0)

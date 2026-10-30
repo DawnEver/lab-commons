@@ -34,6 +34,7 @@ from typing import Any, Final
 
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.measured import (
+    OOM_GROWTH,
     Measured,
     file_of,
     task_gb,
@@ -48,7 +49,6 @@ __all__ = [
     'BOX_WALL_S',
     'CLUSTER_PRIOR',
     'LOCAL',
-    'OOM_GROWTH',
     'PART_FILES',
     'PART_WIDTH',
     'SLURM',
@@ -71,9 +71,6 @@ __all__ = [
     'selection_gb',
     'worker_gb',
 ]
-
-#: How much more memory a run asks after an OUT_OF_MEMORY -- the next round's request and a killed peak's floor.
-OOM_GROWTH: Final = 2
 
 # --- per job: (producer, need-set) -> Run --------------------------------------------------------------
 

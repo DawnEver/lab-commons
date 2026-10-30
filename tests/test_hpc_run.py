@@ -24,7 +24,7 @@ from typing import ClassVar, Final
 import pytest
 
 from lab_commons.compute import learned
-from lab_commons.compute.measured import Measured, memory_band
+from lab_commons.compute.measured import OOM_GROWTH, Measured, memory_band
 from lab_commons.config import CONFIG_ENV
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
@@ -489,15 +489,17 @@ def test_a_measured_peak_raises_the_memory_and_never_lowers_it_under_the_declare
     ), 'PLANTED CONTROL: over the floor the peak decides'
 
 
-def test_a_peak_read_at_a_kill_is_its_one_files_floor_ungrown_and_never_lowers_a_known_peak() -> None:
+def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_known_peak() -> None:
     """Ada 2026-10-13: 24 children OOM-killed at 1 GB read peaks of ~1120 MB -- the limit, not the need.
 
-    The read is the file's floor as read: the run's own ``oom`` multiplier is the retry's growth, applied once.
+    The read grown by ``OOM_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
+    run and killed again); the round's own growth then skips the file (``taught``), so it is applied once.
     """
-    killed = {'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 1120.0}}
+    killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 1120.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed)
-    assert measured.peaks_mb == {'a.py': 1120.0}
+    assert measured.peaks_mb == {'a.py': 1120.0 * OOM_GROWTH}
+    assert measured.taught == {'a.py'}
     known = Measured(peaks_mb={'a.py': 3493.0})
     known.learn(['a.py::t'], killed)
     assert known.peaks_mb == {'a.py': 3493.0}, 'a kill at a lower limit says nothing new'
@@ -508,19 +510,21 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_ungrown_and_never_lowers_a
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
-    """A killed item of several files says nothing about any one of them.
+    """A killed item of several files says nothing about any one of them -- only about the id it cut.
 
     Ada 2026-10-16: one 56-file item killed at its 120362 MB ask read 120219.2 MB; grown x2, 240438.4 MB
     was taught to all 56 files, and every later run of the part asked 352 GB a task.
 
-    Which file held the memory is unknown, so none is priced by it; the retry bisects the item instead.
+    Which file held the memory is unknown, so none is priced by it; the retry bisects the item instead. The id
+    in flight (here the first, none reported) carries the grown read as its own floor (run 4fb97faa904f).
     PLANTED CONTROL: the same item FINISHING teaches its peak to every file, an upper bound for each.
     """
     ids = [f'tests/sweep/test_{n}.py::t' for n in range(56)]
     measured = Measured(peaks_mb={'tests/sweep/test_0.py': 900.0})
-    measured.learn(ids, {'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 120219.2}})
+    measured.learn(ids, {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 120219.2}})
     assert measured.peaks_mb == {'tests/sweep/test_0.py': 900.0}
-    assert measured.item_gb(ids, Cost(), Policy()) == pytest.approx(900.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
+    assert measured.id_peaks_mb == {ids[0]: 120219.2 * OOM_GROWTH}
+    assert measured.item_gb(ids[1:], Cost(), Policy()) == pytest.approx(900.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
     measured.learn(ids, {'seconds': {}, 'done': {'done': 0, 'wall': 30.0, 'peak_mb': 3000.0}})
     assert set(measured.peaks_mb.values()) == {3000.0}
     assert len(measured.peaks_mb) == 56
@@ -2059,3 +2063,11 @@ def test_a_file_whose_item_was_killed_keeps_growing_though_a_sibling_item_finish
     assert grown_after(items[1:], cells, {0: 1}, {1: 'COMPLETED'}, {'tests/f.py': 2.0}, oom=False) == {}, (
         'PLANTED CONTROL: a file with no killed item this round is back at its peak'
     )
+
+
+def test_a_file_whose_kill_taught_its_grown_floor_is_not_grown_again() -> None:
+    """Ada 2026-10-16: a read grown twice re-asked a 20 GB kill at 120 GB. The taught floor IS the growth."""
+    items = [{'ids': ['tests/f.py::a']}, {'ids': ['tests/g.py::a']}]
+    states = {0: 'OUT_OF_MEMORY', 1: 'OUT_OF_MEMORY'}
+    after = grown_after(items, {}, {0: 0, 1: 1}, states, {'tests/f.py': 2.0}, oom=True, taught={'tests/f.py'})
+    assert after == {'tests/g.py': 2.0}, 'f was taught read x growth; g, killed with no read, grows'

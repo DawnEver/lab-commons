@@ -9,13 +9,12 @@ written. Nothing resident waits: the retries are driven by gather calls.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import replace
 from typing import Any
 
 from lab_commons.compute import learned
-from lab_commons.compute.learned import OOM_GROWTH
-from lab_commons.compute.measured import Measured
+from lab_commons.compute.measured import OOM_GROWTH, Measured
 from lab_commons.hpc.cluster import Runner, probe, throttle
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.grants import Grant, Machine
@@ -100,7 +99,9 @@ def gather_run(
     learned.learn({'repo': state['repo'], **state['measured']})
     timed_out = 'TIMEOUT' in states.values()
     oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
-    state['grown'] = grown_after(current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom)
+    state['grown'] = grown_after(
+        current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom, taught=measured.taught
+    )
     if pending and (len(state['rounds']) <= RETRIES or (oom and current['ceiling'])):
         grant = next(g for g in machine.grants if g.account == account)
         snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
@@ -224,14 +225,17 @@ def grown_after(
     grown: Mapping[str, float],
     *,
     oom: bool,
+    taught: Collection[str] = frozenset(),
 ) -> dict[str, float]:
     """The run's memory growth per FILE after a round: a KILLED item's files grow, a finished one's reset.
 
     In a round that ran out of memory, an item left unfinished in a shard that did not time out was killed,
-    and each of its files asks :data:`~lab_commons.compute.learned.OOM_GROWTH` times more next round, never
+    and each of its files asks :data:`~lab_commons.compute.measured.OOM_GROWTH` times more next round, never
     every later item (Ada 2026-10-19: one heavy file's kill doubled every task of the part). A file whose
     item finished every id outside an OUT_OF_MEMORY shard, and none of whose items was killed, is back at its
-    measured peak (:meth:`Measured.learn` keeps it): its growth is dropped.
+    measured peak (:meth:`Measured.learn` keeps it): its growth is dropped. A file in *taught* -- its kill
+    already floored its peak at the read times ``OOM_GROWTH`` (:meth:`Measured.learn`), and the read held
+    every earlier growth -- drops its growth: the growth is applied once.
     """
     after = dict(grown)
     killed: set[str] = set()  # a file grows ONCE a round, however many of its items were killed
@@ -243,8 +247,9 @@ def grown_after(
             finished |= files
         elif oom and shard != 'TIMEOUT':
             killed |= files
-    for name in finished - killed:  # a kill wins: a finished sibling item never resets its file (Ada 2026-10-24)
+    # a kill wins: a finished sibling item never resets its file (Ada 2026-10-24); a taught floor replaces growth
+    for name in (finished - killed) | (killed & set(taught)):
         after.pop(name, None)
-    for name in killed:
+    for name in killed - set(taught):
         after[name] = after.get(name, 1.0) * OOM_GROWTH
     return after

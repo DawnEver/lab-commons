@@ -26,13 +26,14 @@ so every retry was sized shorter than the wall the last one died at, and 325 ids
 rounds.
 
 A PEAK READ AT A KILL IS THE LIMIT, NOT THE NEED, AND IT IS NO FILE'S PEAK. Measured 2026-10-13 (Ada):
-children OOM-killed at 1 GB read ~1120 MB. A signalled ONE-FILE item keeps that read as its file's FLOOR,
-ungrown -- the next run asks it times the safety, more than the limit it died at -- and never lowers a peak
-already known. The retry's growth is the run's own ``oom`` multiplier, applied ONCE. Measured 2026-10-16
-(Ada): the read was also grown by ``learned.OOM_GROWTH`` and the retry grew it again, so a 20 GB kill was
-re-asked at 120 GB, killed, and taught 240 GB to each of 56 files of ONE multi-file item; every later run
-of the part asked 352 GB a task. A signalled MULTI-file item teaches no peak at all: which file held the
-memory is unknown, and its retry is bisected (:mod:`lab_commons.hpc.run`) until one file says.
+children OOM-killed at 1 GB read ~1120 MB. A signalled item's need is more than that read: it is FLOORED at
+the read times :data:`OOM_GROWTH`, never lowering a peak already known -- a ONE-FILE item's on its file, a
+MULTI-file item's on the id it cut alone (``id_peaks_mb``): which file held the memory is unknown, and its
+retry is bisected (:mod:`lab_commons.hpc.run`) until one file says. Measured 2026-10-30 (run 4fb97faa904f):
+an ungrown read was asked again at the read times the safety, ~1.5x a run, and killed again run after run.
+The growth is applied ONCE: the kill's taught floor is the growth, so the round's own growth
+(:func:`lab_commons.hpc.gather.grown_after`) skips what a kill taught. Measured 2026-10-16 (Ada): a read grown
+twice re-asked a 20 GB kill at 120 GB, and taught 240 GB to each of 56 files of ONE multi-file item.
 The declared ``cost.mem_gb`` is a floor too: the peak is the pytest child's, and the
 task's cgroup also holds the item runner (Ada 2026-10-12: a 150 MB peak priced 225M and 429M, OOM both).
 """
@@ -47,10 +48,14 @@ from typing import Any, Final
 
 from lab_commons.hpc.config import Cost, Policy
 
-__all__ = ['ACCUMULATED_CLASSES', 'TIMEOUT_GROWTH', 'Measured', 'file_of', 'memory_band', 'task_gb']
+__all__ = ['ACCUMULATED_CLASSES', 'OOM_GROWTH', 'TIMEOUT_GROWTH', 'Measured', 'file_of', 'memory_band', 'task_gb']
 
 #: MB per GB, as the plan's memory is written.
 _MB_PER_GB = 1024
+
+#: How much more memory an OOM-KILLED item's need is than the limit it died at: a killed peak's floor, and the
+#: next round's ask of the id the kill cut.
+OOM_GROWTH: Final = 2
 
 #: How much more wall a TIMED-OUT item's next plan asks than the wall it died at, held to the partition max.
 TIMEOUT_GROWTH: Final = 2
@@ -81,6 +86,8 @@ class Measured:
     #: The files this instance -- ONE round's fold -- already learned a peak for: within a round a file's peak is
     #: the worst of its items, so a finished sibling never lowers what a killed one read (Ada 2026-10-24).
     _round: set[str] = field(default_factory=set, repr=False, compare=False)
+    #: What this round's kills taught a grown peak floor -- a one-file item's file, a multi-file item's cut id.
+    taught: set[str] = field(default_factory=set, repr=False, compare=False)
 
     @classmethod
     def of(cls, record: dict[str, Any]) -> Measured:
@@ -108,8 +115,9 @@ class Measured:
 
         An item may span several files and pays ONE wall; its overhead is SHARED equally among its files,
         so :meth:`estimate`, which sums the shares, gives the same item back what it measured. Its peak is
-        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak is a floor of
-        its file when it holds ONE, and nobody's when it holds several (the module docstring).
+        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak grown by
+        :data:`OOM_GROWTH` is a floor of its file when it holds ONE, and of the id it cut when it holds several
+        (the module docstring).
         """
         self.durations.update(folded['seconds'])
         for node in folded['seconds']:
@@ -126,12 +134,27 @@ class Measured:
             overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
             for name in files:
                 self.overheads[name] = overhead
-        if peak is None or (signalled and len(files) > 1):
+        if peak is None:
+            return
+        if signalled:
+            self._killed_peak(ids, folded, files, float(peak) * OOM_GROWTH)
             return
         for name in files:
-            floor = self.peaks_mb.get(name, 0.0) if signalled or name in self._round else 0.0
+            floor = self.peaks_mb.get(name, 0.0) if name in self._round else 0.0
             self.peaks_mb[name] = max(floor, float(peak))
             self._round.add(name)
+
+    def _killed_peak(self, ids: Sequence[str], folded: dict[str, Any], files: list[str], need: float) -> None:
+        """Floor a killed item's *need* (MB): on its one file, else on the id it cut; never lower a known floor."""
+        if len(files) == 1:
+            self.peaks_mb[files[0]] = max(self.peaks_mb.get(files[0], 0.0), need)
+            self._round.add(files[0])
+            self.taught.add(files[0])
+            return
+        cut = next((n for n in ids if n not in folded['cells']), None)
+        if cut is not None:
+            self.id_peaks_mb[cut] = max(self.id_peaks_mb.get(cut, 0.0), need)
+            self.taught.add(cut)
 
     def killed(
         self,

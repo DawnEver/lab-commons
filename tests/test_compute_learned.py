@@ -10,8 +10,8 @@ import pytest
 from lab_commons.compute import learned
 from lab_commons.compute.admission import admit
 from lab_commons.compute.durable import durable_write
-from lab_commons.compute.learned import OOM_GROWTH, Run
-from lab_commons.compute.measured import Measured
+from lab_commons.compute.learned import Run
+from lab_commons.compute.measured import OOM_GROWTH, Measured
 from lab_commons.compute.model import Demand, Job, Resources, Supply
 
 REPO = 'https://g/r.git'
@@ -299,12 +299,13 @@ def test_a_finished_sibling_never_lowers_the_peak_its_files_kill_read_in_the_sam
 
     Ada 2026-10-24 (a downstream run): one test of a file was killed at 3447 MB while three sibling items
     of the same file finished near 1 GB; the last finished one overwrote the kill, and the retry asked 2048M.
+    The kill's floor is its read grown by ``OOM_GROWTH`` (run 4fb97faa904f).
     """
     for order in ((3447.0, -9), (1000.0, 0)), ((1000.0, 0), (3447.0, -9)):
         measured = Measured(peaks_mb={'t.py': 500.0})
         for n, (peak, done) in enumerate(order):
             measured.learn([f't.py::x{n}'], _item(peak, done, f't.py::x{n}'))
-        assert measured.peaks_mb['t.py'] == 3447.0, f'in either order: {order}'
+        assert measured.peaks_mb['t.py'] == 3447.0 * OOM_GROWTH, f'in either order: {order}'
     later = Measured(peaks_mb={'t.py': 3447.0})
     later.learn(['t.py::x'], _item(800.0, 0, 't.py::x'))
     assert later.peaks_mb['t.py'] == 800.0, 'PLANTED CONTROL: a newer round that finishes still replaces'
