@@ -8,6 +8,11 @@ shared among the item's files so the shares sum back to what was measured); ``pe
 of a file's pytest process. A newer measurement replaces an older one; nothing is averaged, because the
 code under test changed between the two. A finished id drops its floor: its duration is now known.
 
+A KILLED WALL IS NO OVERHEAD. Measured 2026-10-30 (run 4fb97faa904f): an item OOM-killed 498 s into one id booked
+the 498 s as its file's overhead, which :meth:`Measured.killed` then subtracted as explained, so the id learned a
+38.3 s floor; its retry was sized at minutes and 7 of the round's 8 failures were TIMEOUTs. Only an item that
+closed by itself measures overhead; a killed one floors its cut id at the time it ran, grown as for a TIMEOUT.
+
 An item's estimate is its files' overheads plus its ids' durations, each id at least its floor; an id
 not yet timed in a file that has others is priced at that file's mean. A file with NOTHING measured is
 priced at ``Cost.seconds`` and named, so a plan says how much of it is a guess.
@@ -108,11 +113,12 @@ class Measured:
             return
         tests = sum(folded['seconds'].values())
         files = list(dict.fromkeys(file_of(n) for n in ids))
-        overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
         peak = done.get('peak_mb')
         signalled = int(done.get('done', 0)) < 0
-        for name in files:
-            self.overheads[name] = overhead
+        if not signalled:  # a killed wall holds the cut id's run, not the files' overhead (the module docstring)
+            overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
+            for name in files:
+                self.overheads[name] = overhead
         if peak is None or (signalled and len(files) > 1):
             return
         for name in files:
@@ -133,8 +139,9 @@ class Measured:
 
         Pytest runs an item's ids in the order given, so the first id without a cell is the one the
         kill interrupted. It took at least *spent* minus the finished ids' durations and the files' known
-        overheads; that is its FLOOR -- twice that when the wall cut it (*timed_out*): it would not have finished
-        within it -- held to *top*, the longest wall any partition grants (seconds): past it is a guess no
+        overheads; that is its FLOOR -- times :data:`TIMEOUT_GROWTH` when the wall cut it (*timed_out*) or a signal
+        closed it (its ``done`` line below 0, the cgroup's OOM killer): it would not have finished within it --
+        held to *top*, the longest wall any partition grants (seconds): past it is a guess no
         partition can host. After an OOM the ids after it never started and keep their estimate; after a
         TIMEOUT the item as a whole is re-priced at no less than *spent* times :data:`TIMEOUT_GROWTH`, held to
         *top* (:meth:`_outgrow`) -- dev-lab #493: only the cut id grew, and a 57 min kill was re-asked short and
@@ -145,7 +152,8 @@ class Measured:
             return
         files = dict.fromkeys(file_of(n) for n in ids)
         explained = sum(folded['seconds'].values()) + sum(self.overheads.get(f, 0.0) for f in files)
-        floor = round((spent - explained) * (TIMEOUT_GROWTH if timed_out else 1), 3)
+        signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
+        floor = round((spent - explained) * (TIMEOUT_GROWTH if timed_out or signalled else 1), 3)
         floor = floor if top is None else min(floor, top)
         if floor > 0:
             self.floors[rest[0]] = max(self.floors.get(rest[0], 0.0), floor)

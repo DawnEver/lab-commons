@@ -7,10 +7,13 @@ raised only the id the wall cut, so an item killed at 57 min was re-asked short 
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from lab_commons.compute.measured import Measured, memory_band
+from lab_commons.compute.measured import TIMEOUT_GROWTH, Measured, file_of, memory_band
 from lab_commons.hpc.config import Cost, Policy
+from lab_commons.hpc.pytest_item import read_stream
 
 _COST, _POLICY = Cost(seconds=120, mem_gb=0.1), Policy(safety=1.0)
 
@@ -87,4 +90,58 @@ def test_an_oom_kill_still_floors_only_the_interrupted_id() -> None:
     measured = Measured()
     folded = {'cells': {}, 'seconds': {}, 'done': None}
     measured.killed(['a.py::cut', 'a.py::b'], folded, spent=600.0)
-    assert measured.floors == {'a.py::cut': 600.0}
+    assert measured.floors == {'a.py::cut': 600.0}, 'no close line names the kill: the floor is what it ran'
+
+
+# -- a killed item learns what it needed (run 4fb97faa904f, 2026-10-30) ----------------------------------------
+
+_SDM = 'tests/unit/workflow/test_back_emf_full_matrix.py::test_back_emf[spm_slotted-sdm-A1]'
+_FEA = 'tests/unit/workflow/test_back_emf_full_matrix.py::test_back_emf[spm_slotted-fea-A1]'
+
+
+def _stream(*lines: dict[str, object]) -> str:
+    """An item's ``.lab-ci/*-r*.jsonl`` stream, as the item plugin writes it."""
+    return '\n'.join(json.dumps(line) for line in lines)
+
+
+def _killed_at_498s(ids: list[str], peak_mb: float = 1351.0) -> dict[str, object]:
+    """The recorded shape: the fea id passed in 3.1 s, the sdm id started and the cgroup OOM-killed the item."""
+    return read_stream(
+        _stream(
+            {'start': ids[0]},
+            {'id': ids[0], 'outcome': 'passed', 's': 3.1},
+            {'start': ids[1]},
+            {'done': -9, 'wall': 498.0, 'peak_mb': peak_mb},
+        ),
+        ids,
+    )
+
+
+def test_an_oom_killed_item_floors_its_cut_id_at_the_wall_it_died_at_grown() -> None:
+    """Run 4fb97faa904f: ``back_emf[spm_slotted-sdm-A1]`` ran 498 s before its OOM kill and learned a 38.3 s floor.
+
+    ``learn`` booked the whole killed wall as the file's overhead, ``killed`` subtracted it back as explained.
+    """
+    ids = [_FEA, _SDM]
+    measured = Measured()
+    folded = _killed_at_498s(ids)
+    measured.learn(ids, folded)
+    measured.killed(ids, folded, spent=498.0)
+    assert measured.overheads == {}, 'a killed wall is no overhead: nothing in it closed'
+    assert measured.floors[_SDM] >= (498.0 - 3.1) * TIMEOUT_GROWTH
+    assert sum(measured.estimate([[_SDM]], _COST)[0]) >= (498.0 - 3.1) * TIMEOUT_GROWTH
+
+
+def test_a_finished_item_still_learns_its_true_overhead() -> None:
+    """PLANTED CONTROL: the same item CLOSING (``done`` 0) books its wall minus its tests as the file's overhead."""
+    ids = [_FEA, _SDM]
+    measured = Measured()
+    stream = _stream(
+        {'start': _FEA},
+        {'id': _FEA, 'outcome': 'passed', 's': 3.1},
+        {'start': _SDM},
+        {'id': _SDM, 'outcome': 'passed', 's': 450.0},
+        {'done': 0, 'wall': 498.0, 'peak_mb': 2100.0},
+    )
+    measured.learn(ids, read_stream(stream, ids))
+    assert measured.overheads == {file_of(_SDM): pytest.approx(498.0 - 453.1, rel=1e-12, abs=1e-9)}
