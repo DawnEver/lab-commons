@@ -36,7 +36,7 @@ only what is still unfinished after that is ``INFRA``. An item that closed witho
 recorded it ``PENDING``: never reported.
 
 AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory for
-the files of the KILLED items only (:func:`lab_commons.hpc.gather.grown_after`; a file that then finishes is back at its
+the id each kill CUT only (:func:`lab_commons.hpc.gather.grown_after`; an id that then finishes is back at its
 peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
 counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
 halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
@@ -372,7 +372,7 @@ def submit_run(
         'cells': cells,
         'measured': Measured.of(history or {}).record(),
         'rounds': [],
-        'grown': {},  # file -> this run's memory growth after its item was OOM-killed
+        'grown': {},  # node id -> this run's memory growth after an OOM kill cut it
         'carried': {node: held[1] for node, held in taken.items()},
     }
     files = group_items([node for node in ids if node not in handed and node not in taken])

@@ -379,11 +379,11 @@ def _upgraded_arrays(state: dict[str, Any]) -> dict[str, Any]:
         for r in state.get('rounds', [])
     ]
     current = state.get('current')
-    if 'oom' in state:  # the run-wide growth lands on the files of the round in flight, the ones it would size
-        files = {n.split('::', maxsplit=1)[0] for item in (current or {}).get('items', ()) for n in item['ids']}
-        state = {**state, 'grown': {name: float(state['oom']) for name in files if state['oom'] > 1}}
+    nodes = [n for item in (current or {}).get('items', ()) for n in item['ids']]
+    if 'oom' in state:  # the run-wide growth lands on the ids of the round in flight, the ones it would size
+        state = {**state, 'grown': {node: float(state['oom']) for node in nodes if state['oom'] > 1}}
     state = {**{k: v for k, v in state.items() if k != 'oom'}, 'rounds': rounds}
-    state.setdefault('grown', {})
+    state['grown'] = _grown_by_id(state.get('grown', {}), nodes)
     if current and 'job_id' in current:
         last = rounds[-1]
         band = {
@@ -402,6 +402,16 @@ def _upgraded_arrays(state: dict[str, Any]) -> dict[str, Any]:
             'ceiling': current.get('at_ceiling') is not None,
         }
     return state
+
+
+def _grown_by_id(grown: Mapping[str, float], nodes: Sequence[str]) -> dict[str, float]:
+    """A run's growth keyed by node id; a FILE key (before 2026-10-30) lands on that file's ids in flight."""
+    by_id = {key: growth for key, growth in grown.items() if '::' in key}
+    for node in nodes:
+        name = node.split('::', maxsplit=1)[0]
+        if name in grown and node not in by_id:
+            by_id[node] = grown[name]
+    return by_id
 
 
 def upgraded_state(state: dict[str, Any]) -> dict[str, Any]:

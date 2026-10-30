@@ -14,7 +14,7 @@ from dataclasses import replace
 from typing import Any
 
 from lab_commons.compute import learned
-from lab_commons.compute.measured import OOM_GROWTH, Measured
+from lab_commons.compute.measured import OOM_GROWTH, Measured, file_of
 from lab_commons.hpc.cluster import Runner, probe, throttle
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.grants import Grant, Machine
@@ -227,29 +227,31 @@ def grown_after(
     oom: bool,
     taught: Collection[str] = frozenset(),
 ) -> dict[str, float]:
-    """The run's memory growth per FILE after a round: a KILLED item's files grow, a finished one's reset.
+    """The run's memory growth per node ID after a round: the id a kill CUT grows, an id that finished resets.
 
     In a round that ran out of memory, an item left unfinished in a shard that did not time out was killed,
-    and each of its files asks :data:`~lab_commons.compute.measured.OOM_GROWTH` times more next round, never
-    every later item (Ada 2026-10-19: one heavy file's kill doubled every task of the part). A file whose
-    item finished every id outside an OUT_OF_MEMORY shard, and none of whose items was killed, is back at its
-    measured peak (:meth:`Measured.learn` keeps it): its growth is dropped. A file in *taught* -- its kill
-    already floored its peak at the read times ``OOM_GROWTH`` (:meth:`Measured.learn`), and the read held
-    every earlier growth -- drops its growth: the growth is applied once.
+    and the id it was running -- its first id without a cell -- asks :data:`~lab_commons.compute.measured.OOM_GROWTH`
+    times more next round. Nothing else does: neither every later item (Ada 2026-10-19: one heavy file's kill
+    doubled every task of the part) nor the item's other ids, which finished or never started (run
+    4fb97faa904f: 13 light items of one killed task were doubled). An id that got a cell outside an
+    OUT_OF_MEMORY shard, and was cut by no kill, is back at its measured peak: its growth is dropped. A cut id
+    whose kill already floored its need at the read times ``OOM_GROWTH`` -- the id, or its one file, in
+    *taught* (:meth:`Measured.learn`) -- drops its growth too, since the read held every earlier growth: the
+    growth is applied once.
     """
     after = dict(grown)
-    killed: set[str] = set()  # a file grows ONCE a round, however many of its items were killed
+    cut: set[str] = set()  # an id grows ONCE a round
     finished: set[str] = set()
     for index, item in enumerate(items):
-        files = {node.split('::', maxsplit=1)[0] for node in item['ids']}
         shard = states.get(shard_of[index], '')
-        if all(node in cells for node in item['ids']) and shard != 'OUT_OF_MEMORY':
-            finished |= files
-        elif oom and shard != 'TIMEOUT':
-            killed |= files
-    # a kill wins: a finished sibling item never resets its file (Ada 2026-10-24); a taught floor replaces growth
-    for name in (finished - killed) | (killed & set(taught)):
-        after.pop(name, None)
-    for name in killed - set(taught):
-        after[name] = after.get(name, 1.0) * OOM_GROWTH
+        rest = [node for node in item['ids'] if node not in cells]
+        if shard != 'OUT_OF_MEMORY':
+            finished |= {node for node in item['ids'] if node in cells}
+        if rest and oom and shard != 'TIMEOUT':
+            cut.add(rest[0])
+    known = {node for node in cut if node in taught or file_of(node) in taught}
+    for node in (finished - cut) | known:
+        after.pop(node, None)
+    for node in cut - known:
+        after[node] = after.get(node, 1.0) * OOM_GROWTH
     return after

@@ -278,10 +278,10 @@ class Measured:
     ) -> float:
         """ONE ITEM's memory: ONE pytest process over all its files, so the files ACCUMULATE.
 
-        THE MODEL: each file's peak (learned, else :meth:`prior_mb`; times *grown*, the run's OOM growth of a file
-        whose item was killed, applied to the peak already held to the ``cost.mem_gb`` floor, so a lone file asks
-        ``max(peak x safety, floor) x growth``) is a process of the shared base -- interpreter, pytest, common
-        imports -- plus what the file adds.
+        THE MODEL: each file's peak (learned, else :meth:`prior_mb`, raised to its ids' peak floors; times *grown*,
+        the run's OOM growth of the id a kill cut, applied to that id's peak already held to the ``cost.mem_gb``
+        floor, so a lone id asks ``max(peak x safety, floor) x growth``) is a process of the shared base --
+        interpreter, pytest, common imports -- plus what the file adds.
         The base is the item's lightest peak; the item holds the worst peak plus every other
         distinct peak's growth over the base, times the safety, never under ``cost.mem_gb``. Equal peaks count
         ONCE: a finished multi-file item teaches its one read to every file (:meth:`learn`), one measurement.
@@ -289,20 +289,29 @@ class Measured:
         dev-lab #493 (one account, 7 days) measured the worst-file ask too SMALL: ~10 tasks a run killed at 1-2 GB
         running 8-121 files with learned peaks of 0.5-0.8 GB. :meth:`pack` bounds the sum it makes.
         """
-        growth, floor_mb = grown or {}, cost.mem_gb * _MB_PER_GB / policy.safety
-        files = self._file_peaks_mb(ids)
-        peaks = sorted({max(mb, floor_mb) * growth.get(f, 1.0) for f, mb in files.items()}, reverse=True)
+        floor_mb = cost.mem_gb * _MB_PER_GB / policy.safety
+        files = self._file_peaks_mb(ids, floor_mb=floor_mb, grown=grown or {})
+        peaks = sorted(set(files.values()), reverse=True)
         held = peaks[0] + sum(p - peaks[-1] for p in peaks[1:]) if peaks else 0.0
         return task_gb(held / _MB_PER_GB, prior_gb=cost.mem_gb, safety=policy.safety)
 
-    def _file_peaks_mb(self, ids: Iterable[str]) -> dict[str, float]:
-        """Each file of *ids* at its peak (learned, else :meth:`prior_mb`), raised to its ids' own peak floors."""
+    def _file_peaks_mb(
+        self, ids: Iterable[str], *, floor_mb: float = 0.0, grown: Mapping[str, float] | None = None
+    ) -> dict[str, float]:
+        """Each file of *ids* at its worst id.
+
+        An id needs its file's peak (learned, else :meth:`prior_mb`) or its own peak floor, never under
+        *floor_mb*, times its *grown*.
+        """
+        growth = grown or {}
+        prior: dict[str, float] = {}
         peaks: dict[str, float] = {}
         for node in ids:
             name = file_of(node)
-            if name not in peaks:
-                peaks[name] = self.peaks_mb[name] if name in self.peaks_mb else (self.prior_mb(name) or 0.0)
-            peaks[name] = max(peaks[name], self.id_peaks_mb.get(node, 0.0))
+            if name not in prior:
+                prior[name] = self.peaks_mb[name] if name in self.peaks_mb else (self.prior_mb(name) or 0.0)
+            need = max(prior[name], self.id_peaks_mb.get(node, 0.0), floor_mb) * growth.get(node, 1.0)
+            peaks[name] = max(peaks.get(name, 0.0), need)
         return peaks
 
     def prior_mb(self, name: str) -> float | None:
