@@ -329,10 +329,14 @@ def _creation_time(pid: int) -> int | None:
 
     On Linux the stamp is ``starttime`` from ``/proc/<pid>/stat`` (clock ticks since boot): the
     same ordering property -- a child never starts before its parent, a recycled pid starts later
-    than the process it replaced -- so a reused pid is refuted there too. macOS: ``None``.
+    than the process it replaced -- so a reused pid is refuted there too. On macOS it is ``ps``'s
+    ``lstart`` in whole epoch seconds: equal for one process on every read, and a recycled pid reads
+    later unless reused within the same second, which reads as "cannot disprove" (held).
     """
     if sys.platform.startswith('linux'):
         return _proc_linux.start_time(pid)
+    if sys.platform == 'darwin':
+        return _proc_darwin.start_time(pid)
     if os.name != 'nt':
         return None
     kernel32 = _kernel32()

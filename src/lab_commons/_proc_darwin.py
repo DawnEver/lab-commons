@@ -113,3 +113,9 @@ def is_zombie(pid: int) -> bool:
     """
     state = _state(pid)
     return state is not None and state[0].startswith('Z')
+
+
+def start_time(pid: int) -> int | None:
+    """*pid*'s start in epoch seconds from ``ps -o lstart=``, or ``None`` when unreadable."""
+    state = _state(pid)
+    return None if state is None else state[1]
