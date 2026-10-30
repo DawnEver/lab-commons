@@ -8,11 +8,17 @@ machine shape ``proc`` names as its defect. Stdlib only, through the platform's 
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import time
+from typing import Final
 
 import lab_commons.launch as _door
+
+#: ``ps -o lstart=`` in the C locale, e.g. ``Thu Oct 30 10:11:12 2026`` (local time).
+_LSTART: Final = '%a %b %d %H:%M:%S %Y'
 
 
 def _tool(*argv: str) -> str | None:
@@ -23,6 +29,7 @@ def _tool(*argv: str) -> str | None:
     try:
         done = _door.run(
             [exe, *argv[1:]],
+            env={**os.environ, 'LC_ALL': 'C'},  # one spelling of dates and numbers, whatever the user's locale
             capture_output=True,
             text=True,
             encoding='utf-8',
@@ -68,6 +75,23 @@ def is_zombie(pid: int) -> bool:
     The darwin sibling of :func:`lab_commons._proc_linux.is_zombie`; unreadable is ``False``, erring towards alive.
     """
     return (_tool('ps', '-o', 'stat=', '-p', str(pid)) or '').strip().startswith('Z')
+
+
+def parse_lstart(text: str) -> int | None:
+    """One ``ps -o lstart=`` stamp -> epoch seconds, or ``None`` when it does not parse."""
+    try:
+        return int(time.mktime(time.strptime(' '.join(text.split()), _LSTART)))
+    except (ValueError, OverflowError):
+        return None
+
+
+def start_time(pid: int) -> int | None:
+    """*pid*'s start, epoch seconds from ``ps -o lstart=``, or ``None`` when it cannot be read.
+
+    Whole seconds: a child started in its parent's second carries an EQUAL stamp, which the edge
+    refutation keeps; a recycled pid still starts later than the process it replaced.
+    """
+    return parse_lstart(_tool('ps', '-o', 'lstart=', '-p', str(pid)) or '')
 
 
 def parse_ps_rows(text: str) -> dict[int, tuple[str, int]]:

@@ -333,12 +333,11 @@ def _creation_time(pid: int) -> int | None:
 
     On Linux the stamp is ``starttime`` from ``/proc/<pid>/stat`` (clock ticks since boot): the
     same ordering property -- a child never starts before its parent, a recycled pid starts later
-    than the process it replaced -- so a reused pid is refuted there too. macOS: ``None``.
+    than the process it replaced -- so a reused pid is refuted there too. On macOS it is ``ps``'s
+    ``lstart`` in epoch seconds, which keeps the same property at whole-second resolution.
     """
-    if sys.platform.startswith('linux'):
-        return _proc_linux.start_time(pid)
     if os.name != 'nt':
-        return None
+        return _posix().start_time(pid)
     kernel32 = _kernel32()
     if kernel32 is None:
         return None

@@ -211,7 +211,7 @@ def test_a_linux_stat_line_yields_its_start_time_even_with_a_paren_in_the_name()
 
 def test_this_process_has_a_creation_stamp_wherever_the_kernel_offers_one() -> None:
     stamp = creation_stamp(os.getpid())
-    assert (stamp is None) == (sys.platform == 'darwin'), 'Windows and Linux must refute a recycled pid'
+    assert stamp is not None, 'Windows, Linux and macOS must each refute a recycled pid'
 
 
 class TestDarwinZombie:
@@ -227,3 +227,27 @@ class TestDarwinZombie:
         assert proc._posix() is _proc_darwin
         monkeypatch.setattr(proc.sys, 'platform', 'linux')
         assert proc._posix() is _proc_linux, 'planted control: linux keeps reading /proc'
+
+
+class TestDarwinStartTime:
+    """macOS has no ``/proc/<pid>/stat``: the creation stamp is ``ps -o lstart=``, stubbed so any desk runs it."""
+
+    def test_an_lstart_is_read_as_local_epoch_seconds(self) -> None:
+        expected = int(time.mktime(time.strptime('Thu Oct 30 10:11:12 2026', '%a %b %d %H:%M:%S %Y')))
+        assert _proc_darwin.parse_lstart('Thu Oct 30 10:11:12 2026\n') == expected
+        assert _proc_darwin.parse_lstart('Thu Oct  2 09:01:02 2026') is not None, 'ps pads a one-digit day'
+        assert _proc_darwin.parse_lstart('garbage') is None, 'planted control: an unparsable stamp is unknown'
+
+    def test_the_start_time_asks_ps_for_this_pid(self, monkeypatch) -> None:
+        asked = []
+        monkeypatch.setattr(_proc_darwin, '_tool', lambda *argv: asked.append(argv) or 'Thu Oct 30 10:11:12 2026\n')
+        assert _proc_darwin.start_time(4242) == _proc_darwin.parse_lstart('Thu Oct 30 10:11:12 2026')
+        assert asked == [('ps', '-o', 'lstart=', '-p', '4242')]
+        monkeypatch.setattr(_proc_darwin, '_tool', lambda *_argv: None)
+        assert _proc_darwin.start_time(4242) is None
+
+    def test_the_creation_stamp_asks_the_darwin_reader_on_darwin(self, monkeypatch) -> None:
+        monkeypatch.setattr(proc.sys, 'platform', 'darwin')
+        monkeypatch.setattr(proc.os, 'name', 'posix')
+        monkeypatch.setattr(_proc_darwin, 'start_time', lambda _pid: 1_700_000_000)
+        assert proc._creation_time(4242) == 1_700_000_000
