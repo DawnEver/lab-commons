@@ -18,7 +18,7 @@ import time
 
 import pytest
 
-from lab_commons._proc_darwin import parse_ps_rows, parse_vm_stat
+from lab_commons._proc_darwin import parse_ps_rows, parse_ps_state, parse_vm_stat
 from lab_commons._proc_linux import stat_start_time
 from lab_commons.liveness import creation_stamp
 from lab_commons.proc import (
@@ -200,6 +200,16 @@ class TestTheDarwinBackend:
     def test_ps_rows_are_pid_to_name_and_parent(self) -> None:
         text = '    1     0 /sbin/launchd\n  412     1 /usr/bin/some tool\n garbage\n'
         assert parse_ps_rows(text) == {1: ('/sbin/launchd', 0), 412: ('/usr/bin/some tool', 1)}
+
+    def test_ps_state_is_the_stat_letters_and_a_whole_second_start(self) -> None:
+        zombie, started = parse_ps_state('Z+   Thu Oct 30 04:28:40 2026')
+        assert zombie == 'Z+'
+        assert started == int(time.mktime((2026, 10, 30, 4, 28, 40, 0, 0, -1)))
+        assert parse_ps_state('S    Thu Oct 30 04:28:41 2026')[1] - started == 1  # s
+
+    def test_ps_state_of_a_gone_pid_is_unread(self) -> None:
+        assert parse_ps_state('') is None
+        assert parse_ps_state('S Thu Oct 30 2026') is None
 
 
 def test_a_linux_stat_line_yields_its_start_time_even_with_a_paren_in_the_name() -> None:

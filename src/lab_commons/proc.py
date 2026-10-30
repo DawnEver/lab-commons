@@ -265,7 +265,7 @@ def pid_alive(pid: int) -> bool:  # noqa: PLR0911 -- one return per platform bra
         os.kill(pid, 0)
     except OSError:
         return False
-    return not _proc_linux.is_zombie(pid)
+    return not (_proc_darwin.is_zombie(pid) if sys.platform == 'darwin' else _proc_linux.is_zombie(pid))
 
 
 def _processentry32w() -> type[ctypes.Structure]:

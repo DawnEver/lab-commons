@@ -8,15 +8,17 @@ machine shape ``proc`` names as its defect. Stdlib only, through the platform's 
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import time
 
 import lab_commons.launch as _door
 
 
 def _tool(*argv: str) -> str | None:
-    """*argv*'s stdout, or ``None`` when the tool is absent or fails."""
+    """*argv*'s stdout under the C locale (``ps`` dates are locale-formatted), or ``None`` when absent or failed."""
     exe = shutil.which(argv[0])
     if exe is None:
         return None
@@ -29,6 +31,7 @@ def _tool(*argv: str) -> str | None:
             errors='replace',
             check=False,
             timeout=30,
+            env={**os.environ, 'LC_ALL': 'C'},
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -76,3 +79,37 @@ def process_rows() -> dict[int, tuple[str, int]] | None:
     """``{pid: (image, parent_pid)}`` from one ``ps`` snapshot, or ``None`` when unreadable."""
     text = _tool('ps', '-A', '-o', 'pid=,ppid=,comm=')
     return None if text is None else (parse_ps_rows(text) or None)
+
+
+#: ``ps -o stat=,lstart=`` words: the state letters, then ``lstart``'s weekday, month, day, time and year.
+_STATE_WORDS = 6
+
+
+def parse_ps_state(text: str) -> tuple[str, int] | None:
+    """``ps -o stat=,lstart=`` -> ``(state letters, start in epoch seconds)``, or ``None`` when malformed.
+
+    ``lstart`` is the C-locale ``Thu Oct 30 04:28:40 2026``: whole seconds, the same value on every read,
+    so equality identifies the process and a recycled pid reads a later stamp.
+    """
+    fields = text.split()
+    if len(fields) != _STATE_WORDS:
+        return None
+    try:
+        started = time.mktime(time.strptime(' '.join(fields[1:]), '%a %b %d %H:%M:%S %Y'))
+    except (ValueError, OverflowError):
+        return None
+    return fields[0], int(started)
+
+
+def _state(pid: int) -> tuple[str, int] | None:
+    return parse_ps_state(_tool('ps', '-o', 'stat=,lstart=', '-p', str(pid)) or '')
+
+
+def is_zombie(pid: int) -> bool:
+    """Whether *pid* has exited and awaits its parent's ``wait`` (``ps`` state ``Z``); ``False`` when unread.
+
+    The darwin twin of :func:`lab_commons._proc_linux.is_zombie`: signal 0 answers yes for a zombie, so
+    without this every killed direct child read as a survivor until its ``Popen`` reaped it.
+    """
+    state = _state(pid)
+    return state is not None and state[0].startswith('Z')
