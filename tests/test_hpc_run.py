@@ -327,7 +327,10 @@ def test_a_pytest_that_dies_mid_item_names_the_test_it_was_running(
 def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A hang pytest-timeout is not asked to catch: the runner kills the tree, records a timeout, runs the rest."""
+    """A hang pytest-timeout is not asked to catch: the runner kills the tree, records a timeout, runs the rest.
+
+    Sized for load: a 2 s wall (was 3 s) still sits far under the 600 s child and the 60 s bound.
+    """
     runner = _item_runner(tmp_path, monkeypatch)
     body = (
         'import subprocess, sys, time\n\n'
@@ -339,10 +342,10 @@ def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
     )
     ids = _tree(tmp_path, body)
     began = time.monotonic()
-    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 3)})
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 2)})
     assert time.monotonic() - began < 60, 'the hang ended within its wall, not at the scheduler limit'
     assert _words(result['cells']) == {ids[0]: 'ok', ids[1]: 'timeout', ids[2]: 'ok'}, result['tail']
-    assert _whys(result['cells'])[ids[1]].startswith('timeout after 3s')
+    assert _whys(result['cells'])[ids[1]].startswith('timeout after 2s')
     assert ids[1] not in result['seconds'], 'the bound it hit is no measurement of the test'
     assert result['done'] is not None
 
@@ -350,9 +353,12 @@ def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
 def test_a_test_that_declares_a_longer_timeout_outlives_the_measured_wall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A test's own ``@pytest.mark.timeout`` is a declared duration: the outer wall never cuts it shorter."""
+    """A test's own ``@pytest.mark.timeout`` is a declared duration: the outer wall never cuts it shorter.
+
+    Sized for load: sleeping twice the 1 s wall is the whole claim (was four times).
+    """
     runner = _item_runner(tmp_path, monkeypatch)
-    body = 'import time\n\nimport pytest\n\n@pytest.mark.timeout(30)\ndef test_slow():\n    time.sleep(4)\n'
+    body = 'import time\n\nimport pytest\n\n@pytest.mark.timeout(30)\ndef test_slow():\n    time.sleep(2)\n'
     ids = _tree(tmp_path, body)
     result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 1)})
     assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
@@ -363,21 +369,22 @@ def test_a_test_spinning_inside_c_with_the_gil_held_is_killed_at_its_wall(
 ) -> None:
     """A native loop that never yields to the interpreter is killed from outside (Ada 2026-10-24..26).
 
-    pytest-timeout, declared here at 2 s, cannot fire: catastrophic regex backtracking is one C call holding the GIL.
+    pytest-timeout, declared here at 1 s, cannot fire: catastrophic regex backtracking is one C call holding the GIL.
+    Sized for load: the claim needs only declared < wall, so 1 s under a 2 s wall (was 2 s under 4 s).
     """
     runner = _item_runner(tmp_path, monkeypatch)
     body = (
         'import re\n\nimport pytest\n\n'
-        '@pytest.mark.timeout(2)\n'
+        '@pytest.mark.timeout(1)\n'
         'def test_spin():\n    re.match(r"(a+)+$", "a" * 64 + "b")\n\n'
         'def test_after():\n    pass\n'
     )
     ids = _tree(tmp_path, body)
     began = time.monotonic()
-    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 4)})
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 2)})
     assert time.monotonic() - began < 60, 'killed from outside at its wall, not left to the scheduler limit'
     assert _words(result['cells']) == {ids[0]: 'timeout', ids[1]: 'ok'}, result['tail']
-    assert _whys(result['cells'])[ids[0]].startswith('timeout after 4s')
+    assert _whys(result['cells'])[ids[0]].startswith('timeout after 2s')
 
 
 def test_a_normal_item_under_a_wall_passes_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
