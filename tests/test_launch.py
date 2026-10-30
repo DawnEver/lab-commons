@@ -17,9 +17,6 @@ import pytest
 
 from lab_commons import launch
 
-_ON_WINDOWS = sys.platform == 'win32'
-
-
 #: The real ``CREATE_NO_WINDOW`` and ``BELOW_NORMAL_PRIORITY_CLASS`` values, readable on every platform.
 _NO_WINDOW, _BELOW = 0x08000000, 0x00004000
 
@@ -76,8 +73,7 @@ open(sys.argv[3], 'w', encoding='utf-8').write(done.stdout)
 """
 
 
-@pytest.mark.not_applicable
-@pytest.mark.skipif(not _ON_WINDOWS, reason='a console window exists only on Windows')
+@pytest.mark.windows  # a console window exists only on Windows: its part is produced by a Windows host
 def test_a_windowless_parents_child_and_its_plain_grandchild_have_no_window(tmp_path: Path) -> None:
     """MEASURED: a windowless parent's child and that child's plain grandchild both have no window.
 
