@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
+from lab_commons.compute.probe import OS_NAMES
 
 if sys.platform == 'win32':
     import ctypes
@@ -44,7 +45,7 @@ __all__ = [
 #: The longest one smoke may run (MATLAB's first start on a cold box is the slow one).
 SMOKE_TIMEOUT_S: Final = 300.0
 
-_SYSTEMS: Final = {'win32': 'windows', 'linux': 'linux', 'darwin': 'macos'}
+_SYSTEMS: Final = OS_NAMES
 
 
 @dataclass(frozen=True)
