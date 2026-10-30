@@ -145,3 +145,26 @@ def test_a_finished_item_still_learns_its_true_overhead() -> None:
     )
     measured.learn(ids, read_stream(stream, ids))
     assert measured.overheads == {file_of(_SDM): pytest.approx(498.0 - 453.1, rel=1e-12, abs=1e-9)}
+
+
+def test_a_heavy_id_in_a_light_parametrized_file_is_priced_by_its_own_peak_floor() -> None:
+    """Run 4fb97faa904f: the sdm cases of ``test_back_emf_full_matrix.py`` need 2.1-6.4 GB; the file is 1351 MB.
+
+    A per-FILE peak cannot say it; a per-ID peak floor does, and only for the id it names.
+    """
+    measured = Measured(peaks_mb={file_of(_SDM): 1351.0}, id_peaks_mb={_SDM: 6400.0})
+    policy = Policy(safety=1.5)
+    assert measured.item_gb([_SDM], _COST, policy) == pytest.approx(6400.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
+    assert measured.item_gb([_FEA], _COST, policy) == pytest.approx(1351.0 * 1.5 / 1024, rel=1e-12, abs=0.0), (
+        'PLANTED CONTROL: its light sibling keeps the file peak'
+    )
+    assert Measured.of(measured.record()).id_peaks_mb == {_SDM: 6400.0}, 'the record carries it'
+
+
+def test_an_id_that_finishes_drops_its_peak_floor() -> None:
+    """Like a duration floor: once the id finished, its file's measured peak covers it."""
+    measured = Measured(id_peaks_mb={_SDM: 6400.0, _FEA: 3000.0})
+    stream = _stream({'id': _SDM, 'outcome': 'passed', 's': 450.0}, {'done': 0, 'wall': 460.0, 'peak_mb': 5000.0})
+    measured.learn([_SDM], read_stream(stream, [_SDM]))
+    assert measured.id_peaks_mb == {_FEA: 3000.0}
+    assert measured.peaks_mb == {file_of(_SDM): 5000.0}

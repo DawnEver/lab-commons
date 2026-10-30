@@ -5,8 +5,11 @@ phases as pytest timed them; ``floors`` -- seconds an id that NEVER FINISHED is 
 because it was still running when its item was killed; ``overheads`` -- seconds per test FILE that are
 not any test's (the interpreter, the imports, module fixtures: an item's wall time minus its tests',
 shared among the item's files so the shares sum back to what was measured); ``peaks_mb`` -- the peak RSS
-of a file's pytest process. A newer measurement replaces an older one; nothing is averaged, because the
-code under test changed between the two. A finished id drops its floor: its duration is now known.
+of a file's pytest process; ``id_peaks_mb`` -- MB an id that never finished is known to need at least, the
+memory twin of ``floors``: one heavy id of a light parametrized file is priced by its own floor, never the
+file's (run 4fb97faa904f: sdm cases needing 2.1-6.4 GB in a file whose peak read 1351 MB).
+A newer measurement replaces an older one; nothing is averaged, because the code under test changed between
+the two. A finished id drops its floors: its duration and peak are now known.
 
 A KILLED WALL IS NO OVERHEAD. Measured 2026-10-30 (run 4fb97faa904f): an item OOM-killed 498 s into one id booked
 the 498 s as its file's overhead, which :meth:`Measured.killed` then subtracted as explained, so the id learned a
@@ -68,12 +71,13 @@ def file_of(node: str) -> str:
 
 @dataclass
 class Measured:
-    """The four measurements; :meth:`of` reads them from a record, :meth:`record` writes them back."""
+    """The five measurements; :meth:`of` reads them from a record, :meth:`record` writes them back."""
 
     durations: dict[str, float] = field(default_factory=dict)
     floors: dict[str, float] = field(default_factory=dict)
     overheads: dict[str, float] = field(default_factory=dict)
     peaks_mb: dict[str, float] = field(default_factory=dict)
+    id_peaks_mb: dict[str, float] = field(default_factory=dict)
     #: The files this instance -- ONE round's fold -- already learned a peak for: within a round a file's peak is
     #: the worst of its items, so a finished sibling never lowers what a killed one read (Ada 2026-10-24).
     _round: set[str] = field(default_factory=set, repr=False, compare=False)
@@ -86,6 +90,7 @@ class Measured:
             floors=dict(record.get('floors', {})),
             overheads=dict(record.get('overheads', {})),
             peaks_mb=dict(record.get('peaks_mb', {})),
+            id_peaks_mb=dict(record.get('id_peaks_mb', {})),
         )
 
     def record(self) -> dict[str, dict[str, float]]:
@@ -95,6 +100,7 @@ class Measured:
             'floors': self.floors,
             'overheads': self.overheads,
             'peaks_mb': self.peaks_mb,
+            'id_peaks_mb': self.id_peaks_mb,
         }
 
     def learn(self, ids: Sequence[str], folded: dict[str, Any]) -> None:
@@ -108,6 +114,7 @@ class Measured:
         self.durations.update(folded['seconds'])
         for node in folded['seconds']:
             self.floors.pop(node, None)
+            self.id_peaks_mb.pop(node, None)
         done = folded['done']
         if done is None or not ids:
             return
@@ -260,13 +267,20 @@ class Measured:
         running 8-121 files with learned peaks of 0.5-0.8 GB. :meth:`pack` bounds the sum it makes.
         """
         growth, floor_mb = grown or {}, cost.mem_gb * _MB_PER_GB / policy.safety
-        files = {file_of(n) for n in ids}
-        peaks = sorted({max(self._peak_mb(f), floor_mb) * growth.get(f, 1.0) for f in files}, reverse=True)
+        files = self._file_peaks_mb(ids)
+        peaks = sorted({max(mb, floor_mb) * growth.get(f, 1.0) for f, mb in files.items()}, reverse=True)
         held = peaks[0] + sum(p - peaks[-1] for p in peaks[1:]) if peaks else 0.0
         return task_gb(held / _MB_PER_GB, prior_gb=cost.mem_gb, safety=policy.safety)
 
-    def _peak_mb(self, name: str) -> float:
-        return self.peaks_mb[name] if name in self.peaks_mb else (self.prior_mb(name) or 0.0)
+    def _file_peaks_mb(self, ids: Iterable[str]) -> dict[str, float]:
+        """Each file of *ids* at its peak (learned, else :meth:`prior_mb`), raised to its ids' own peak floors."""
+        peaks: dict[str, float] = {}
+        for node in ids:
+            name = file_of(node)
+            if name not in peaks:
+                peaks[name] = self.peaks_mb[name] if name in self.peaks_mb else (self.prior_mb(name) or 0.0)
+            peaks[name] = max(peaks[name], self.id_peaks_mb.get(node, 0.0))
+        return peaks
 
     def prior_mb(self, name: str) -> float | None:
         """The PRIOR peak of an unmeasured file *name* (D5): its measured siblings' median, else the table's.
@@ -288,11 +302,10 @@ class Measured:
         """The worst peak of these nodes' files times *safety*, never under *prior_gb*.
 
         ONE RULE FOR A SLURM TASK AND A BOX WORKER: each is one pytest process over some files. A measured
-        file is its peak; an unmeasured one its :meth:`prior_mb` (siblings' median); with nothing measured
-        at all, *prior_gb* alone stands.
+        file is its peak; an unmeasured one its :meth:`prior_mb` (siblings' median), raised to its ids' peak
+        floors; with nothing measured at all, *prior_gb* alone stands.
         """
-        files = {file_of(n) for n in nodes}
-        peaks = [self.peaks_mb[f] if f in self.peaks_mb else (self.prior_mb(f) or 0.0) for f in files]
+        peaks = self._file_peaks_mb(nodes).values()
         return task_gb(max(peaks, default=0.0) / _MB_PER_GB, prior_gb=prior_gb, safety=safety)
 
 
