@@ -204,12 +204,28 @@ class Grant:
 
 
 @dataclass(frozen=True)
+class Affinity:
+    """Which accounts produce forge verify parts first, and which of them have one now (user ruling 2026-10-30).
+
+    Data, never declared here: the forge's host cards carry it and its reader supplies it
+    (:func:`lab_commons.hpc.affinity.resolve`). Each is a grant's ``user``.
+    """
+
+    #: The verify accounts: a research submission prefers every other account.
+    verify: frozenset[str] = frozenset()
+    #: Those of them with a verify part running or claimable: never borrowed.
+    busy: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class Machine:
     """The session this process submits for, and every grant the machine holds."""
 
     session: Session | None
     grants: tuple[Grant, ...]
     paging: Paging | None = None
+    #: The verify accounts a research submission yields (:mod:`lab_commons.hpc.affinity`); ``None``: none known.
+    affinity: Affinity | None = None
 
     @property
     def comment(self) -> str:

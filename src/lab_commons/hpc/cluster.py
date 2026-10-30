@@ -221,6 +221,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         f'--gres=gpu:{plan.gpus}' if plan.gpus else '',
         f'--time={plan.minutes}',
         f'--comment={plan.comment}' if plan.comment else '',
+        f'--nice={plan.nice}' if plan.nice else '',
         # A task's output is node-local (below); Slurm writes no file of its own on the shared home.
         '--output=/dev/null',
     ]

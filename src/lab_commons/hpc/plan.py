@@ -112,6 +112,9 @@ class Plan:
     #: The longest wall (minutes) any open candidate granted when planned; ``None`` when one is unbounded or unread.
     #: A shard cut at it cannot be given more (:func:`lab_commons.hpc.records.fold`).
     top_minutes: float | None = None
+    #: Slurm ``--nice``: a research array on a borrowed verify account yields to its verify work
+    #: (:data:`lab_commons.hpc.affinity.NICE`); ``0`` asks for none.
+    nice: int = 0
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""
