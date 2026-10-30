@@ -89,6 +89,9 @@ install = "uv sync --frozen --all-extras"
 # The run record's root (dev_lab.dev.platformparts).
 [tool.dev_lab.parts]
 output = "output/logs"
+# User ruling 2026-10-30: no hosted runner is a workstation, so the workstation-marked tests (host node) run
+# in no part and nothing waits on one (dev_lab.dev.unproduced; relock onto it pending).
+unproduced = ["workstation"]
 
 # One need vocabulary (lab_commons.hpc.needsets): a test marks the resources it needs, and its part is its
 # need-set -- tests/base, tests/windows and tests/workstation. A host claims a part when its machine file's
