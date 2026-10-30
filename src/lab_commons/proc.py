@@ -36,6 +36,7 @@ import os
 import signal
 import sys
 import time
+import types
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -73,6 +74,11 @@ _KILL_EXIT_POLL_S = 0.02
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _TH32CS_SNAPPROCESS = 0x00000002
+
+
+def _posix() -> types.ModuleType:
+    """The POSIX reader for this platform: ``ps``-based on macOS (no ``/proc`` there), ``/proc`` elsewhere."""
+    return _proc_darwin if sys.platform == 'darwin' else _proc_linux
 
 
 def _kernel32() -> object | None:
@@ -156,7 +162,7 @@ def system_memory() -> SystemMemory | None:
     """
     if os.name == 'nt':
         return _system_memory_windows()
-    reading = _proc_darwin.memory() if sys.platform == 'darwin' else _proc_linux.memory()
+    reading = _posix().memory()
     return None if reading is None else SystemMemory(total_bytes=reading[0], available_bytes=reading[1])
 
 
@@ -211,7 +217,7 @@ def working_set_bytes(pid: int) -> int | None:
     if pid <= 0:
         return None
     if os.name != 'nt':
-        return (_proc_darwin if sys.platform == 'darwin' else _proc_linux).rss_bytes(pid)
+        return _posix().rss_bytes(pid)
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
@@ -265,7 +271,7 @@ def pid_alive(pid: int) -> bool:  # noqa: PLR0911 -- one return per platform bra
         os.kill(pid, 0)
     except OSError:
         return False
-    return not _proc_linux.is_zombie(pid)
+    return not _posix().is_zombie(pid)
 
 
 def _processentry32w() -> type[ctypes.Structure]:
@@ -293,10 +299,8 @@ def _process_rows() -> dict[int, tuple[str, int]] | None:
     (2026-08-19, 2026-08-21) by a damaged WMI, where it reports "not found" for live pids. The
     Win32 snapshot answers the question itself rather than asking a tool that can be broken.
     """
-    if sys.platform == 'darwin':
-        return _proc_darwin.process_rows()
     if os.name != 'nt':
-        return _proc_linux.process_rows()
+        return _posix().process_rows()
     kernel32 = _kernel32()
     if kernel32 is None:
         return None

@@ -18,6 +18,7 @@ import time
 
 import pytest
 
+from lab_commons import _proc_darwin, _proc_linux, proc
 from lab_commons._proc_darwin import parse_ps_rows, parse_vm_stat
 from lab_commons._proc_linux import stat_start_time
 from lab_commons.liveness import creation_stamp
@@ -211,3 +212,18 @@ def test_a_linux_stat_line_yields_its_start_time_even_with_a_paren_in_the_name()
 def test_this_process_has_a_creation_stamp_wherever_the_kernel_offers_one() -> None:
     stamp = creation_stamp(os.getpid())
     assert (stamp is None) == (sys.platform == 'darwin'), 'Windows and Linux must refute a recycled pid'
+
+
+class TestDarwinZombie:
+    """macOS has no ``/proc``: a zombie is read from ``ps -o stat=``, stubbed here so any desk runs it."""
+
+    @pytest.mark.parametrize(('stat', 'zombie'), [('Z+\n', True), ('Z\n', True), ('S+\n', False), (None, False)])
+    def test_a_ps_stat_starting_with_z_is_a_zombie(self, monkeypatch, stat, zombie) -> None:
+        monkeypatch.setattr(_proc_darwin, '_tool', lambda *argv: stat if argv[:3] == ('ps', '-o', 'stat=') else None)
+        assert _proc_darwin.is_zombie(4242) is zombie
+
+    def test_the_posix_reader_is_the_darwin_one_on_darwin(self, monkeypatch) -> None:
+        monkeypatch.setattr(proc.sys, 'platform', 'darwin')
+        assert proc._posix() is _proc_darwin
+        monkeypatch.setattr(proc.sys, 'platform', 'linux')
+        assert proc._posix() is _proc_linux, 'planted control: linux keeps reading /proc'

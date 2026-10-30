@@ -62,6 +62,14 @@ def rss_bytes(pid: int) -> int | None:
     return int(rss) * 1024 if rss.isdigit() else None
 
 
+def is_zombie(pid: int) -> bool:
+    """Whether *pid* has exited and awaits only its parent's ``wait``: its ``ps -o stat=`` starts with ``Z``.
+
+    The darwin sibling of :func:`lab_commons._proc_linux.is_zombie`; unreadable is ``False``, erring towards alive.
+    """
+    return (_tool('ps', '-o', 'stat=', '-p', str(pid)) or '').strip().startswith('Z')
+
+
 def parse_ps_rows(text: str) -> dict[int, tuple[str, int]]:
     """``ps -o pid=,ppid=,comm=`` lines -> ``{pid: (image, parent_pid)}``; a malformed line is skipped."""
     rows: dict[int, tuple[str, int]] = {}
