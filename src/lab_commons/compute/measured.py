@@ -110,6 +110,27 @@ class Measured:
             'id_peaks_mb': self.id_peaks_mb,
         }
 
+    def floored(self, priced: Mapping[str, Mapping[str, float]]) -> Measured:
+        """A copy raised to a repo's DECLARED floors (``[tool.lab_commons.hpc] priced``); a higher learned value wins.
+
+        A node id's ``mem_gb`` floors its :attr:`id_peaks_mb` and its ``wall_s`` its :attr:`floors`; a file's
+        ``mem_gb`` floors its :attr:`peaks_mb` and its ``wall_s`` its :attr:`overheads` -- the file costs at
+        least that beside its tests. Only a PLAN reads the copy: the learned facts, and the record a run writes
+        back, never carry a declaration (run 4fb97faa904f: heavy ids OOM-killed in round 0 on every host until
+        each had learned them).
+        """
+        floored = Measured.of(self.record())
+        for key, price in priced.items():
+            mem_mb, wall_s = price.get('mem_gb', 0.0) * _MB_PER_GB, price.get('wall_s', 0.0)
+            peaks, walls = (
+                (floored.id_peaks_mb, floored.floors) if '::' in key else (floored.peaks_mb, floored.overheads)
+            )
+            if mem_mb:
+                peaks[key] = max(peaks.get(key, 0.0), mem_mb)
+            if wall_s:
+                walls[key] = max(walls.get(key, 0.0), wall_s)
+        return floored
+
     def learn(self, ids: Sequence[str], folded: dict[str, Any]) -> None:
         """Take one item's folded stream (:func:`lab_commons.hpc.pytest_item.read_stream`).
 

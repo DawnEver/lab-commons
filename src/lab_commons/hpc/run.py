@@ -171,6 +171,11 @@ def _no_room() -> Iterator[None]:
         raise NoRoom(msg) from refused
 
 
+def planned(state: Mapping[str, Any]) -> Measured:
+    """What a PLAN prices with: the run's learned facts raised to its commit's declared floors (``priced``)."""
+    return Measured.of(state.get('measured', {})).floored(state.get('priced', {}))
+
+
 def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
     """Each id's wall in seconds: the run's declared :class:`ItemWall` over what the id was MEASURED to take.
 
@@ -178,7 +183,7 @@ def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
     neither is unmeasured. A state written before the wall existed gets the declared defaults.
     """
     wall = ItemWall(**state.get('item_wall', {}))
-    measured = Measured.of(state.get('measured', {}))
+    measured = planned(state)
     seen = {**measured.floors, **{n: max(s, measured.floors.get(n, 0.0)) for n, s in measured.durations.items()}}
     return {node: wall.bound(seen.get(node)) for node in ids}
 
@@ -203,7 +208,7 @@ def submit_round(
     the others plan on it, since the tree lives in its home.
     """
     tag = f'{state["stamp"]}-r{len(state["rounds"])}'
-    measured = Measured.of(state['measured'])
+    measured = planned(state)
     grown = state.get('grown', {})
     grantable = grantable_gb(snapshots)
     asks = [measured.item_gb(ids, cost, policy, grown) for ids in pending]
@@ -371,12 +376,13 @@ def submit_run(
         'handed': handed,
         'cells': cells,
         'measured': Measured.of(history or {}).record(),
+        'priced': spec.builds.priced_floors,  # the commit's declared floors; only a plan reads them (planned)
         'rounds': [],
         'grown': {},  # node id -> this run's memory growth after an OOM kill cut it
         'carried': {node: held[1] for node, held in taken.items()},
     }
     files = group_items([node for node in ids if node not in handed and node not in taken])
-    measured = Measured.of(state['measured'])
+    measured = planned(state)
 
     def band(ids: list[str]) -> int:
         return memory_band(measured.item_gb(ids, cost, policy))

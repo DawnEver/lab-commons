@@ -835,6 +835,31 @@ def test_each_memory_class_is_its_own_array_at_its_own_files_peak() -> None:
     assert '--array=1%' in light
 
 
+def test_a_declared_floor_sizes_round_0_and_never_reaches_the_record() -> None:
+    """PLANTED, run 4fb97faa904f: nothing learned, the commit declares tests/a.py::t1 needs 20 GB for 600 s.
+
+    Round 0 asks it (20 GB x 1.5) in its own class with its declared wall; the undeclared file keeps the floor
+    (the control); the run's measured facts -- what the record teaches every host -- carry no declaration.
+    """
+    fake = FakeRunCluster()
+    spec = RunSpec(
+        sha=SHA,
+        repo_url='https://g/r.git',
+        builds=Builds(
+            install='true', env_key='k1', priced_floors={'tests/a.py::t1': {'mem_gb': 20.0, 'wall_s': 600.0}}
+        ),
+        vocabulary=Vocabulary(('win',)),
+    )
+    state = submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
+    asks = _asks(state)
+    assert asks[('tests/a.py::t1', 'tests/a.py::t2')] == 30720
+    assert asks[('tests/b.py::t3', 'tests/b.py::t4', 'tests/b.py::t5')] == 1024
+    [manifest] = fake.manifests
+    assert manifest['items'][0]['walls']['tests/a.py::t1'] == 6000, 'the declared wall bounds the id'
+    assert 'tests/a.py::t1' not in state['measured']['id_peaks_mb']
+    assert 'tests/a.py::t1' not in state['measured']['floors']
+
+
 def test_the_live_throttle_is_the_ceilings_free_room_bounded_by_the_tasks_and_the_qos() -> None:
     """Ada 2026-10-19: 96 cores a grant, 22 single-core tasks running -- arrays pended on their own ``%N``.
 
