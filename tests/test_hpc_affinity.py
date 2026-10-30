@@ -1,25 +1,24 @@
-"""HPC account affinity on the RESEARCH side (user ruling 2026-10-30): a job-file submission yields the verify accounts.
+"""HPC account affinity, RESEARCH side (user ruling 2026-10-30): a job-file submit never lands on a verify account.
 
-The verify accounts and which of them are busy come from the forge's host cards through the installed reader
+The verify accounts come from the forge's host cards through the installed reader
 (:data:`lab_commons.hpc.affinity.READER`); none installed leaves placement exactly as it was.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from lab_commons.hpc import __main__ as cli
-from lab_commons.hpc import affinity, jobs
-from lab_commons.hpc.cluster import render_script
+from lab_commons.hpc import affinity, allocation, jobs
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Affinity, Grant, Machine
 from lab_commons.hpc.plan import Unplaceable
 from lab_commons.hpc.slurm import parse_snapshot
-from lab_commons.hpc.span import Placement, span
+from lab_commons.hpc.span import Placement
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
@@ -46,41 +45,62 @@ def _plan(monkeypatch: pytest.MonkeyPatch, machine: Machine, research_held: floa
 
 
 def test_with_no_affinity_declared_placement_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The PLANTED CONTROL of every test below: unaffined, the emptier verify account takes the work, un-niced."""
+    """The PLANTED CONTROL of every test below: unaffined, the emptier verify account takes the work."""
     placed = _plan(monkeypatch, _machine(None))
-    assert [(p.grant, p.plan.nice) for p in placed] == [(VERIFY, 0)]
+    assert [p.grant for p in placed] == [VERIFY]
 
 
 def test_research_picks_a_research_account_even_when_a_verify_account_is_emptier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     placed = _plan(monkeypatch, _machine(Affinity(verify=frozenset({'verifier'}))))
-    assert [(p.grant, p.plan.nice) for p in placed] == [(RESEARCH, 0)]
+    assert [p.grant for p in placed] == [RESEARCH]
 
 
-def test_research_borrows_an_idle_verify_account_at_the_one_nice(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The research account is full (96 of 96 CPUs held), so the idle verify account is borrowed -- niced."""
+def test_research_never_lands_on_an_idle_verify_account_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User ruling 2026-10-30: the research account is full (96 of 96 CPUs held), the verify account idle -- WAIT."""
     placed = _plan(monkeypatch, _machine(Affinity(verify=frozenset({'verifier'}))), research_held=96)
-    assert [(p.grant, p.plan.nice) for p in placed] == [(VERIFY, affinity.NICE)]
-    assert affinity.NICE == 1000
-
-
-def test_a_busy_verify_account_is_not_borrowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The research account is full and the verify account busy: the work WAITS on the research account."""
-    busy = Affinity(verify=frozenset({'verifier'}), busy=frozenset({'verifier'}))
-    placed = _plan(monkeypatch, _machine(busy), research_held=96)
     assert [(p.grant, p.plan.room) for p in placed] == [(RESEARCH, 0)]
-    alone = Machine(session=None, grants=(VERIFY,), affinity=busy)
-    with pytest.raises(Unplaceable, match=r'busy verify account'):
+    alone = Machine(session=None, grants=(VERIFY,), affinity=Affinity(verify=frozenset({'verifier'})))
+    with pytest.raises(Unplaceable, match=r'never take research unless the user opts in'):
         _plan(monkeypatch, alone)
 
 
-def test_a_niced_plan_asks_slurm_for_it_and_an_unniced_one_does_not() -> None:
-    config = Config(job=JobSpec(name='r', workdir='~/w', entry='m:f'), cost=SMALL, policy=Policy())
-    (one,) = span(4, SMALL, [(RESEARCH, _snap())], session=None, policy=Policy())
-    assert '--nice' not in render_script(one.plan, config, '~/run')
-    niced = replace(one.plan, nice=affinity.NICE)
-    assert f'#SBATCH --nice={affinity.NICE}' in render_script(niced, config, '~/run')
+def test_the_users_opt_in_lets_research_borrow_a_verify_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PLANTED CONTROL of the test above: with the opt-in the same full research account is passed over."""
+    placed = _plan(monkeypatch, _machine(Affinity(verify=frozenset({'verifier'}), borrow=True)), research_held=96)
+    assert [p.grant for p in placed] == [VERIFY]
+
+
+def _record(*, hours: float, borrow: tuple[str, ...]) -> Callable[[], bytes]:
+    expires = datetime.now(UTC) + timedelta(hours=hours)
+    return lambda: allocation.render(allocation.Allocation(expires, {}, frozenset(borrow))).encode('utf-8')
+
+
+@pytest.mark.parametrize(
+    ('hours', 'borrow', 'verdict'),
+    [
+        (1, (allocation.RESEARCH_BORROWS_VERIFY,), 'borrows'),
+        (-1, (allocation.RESEARCH_BORROWS_VERIFY,), 'stays'),
+        (1, (allocation.VERIFY_BORROWS_RESEARCH,), 'stays'),
+        (1, (), 'stays'),
+    ],
+    ids=['unexpired-opt-in-borrows', 'expired-opt-in-is-ignored', 'the-other-direction-is-not-this-one', 'none'],
+)
+def test_resolve_borrows_only_by_an_unexpired_research_opt_in(
+    hours: float, borrow: tuple[str, ...], verdict: str
+) -> None:
+    held = Affinity(verify=frozenset({'verifier'}))
+    resolved = affinity.resolve(_machine(None), lambda: held, _record(hours=hours, borrow=borrow))
+    assert resolved.affinity == Affinity(verify=held.verify, borrow=verdict == 'borrows')
+    assert affinity.resolve(_machine(None), lambda: held, lambda: None).affinity == held, 'no record borrows nothing'
+
+
+def test_a_record_naming_an_unknown_direction_is_refused_by_name() -> None:
+    expires = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    with pytest.raises(ValueError, match=r'research->box'):
+        allocation.parse(f'{{"expires": "{expires}", "borrow": ["research->box"]}}')
+    assert allocation.parse(f'{{"expires": "{expires}"}}').borrow == frozenset(), 'PLANTED CONTROL: none is fine'
 
 
 def test_resolve_reads_the_installed_reader_and_a_failing_or_absent_one_leaves_no_affinity(

@@ -205,16 +205,17 @@ class Grant:
 
 @dataclass(frozen=True)
 class Affinity:
-    """Which accounts produce forge verify parts first, and which of them have one now (user ruling 2026-10-30).
+    """Which accounts produce forge verify parts, and whether research may borrow them (user ruling 2026-10-30).
 
-    Data, never declared here: the forge's host cards carry it and its reader supplies it
-    (:func:`lab_commons.hpc.affinity.resolve`). Each is a grant's ``user``.
+    Data, never declared here: the forge's host cards carry *verify* and its reader supplies it; *borrow* is the
+    user's unexpired opt-in in the allocation record (:func:`lab_commons.hpc.affinity.resolve`). Each is a
+    grant's ``user``.
     """
 
-    #: The verify accounts: a research submission prefers every other account.
+    #: The verify accounts: a research submission never lands on one by default.
     verify: frozenset[str] = frozenset()
-    #: Those of them with a verify part running or claimable: never borrowed.
-    busy: frozenset[str] = frozenset()
+    #: The user opted in to research borrowing them (:data:`lab_commons.hpc.allocation.RESEARCH_BORROWS_VERIFY`).
+    borrow: bool = False
 
 
 @dataclass(frozen=True)

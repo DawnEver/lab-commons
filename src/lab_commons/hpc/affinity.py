@@ -1,15 +1,14 @@
-"""A RESEARCH submission yields the verify accounts (user ruling 2026-10-30, D103).
+"""A RESEARCH submission never lands on a verify account (user ruling 2026-10-30).
 
-HPC accounts have a default affinity: the VERIFY accounts produce the forge's verify parts first, the others carry
-research. A job-file submission (``python -m lab_commons.hpc plan|submit|retry -c <job.toml>``) is research, so
-:func:`place`:
+HPC accounts have a default affinity: the VERIFY accounts produce the forge's verify parts, the others carry
+research, and BY DEFAULT NEITHER BORROWS FROM THE OTHER. A job-file submission
+(``python -m lab_commons.hpc plan|submit|retry -c <job.toml>``) is research, so :func:`place` spreads it over the
+non-verify accounts only. Work they cannot take now WAITS there (a plan with ``room`` 0); with no research account
+at all it is refused for room (:class:`~lab_commons.hpc.plan.Unplaceable`) and a later submit tries again.
 
-* places it on the non-verify accounts, as it would without an affinity;
-* borrows a verify account only when those cannot take it with room and the verify account is IDLE -- no verify
-  part running or claimable for it (:attr:`Affinity.busy`) -- and then asks Slurm for :data:`NICE` there, so a
-  verify job queued later starts first. Nothing is ever cancelled or reserved;
-* never borrows a busy verify account: the work waits on a research account (a plan with ``room`` 0), or, with
-  none to wait on, is refused for room (:class:`~lab_commons.hpc.plan.Unplaceable`) and a later submit tries again.
+THE ONE WAY TO BORROW is the user's explicit opt-in: :data:`lab_commons.hpc.allocation.RESEARCH_BORROWS_VERIFY` in
+the expiring allocation record (``python -m dev_lab.dev.hpchost allocate --until <iso> --borrow research->verify``).
+While it is unexpired the verify accounts are candidates like any other; expired or absent, they are not.
 
 A forge verify run (``run submit``) is never placed here: an affined seat submits its own parts under its own login.
 
@@ -23,20 +22,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 from importlib.metadata import entry_points
 from typing import Any, Final
 
+from lab_commons.hpc import allocation
 from lab_commons.hpc.grants import Affinity, Grant, Machine
 from lab_commons.hpc.plan import Unplaceable
 from lab_commons.hpc.span import Placement
 
-__all__ = ['NICE', 'READER', 'declared', 'place', 'resolve']
+__all__ = ['READER', 'declared', 'place', 'resolve']
 
 #: The entry-point group the forge installs its affinity reader under: ``() -> Affinity | None``.
 READER: Final = 'lab_commons.hpc.affinity'
-
-#: Slurm ``--nice`` of a research array on a borrowed verify account: later verify jobs start first.
-NICE: Final = 1000
 
 
 def declared() -> Affinity | None:
@@ -46,13 +44,30 @@ def declared() -> Affinity | None:
     return None
 
 
-def resolve(machine: Machine, read: Callable[[], Affinity | None] | None = None) -> Machine:
-    """*machine* with the affinity *read* returns (default :func:`declared`); an unreadable forge leaves none."""
+def resolve(
+    machine: Machine,
+    read: Callable[[], Affinity | None] | None = None,
+    record: Callable[[], bytes | None] | None = None,
+) -> Machine:
+    """*machine* with the affinity *read* returns (default :func:`declared`), its borrow from the allocation *record*.
+
+    *record* defaults to :func:`lab_commons.hpc.allocation.recorded`. An unreadable forge leaves no affinity; an
+    unreadable record borrows nothing.
+    """
     try:
         held = (read or declared)()
     except (OSError, ValueError):
         held = None
-    return replace(machine, affinity=held)
+    if held is None:
+        return replace(machine, affinity=None)
+    try:
+        raw = (record or allocation.recorded)()
+        borrow = allocation.RESEARCH_BORROWS_VERIFY in allocation.borrowing(
+            None if raw is None else raw.decode('utf-8'), now=datetime.now(UTC)
+        )
+    except (OSError, ValueError):
+        borrow = False
+    return replace(machine, affinity=replace(held, borrow=borrow))
 
 
 def place(
@@ -60,27 +75,19 @@ def place(
     held: Affinity | None,
     spread: Callable[[list[tuple[Grant, Any]]], tuple[Placement, ...]],
 ) -> tuple[Placement, ...]:
-    """Where a research batch runs: *spread* over the non-verify *candidates*, borrowing an idle verify one niced.
+    """Where a research batch runs: *spread* over the non-verify *candidates* -- see the module docstring.
 
-    Without *held*, or with no verify account among *candidates*, it is *spread* over them all, unchanged.
+    Without *held*, with the user's borrow opt-in, or with no verify account among *candidates*, it is *spread*
+    over them all, unchanged.
     """
-    if held is None or not any(grant.user in held.verify for grant, _ in candidates):
+    if held is None or held.borrow or not any(grant.user in held.verify for grant, _ in candidates):
         return spread(list(candidates))
     own = [(g, s) for g, s in candidates if g.user not in held.verify]
-    idle = [(g, s) for g, s in candidates if g.user in held.verify and g.user not in held.busy]
-    refused: Unplaceable | None = None
-    if own:
-        try:
-            placed = spread(own)
-        except Unplaceable as no_room:
-            refused = no_room
-        else:
-            if not idle or all(p.plan.room != 0 for p in placed):
-                return placed
-    if not idle:
-        busy = sorted(g.name for g, _ in candidates if g.user in held.busy)
-        msg = f'{refused or "no research account"}; every busy verify account is kept for its verify parts: {busy}'
+    if not own:
+        kept = sorted(g.name for g, _ in candidates)
+        msg = (
+            f'no research account to wait on; the verify accounts {kept} never take research unless the user opts in '
+            f'(allocate --borrow {allocation.RESEARCH_BORROWS_VERIFY})'
+        )
         raise Unplaceable(msg)
-    return tuple(
-        replace(p, plan=replace(p.plan, nice=NICE)) if p.grant.user in held.verify else p for p in spread([*own, *idle])
-    )
+    return spread(own)

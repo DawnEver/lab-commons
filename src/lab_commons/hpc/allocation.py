@@ -17,9 +17,17 @@ shares, is the forge's (``python -m dev_lab.dev.hpchost allocate``). Its shape:
 While it is unexpired it FIXES the named sessions' shares; the remainder -- the pool less what each named
 session uses of its share, floored at 0 -- is divided by the same max-min among the unnamed active streams,
 untagged included, so a named session's slack lends out exactly as a derived share's does. Expired
-or absent, the derived default stands. Every submitter -- any agent, any tool, a human's ``python -m
-lab_commons.hpc plan|submit|retry|run submit`` and the forge alike -- reads the same record under its own
-``$LC_HPC_SESSION`` (:func:`resolve`, user ruling 2026-10-23: it is a runtime fact about the account).
+or absent, the derived default stands.
+
+THE SAME RECORD CARRIES THE ONLY CROSS-BORROW (user ruling 2026-10-30). By default research and verify accounts
+never borrow from each other, in either direction: a research submit never lands on a verify account
+(:func:`lab_commons.hpc.affinity.place`) and a research seat never claims a forge verify part. The user opts in
+by naming a direction in the record's ``borrow`` list (:data:`BORROWS`); it holds until the record expires
+(:func:`borrowing`), and a record without it borrows nothing.
+
+Every submitter -- any agent, any tool, a human's ``python -m lab_commons.hpc plan|submit|retry|run submit``
+and the forge alike -- reads the same record under its own ``$LC_HPC_SESSION``
+(:func:`resolve`, user ruling 2026-10-23: it is a runtime fact about the account).
 
 THE READER IS A PORT. The record lives where the forge keeps records, and hpc never reaches the forge, so the
 forge installs the one reader as an entry point in :data:`READER` (:func:`recorded`); none installed, or a
@@ -41,11 +49,15 @@ from lab_commons.hpc.grants import Machine, Session
 from lab_commons.hpc.slurm import Held, Snapshot
 
 __all__ = [
+    'BORROWS',
     'READER',
     'RECORD',
+    'RESEARCH_BORROWS_VERIFY',
     'UNTAGGED',
+    'VERIFY_BORROWS_RESEARCH',
     'Allocation',
     'active',
+    'borrowing',
     'derived',
     'fair',
     'parse',
@@ -68,13 +80,21 @@ READER: Final = 'lab_commons.hpc.allocation'
 #: The stream every job without a session tag counts as.
 UNTAGGED: Final = 'untagged'
 
+#: A research submission may land on a verify account.
+RESEARCH_BORROWS_VERIFY: Final = 'research->verify'
+#: A research seat may claim a forge verify part.
+VERIFY_BORROWS_RESEARCH: Final = 'verify->research'
+#: Every direction the record's ``borrow`` list may name; anything else is refused by name.
+BORROWS: Final = frozenset({RESEARCH_BORROWS_VERIFY, VERIFY_BORROWS_RESEARCH})
+
 
 @dataclass(frozen=True)
 class Allocation:
-    """The override: each named session's caps, until *expires* (UTC)."""
+    """The override: each named session's caps, and the cross-borrow directions allowed, until *expires* (UTC)."""
 
     expires: datetime
     sessions: Mapping[str, Session]
+    borrow: frozenset[str] = frozenset()
 
 
 def parse(text: str) -> Allocation:
@@ -84,7 +104,12 @@ def parse(text: str) -> Allocation:
     if expires.tzinfo is None:
         msg = f'{RECORD}: expires {raw["expires"]!r} names no timezone; write it in UTC'
         raise ValueError(msg)
-    return Allocation(expires, {name: Session(name, **caps) for name, caps in raw['sessions'].items()})
+    borrow = frozenset(raw.get('borrow', ()))
+    if borrow - BORROWS:
+        msg = f'{RECORD}: borrow {sorted(borrow - BORROWS)} names no direction; one of {sorted(BORROWS)}'
+        raise ValueError(msg)
+    sessions = {name: Session(name, **caps) for name, caps in raw.get('sessions', {}).items()}
+    return Allocation(expires, sessions, borrow)
 
 
 def render(allocation: Allocation) -> str:
@@ -93,7 +118,16 @@ def render(allocation: Allocation) -> str:
         name: {k: v for k, v in asdict(session).items() if k not in {'name', 'fixed'} and v is not None}
         for name, session in sorted(allocation.sessions.items())
     }
-    return json.dumps({'expires': allocation.expires.astimezone(UTC).isoformat(), 'sessions': sessions}, indent=2)
+    record = {'expires': allocation.expires.astimezone(UTC).isoformat(), 'sessions': sessions}
+    return json.dumps(record | ({'borrow': sorted(allocation.borrow)} if allocation.borrow else {}), indent=2)
+
+
+def borrowing(record: str | None, *, now: datetime) -> frozenset[str]:
+    """The cross-borrow directions *record* allows at *now*: none without one, or once it has expired."""
+    if record is None:
+        return frozenset()
+    allocation = parse(record)
+    return allocation.borrow if now < allocation.expires else frozenset()
 
 
 def parse_shares(words: Sequence[str]) -> dict[str, Session]:
