@@ -20,6 +20,7 @@ login is ``''``) matches nothing: priority is never a guess.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
@@ -31,6 +32,7 @@ __all__ = ['PRIORITY_TABLE', 'Priority']
 #: The machine-file table a host declares its priority in.
 PRIORITY_TABLE: Final = 'priority'
 
+#: The table's keys: the dataclass's fields, in order (one source for the table, the card row and the text).
 _KEYS: Final = ('logins', 'hosts', 'sessions', 'repos')
 
 
@@ -57,18 +59,13 @@ class Priority:
         return bool(
             (candidate.origin and candidate.origin in self.logins)
             or (candidate.origin_host and candidate.origin_host in self.hosts)
-            or candidate.repo.rsplit('/', 1)[-1] in self.repos
+            or candidate.repo.rsplit('/', 1)[-1] in self.repos  # the NAME, whatever the owner: forges differ
             or (candidate.session and candidate.session in self.sessions)
         )
 
     def row(self) -> dict[str, list[str]]:
-        """As a host card carries it: each subject list, sorted."""
-        return {
-            'logins': sorted(self.logins),
-            'hosts': sorted(self.hosts),
-            'sessions': sorted(self.sessions),
-            'repos': sorted(self.repos),
-        }
+        """As a host card carries it: each subject list, sorted, keyed as the machine file declares it."""
+        return {key: sorted(names) for key, names in dataclasses.asdict(self).items()}
 
     def text(self) -> str:
         """How a human reads it: ``logins YongxuanWu; sessions lane/x`` -- ``none`` when nothing is declared."""
