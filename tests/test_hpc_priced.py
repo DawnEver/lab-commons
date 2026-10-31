@@ -35,6 +35,20 @@ def test_a_declared_floor_sizes_round_0() -> None:
     assert bare.record() == Measured().record(), 'the learned facts are never written by a declaration'
 
 
+@pytest.mark.parametrize('safety', [1.0, 1.3, 2.0])
+def test_a_declared_floor_is_multiplied_by_exactly_the_one_safety_factor(safety: float) -> None:
+    """ONE MARGIN, ONE PLACE (user ruling 2026-10-31): a declared raw peak asks peak x ``Policy.safety``, nothing more.
+
+    motronics declared peak x 1.5 and the plan multiplied its own 1.5 on top (~2.25x). The declaration is the
+    measurement; the margin is the policy's. PLANTED: at ``safety=1.0`` the ask IS the declared peak, so a
+    second factor anywhere would show.
+    """
+    policy, cost = Policy(safety=safety), Cost(mem_gb=0.25)
+    for key, ids in ((HEAVY, [HEAVY]), ('tests/b.py', [LIGHT])):
+        priced = Measured().floored({key: {'mem_gb': 6.0}})
+        assert priced.item_gb(ids, cost, policy) == pytest.approx(6.0 * safety), key
+
+
 def test_a_higher_learned_value_wins_over_the_floor() -> None:
     learned = Measured(id_peaks_mb={HEAVY: 20 * 1024.0}, floors={HEAVY: 5000.0}, peaks_mb={'tests/b.py': 30000.0})
     priced = learned.floored({HEAVY: {'mem_gb': 9.0, 'wall_s': 1200.0}, 'tests/b.py': {'mem_gb': 1.0}})

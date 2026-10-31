@@ -113,6 +113,9 @@ class Measured:
     def floored(self, priced: Mapping[str, Mapping[str, float]]) -> Measured:
         """A copy raised to a repo's DECLARED floors (``[tool.lab_commons.hpc] priced``); a higher learned value wins.
 
+        A declared value is a RAW MEASUREMENT, read like a learned one: the plan's one safety factor applies to
+        it once, so a declaration never carries a margin of its own (user ruling 2026-10-31).
+
         A node id's ``mem_gb`` floors its :attr:`id_peaks_mb` and its ``wall_s`` its :attr:`floors`; a file's
         ``mem_gb`` floors its :attr:`peaks_mb` and its ``wall_s`` its :attr:`overheads` -- the file costs at
         least that beside its tests. Only a PLAN reads the copy: the learned facts, and the record a run writes

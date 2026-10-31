@@ -11,7 +11,7 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
     timeout_s = { incremental = 300, full = 3000 }          # pytest --timeout per run scope (absent: the repo's own)
     item_wall = { multiple = 10, floor_s = 300, unmeasured_s = 3600 }  # per-test kill bound (these are the defaults)
-    priced = "tests/priced.toml"                            # known costs a plan floors at (read_priced)
+    priced = "tests/priced.toml"                            # measured peaks/walls, no margin (read_priced)
 
 A venv lives in ``~/ci/envs/<env key>`` and a native build in ``~/ci/native/<native key>``; each sha is
 only a ``git worktree`` whose ``source_roots`` reach the venv through ``PYTHONPATH`` -- no per-sha
@@ -143,9 +143,11 @@ def read_priced(text: str, path: str) -> dict[str, dict[str, float]]:
     """A repo's PRICED FLOORS, the TOML at *path* (``[tool.lab_commons.hpc] priced``), refused by name if malformed.
 
     Each key is a test node id or a test file, each value ``{ mem_gb = .., wall_s = .. }`` (either or both): the
-    peak GB and the seconds it is KNOWN to need, from a measurement the file's comments cite. A plan reads them
-    as floors (:meth:`lab_commons.compute.measured.Measured.floored`), so round 0 asks what a host would
-    otherwise learn only by killing it (run 4fb97faa904f).
+    RAW MEASURED peak GB and wall seconds, from a measurement the file's comments cite, with NO margin. A plan
+    reads them as floors (:meth:`lab_commons.compute.measured.Measured.floored`), exactly as it reads a learned
+    peak, and applies its ONE safety factor (:attr:`lab_commons.hpc.config.Policy.safety`) -- a declared margin
+    on top is the same fact in two places and asks ~2.25x (user ruling 2026-10-31). Round 0 thus asks what a
+    host would otherwise learn only by killing it (run 4fb97faa904f).
     """
     try:
         data = tomllib.loads(text)
