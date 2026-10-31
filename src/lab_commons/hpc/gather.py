@@ -21,7 +21,15 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import needs_of
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import live_throttle
-from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of, stream_sources
+from lab_commons.hpc.records import (
+    files_made,
+    fold,
+    job_measured,
+    read_streams,
+    record_of,
+    round_losses,
+    stream_sources,
+)
 from lab_commons.hpc.run import ACTIVE, RETRIES, NoRoom, load_state, save_state, shares_home, submit_round
 from lab_commons.hpc.sacct import shard_clock
 from lab_commons.hpc.slurm import Snapshot
@@ -94,6 +102,7 @@ def gather_run(
         tops={n: band['top_minutes'] * 60 for n, band in band_of.items() if band.get('top_minutes')},
     )
     planned['clock'] = round_clock(clocks, busy)
+    planned['lost'] = round_losses(current['items'], streams, shards=planned['shards'], walls=walls, states=states)
     planned['walls_s'] = walls
     state['measured'] = measured.record()
     learned.learn({'repo': state['repo'], **state['measured']})

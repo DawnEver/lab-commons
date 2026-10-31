@@ -20,7 +20,7 @@ from lab_commons.compute.learned import Run
 from lab_commons.compute.measured import Measured
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
-from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, read_stream, split_streams, tagged
+from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, badness, read_stream, split_streams, tagged
 from lab_commons.hpc.shell import ROOT
 from lab_commons.hpc.testcells import TestCell, counts, upgraded
 from lab_commons.outcomes import Cell, Reason, Status
@@ -37,6 +37,7 @@ __all__ = [
     'read_streams',
     'record_name',
     'record_of',
+    'round_losses',
     'run_shas',
     'split_streams',
     'stream_sources',
@@ -185,6 +186,69 @@ def fold(
         pending += [part for part in (rest[:half], rest[half:]) if part]
     busy = sum(float(f['done']['wall']) for f in folds if f['done'] is not None)
     return pending, killed, busy
+
+
+#: How much of a failure's own reason a round's loss keeps: enough to say why, never a traceback.
+_LOSS_WHY_CHARS: Final = 200
+
+
+def _loss(node: str, kind: str, peak: float | None, wall: float | None, why: str) -> dict[str, Any]:
+    return {
+        'id': node,
+        'kind': kind,
+        'peak_mb': None if peak is None else round(float(peak), 1),
+        'wall_s': None if wall is None else round(float(wall), 1),
+        'why': why[:_LOSS_WHY_CHARS],
+    }
+
+
+def round_losses(
+    items: list[dict[str, Any]],
+    streams: dict[int, str],
+    *,
+    shards: Sequence[Sequence[int]],
+    walls: Sequence[float],
+    states: Mapping[int, str],
+) -> list[dict[str, Any]]:
+    """WHAT ONE ROUND LOST, by test id: each failed, killed, out-of-memory or timed-out id with its peak and wall.
+
+    The run PUBLISHES this, so nobody needs a shell on the cluster to learn why a round re-ran what it did (user
+    ruling 2026-10-31: the cluster being unreachable is normal). A decided miss (:func:`badness` 0) is a loss of
+    its status' kind with its reason; an item a signal or the wall closed names the id it cut (its last unreported
+    START, else its first unreported id) as ``out_of_memory`` (Slurm said so, or a signal outside a TIMEOUT
+    shard), ``timeout`` (a TIMEOUT shard) or ``killed`` (any other end, its Slurm state named), and an item that
+    EXITED mid-test names that test ``exit``. *states* maps a shard to its Slurm state; a clean round loses nothing.
+    """
+    losses: list[dict[str, Any]] = []
+    folds = [read_stream(streams.get(index, ''), item['ids']) for index, item in enumerate(items)]
+    spent = _killed_after(folds, shards, walls)
+    shard_of = {i: n for n, (a, b) in enumerate(shards) for i in range(a, b)}
+    for index, (item, folded) in enumerate(zip(items, folds, strict=True)):
+        done = folded['done'] or {}
+        peak = done.get('peak_mb')
+        for node, line in folded['cells'].items():
+            plain = _plain(line)
+            if badness(plain) == 0:
+                why = str((plain.get('reason') or {}).get('text', ''))
+                losses.append(_loss(node, str(plain['status']), peak, folded['seconds'].get(node), why))
+        rest = [n for n in item['ids'] if n not in folded['cells']]
+        if not rest:
+            continue
+        cut = folded['started'] if folded['started'] in rest else rest[0]
+        code = int(done['done']) if folded['done'] is not None else None
+        if code is not None and code >= 0:
+            losses.append(_loss(cut, 'exit', peak, done.get('wall'), f'the item exited {code} while it ran'))
+            continue
+        state = states.get(shard_of.get(index, -1), '')
+        wall = done.get('wall') if code is not None else spent.get(index)
+        if state == 'OUT_OF_MEMORY' or (code is not None and state != 'TIMEOUT'):
+            kind, why = 'out_of_memory', f'killed out of memory ({state or f"exit {code}"})'
+        elif state == 'TIMEOUT':
+            kind, why = 'timeout', 'cut by the shard wall (TIMEOUT)'
+        else:
+            kind, why = 'killed', f'the item never closed ({state or "no Slurm state"})'
+        losses.append(_loss(cut, kind, peak, wall, f'{why}; {len(rest) - 1} id(s) after it re-queued'))
+    return losses
 
 
 def _killed_after(
