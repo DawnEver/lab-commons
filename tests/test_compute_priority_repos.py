@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 
 import pytest
 
 from lab_commons.compute.model import Candidate
-from lab_commons.compute.priority import Priority
+from lab_commons.compute.priority import PRIORITY_KEYS, Priority
 
 NOW = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
 
@@ -39,7 +40,6 @@ def test_a_repo_matches_by_name_whatever_its_owner() -> None:
     """The rule is the NAME (the deploy row), never owner/name: one repo lives under different owners per forge."""
     favoured = Priority.of({'repos': ['motronics-studio']})
     assert favoured.matches(_cand('another-owner/motronics-studio'))
-    assert not Priority.of({'repos': ['Tianjie-Zou-Team/motronics-studio']}).matches(_cand('x/motronics-studio'))
 
 
 def test_the_card_row_carries_every_declared_key() -> None:
@@ -55,3 +55,15 @@ def test_a_repo_declaration_is_carried_and_read() -> None:
 def test_an_unknown_key_is_still_refused() -> None:
     with pytest.raises(ValueError, match='repo'):
         Priority.of({'repo': ['wdg-lab']})
+
+
+def test_a_repo_entry_with_an_owner_is_refused_naming_the_rule() -> None:
+    """The rule is the NAME: an owner/name entry would never match, so it is refused, not silently inert."""
+    with pytest.raises(ValueError, match='name only'):
+        Priority.of({'repos': ['Tianjie-Zou-Team/motronics-studio']})
+    assert Priority.of({'repos': ['motronics-studio']}).repos == frozenset({'motronics-studio'})
+
+
+def test_the_table_keys_are_the_dataclass_fields() -> None:
+    assert tuple(field.name for field in dataclasses.fields(Priority)) == PRIORITY_KEYS
+    assert tuple(Priority().row()) == PRIORITY_KEYS
