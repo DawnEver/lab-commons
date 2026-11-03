@@ -111,3 +111,37 @@ def test_claude_homes_and_agent_repos_are_outside_the_policy(tmp_path: Path, mon
     assert home.exempt(tmp_path / 'cc' / 'hooks' / 'a.js')
     assert not home.exempt(tmp_path / 'user' / '.claudette' / 'x')  # planted: a near-miss name
     assert not home.exempt(tmp_path / 'user' / 'Documents' / 'x')  # planted: an ordinary path
+
+
+def test_the_managed_tool_root_is_one_function(machine: Path) -> None:
+    assert home.tools() == machine / 'tools'
+
+
+@pytest.mark.usefixtures('machine')
+def test_the_tools_table_reads_its_two_keys_and_its_install_root_is_a_write_root(tmp_path: Path) -> None:
+    target = tmp_path / 'Program Files'
+    _declare(f'[tools]\ninstall_root = "{target.as_posix()}"\nmin_free_gb = 5\n')
+    assert home.tools_table() == home.Tools(install_root=target, min_free_gb=5.0)
+    assert target in home.write_roots()
+    assert home.allowed(target / 'femm' / 'femm.exe')
+
+
+@pytest.mark.usefixtures('machine')
+def test_an_undeclared_tools_table_has_no_install_root() -> None:
+    assert home.tools_table() == home.Tools(install_root=None, min_free_gb=None)
+    assert not home.allowed(Path('C:/Program Files/femm/femm.exe'))  # planted: no install root declared
+
+
+@pytest.mark.usefixtures('machine')
+@pytest.mark.parametrize(
+    ('body', 'match'),
+    [
+        ('[tools]\nroot = "C:/x"\n', 'unknown key'),
+        ('[tools]\ninstall_root = "relative"\n', 'absolute'),
+        ('[tools]\nmin_free_gb = "five"\n', 'number'),
+    ],
+)
+def test_a_malformed_tools_table_is_refused_by_name(body: str, match: str) -> None:
+    _declare(body)
+    with pytest.raises(ValueError, match=match):
+        home.tools_table()

@@ -18,6 +18,11 @@ THE WRITE ROOTS derive from it (:func:`write_roots`): the home, and each configu
 working in a repo has ``TMP``/``TEMP``/``TMPDIR`` at that repo's ``output/tmp/`` (:func:`temp_environment`);
 a writer with no configured repo is refused, never given a fallback directory.
 
+THE TOOLS TABLE (:func:`tools_table`). ``[tools]`` has exactly two keys: ``install_root`` (the absolute directory
+the user confirmed an external tool may be installed into, e.g. ``<X>:/Program Files/``; it joins the write roots)
+and ``min_free_gb`` (the free space an install needs there). Any other key is refused by name. The toolchain's
+own managed tool root is :func:`tools`.
+
 OUTSIDE THE POLICY (:func:`exempt`): Claude's own configuration (:data:`CLAUDE_HOMES` under the user's home --
 never touched by the toolchain) and the AGENT repos of ``[agent_repos]`` (name -> absolute path; Claude Code's
 configuration and plugin market), which are not toolchain repos.
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -35,6 +41,7 @@ __all__ = [
     'HOME_ENV',
     'PARTS',
     'TEMP_NAMES',
+    'Tools',
     'agent_repos',
     'allowed',
     'config_path',
@@ -45,6 +52,8 @@ __all__ = [
     'repos',
     'temp_environment',
     'temp_of',
+    'tools',
+    'tools_table',
     'write_roots',
 ]
 
@@ -81,6 +90,11 @@ def part(name: str) -> Path:
     return home() / name
 
 
+def tools() -> Path:
+    """The toolchain's managed tool root, ``<home>/tools``."""
+    return part('tools')
+
+
 def config_path() -> Path:
     """The one per-machine file, ``<home>/config/motronics.toml``."""
     return part('config') / 'motronics.toml'
@@ -97,8 +111,7 @@ def agent_repos() -> dict[str, Path]:
 
 
 def _paths(table_name: str) -> dict[str, Path]:
-    path = config_path()
-    table = tomllib.loads(path.read_text(encoding='utf-8')).get(table_name, {}) if path.is_file() else {}
+    path, table = config_path(), _table(table_name)
     if not isinstance(table, dict):
         msg = f'{path}: [{table_name}] must be a table of name = "<absolute path>"'
         raise TypeError(msg)
@@ -112,9 +125,52 @@ def _paths(table_name: str) -> dict[str, Path]:
     return found
 
 
+@dataclass(frozen=True)
+class Tools:
+    """The ``[tools]`` table: where the user lets an external tool install, and the free space it needs."""
+
+    install_root: Path | None
+    min_free_gb: float | None
+
+
+_TOOLS_KEYS: Final = frozenset({'install_root', 'min_free_gb'})
+
+
+def _table(name: str) -> object:
+    path = config_path()
+    return tomllib.loads(path.read_text(encoding='utf-8')).get(name, {}) if path.is_file() else {}
+
+
+def tools_table() -> Tools:
+    """The ``[tools]`` table, validated; an unknown key, a relative root or a non-number size is refused."""
+    path, table = config_path(), _table('tools')
+    if not isinstance(table, dict):
+        msg = f'{path}: [tools] must be a table'
+        raise TypeError(msg)
+    if unknown := sorted(set(table) - _TOOLS_KEYS):
+        msg = f'{path}: [tools] has unknown key(s) {unknown}; the keys are {sorted(_TOOLS_KEYS)}'
+        raise ValueError(msg)
+    root, size = table.get('install_root'), table.get('min_free_gb')
+    if root is not None and (not isinstance(root, str) or not Path(root).expanduser().is_absolute()):
+        msg = f'{path}: [tools] install_root = {root!r} must be an absolute path'
+        raise ValueError(msg)
+    if size is not None and (isinstance(size, bool) or not isinstance(size, int | float)):
+        msg = f'{path}: [tools] min_free_gb = {size!r} must be a number'
+        raise ValueError(msg)
+    return Tools(
+        install_root=None if root is None else Path(root).expanduser(),
+        min_free_gb=None if size is None else float(size),
+    )
+
+
 def write_roots() -> tuple[Path, ...]:
-    """The home, then each configured repo's ``output/`` and ``scratch/``."""
-    return (home(), *(root / child for root in repos().values() for child in _WRITABLE))
+    """The home, each configured repo's ``output/`` and ``scratch/``, then ``[tools] install_root`` if declared."""
+    install = tools_table().install_root
+    return (
+        home(),
+        *(root / child for root in repos().values() for child in _WRITABLE),
+        *(() if install is None else (install,)),
+    )
 
 
 def _resolved(path: Path) -> Path:
@@ -141,7 +197,8 @@ def repo_of(path: Path) -> Path | None:
 def allowed(path: Path) -> bool:
     """Whether *path* lies in the home or in a configured repo's (or its worktree's) ``output/`` or ``scratch/``."""
     target = _resolved(path)
-    if _within(target, _resolved(home())):
+    install = tools_table().install_root
+    if _within(target, _resolved(home())) or (install is not None and _within(target, _resolved(install))):
         return True
     repo = repo_of(target)
     return repo is not None and any(_within(target, repo / child) for child in _WRITABLE)
