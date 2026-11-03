@@ -1,6 +1,7 @@
 """THE per-machine configuration: one TOML file, one table per package.
 
-``~/.config/lab-commons/config.toml`` (or the path in ``$LAB_COMMONS_CONFIG``) says what THIS BOX is
+``<machine home>/config/motronics.toml`` (:func:`lab_commons.home.config_path`; or the path in ``$LAB_COMMONS_CONFIG``)
+says what THIS BOX is
 and may use -- the facts that differ between workstations sharing one checkout. Each package owns one
 top-level table and validates it itself (an unknown key is the package's to refuse); this module only
 reads the file and hands a table out. A missing file is an empty configuration: a package that cannot
@@ -38,6 +39,8 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons import home
+
 __all__ = ['CONFIG_ENV', 'LOG_LEVELS', 'SHARED_KEYS', 'USER_TABLE', 'User', 'config_path', 'machine', 'section', 'user']
 
 #: Environment override of the per-machine file.
@@ -48,9 +51,9 @@ _RETIRED: Final = {'hpc.toml': 'move it under [hpc] in config.toml (keys unchang
 
 
 def config_path() -> Path:
-    """``$LAB_COMMONS_CONFIG``, else ``~/.config/lab-commons/config.toml``."""
+    """``$LAB_COMMONS_CONFIG``, else the machine home's file (:func:`lab_commons.home.config_path`)."""
     override = os.environ.get(CONFIG_ENV)
-    return Path(override).expanduser() if override else Path.home() / '.config' / 'lab-commons' / 'config.toml'
+    return Path(override).expanduser() if override else home.config_path()
 
 
 def machine() -> dict[str, Any]:

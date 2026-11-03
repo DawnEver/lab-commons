@@ -40,9 +40,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed
-from lab_commons.config import config_path
 
 __all__ = [
     'TTL',
@@ -205,7 +205,7 @@ def probe(tool: str, check: Check, declared: Requirement | None, *, now: datetim
 
 
 def _state(path: Path | None) -> Path:
-    return path or config_path().parent / 'tool-presence.json'
+    return path or home.part('state') / 'tool-presence.json'
 
 
 def _load(path: Path) -> dict[str, Any]:
