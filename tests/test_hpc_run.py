@@ -499,7 +499,7 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_k
     measured = Measured()
     measured.learn(['a.py::t'], killed)
     assert measured.peaks_mb == {'a.py': 1120.0 * OOM_GROWTH}
-    assert measured.taught == {'a.py'}
+    assert measured.taught == {'a.py', 'a.py::t'}, 'the cut id carries the floor too'
     known = Measured(peaks_mb={'a.py': 3493.0})
     known.learn(['a.py::t'], killed)
     assert known.peaks_mb == {'a.py': 3493.0}, 'a kill at a lower limit says nothing new'
