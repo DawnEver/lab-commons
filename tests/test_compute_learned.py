@@ -46,7 +46,7 @@ def test_a_killed_runs_peak_is_a_floor_that_never_lowers_what_is_known() -> None
 
 def test_per_test_facts_and_per_job_runs_share_one_file_without_erasing_each_other() -> None:
     learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0))
-    learned.learn({'repo': REPO, 'durations': {'a.py::x': 3.0}, 'peaks_mb': {'a.py': 512.0}})
+    learned.learn_round(REPO, {}, {'durations': {'a.py::x': 3.0}, 'peaks_mb': {'a.py': 512.0}})
     assert learned.run_of(REPO, 'linux', ()) is not None, 'learning test facts kept the job runs'
     learned.learn_peaks(REPO, {'b.py': 2048.0})
     table = learned.learned(REPO)
@@ -309,3 +309,23 @@ def test_a_finished_sibling_never_lowers_the_peak_its_files_kill_read_in_the_sam
     later = Measured(peaks_mb={'t.py': 3447.0})
     later.learn(['t.py::x'], _item(800.0, 0, 't.py::x'))
     assert later.peaks_mb['t.py'] == 800.0, 'PLANTED CONTROL: a newer round that finishes still replaces'
+
+
+def test_a_round_teaches_only_what_it_changed_so_a_concurrent_run_keeps_its_kill_floor() -> None:
+    """A round writes its delta -- what it changed, and what it dropped -- never its whole view.
+
+    Ada 2026-11-03: five shas ran at once, each seeded from the table at submit; every fold wrote its WHOLE
+    view back, so a run started before another's OOM kill erased that kill's floor and the next plan asked
+    below the limit already died at.
+    """
+    learned.learn_round(REPO, {}, {'peaks_mb': {'a.py': 600.0}})
+    seeded = learned.learned(REPO)
+    stale = {'peaks_mb': dict(seeded['peaks_mb']), 'id_peaks_mb': {}, 'durations': {}}
+    learned.learn_round(REPO, stale, {**stale, 'id_peaks_mb': {'a.py::b': 3746.0}})
+    learned.learn_round(REPO, stale, {**stale, 'durations': {'a.py::c': 2.0}})
+    table = learned.learned(REPO)
+    assert table['id_peaks_mb'] == {'a.py::b': 3746.0}, 'the concurrent run kept the kill floor'
+    assert table['durations'] == {'a.py::c': 2.0}
+    finished = {**stale, 'id_peaks_mb': {'a.py::b': 3746.0}}
+    learned.learn_round(REPO, finished, {**finished, 'id_peaks_mb': {}})
+    assert learned.learned(REPO)['id_peaks_mb'] == {}, 'PLANTED CONTROL: a round that drops a floor drops it'

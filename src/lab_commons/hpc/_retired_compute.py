@@ -61,6 +61,7 @@ COMPUTE: Final[dict[str, str]] = {
     'lab_commons.hpc.learned': 'lab_commons.compute.learned (the one measured demand table)',
     'lab_commons.hpc.measured': 'lab_commons.compute.measured.Measured',
     'hpc-learned': 'compute-learned (beside the machine config, lab_commons.compute.learned.directory)',
+    'learned.learn({': 'lab_commons.compute.learned.learn_round (a round writes its delta, never its whole view)',
     'lab_commons.hpc.outstanding': 'dev_lab.dev.forgerun (the runs in flight, one state file each, in forge-runs/)',
     # A host's own user is served by its own reserve, and an account is divided by reservations (2026-10-13).
     'own_weight': (
