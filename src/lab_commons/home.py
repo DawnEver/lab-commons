@@ -26,11 +26,21 @@ own managed tool root is :func:`tools`.
 OUTSIDE THE POLICY (:func:`exempt`): Claude's own configuration (:data:`CLAUDE_HOMES` under the user's home --
 never touched by the toolchain) and the AGENT repos of ``[agent_repos]`` (name -> absolute path; Claude Code's
 configuration and plugin market), which are not toolchain repos.
+
+SYNCED FOLDERS (:func:`sync_roots`): ``[sync] roots`` lists the globs of the folders a sync client shares with a
+live human session (OneDrive); a write there needs the user's consent for that write. Undeclared, the platform's
+default applies (:func:`sync_defaults`).
+
+PATHS ARE COMPARED AS THE FILESYSTEM SEES THEM (:func:`canonical`, :func:`within`): every link (symlink, junction)
+is resolved first, so a link inside ``output/`` is judged by where it leads and Ada's ``/home/<u>`` is its
+``/gpfs01/home/<u>``; and case is ignored where the filesystem ignores it (Windows, macOS).
 """
 
 from __future__ import annotations
 
+import glob
 import os
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,16 +54,21 @@ __all__ = [
     'Tools',
     'agent_repos',
     'allowed',
+    'canonical',
     'config_path',
     'exempt',
     'home',
     'part',
     'repo_of',
     'repos',
+    'sync_defaults',
+    'sync_roots',
     'temp_environment',
     'temp_of',
     'tools',
     'tools_table',
+    'within',
+    'within_text',
     'write_roots',
 ]
 
@@ -74,6 +89,16 @@ _WRITABLE: Final = ('output', 'scratch')
 
 #: Where a repo's worktrees live inside it: a worktree is the repo.
 _WORKTREES: Final = ('.claude', 'worktrees')
+
+#: The platforms whose default filesystem ignores case (NTFS, APFS): there two spellings are one path.
+_CASELESS: Final = frozenset({'win32', 'darwin'})
+
+#: Each platform's sync-client folders when ``[sync] roots`` is undeclared; none on Linux.
+_SYNC_DEFAULTS: Final = {
+    'win32': ('~/OneDrive*',),
+    'darwin': ('~/Library/CloudStorage/OneDrive-*',),
+}
+_SYNC_KEYS: Final = frozenset({'roots'})
 
 
 def home() -> Path:
@@ -173,22 +198,36 @@ def write_roots() -> tuple[Path, ...]:
     )
 
 
-def _resolved(path: Path) -> Path:
-    return Path(os.path.normpath(Path(path).expanduser().absolute()))
+def canonical(path: Path) -> Path:
+    """*path* as the filesystem resolves it: absolute, every link (symlink, junction) followed, ``..`` folded."""
+    return Path(os.path.realpath(Path(path).expanduser().absolute()))
 
 
-def _within(path: Path, root: Path) -> bool:
-    return path == root or root in path.parents
+def _key(text: str, platform: str) -> str:
+    folded = text.replace('\\', '/') if platform == 'win32' else text
+    return folded.casefold() if platform in _CASELESS else folded
+
+
+def within_text(path: str, root: str, *, platform: str = sys.platform) -> bool:
+    """Whether *path* is *root* or under it, as spelled; case is ignored where *platform*'s filesystem ignores it."""
+    target, base = _key(path, platform), _key(root, platform).rstrip('/')
+    return target == base or target.startswith(base + '/')
+
+
+def within(path: Path, root: Path) -> bool:
+    """Whether *path* is *root* or under it, both resolved as the filesystem sees them (:func:`canonical`)."""
+    return within_text(str(canonical(path)), str(canonical(root)))
 
 
 def repo_of(path: Path) -> Path | None:
-    """The configured repo -- or that repo's worktree -- *path* lies in; ``None`` outside every one."""
-    target = _resolved(path)
-    for root in sorted((_resolved(r) for r in repos().values()), key=lambda r: len(r.parts), reverse=True):
-        if not _within(target, root):
+    """The configured repo -- or that repo's worktree -- *path* lies in, resolved; ``None`` outside every one."""
+    target = canonical(path)
+    for root in sorted((canonical(r) for r in repos().values()), key=lambda r: len(r.parts), reverse=True):
+        if not within_text(str(target), str(root)):
             continue
-        rest = target.relative_to(root).parts
-        if rest[: len(_WORKTREES)] == _WORKTREES and len(rest) > len(_WORKTREES):
+        rest = target.parts[len(root.parts) :]
+        head = tuple(part.casefold() for part in rest[: len(_WORKTREES)])
+        if head == _WORKTREES and len(rest) > len(_WORKTREES):
             return root.joinpath(*_WORKTREES, rest[len(_WORKTREES)])
         return root
     return None
@@ -196,19 +235,39 @@ def repo_of(path: Path) -> Path | None:
 
 def allowed(path: Path) -> bool:
     """Whether *path* lies in the home or in a configured repo's (or its worktree's) ``output/`` or ``scratch/``."""
-    target = _resolved(path)
     install = tools_table().install_root
-    if _within(target, _resolved(home())) or (install is not None and _within(target, _resolved(install))):
+    if within(path, home()) or (install is not None and within(path, install)):
         return True
-    repo = repo_of(target)
-    return repo is not None and any(_within(target, repo / child) for child in _WRITABLE)
+    repo = repo_of(path)
+    return repo is not None and any(within(path, repo / child) for child in _WRITABLE)
 
 
 def exempt(path: Path) -> bool:
     """Whether *path* is outside the policy: Claude's configuration or an agent repo."""
-    target = _resolved(path)
     roots = [Path.home() / name for name in CLAUDE_HOMES] + list(agent_repos().values())
-    return any(_within(target, _resolved(root)) for root in roots)
+    return any(within(path, root) for root in roots)
+
+
+def sync_defaults(platform: str = sys.platform) -> tuple[str, ...]:
+    """The sync-client folder globs of *platform* when ``[sync] roots`` is undeclared; none on Linux."""
+    return _SYNC_DEFAULTS.get(platform, ())
+
+
+def sync_roots() -> tuple[Path, ...]:
+    """The synced folders on this machine: ``[sync] roots`` globs, else :func:`sync_defaults`, each expanded."""
+    path, table = config_path(), _table('sync')
+    if not isinstance(table, dict):
+        msg = f'{path}: [sync] must be a table'
+        raise TypeError(msg)
+    if unknown := sorted(set(table) - _SYNC_KEYS):
+        msg = f'{path}: [sync] has unknown key(s) {unknown}; the keys are {sorted(_SYNC_KEYS)}'
+        raise ValueError(msg)
+    patterns = table.get('roots', sync_defaults())
+    if not isinstance(patterns, list | tuple) or not all(isinstance(one, str) for one in patterns):
+        msg = f'{path}: [sync] roots = {patterns!r} must be a list of path globs'
+        raise ValueError(msg)
+    hits = (Path(hit) for one in patterns for hit in sorted(glob.glob(str(Path(one).expanduser()))))  # noqa: PTH207
+    return tuple(hit for hit in hits if hit.is_dir())
 
 
 def temp_of(path: Path) -> Path:

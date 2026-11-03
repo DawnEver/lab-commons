@@ -145,3 +145,68 @@ def test_a_malformed_tools_table_is_refused_by_name(body: str, match: str) -> No
     _declare(body)
     with pytest.raises(ValueError, match=match):
         home.tools_table()
+
+
+def _link(link: Path, target: Path) -> None:
+    """A directory link: a symlink where the platform allows one, else a Windows junction."""
+    target.mkdir(parents=True, exist_ok=True)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        import _winapi  # noqa: PLC0415 -- Windows without the symlink privilege: a junction
+
+        _winapi.CreateJunction(str(target), str(link))
+
+
+@pytest.mark.usefixtures('machine')
+def test_a_link_inside_output_is_judged_by_where_it_leads(tmp_path: Path) -> None:
+    repo, away = tmp_path / 'repo', tmp_path / 'away'
+    _declare(f'[repos]\nrepo = "{repo.as_posix()}"\n')
+    _link(repo / 'output' / 'escape', away)
+    _link(repo / 'output' / 'inner', repo / 'output' / 'logs')
+    assert not home.allowed(repo / 'output' / 'escape' / 'x.json')  # planted: a junction out of output/
+    assert home.allowed(repo / 'output' / 'inner' / 'x.json')
+
+
+@pytest.mark.usefixtures('machine')
+def test_a_repo_reached_through_a_linked_home_is_the_same_repo(tmp_path: Path) -> None:
+    real = tmp_path / 'gpfs01' / 'home' / 'u'
+    _link(tmp_path / 'home' / 'u', real)  # Ada: /home/<u> and /gpfs01/home/<u> are one directory
+    _declare(f'[repos]\nrepo = "{(real / "repo").as_posix()}"\n')
+    found = home.repo_of(tmp_path / 'home' / 'u' / 'repo' / 'src' / 'a.py')
+    assert found is not None
+    assert home.within(found, real / 'repo')
+    assert home.within(real / 'repo', found)
+    assert home.allowed(tmp_path / 'home' / 'u' / 'repo' / 'output' / 'a.json')
+
+
+@pytest.mark.parametrize(('platform', 'caseless'), [('win32', 'yes'), ('darwin', 'yes'), ('linux', 'no')])
+def test_case_is_ignored_only_where_the_filesystem_ignores_it(platform: str, caseless: str) -> None:
+    root, path = '/Users/Me/Repo', '/users/me/repo/output/a.json'
+    assert home.within_text(path, root, platform=platform) is (caseless == 'yes')
+    assert home.within_text('/Users/Me/Repo/output', root, platform=platform)
+    assert not home.within_text('/Users/Me/RepoX/a', root, platform=platform)  # planted: a sibling prefix
+
+
+@pytest.mark.usefixtures('machine')
+def test_sync_roots_are_declared_globs(tmp_path: Path) -> None:
+    (tmp_path / 'OneDrive - Uni').mkdir()
+    (tmp_path / 'Other').mkdir()
+    _declare(f'[sync]\nroots = ["{(tmp_path / "OneDrive*").as_posix()}"]\n')
+    assert home.sync_roots() == (tmp_path / 'OneDrive - Uni',)
+
+
+@pytest.mark.parametrize(
+    ('platform', 'patterns'),
+    [('win32', ('~/OneDrive*',)), ('darwin', ('~/Library/CloudStorage/OneDrive-*',)), ('linux', ())],
+)
+def test_undeclared_sync_roots_take_the_platform_default(platform: str, patterns: tuple[str, ...]) -> None:
+    assert home.sync_defaults(platform) == patterns
+
+
+@pytest.mark.usefixtures('machine')
+def test_a_malformed_sync_table_is_refused_by_name() -> None:
+    _declare('[sync]\nroot = ["x"]\n')
+    with pytest.raises(ValueError, match=r"unknown key\(s\) \['root'\]"):
+        home.sync_roots()
