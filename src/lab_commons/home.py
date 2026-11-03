@@ -17,6 +17,10 @@ THE WRITE ROOTS derive from it (:func:`write_roots`): the home, and each configu
 ``scratch/`` -- nothing else is ever written (:func:`allowed`). Temporary files are OUTPUT: a process
 working in a repo has ``TMP``/``TEMP``/``TMPDIR`` at that repo's ``output/tmp/`` (:func:`temp_environment`);
 a writer with no configured repo is refused, never given a fallback directory.
+
+OUTSIDE THE POLICY (:func:`exempt`): Claude's own configuration (:data:`CLAUDE_HOMES` under the user's home --
+never touched by the toolchain) and the AGENT repos of ``[agent_repos]`` (name -> absolute path; Claude Code's
+configuration and plugin market), which are not toolchain repos.
 """
 
 from __future__ import annotations
@@ -27,11 +31,14 @@ from pathlib import Path
 from typing import Final
 
 __all__ = [
+    'CLAUDE_HOMES',
     'HOME_ENV',
     'PARTS',
     'TEMP_NAMES',
+    'agent_repos',
     'allowed',
     'config_path',
+    'exempt',
     'home',
     'part',
     'repo_of',
@@ -49,6 +56,9 @@ PARTS: Final = ('config', 'state', 'cache', 'tools', 'repos', 'backups')
 
 #: Every name a platform reads its temporary directory from.
 TEMP_NAMES: Final = ('TMP', 'TEMP', 'TMPDIR')
+
+#: Claude's configuration directories under the user's home: outside the policy (user ruling 2026-11-03).
+CLAUDE_HOMES: Final = ('.claude', '.claude-evans')
 
 #: A repo's two writable children.
 _WRITABLE: Final = ('output', 'scratch')
@@ -78,16 +88,25 @@ def config_path() -> Path:
 
 def repos() -> dict[str, Path]:
     """The ``[repos]`` table: each repo's absolute checkout path on this machine; ``{}`` when undeclared."""
+    return _paths('repos')
+
+
+def agent_repos() -> dict[str, Path]:
+    """The ``[agent_repos]`` table: the agent repos outside this policy; ``{}`` when undeclared."""
+    return _paths('agent_repos')
+
+
+def _paths(table_name: str) -> dict[str, Path]:
     path = config_path()
-    table = tomllib.loads(path.read_text(encoding='utf-8')).get('repos', {}) if path.is_file() else {}
+    table = tomllib.loads(path.read_text(encoding='utf-8')).get(table_name, {}) if path.is_file() else {}
     if not isinstance(table, dict):
-        msg = f'{path}: [repos] must be a table of name = "<absolute path>"'
+        msg = f'{path}: [{table_name}] must be a table of name = "<absolute path>"'
         raise TypeError(msg)
     found: dict[str, Path] = {}
     for name, value in table.items():
         where = Path(str(value)).expanduser()
         if not isinstance(value, str) or not where.is_absolute():
-            msg = f'{path}: [repos] {name} = {value!r} must be an absolute path'
+            msg = f'{path}: [{table_name}] {name} = {value!r} must be an absolute path'
             raise ValueError(msg)
         found[name] = where
     return found
@@ -126,6 +145,13 @@ def allowed(path: Path) -> bool:
         return True
     repo = repo_of(target)
     return repo is not None and any(_within(target, repo / child) for child in _WRITABLE)
+
+
+def exempt(path: Path) -> bool:
+    """Whether *path* is outside the policy: Claude's configuration or an agent repo."""
+    target = _resolved(path)
+    roots = [Path.home() / name for name in CLAUDE_HOMES] + list(agent_repos().values())
+    return any(_within(target, _resolved(root)) for root in roots)
 
 
 def temp_of(path: Path) -> Path:
