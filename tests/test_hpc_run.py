@@ -364,6 +364,17 @@ def test_a_test_that_declares_a_longer_timeout_outlives_the_measured_wall(
     assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
 
 
+def test_a_launch_slower_than_the_wall_is_charged_to_no_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Imports and collection are the launch's time, never a test's (measured 2026-11-04: 4-7 s on a workstation).
+
+    PLANTED: the module itself takes 3 s to import under a 1 s wall; the old watch killed the item at launch.
+    """
+    runner = _item_runner(tmp_path, monkeypatch)
+    ids = _tree(tmp_path, 'import time\n\ntime.sleep(3)\n\ndef test_quick():\n    pass\n')
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 1)})
+    assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
+
+
 def test_a_test_spinning_inside_c_with_the_gil_held_is_killed_at_its_wall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
