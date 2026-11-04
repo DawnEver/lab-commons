@@ -9,20 +9,27 @@ written. Nothing resident waits: the retries are driven by gather calls.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import replace
 from typing import Any
 
 from lab_commons.compute import learned
-from lab_commons.compute.learned import OOM_GROWTH
-from lab_commons.compute.measured import Measured
+from lab_commons.compute.measured import OOM_GROWTH, Measured, file_of
 from lab_commons.hpc.cluster import Runner, probe, throttle
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.needsets import needs_of
 from lab_commons.hpc.phases import round_clock
 from lab_commons.hpc.plan import live_throttle
-from lab_commons.hpc.records import files_made, fold, job_measured, read_streams, record_of, stream_sources
+from lab_commons.hpc.records import (
+    files_made,
+    fold,
+    job_measured,
+    read_streams,
+    record_of,
+    round_losses,
+    stream_sources,
+)
 from lab_commons.hpc.run import ACTIVE, RETRIES, NoRoom, load_state, save_state, shares_home, submit_round
 from lab_commons.hpc.sacct import shard_clock
 from lab_commons.hpc.slurm import Snapshot
@@ -52,7 +59,7 @@ def gather_run(
 
     A retry round the QOS has no submit room for (:class:`~lab_commons.hpc.run.NoRoom`) is CAPACITY, never a
     settled run: the folded round's cells stay, the unfinished items wait in ``state['waiting']``, and each
-    later gather tries the submit again. Ada 2026-10-21 (motronics #4684): 42 items finished over ~6 h, the
+    later gather tries the submit again. Ada 2026-10-21 (a downstream run): 42 items finished over ~6 h, the
     retry round hit ``QOSMaxSubmitJobPerUserLimit``, and the run was released "ended without a record". A wait
     past ``policy.stall_minutes`` settles with what DID run, the waiting ids named unrun.
     """
@@ -95,12 +102,15 @@ def gather_run(
         tops={n: band['top_minutes'] * 60 for n, band in band_of.items() if band.get('top_minutes')},
     )
     planned['clock'] = round_clock(clocks, busy)
+    planned['lost'] = round_losses(current['items'], streams, shards=planned['shards'], walls=walls, states=states)
     planned['walls_s'] = walls
     state['measured'] = measured.record()
     learned.learn({'repo': state['repo'], **state['measured']})
     timed_out = 'TIMEOUT' in states.values()
     oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
-    state['grown'] = grown_after(current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom)
+    state['grown'] = grown_after(
+        current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom, taught=measured.taught
+    )
     if pending and (len(state['rounds']) <= RETRIES or (oom and current['ceiling'])):
         grant = next(g for g in machine.grants if g.account == account)
         snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
@@ -225,27 +235,33 @@ def grown_after(
     grown: Mapping[str, float],
     *,
     oom: bool,
+    taught: Collection[str] = frozenset(),
 ) -> dict[str, float]:
-    """The run's memory growth per FILE after a round: a KILLED item's files grow, a finished one's reset.
+    """The run's memory growth per node ID after a round: the id a kill CUT grows, an id that finished resets.
 
     In a round that ran out of memory, an item left unfinished in a shard that did not time out was killed,
-    and each of its files asks :data:`~lab_commons.compute.learned.OOM_GROWTH` times more next round, never
-    every later item (Ada 2026-10-19: one heavy file's kill doubled every task of the part). A file whose
-    item finished every id outside an OUT_OF_MEMORY shard, and none of whose items was killed, is back at its
-    measured peak (:meth:`Measured.learn` keeps it): its growth is dropped.
+    and the id it was running -- its first id without a cell -- asks :data:`~lab_commons.compute.measured.OOM_GROWTH`
+    times more next round. Nothing else does: neither every later item (Ada 2026-10-19: one heavy file's kill
+    doubled every task of the part) nor the item's other ids, which finished or never started (run
+    4fb97faa904f: 13 light items of one killed task were doubled). An id that got a cell outside an
+    OUT_OF_MEMORY shard, and was cut by no kill, is back at its measured peak: its growth is dropped. A cut id
+    whose kill already floored its need at the read times ``OOM_GROWTH`` -- the id, or its one file, in
+    *taught* (:meth:`Measured.learn`) -- drops its growth too, since the read held every earlier growth: the
+    growth is applied once.
     """
     after = dict(grown)
-    killed: set[str] = set()  # a file grows ONCE a round, however many of its items were killed
+    cut: set[str] = set()  # an id grows ONCE a round
     finished: set[str] = set()
     for index, item in enumerate(items):
-        files = {node.split('::', maxsplit=1)[0] for node in item['ids']}
         shard = states.get(shard_of[index], '')
-        if all(node in cells for node in item['ids']) and shard != 'OUT_OF_MEMORY':
-            finished |= files
-        elif oom and shard != 'TIMEOUT':
-            killed |= files
-    for name in finished - killed:  # a kill wins: a finished sibling item never resets its file (Ada 2026-10-24)
-        after.pop(name, None)
-    for name in killed:
-        after[name] = after.get(name, 1.0) * OOM_GROWTH
+        rest = [node for node in item['ids'] if node not in cells]
+        if shard != 'OUT_OF_MEMORY':
+            finished |= {node for node in item['ids'] if node in cells}
+        if rest and oom and shard != 'TIMEOUT':
+            cut.add(rest[0])
+    known = {node for node in cut if node in taught or file_of(node) in taught}
+    for node in (finished - cut) | known:
+        after.pop(node, None)
+    for node in cut - known:
+        after[node] = after.get(node, 1.0) * OOM_GROWTH
     return after

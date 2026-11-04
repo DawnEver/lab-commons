@@ -9,7 +9,7 @@ accessed: 2026-10-21
 
 # PLAN: a short, robust toolchain (user-approved 2026-10-21)
 
-Scope: lab-commons, dev-lab (new), ai-lab, cc-market, cc-config, and every consumer (motronics-studio,
+Scope: lab-commons, dev-lab (new), ai-lab, cc-market, cc-config, and every consumer (consumer-c,
 consumer-a, numerics-lab, consumer-b). Principles: first principles, no historical baggage, Occam, single
 source of truth, layered decoupling, names match, no backward compatibility, progressive disclosure.
 
@@ -33,7 +33,7 @@ merges it; every failure is a status on the PR.
 | R3 | heterogeneous fleet; failures only in host logs | Ada QOS discarded a 6 h run; WS2 MAX_PATH trees; diagnosis by ssh |
 | R4 | the review spans four repos, machine paths and two merge implementations | `merge.mjs` (cc-market) and `rules.py` (ai-lab) both merge findings; an empty context gave a silent HTTP 400 |
 | R5 | configuration in many sources | pyproject tables, machine config, rendered files, cc-config settings, hook TOML |
-| R6 | PRs fragment and stack | 28 open motronics PRs; one stalled base blocked a dozen |
+| R6 | PRs fragment and stack | 28 open a consumer PRs; one stalled base blocked a dozen |
 | R7 | rule and module sprawl | 62 rules, 231 dev modules, 47 forge modules (~10k lines), size-only splits |
 | R8 | agents cannot verify locally | `measure` refused for memory in nearly every agent run |
 | R9 | concurrency decided per call site | G memory-starved by parallel runs that each sized themselves |
@@ -52,7 +52,7 @@ without a PR status.
 The forge and the hooks log every refusal and every hand action (one JSONL per kind).
 
 ### P1 stop the bleeding (in flight)
-- Land the 2026-10-21 PRs: lab-commons #236 #237 #242 #243 #244 #246; motronics #4684 #4685 #4660 #4681 then
+- Land the 2026-10-21 PRs: lab-commons #236 #237 #242 #243 #244 #246; consumer PRs then
   the rest; numerics-lab #18; ai-lab #29 #31.
 - ONE SESSION, ONE PR per repo. The launcher issues a session id (`LAB_SESSION`) for Claude, codex and ccds;
   the commit-msg hook writes `Lab-Session:`; `forge pr create` and the pre-push of a new `pr/*` refuse a
@@ -71,7 +71,7 @@ The forge and the hooks log every refusal and every hand action (one JSONL per k
 - Tables that belong to dev-lab are renamed `[tool.dev_lab.*]` in the same merge as the imports; no
   read-time upgrade.
 - Cut-over day: forge hosts install dev-lab and switch serving; consumers switch in one merge each
-  (numerics-lab, ai-lab, consumer-b, consumer-a, motronics); lab-commons releases without the moved modules.
+  (numerics-lab, ai-lab, consumer-b, consumer-a, consumer-c); lab-commons releases without the moved modules.
   Superseded heads are not tested with the old tool.
 - Versions: the machine tool self-updates each forge tick; a consumer venv carries dev-lab in uv.lock,
   relocked by auto-sync. `dev-lab>=X` rises only in the PR that first uses a new API; a push checks only
@@ -144,7 +144,7 @@ Each amendment resolves a place where this plan and a later user ruling, or the 
 | A2 | P2: "rendered family files are generated at bootstrap and not committed, except .gitignore" | every repo commits `.claude/hooks/deny-rules.json` and `.claude/settings.json`; a hook must be live in a fresh clone before any bootstrap runs (the guard protects the bootstrap itself) | proposed: keep the agent-guard files COMMITTED (they are the guard of the first command), render-checked by the guard famtest; every other rendered family file follows the plan (generated, not committed) |
 | A3 | P2: dev-lab tables renamed `[tool.dev_lab.*]` | not done; `[tool.lab_commons.*]` still names dev-lab's tables (review, integrator, branchset, hooks, tests, hpc) | do it as written, in one merge per repo, no read-time upgrade (names match reality) |
 | A4 | P2: "the machine tool self-updates each forge tick" | Ada's dev-lab checkout refreshes per tick, its venv only on redeploy (three manual redeploys on 2026-10-26) | the kit tick rebuilds the kit venv when its lock key moved (the deploy's own keyed build, reused) |
-| A5 | P3: local keeps only irreversible-harm and second-scale checks; branch set on the forge only (ruling 2026-10-24) | the forge judged only PR heads, so 38 lane/feat branches without a PR reached motronics origin; the push-time ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES returned (dev-lab d38e583, user challenged) | branch namespace is an irreversible-harm check (a pushed ref is public), so it stays local; P3's guard-by-guard review uses the P0 fire/false-positive rates |
+| A5 | P3: local keeps only irreversible-harm and second-scale checks; branch set on the forge only (ruling 2026-10-24) | the forge judged only PR heads, so 38 lane/feat branches without a PR reached a consumer origin; the push-time ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES returned (dev-lab d38e583, user challenged) | branch namespace is an irreversible-harm check (a pushed ref is public), so it stays local; P3's guard-by-guard review uses the P0 fire/false-positive rates |
 | A6 | P5: "a large share of the Windows fleet can be RESERVED for one task (owner, share, end time)" | user rulings 2026-10-25/26: no fixed reservation; people declare use with `box claim`; seat_margin and any "share" deleted | replace with: a task declares its use as a `box claim` (cpu, mem, seats, wall, why); the forge uses only what lies outside declared claims |
 | A7 | P5: "integrator back door: one named back door, who/why recorded on the PR" | in practice the integrator lands rounds by a `Break-Glass:` merge trailer on integrate/main; nothing is recorded on the PRs it carries | the back door is the Break-Glass merge; its merge also posts one comment on each PR it carries (who, why, merge sha) |
 | A8 | P5: `forge try <paths>` | not built | build after #413 P1 (it is a demand on the engine that never waits) |

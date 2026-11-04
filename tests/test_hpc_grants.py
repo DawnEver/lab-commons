@@ -374,7 +374,7 @@ def test_the_retired_workstation_key_is_refused_by_name() -> None:
 
 
 def test_sbatch_asks_for_every_declared_partition_that_admits_the_shard(tmp_path: Path) -> None:
-    """Array 7660516 went to ``shortq`` alone and pended for hours while ``defq`` had idle nodes."""
+    """Array 1000001 went to ``shortq`` alone and pended for hours while ``defq`` had idle nodes."""
     _, plan = allocate(500, Cost(seconds=60), [(GRANT, _snap())], session=WIDE, policy=Policy())
     assert plan.partitions == ('shortq', 'defq')
     script = render_script(plan, Config(job=JobSpec(workdir=str(tmp_path))), '~/r')

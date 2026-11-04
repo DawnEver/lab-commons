@@ -1,16 +1,19 @@
 """An item is ONE pytest process over all its files: its memory and its wall are sized as a whole.
 
-dev-lab #493 (ezzls2, 7 days): ~10 tasks a run of motronics ``base`` died at 1-2 GB running 8-121 files whose
+dev-lab #493 (one account, 7 days): ~10 tasks a downstream ``base`` run died at 1-2 GB running 8-121 files whose
 learned peaks were 0.5-0.8 GB -- the ask was the heaviest file's, the process held them all. And a TIMEOUT
 raised only the id the wall cut, so an item killed at 57 min was re-asked short and killed again at 110 min.
 """
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from lab_commons.compute.measured import Measured, memory_band
+from lab_commons.compute.measured import OOM_GROWTH, TIMEOUT_GROWTH, Measured, file_of, memory_band
 from lab_commons.hpc.config import Cost, Policy
+from lab_commons.hpc.pytest_item import read_stream
 
 _COST, _POLICY = Cost(seconds=120, mem_gb=0.1), Policy(safety=1.0)
 
@@ -87,4 +90,110 @@ def test_an_oom_kill_still_floors_only_the_interrupted_id() -> None:
     measured = Measured()
     folded = {'cells': {}, 'seconds': {}, 'done': None}
     measured.killed(['a.py::cut', 'a.py::b'], folded, spent=600.0)
-    assert measured.floors == {'a.py::cut': 600.0}
+    assert measured.floors == {'a.py::cut': 600.0}, 'no close line names the kill: the floor is what it ran'
+
+
+# -- a killed item learns what it needed (run 4fb97faa904f, 2026-10-30) ----------------------------------------
+
+_SDM = 'tests/unit/workflow/test_back_emf_full_matrix.py::test_back_emf[spm_slotted-sdm-A1]'
+_FEA = 'tests/unit/workflow/test_back_emf_full_matrix.py::test_back_emf[spm_slotted-fea-A1]'
+
+
+def _stream(*lines: dict[str, object]) -> str:
+    """An item's ``.lab-ci/*-r*.jsonl`` stream, as the item plugin writes it."""
+    return '\n'.join(json.dumps(line) for line in lines)
+
+
+def _killed_at_498s(ids: list[str], peak_mb: float = 1351.0) -> dict[str, object]:
+    """The recorded shape: the fea id passed in 3.1 s, the sdm id started and the cgroup OOM-killed the item."""
+    return read_stream(
+        _stream(
+            {'start': ids[0]},
+            {'id': ids[0], 'outcome': 'passed', 's': 3.1},
+            {'start': ids[1]},
+            {'done': -9, 'wall': 498.0, 'peak_mb': peak_mb},
+        ),
+        ids,
+    )
+
+
+def test_an_oom_killed_item_floors_its_cut_id_at_the_wall_it_died_at_grown() -> None:
+    """Run 4fb97faa904f: ``back_emf[spm_slotted-sdm-A1]`` ran 498 s before its OOM kill and learned a 38.3 s floor.
+
+    ``learn`` booked the whole killed wall as the file's overhead, ``killed`` subtracted it back as explained.
+    """
+    ids = [_FEA, _SDM]
+    measured = Measured()
+    folded = _killed_at_498s(ids)
+    measured.learn(ids, folded)
+    measured.killed(ids, folded, spent=498.0)
+    assert measured.overheads == {}, 'a killed wall is no overhead: nothing in it closed'
+    assert measured.floors[_SDM] >= (498.0 - 3.1) * TIMEOUT_GROWTH
+    assert sum(measured.estimate([[_SDM]], _COST)[0]) >= (498.0 - 3.1) * TIMEOUT_GROWTH
+
+
+def test_a_finished_item_still_learns_its_true_overhead() -> None:
+    """PLANTED CONTROL: the same item CLOSING (``done`` 0) books its wall minus its tests as the file's overhead."""
+    ids = [_FEA, _SDM]
+    measured = Measured()
+    stream = _stream(
+        {'start': _FEA},
+        {'id': _FEA, 'outcome': 'passed', 's': 3.1},
+        {'start': _SDM},
+        {'id': _SDM, 'outcome': 'passed', 's': 450.0},
+        {'done': 0, 'wall': 498.0, 'peak_mb': 2100.0},
+    )
+    measured.learn(ids, read_stream(stream, ids))
+    assert measured.overheads == {file_of(_SDM): pytest.approx(498.0 - 453.1, rel=1e-12, abs=1e-9)}
+
+
+def test_a_heavy_id_in_a_light_parametrized_file_is_priced_by_its_own_peak_floor() -> None:
+    """Run 4fb97faa904f: the sdm cases of ``test_back_emf_full_matrix.py`` need 2.1-6.4 GB; the file is 1351 MB.
+
+    A per-FILE peak cannot say it; a per-ID peak floor does, and only for the id it names.
+    """
+    measured = Measured(peaks_mb={file_of(_SDM): 1351.0}, id_peaks_mb={_SDM: 6400.0})
+    policy = Policy(safety=1.5)
+    assert measured.item_gb([_SDM], _COST, policy) == pytest.approx(6400.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
+    assert measured.item_gb([_FEA], _COST, policy) == pytest.approx(1351.0 * 1.5 / 1024, rel=1e-12, abs=0.0), (
+        'PLANTED CONTROL: its light sibling keeps the file peak'
+    )
+    assert Measured.of(measured.record()).id_peaks_mb == {_SDM: 6400.0}, 'the record carries it'
+
+
+def test_an_id_that_finishes_drops_its_peak_floor() -> None:
+    """Like a duration floor: once the id finished, its file's measured peak covers it."""
+    measured = Measured(id_peaks_mb={_SDM: 6400.0, _FEA: 3000.0})
+    stream = _stream({'id': _SDM, 'outcome': 'passed', 's': 450.0}, {'done': 0, 'wall': 460.0, 'peak_mb': 5000.0})
+    measured.learn([_SDM], read_stream(stream, [_SDM]))
+    assert measured.id_peaks_mb == {_FEA: 3000.0}
+    assert measured.peaks_mb == {file_of(_SDM): 5000.0}
+
+
+def test_a_one_file_oom_kill_floors_its_files_peak_at_the_limit_grown() -> None:
+    """Run 4fb97faa904f: a one-file kill taught the ~limit it read, so the next run asked limit x 1.5 and died again.
+
+    The read is the limit the cgroup killed at, not the need: the file's floor is that times ``OOM_GROWTH``.
+    """
+    ids = [_FEA, _SDM]
+    measured = Measured(peaks_mb={file_of(_SDM): 900.0})
+    measured.learn(ids, _killed_at_498s(ids, peak_mb=1351.0))
+    assert measured.peaks_mb == {file_of(_SDM): 1351.0 * OOM_GROWTH}
+    known = Measured(peaks_mb={file_of(_SDM): 4000.0})
+    known.learn(ids, _killed_at_498s(ids, peak_mb=1351.0))
+    assert known.peaks_mb == {file_of(_SDM): 4000.0}, 'PLANTED CONTROL: a kill below a known peak lowers nothing'
+
+
+def test_a_multi_file_oom_kill_floors_only_its_cut_id() -> None:
+    """Which file held the memory is unknown, but the id in flight is known: it alone carries the grown limit."""
+    other = 'tests/unit/workflow/test_cogging.py::test_cogging'
+    ids = [_FEA, _SDM, other]
+    measured = Measured(peaks_mb={file_of(_SDM): 900.0, file_of(other): 300.0})
+    measured.learn(ids, _killed_at_498s(ids, peak_mb=2048.0))
+    assert measured.id_peaks_mb == {_SDM: 2048.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {file_of(_SDM): 900.0, file_of(other): 300.0}, 'no file is priced by the kill'
+    policy = Policy(safety=1.0)
+    assert measured.item_gb([_FEA], _COST, policy) == pytest.approx(900.0 / 1024, rel=1e-12, abs=0.0), (
+        'PLANTED CONTROL: the finished sibling keeps its file peak'
+    )
+    assert measured.item_gb([_SDM], _COST, policy) == pytest.approx(2048.0 * OOM_GROWTH / 1024, rel=1e-12, abs=0.0)

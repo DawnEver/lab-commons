@@ -11,6 +11,7 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
     timeout_s = { incremental = 300, full = 3000 }          # pytest --timeout per run scope (absent: the repo's own)
     item_wall = { multiple = 10, floor_s = 300, unmeasured_s = 3600 }  # per-test kill bound (these are the defaults)
+    priced = "tests/priced.toml"                            # measured peaks/walls, no margin (read_priced)
 
 A venv lives in ``~/ci/envs/<env key>`` and a native build in ``~/ci/native/<native key>``; each sha is
 only a ``git worktree`` whose ``source_roots`` reach the venv through ``PYTHONPATH`` -- no per-sha
@@ -33,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import math
 import shutil
+import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Final
@@ -49,6 +51,7 @@ __all__ = [
     'builds_at',
     'key_of',
     'read_builds',
+    'read_priced',
 ]
 
 _GIT: Final = shutil.which('git') or 'git'
@@ -76,7 +79,7 @@ class ItemWall:
     kill doubles (:meth:`lab_commons.compute.measured.Measured.killed`), so ``multiple`` times it grows without
     bound. Ada 2026-10-24..26: eight forge jobs each held a core 34-41 h on one hung winding test whose wall read
     776553..1051465 s -- nine to twelve days, past every Slurm limit, so the runner's kill never fired. Two hours
-    is twenty times the slowest test the motronics suite measured passing (~11 min) and a fraction of any shard's
+    is twenty times the slowest test a downstream suite measured passing (~11 min) and a fraction of any shard's
     wall; a test needing more is a test to split, not a node to hold.
     """
 
@@ -108,6 +111,9 @@ class Builds:
     timeout_s: dict[str, int] = field(default_factory=dict)
     #: Repository paths a job's artifact carries beside the source roots (:mod:`lab_commons.hpc.artifact`).
     artifact_paths: tuple[str, ...] = ()
+    #: The repo path of its PRICED FLOORS (:func:`read_priced`), and what that file holds at the commit.
+    priced: str = ''
+    priced_floors: dict[str, dict[str, float]] = field(default_factory=dict)
     #: The per-test wall the item runner kills a hung test at (:class:`ItemWall`).
     item_wall: ItemWall = field(default_factory=ItemWall)
 
@@ -128,6 +134,40 @@ def _item_wall(raw: dict[str, object]) -> ItemWall:
         msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: floor_s may not pass ceiling_s'
         raise InvalidDeclaration(msg)
     return wall
+
+
+_PRICE_KEYS: Final = frozenset({'mem_gb', 'wall_s'})
+
+
+def read_priced(text: str, path: str) -> dict[str, dict[str, float]]:
+    """A repo's PRICED FLOORS, the TOML at *path* (``[tool.lab_commons.hpc] priced``), refused by name if malformed.
+
+    Each key is a test node id or a test file, each value ``{ mem_gb = .., wall_s = .. }`` (either or both): the
+    RAW MEASURED peak GB and wall seconds, from a measurement the file's comments cite, with NO margin. A plan
+    reads them as floors (:meth:`lab_commons.compute.measured.Measured.floored`), exactly as it reads a learned
+    peak, and applies its ONE safety factor (:attr:`lab_commons.hpc.config.Policy.safety`) -- a declared margin
+    on top is the same fact in two places and asks ~2.25x (user ruling 2026-10-31). Round 0 thus asks what a
+    host would otherwise learn only by killing it (run 4fb97faa904f).
+    """
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as broken:
+        msg = f'{path}: not TOML ({broken})'
+        raise InvalidDeclaration(msg) from broken
+    floors: dict[str, dict[str, float]] = {}
+    for key, price in data.items():
+        if '.py' not in key.split('::', maxsplit=1)[0] or not isinstance(price, dict) or not price:
+            msg = f'{path}: {key!r} must be a test file or node id priced as {{ mem_gb = .., wall_s = .. }}'
+            raise InvalidDeclaration(msg)
+        if unknown := sorted(set(price) - _PRICE_KEYS):
+            msg = f'{path}: {key!r} has unknown key(s) {unknown}; a price is {sorted(_PRICE_KEYS)}'
+            raise InvalidDeclaration(msg)
+        bad = sorted(k for k, v in price.items() if isinstance(v, bool) or not isinstance(v, int | float) or v <= 0)
+        if bad:
+            msg = f'{path}: {key!r} {bad} must be positive numbers'
+            raise InvalidDeclaration(msg)
+        floors[key] = {k: float(v) for k, v in price.items()}
+    return floors
 
 
 _NO_PROJECT: Final = '--no-install-project'
@@ -161,6 +201,7 @@ def read_builds(text: str) -> Builds:
         native_build=str(native.get('build', '')),
         timeout_s=dict(raw.get('timeout_s', {})),
         item_wall=_item_wall(dict(raw.get('item_wall', {}))),
+        priced=str(raw.get('priced', '')),
     )
     bad = {k: v for k, v in builds.timeout_s.items() if k not in SCOPES or not isinstance(v, int) or v <= 0}
     if bad:
@@ -229,6 +270,18 @@ def builds_at(repo: Path, sha: str, *, python: str) -> Builds:
     if not builds.install:
         msg = f'{sha[:12]} declares no [tool.lab_commons.hpc] install, e.g. install = "uv sync --extra dev"'
         raise ValueError(msg)
+    if builds.priced:
+        shown = _door.run(
+            [_GIT, '-C', str(repo), 'show', f'{sha}:{builds.priced}'],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=False,
+        )
+        if shown.returncode:
+            msg = f'{sha[:12]} declares [tool.lab_commons.hpc] priced = {builds.priced!r}, which it does not carry'
+            raise InvalidDeclaration(msg)
+        builds = replace(builds, priced_floors=read_priced(shown.stdout, builds.priced))
     oids = _oids(repo, sha, builds.dependency_inputs) if builds.dependency_inputs else {'commit': sha}
     env_key = key_of(oids, builds.install, python, *builds.needs)
     native_key = ''

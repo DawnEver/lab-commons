@@ -34,6 +34,7 @@ from lab_commons.compute.presence import (
     refresh,
     renew,
 )
+from lab_commons.compute.probe import OS_NAMES
 from lab_commons.compute.toolchecks import CHECKS, Check, femm_find, matlab_find, matlab_version, simba_find
 
 NOW = datetime(2026, 10, 16, 12, tzinfo=UTC)
@@ -430,3 +431,7 @@ def test_a_re_probe_that_crashes_keeps_the_stale_reading_and_raises_nothing(tmp_
     one = renew('femm', checks={'femm': check}, state=state, now=NOW + TTL + timedelta(seconds=1))
     assert one.evidence[-1].source == 'ttl', 'still the stale reading, never a crash cached as absent'
     assert state.read_text(encoding='utf-8') == before
+
+
+def test_the_toolchecks_os_map_is_the_probe_map() -> None:
+    assert toolchecks._SYSTEMS is OS_NAMES

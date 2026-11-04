@@ -7,8 +7,8 @@ accessed: 2026-10-22
 
 # A consumer lends a named capacity to the box ledger (`Capacity.lent`)
 
-- NEED (motronics, 2026-10-22): JMAG Job System node slots (`WS1 = 4, WS2 = 2`) must be shared by every
-  sweep process on a machine, freed when a process dies, and counted once. motronics had grown a second
+- NEED (a consumer, 2026-10-22): JMAG Job System node slots (`WS1 = 4, WS2 = 2`) must be shared by every
+  sweep process on a machine, freed when a process dies, and counted once. a consumer had grown a second
   ledger for them (an OS file-lock `SlotPool` beside `box.sqlite`). The box ledger already had everything but
   the capacity: seats were sized only by the machine file's `[capabilities]`.
 - CHOSEN: `Capacity.lent({'<kind>:<instance>': n})` -- a capacity of lent resources alone (no cores, memory).

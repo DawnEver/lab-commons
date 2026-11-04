@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
+from lab_commons.hpc.affinity import place
 from lab_commons.hpc.artifact import enter_lines, require
 from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, submit
 from lab_commons.hpc.config import Config
@@ -132,7 +133,7 @@ def tiered(
     span; any other ``ValueError`` is the request's defect and propagates.
     """
 
-    def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
+    def spread(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
         return span(
             n_items,
             config.cost,
@@ -142,6 +143,9 @@ def tiered(
             paging=machine.paging,
             rerun_safe=config.job.rerun_safe,
         )
+
+    def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
+        return place(candidates, machine.affinity, spread)
 
     costed = [g for g in grants if g.costed]
     tier = [g for g in machine.grants if not g.costed]

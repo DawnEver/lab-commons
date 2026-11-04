@@ -45,7 +45,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.durable import durable_text
-from lab_commons.hpc import allocation, clean
+from lab_commons.hpc import affinity, allocation, clean
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -377,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run(parser, args)
     machine = load_grants()
     if args.verb in {'plan', 'submit', 'retry'}:
-        machine = allocation.resolve(machine)
+        machine = affinity.resolve(allocation.resolve(machine))
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
     if args.wait and args.verb != 'gather':

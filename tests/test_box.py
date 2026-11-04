@@ -35,6 +35,7 @@ from lab_commons.box import (
 )
 from lab_commons.box.demand import checked, cores, mem_bytes, seats
 from lab_commons.box.ledger import _decide
+from lab_commons.box.machine import own_reserve, reserve_table
 from lab_commons.box.supply import Reading
 from lab_commons.compute.model import Demand
 
@@ -86,7 +87,7 @@ def test_a_demand_for_nothing_is_still_refused() -> None:
 
 @pytest.mark.usefixtures('box')
 def test_a_coreless_claim_is_admitted_while_another_claim_holds_every_core() -> None:
-    """D10 (motronics, 2026-10-23): a held solver claim never queues a stage that asks no core."""
+    """D10 (a downstream repo, 2026-10-23): a held solver claim never queues a stage that asks no core."""
     with (
         hold(*_demand(cpu=4, mem_gb=1.0), 'solver', queue_s=0.2, **_ON),
         hold(*_demand(cpu=0, mem_gb=1.0, seats={'jmag': 1}), 'prepare', queue_s=0.2, **{**_ON, 'key': 'p'}),
@@ -259,10 +260,17 @@ def test_capacity_reads_the_reserve_margins_compute_reads(tmp_path: Path, monkey
     loose = Capacity.read()
     config.write_text('[reserve]\ncpu_margin = 2\nmem_margin = 0.5\n[capabilities.jmag]\nseats = 3\n', encoding='utf-8')
     tight = Capacity.read()
-    assert loose.cpu - tight.cpu == pytest.approx(1, abs=1e-9)  # cores
+    host = float(os.cpu_count() or 1)
+
+    def kept(table: dict[str, float]) -> float:
+        return own_reserve({'cpu': host, 'mem_gb': 0.0}, reserve_table(table))['cpu']
+
+    assert loose.cpu == pytest.approx(host - kept({'cpu_margin': 1}), abs=1e-9)  # cores
+    assert tight.cpu == pytest.approx(host - kept({'cpu_margin': 2}), abs=1e-9)  # cores
     assert tight.mem_bytes < loose.mem_bytes
     assert loose.seats == {'jmag': 3}
-    assert loose.cpu == pytest.approx((os.cpu_count() or 1) - 1, abs=1e-9)  # cores
+    config.write_text('[reserve]\ncpu_margin = 0.5\ncpu_margin_share = 1\n', encoding='utf-8')
+    assert Capacity.read().cpu == pytest.approx(host - min(0.5, host), abs=1e-9), 'the share is read, not assumed'
 
 
 def _external_rows(path: Path) -> list[tuple[int, int]]:
@@ -511,7 +519,7 @@ def test_a_waiter_the_box_can_reach_is_not_delayed_by_a_later_demand(box: Path) 
 
 
 def test_a_liveness_probe_runs_outside_the_write_lock(box: Path, tmp_path: Path) -> None:
-    """2026-10-24, motronics Luce maps: 7 of 8 maps stopped on ``database is locked``.
+    """2026-10-24, a downstream repo's loss maps: 7 of 8 maps stopped on ``database is locked``.
 
     The reaper ran each external claim's probe (up to PROBE_S) INSIDE ``BEGIN IMMEDIATE``, so N gone clients held
     the write lock N x PROBE_S, past every other process's busy timeout. The probe here asks for that lock itself.

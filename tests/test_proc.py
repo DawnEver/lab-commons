@@ -18,6 +18,7 @@ import time
 
 import pytest
 
+from lab_commons import _proc_darwin, _proc_linux, proc
 from lab_commons._proc_darwin import parse_ps_rows, parse_vm_stat
 from lab_commons._proc_linux import stat_start_time
 from lab_commons.liveness import creation_stamp
@@ -210,4 +211,43 @@ def test_a_linux_stat_line_yields_its_start_time_even_with_a_paren_in_the_name()
 
 def test_this_process_has_a_creation_stamp_wherever_the_kernel_offers_one() -> None:
     stamp = creation_stamp(os.getpid())
-    assert (stamp is None) == (sys.platform == 'darwin'), 'Windows and Linux must refute a recycled pid'
+    assert stamp is not None, 'Windows, Linux and macOS must each refute a recycled pid'
+
+
+class TestDarwinZombie:
+    """macOS has no ``/proc``: a zombie is read from ``ps -o stat=``, stubbed here so any desk runs it."""
+
+    @pytest.mark.parametrize(('stat', 'zombie'), [('Z+\n', True), ('Z\n', True), ('S+\n', False), (None, False)])
+    def test_a_ps_stat_starting_with_z_is_a_zombie(self, monkeypatch, stat, zombie) -> None:
+        monkeypatch.setattr(_proc_darwin, '_tool', lambda *argv: stat if argv[:3] == ('ps', '-o', 'stat=') else None)
+        assert _proc_darwin.is_zombie(4242) is zombie
+
+    def test_the_posix_reader_is_the_darwin_one_on_darwin(self, monkeypatch) -> None:
+        monkeypatch.setattr(proc.sys, 'platform', 'darwin')
+        assert proc._posix() is _proc_darwin
+        monkeypatch.setattr(proc.sys, 'platform', 'linux')
+        assert proc._posix() is _proc_linux, 'planted control: linux keeps reading /proc'
+
+
+class TestDarwinStartTime:
+    """macOS has no ``/proc/<pid>/stat``: the creation stamp is ``ps -o lstart=``, stubbed so any desk runs it."""
+
+    def test_an_lstart_is_read_as_local_epoch_seconds(self) -> None:
+        expected = int(time.mktime(time.strptime('Thu Oct 30 10:11:12 2026', '%a %b %d %H:%M:%S %Y')))
+        assert _proc_darwin.parse_lstart('Thu Oct 30 10:11:12 2026\n') == expected
+        assert _proc_darwin.parse_lstart('Thu Oct  2 09:01:02 2026') is not None, 'ps pads a one-digit day'
+        assert _proc_darwin.parse_lstart('garbage') is None, 'planted control: an unparsable stamp is unknown'
+
+    def test_the_start_time_asks_ps_for_this_pid(self, monkeypatch) -> None:
+        asked = []
+        monkeypatch.setattr(_proc_darwin, '_tool', lambda *argv: asked.append(argv) or 'Thu Oct 30 10:11:12 2026\n')
+        assert _proc_darwin.start_time(4242) == _proc_darwin.parse_lstart('Thu Oct 30 10:11:12 2026')
+        assert asked == [('ps', '-o', 'lstart=', '-p', '4242')]
+        monkeypatch.setattr(_proc_darwin, '_tool', lambda *_argv: None)
+        assert _proc_darwin.start_time(4242) is None
+
+    def test_the_creation_stamp_asks_the_darwin_reader_on_darwin(self, monkeypatch) -> None:
+        monkeypatch.setattr(proc.sys, 'platform', 'darwin')
+        monkeypatch.setattr(proc.os, 'name', 'posix')
+        monkeypatch.setattr(_proc_darwin, 'start_time', lambda _pid: 1_700_000_000)
+        assert proc._creation_time(4242) == 1_700_000_000

@@ -6,6 +6,7 @@ A serving host's machine file (:mod:`lab_commons.config`) may name the subjects 
     logins = ["YongxuanWu"]   # the forge login a job came from (Candidate.origin)
     hosts = []                # the host card that created it, vouched for by that login (Candidate.origin_host)
     sessions = []             # the ref it was pushed to (Candidate.session)
+    repos = []                # the repository, by its deploy-row name (the last segment of Candidate.repo)
 
 On THAT host, every candidate matching any subject is ordered before every candidate matching none, in
 its claim pass; within each class the score order stands (:func:`lab_commons.compute.model.rank`).
@@ -30,16 +31,17 @@ __all__ = ['PRIORITY_TABLE', 'Priority']
 #: The machine-file table a host declares its priority in.
 PRIORITY_TABLE: Final = 'priority'
 
-_KEYS: Final = ('logins', 'hosts', 'sessions')
+_KEYS: Final = ('logins', 'hosts', 'sessions', 'repos')
 
 
 @dataclass(frozen=True)
 class Priority:
-    """The subjects one host orders first: forge logins, host cards, sessions (refs)."""
+    """The subjects one host orders first: forge logins, host cards, sessions (refs), repositories."""
 
     logins: frozenset[str] = frozenset()
     hosts: frozenset[str] = frozenset()
     sessions: frozenset[str] = frozenset()
+    repos: frozenset[str] = frozenset()
 
     @classmethod
     def of(cls, table: Mapping[str, Any]) -> Priority:
@@ -51,16 +53,22 @@ class Priority:
         return cls(*(frozenset(str(one) for one in table.get(key, ()) if one) for key in _KEYS))
 
     def matches(self, candidate: Candidate) -> bool:
-        """Whether *candidate*'s login, host or session is one this host orders first; ``''`` never matches."""
+        """Whether *candidate*'s login, host, session or repo is one this host orders first; ``''`` never matches."""
         return bool(
             (candidate.origin and candidate.origin in self.logins)
             or (candidate.origin_host and candidate.origin_host in self.hosts)
+            or candidate.repo.rsplit('/', 1)[-1] in self.repos
             or (candidate.session and candidate.session in self.sessions)
         )
 
     def row(self) -> dict[str, list[str]]:
         """As a host card carries it: each subject list, sorted."""
-        return {'logins': sorted(self.logins), 'hosts': sorted(self.hosts), 'sessions': sorted(self.sessions)}
+        return {
+            'logins': sorted(self.logins),
+            'hosts': sorted(self.hosts),
+            'sessions': sorted(self.sessions),
+            'repos': sorted(self.repos),
+        }
 
     def text(self) -> str:
         """How a human reads it: ``logins YongxuanWu; sessions lane/x`` -- ``none`` when nothing is declared."""

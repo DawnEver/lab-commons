@@ -8,6 +8,7 @@ claim that has not grown to its declaration yet still owns the rest. Each test d
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -87,7 +88,8 @@ def test_this_box_reads_a_sane_reading() -> None:
     assert 0 <= reading.idle_cores <= reading.cores + 1e-6  # cores
     assert 0 < reading.available_bytes <= reading.total_bytes
     assert reading.usage[os.getpid()].resident_bytes > 0
-    assert system_cpu_seconds() is not None
+    # proccpu declares no darwin backend: None there (idle then reads as every core), a reading elsewhere
+    assert (system_cpu_seconds() is None) == (sys.platform == 'darwin')
 
 
 # ISSUE #5 (2026-10-19, five deadlocks): a HOLDER's nested ask (a vendor Designer it starts and hands over) is

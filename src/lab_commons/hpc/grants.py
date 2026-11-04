@@ -204,12 +204,29 @@ class Grant:
 
 
 @dataclass(frozen=True)
+class Affinity:
+    """Which accounts produce forge verify parts, and whether research may borrow them (user ruling 2026-10-30).
+
+    Data, never declared here: the forge's host cards carry *verify* and its reader supplies it; *borrow* is the
+    user's unexpired opt-in in the allocation record (:func:`lab_commons.hpc.affinity.resolve`). Each is a
+    grant's ``user``.
+    """
+
+    #: The verify accounts: a research submission never lands on one by default.
+    verify: frozenset[str] = frozenset()
+    #: The user opted in to research borrowing them (:data:`lab_commons.hpc.allocation.RESEARCH_BORROWS_VERIFY`).
+    borrow: bool = False
+
+
+@dataclass(frozen=True)
 class Machine:
     """The session this process submits for, and every grant the machine holds."""
 
     session: Session | None
     grants: tuple[Grant, ...]
     paging: Paging | None = None
+    #: The verify accounts a research submission yields (:mod:`lab_commons.hpc.affinity`); ``None``: none known.
+    affinity: Affinity | None = None
 
     @property
     def comment(self) -> str:

@@ -5,8 +5,16 @@ phases as pytest timed them; ``floors`` -- seconds an id that NEVER FINISHED is 
 because it was still running when its item was killed; ``overheads`` -- seconds per test FILE that are
 not any test's (the interpreter, the imports, module fixtures: an item's wall time minus its tests',
 shared among the item's files so the shares sum back to what was measured); ``peaks_mb`` -- the peak RSS
-of a file's pytest process. A newer measurement replaces an older one; nothing is averaged, because the
-code under test changed between the two. A finished id drops its floor: its duration is now known.
+of a file's pytest process; ``id_peaks_mb`` -- MB an id that never finished is known to need at least, the
+memory twin of ``floors``: one heavy id of a light parametrized file is priced by its own floor, never the
+file's (run 4fb97faa904f: sdm cases needing 2.1-6.4 GB in a file whose peak read 1351 MB).
+A newer measurement replaces an older one; nothing is averaged, because the code under test changed between
+the two. A finished id drops its floors: its duration and peak are now known.
+
+A KILLED WALL IS NO OVERHEAD. Measured 2026-10-30 (run 4fb97faa904f): an item OOM-killed 498 s into one id booked
+the 498 s as its file's overhead, which :meth:`Measured.killed` then subtracted as explained, so the id learned a
+38.3 s floor; its retry was sized at minutes and 7 of the round's 8 failures were TIMEOUTs. Only an item that
+closed by itself measures overhead; a killed one floors its cut id at the time it ran, grown as for a TIMEOUT.
 
 An item's estimate is its files' overheads plus its ids' durations, each id at least its floor; an id
 not yet timed in a file that has others is priced at that file's mean. A file with NOTHING measured is
@@ -18,13 +26,14 @@ so every retry was sized shorter than the wall the last one died at, and 325 ids
 rounds.
 
 A PEAK READ AT A KILL IS THE LIMIT, NOT THE NEED, AND IT IS NO FILE'S PEAK. Measured 2026-10-13 (Ada):
-children OOM-killed at 1 GB read ~1120 MB. A signalled ONE-FILE item keeps that read as its file's FLOOR,
-ungrown -- the next run asks it times the safety, more than the limit it died at -- and never lowers a peak
-already known. The retry's growth is the run's own ``oom`` multiplier, applied ONCE. Measured 2026-10-16
-(Ada): the read was also grown by ``learned.OOM_GROWTH`` and the retry grew it again, so a 20 GB kill was
-re-asked at 120 GB, killed, and taught 240 GB to each of 56 files of ONE multi-file item; every later run
-of the part asked 352 GB a task. A signalled MULTI-file item teaches no peak at all: which file held the
-memory is unknown, and its retry is bisected (:mod:`lab_commons.hpc.run`) until one file says.
+children OOM-killed at 1 GB read ~1120 MB. A signalled item's need is more than that read: it is FLOORED at
+the read times :data:`OOM_GROWTH`, never lowering a peak already known -- a ONE-FILE item's on its file, a
+MULTI-file item's on the id it cut alone (``id_peaks_mb``): which file held the memory is unknown, and its
+retry is bisected (:mod:`lab_commons.hpc.run`) until one file says. Measured 2026-10-30 (run 4fb97faa904f):
+an ungrown read was asked again at the read times the safety, ~1.5x a run, and killed again run after run.
+The growth is applied ONCE: the kill's taught floor is the growth, so the round's own growth
+(:func:`lab_commons.hpc.gather.grown_after`) skips what a kill taught. Measured 2026-10-16 (Ada): a read grown
+twice re-asked a 20 GB kill at 120 GB, and taught 240 GB to each of 56 files of ONE multi-file item.
 The declared ``cost.mem_gb`` is a floor too: the peak is the pytest child's, and the
 task's cgroup also holds the item runner (Ada 2026-10-12: a 150 MB peak priced 225M and 429M, OOM both).
 """
@@ -39,10 +48,14 @@ from typing import Any, Final
 
 from lab_commons.hpc.config import Cost, Policy
 
-__all__ = ['ACCUMULATED_CLASSES', 'TIMEOUT_GROWTH', 'Measured', 'file_of', 'memory_band', 'task_gb']
+__all__ = ['ACCUMULATED_CLASSES', 'OOM_GROWTH', 'TIMEOUT_GROWTH', 'Measured', 'file_of', 'memory_band', 'task_gb']
 
 #: MB per GB, as the plan's memory is written.
 _MB_PER_GB = 1024
+
+#: How much more memory an OOM-KILLED item's need is than the limit it died at: a killed peak's floor, and the
+#: next round's ask of the id the kill cut.
+OOM_GROWTH: Final = 2
 
 #: How much more wall a TIMED-OUT item's next plan asks than the wall it died at, held to the partition max.
 TIMEOUT_GROWTH: Final = 2
@@ -63,15 +76,18 @@ def file_of(node: str) -> str:
 
 @dataclass
 class Measured:
-    """The four measurements; :meth:`of` reads them from a record, :meth:`record` writes them back."""
+    """The five measurements; :meth:`of` reads them from a record, :meth:`record` writes them back."""
 
     durations: dict[str, float] = field(default_factory=dict)
     floors: dict[str, float] = field(default_factory=dict)
     overheads: dict[str, float] = field(default_factory=dict)
     peaks_mb: dict[str, float] = field(default_factory=dict)
+    id_peaks_mb: dict[str, float] = field(default_factory=dict)
     #: The files this instance -- ONE round's fold -- already learned a peak for: within a round a file's peak is
     #: the worst of its items, so a finished sibling never lowers what a killed one read (Ada 2026-10-24).
     _round: set[str] = field(default_factory=set, repr=False, compare=False)
+    #: What this round's kills taught a grown peak floor -- a one-file item's file, a multi-file item's cut id.
+    taught: set[str] = field(default_factory=set, repr=False, compare=False)
 
     @classmethod
     def of(cls, record: dict[str, Any]) -> Measured:
@@ -81,6 +97,7 @@ class Measured:
             floors=dict(record.get('floors', {})),
             overheads=dict(record.get('overheads', {})),
             peaks_mb=dict(record.get('peaks_mb', {})),
+            id_peaks_mb=dict(record.get('id_peaks_mb', {})),
         )
 
     def record(self) -> dict[str, dict[str, float]]:
@@ -90,35 +107,78 @@ class Measured:
             'floors': self.floors,
             'overheads': self.overheads,
             'peaks_mb': self.peaks_mb,
+            'id_peaks_mb': self.id_peaks_mb,
         }
+
+    def floored(self, priced: Mapping[str, Mapping[str, float]]) -> Measured:
+        """A copy raised to a repo's DECLARED floors (``[tool.lab_commons.hpc] priced``); a higher learned value wins.
+
+        A declared value is a RAW MEASUREMENT, read like a learned one: the plan's one safety factor applies to
+        it once, so a declaration never carries a margin of its own (user ruling 2026-10-31).
+
+        A node id's ``mem_gb`` floors its :attr:`id_peaks_mb` and its ``wall_s`` its :attr:`floors`; a file's
+        ``mem_gb`` floors its :attr:`peaks_mb` and its ``wall_s`` its :attr:`overheads` -- the file costs at
+        least that beside its tests. Only a PLAN reads the copy: the learned facts, and the record a run writes
+        back, never carry a declaration (run 4fb97faa904f: heavy ids OOM-killed in round 0 on every host until
+        each had learned them).
+        """
+        floored = Measured.of(self.record())
+        for key, price in priced.items():
+            mem_mb, wall_s = price.get('mem_gb', 0.0) * _MB_PER_GB, price.get('wall_s', 0.0)
+            peaks, walls = (
+                (floored.id_peaks_mb, floored.floors) if '::' in key else (floored.peaks_mb, floored.overheads)
+            )
+            if mem_mb:
+                peaks[key] = max(peaks.get(key, 0.0), mem_mb)
+            if wall_s:
+                walls[key] = max(walls.get(key, 0.0), wall_s)
+        return floored
 
     def learn(self, ids: Sequence[str], folded: dict[str, Any]) -> None:
         """Take one item's folded stream (:func:`lab_commons.hpc.pytest_item.read_stream`).
 
         An item may span several files and pays ONE wall; its overhead is SHARED equally among its files,
         so :meth:`estimate`, which sums the shares, gives the same item back what it measured. Its peak is
-        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak is a floor of
-        its file when it holds ONE, and nobody's when it holds several (the module docstring).
+        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak grown by
+        :data:`OOM_GROWTH` is a floor of its file when it holds ONE, and of the id it cut when it holds several
+        (the module docstring).
         """
         self.durations.update(folded['seconds'])
         for node in folded['seconds']:
             self.floors.pop(node, None)
+            self.id_peaks_mb.pop(node, None)
         done = folded['done']
         if done is None or not ids:
             return
         tests = sum(folded['seconds'].values())
         files = list(dict.fromkeys(file_of(n) for n in ids))
-        overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
         peak = done.get('peak_mb')
         signalled = int(done.get('done', 0)) < 0
-        for name in files:
-            self.overheads[name] = overhead
-        if peak is None or (signalled and len(files) > 1):
+        if not signalled:  # a killed wall holds the cut id's run, not the files' overhead (the module docstring)
+            overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
+            for name in files:
+                self.overheads[name] = overhead
+        if peak is None:
+            return
+        if signalled:
+            self._killed_peak(ids, folded, files, float(peak) * OOM_GROWTH)
             return
         for name in files:
-            floor = self.peaks_mb.get(name, 0.0) if signalled or name in self._round else 0.0
+            floor = self.peaks_mb.get(name, 0.0) if name in self._round else 0.0
             self.peaks_mb[name] = max(floor, float(peak))
             self._round.add(name)
+
+    def _killed_peak(self, ids: Sequence[str], folded: dict[str, Any], files: list[str], need: float) -> None:
+        """Floor a killed item's *need* (MB): on its one file, else on the id it cut; never lower a known floor."""
+        if len(files) == 1:
+            self.peaks_mb[files[0]] = max(self.peaks_mb.get(files[0], 0.0), need)
+            self._round.add(files[0])
+            self.taught.add(files[0])
+            return
+        cut = next((n for n in ids if n not in folded['cells']), None)
+        if cut is not None:
+            self.id_peaks_mb[cut] = max(self.id_peaks_mb.get(cut, 0.0), need)
+            self.taught.add(cut)
 
     def killed(
         self,
@@ -133,8 +193,9 @@ class Measured:
 
         Pytest runs an item's ids in the order given, so the first id without a cell is the one the
         kill interrupted. It took at least *spent* minus the finished ids' durations and the files' known
-        overheads; that is its FLOOR -- twice that when the wall cut it (*timed_out*): it would not have finished
-        within it -- held to *top*, the longest wall any partition grants (seconds): past it is a guess no
+        overheads; that is its FLOOR -- times :data:`TIMEOUT_GROWTH` when the wall cut it (*timed_out*) or a signal
+        closed it (its ``done`` line below 0, the cgroup's OOM killer): it would not have finished within it --
+        held to *top*, the longest wall any partition grants (seconds): past it is a guess no
         partition can host. After an OOM the ids after it never started and keep their estimate; after a
         TIMEOUT the item as a whole is re-priced at no less than *spent* times :data:`TIMEOUT_GROWTH`, held to
         *top* (:meth:`_outgrow`) -- dev-lab #493: only the cut id grew, and a 57 min kill was re-asked short and
@@ -145,7 +206,8 @@ class Measured:
             return
         files = dict.fromkeys(file_of(n) for n in ids)
         explained = sum(folded['seconds'].values()) + sum(self.overheads.get(f, 0.0) for f in files)
-        floor = round((spent - explained) * (TIMEOUT_GROWTH if timed_out else 1), 3)
+        signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
+        floor = round((spent - explained) * (TIMEOUT_GROWTH if timed_out or signalled else 1), 3)
         floor = floor if top is None else min(floor, top)
         if floor > 0:
             self.floors[rest[0]] = max(self.floors.get(rest[0], 0.0), floor)
@@ -240,25 +302,41 @@ class Measured:
     ) -> float:
         """ONE ITEM's memory: ONE pytest process over all its files, so the files ACCUMULATE.
 
-        THE MODEL: each file's peak (learned, else :meth:`prior_mb`; times *grown*, the run's OOM growth of a file
-        whose item was killed, applied to the peak already held to the ``cost.mem_gb`` floor, so a lone file asks
-        ``max(peak x safety, floor) x growth``) is a process of the shared base -- interpreter, pytest, common
-        imports -- plus what the file adds.
+        THE MODEL: each file's peak (learned, else :meth:`prior_mb`, raised to its ids' peak floors; times *grown*,
+        the run's OOM growth of the id a kill cut, applied to that id's peak already held to the ``cost.mem_gb``
+        floor, so a lone id asks ``max(peak x safety, floor) x growth``) is a process of the shared base --
+        interpreter, pytest, common imports -- plus what the file adds.
         The base is the item's lightest peak; the item holds the worst peak plus every other
         distinct peak's growth over the base, times the safety, never under ``cost.mem_gb``. Equal peaks count
         ONCE: a finished multi-file item teaches its one read to every file (:meth:`learn`), one measurement.
         Upper-bounded, not averaged -- modules imported by two files are paid once and counted twice -- because
-        dev-lab #493 (ezzls2, 7 days) measured the worst-file ask too SMALL: ~10 tasks a run killed at 1-2 GB
+        dev-lab #493 (one account, 7 days) measured the worst-file ask too SMALL: ~10 tasks a run killed at 1-2 GB
         running 8-121 files with learned peaks of 0.5-0.8 GB. :meth:`pack` bounds the sum it makes.
         """
-        growth, floor_mb = grown or {}, cost.mem_gb * _MB_PER_GB / policy.safety
-        files = {file_of(n) for n in ids}
-        peaks = sorted({max(self._peak_mb(f), floor_mb) * growth.get(f, 1.0) for f in files}, reverse=True)
+        floor_mb = cost.mem_gb * _MB_PER_GB / policy.safety
+        files = self._file_peaks_mb(ids, floor_mb=floor_mb, grown=grown or {})
+        peaks = sorted(set(files.values()), reverse=True)
         held = peaks[0] + sum(p - peaks[-1] for p in peaks[1:]) if peaks else 0.0
         return task_gb(held / _MB_PER_GB, prior_gb=cost.mem_gb, safety=policy.safety)
 
-    def _peak_mb(self, name: str) -> float:
-        return self.peaks_mb[name] if name in self.peaks_mb else (self.prior_mb(name) or 0.0)
+    def _file_peaks_mb(
+        self, ids: Iterable[str], *, floor_mb: float = 0.0, grown: Mapping[str, float] | None = None
+    ) -> dict[str, float]:
+        """Each file of *ids* at its worst id.
+
+        An id needs its file's peak (learned, else :meth:`prior_mb`) or its own peak floor, never under
+        *floor_mb*, times its *grown*.
+        """
+        growth = grown or {}
+        prior: dict[str, float] = {}
+        peaks: dict[str, float] = {}
+        for node in ids:
+            name = file_of(node)
+            if name not in prior:
+                prior[name] = self.peaks_mb[name] if name in self.peaks_mb else (self.prior_mb(name) or 0.0)
+            need = max(prior[name], self.id_peaks_mb.get(node, 0.0), floor_mb) * growth.get(node, 1.0)
+            peaks[name] = max(peaks.get(name, 0.0), need)
+        return peaks
 
     def prior_mb(self, name: str) -> float | None:
         """The PRIOR peak of an unmeasured file *name* (D5): its measured siblings' median, else the table's.
@@ -280,11 +358,10 @@ class Measured:
         """The worst peak of these nodes' files times *safety*, never under *prior_gb*.
 
         ONE RULE FOR A SLURM TASK AND A BOX WORKER: each is one pytest process over some files. A measured
-        file is its peak; an unmeasured one its :meth:`prior_mb` (siblings' median); with nothing measured
-        at all, *prior_gb* alone stands.
+        file is its peak; an unmeasured one its :meth:`prior_mb` (siblings' median), raised to its ids' peak
+        floors; with nothing measured at all, *prior_gb* alone stands.
         """
-        files = {file_of(n) for n in nodes}
-        peaks = [self.peaks_mb[f] if f in self.peaks_mb else (self.prior_mb(f) or 0.0) for f in files]
+        peaks = self._file_peaks_mb(nodes).values()
         return task_gb(max(peaks, default=0.0) / _MB_PER_GB, prior_gb=prior_gb, safety=safety)
 
 

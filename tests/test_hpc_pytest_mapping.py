@@ -141,3 +141,15 @@ def test_a_live_run_state_of_the_retired_words_is_upgraded_on_read() -> None:
     assert pending is not None
     assert pending.status is Status.PENDING
     assert upgraded(HANDED) is None, 'a handed id is no cell'
+
+
+def test_a_live_run_states_file_keyed_growth_is_read_onto_the_ids_in_flight() -> None:
+    """Before 2026-10-30 a run's ``grown`` was keyed by FILE; a run in flight across the change keys it by id.
+
+    PLANTED CONTROL: an id key is kept as it is, and a file with nothing in flight lands nowhere.
+    """
+    state = {
+        'current': {'items': [{'ids': ['a.py::x', 'a.py::y', 'b.py::z']}]},
+        'grown': {'a.py': 2.0, 'c.py': 4.0, 'b.py::z': 8.0},
+    }
+    assert upgraded_state(state)['grown'] == {'a.py::x': 2.0, 'a.py::y': 2.0, 'b.py::z': 8.0}

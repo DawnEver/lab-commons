@@ -24,7 +24,7 @@ from typing import ClassVar, Final
 import pytest
 
 from lab_commons.compute import learned
-from lab_commons.compute.measured import Measured, memory_band
+from lab_commons.compute.measured import OOM_GROWTH, Measured, file_of, memory_band
 from lab_commons.config import CONFIG_ENV
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
@@ -327,7 +327,10 @@ def test_a_pytest_that_dies_mid_item_names_the_test_it_was_running(
 def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A hang pytest-timeout is not asked to catch: the runner kills the tree, records a timeout, runs the rest."""
+    """A hang pytest-timeout is not asked to catch: the runner kills the tree, records a timeout, runs the rest.
+
+    Sized for load: a 2 s wall (was 3 s) still sits far under the 600 s child and the 60 s bound.
+    """
     runner = _item_runner(tmp_path, monkeypatch)
     body = (
         'import subprocess, sys, time\n\n'
@@ -339,10 +342,10 @@ def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
     )
     ids = _tree(tmp_path, body)
     began = time.monotonic()
-    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 3)})
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 2)})
     assert time.monotonic() - began < 60, 'the hang ended within its wall, not at the scheduler limit'
     assert _words(result['cells']) == {ids[0]: 'ok', ids[1]: 'timeout', ids[2]: 'ok'}, result['tail']
-    assert _whys(result['cells'])[ids[1]].startswith('timeout after 3s')
+    assert _whys(result['cells'])[ids[1]].startswith('timeout after 2s')
     assert ids[1] not in result['seconds'], 'the bound it hit is no measurement of the test'
     assert result['done'] is not None
 
@@ -350,9 +353,12 @@ def test_a_test_that_hangs_past_its_wall_is_killed_named_and_the_item_runs_on(
 def test_a_test_that_declares_a_longer_timeout_outlives_the_measured_wall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A test's own ``@pytest.mark.timeout`` is a declared duration: the outer wall never cuts it shorter."""
+    """A test's own ``@pytest.mark.timeout`` is a declared duration: the outer wall never cuts it shorter.
+
+    Sized for load: sleeping twice the 1 s wall is the whole claim (was four times).
+    """
     runner = _item_runner(tmp_path, monkeypatch)
-    body = 'import time\n\nimport pytest\n\n@pytest.mark.timeout(30)\ndef test_slow():\n    time.sleep(4)\n'
+    body = 'import time\n\nimport pytest\n\n@pytest.mark.timeout(30)\ndef test_slow():\n    time.sleep(2)\n'
     ids = _tree(tmp_path, body)
     result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 1)})
     assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
@@ -363,21 +369,22 @@ def test_a_test_spinning_inside_c_with_the_gil_held_is_killed_at_its_wall(
 ) -> None:
     """A native loop that never yields to the interpreter is killed from outside (Ada 2026-10-24..26).
 
-    pytest-timeout, declared here at 2 s, cannot fire: catastrophic regex backtracking is one C call holding the GIL.
+    pytest-timeout, declared here at 1 s, cannot fire: catastrophic regex backtracking is one C call holding the GIL.
+    Sized for load: the claim needs only declared < wall, so 1 s under a 2 s wall (was 2 s under 4 s).
     """
     runner = _item_runner(tmp_path, monkeypatch)
     body = (
         'import re\n\nimport pytest\n\n'
-        '@pytest.mark.timeout(2)\n'
+        '@pytest.mark.timeout(1)\n'
         'def test_spin():\n    re.match(r"(a+)+$", "a" * 64 + "b")\n\n'
         'def test_after():\n    pass\n'
     )
     ids = _tree(tmp_path, body)
     began = time.monotonic()
-    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 4)})
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 2)})
     assert time.monotonic() - began < 60, 'killed from outside at its wall, not left to the scheduler limit'
     assert _words(result['cells']) == {ids[0]: 'timeout', ids[1]: 'ok'}, result['tail']
-    assert _whys(result['cells'])[ids[0]].startswith('timeout after 4s')
+    assert _whys(result['cells'])[ids[0]].startswith('timeout after 2s')
 
 
 def test_a_normal_item_under_a_wall_passes_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -482,15 +489,17 @@ def test_a_measured_peak_raises_the_memory_and_never_lowers_it_under_the_declare
     ), 'PLANTED CONTROL: over the floor the peak decides'
 
 
-def test_a_peak_read_at_a_kill_is_its_one_files_floor_ungrown_and_never_lowers_a_known_peak() -> None:
+def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_known_peak() -> None:
     """Ada 2026-10-13: 24 children OOM-killed at 1 GB read peaks of ~1120 MB -- the limit, not the need.
 
-    The read is the file's floor as read: the run's own ``oom`` multiplier is the retry's growth, applied once.
+    The read grown by ``OOM_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
+    run and killed again); the round's own growth then skips the file (``taught``), so it is applied once.
     """
-    killed = {'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 1120.0}}
+    killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 1120.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed)
-    assert measured.peaks_mb == {'a.py': 1120.0}
+    assert measured.peaks_mb == {'a.py': 1120.0 * OOM_GROWTH}
+    assert measured.taught == {'a.py'}
     known = Measured(peaks_mb={'a.py': 3493.0})
     known.learn(['a.py::t'], killed)
     assert known.peaks_mb == {'a.py': 3493.0}, 'a kill at a lower limit says nothing new'
@@ -501,19 +510,21 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_ungrown_and_never_lowers_a
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
-    """A killed item of several files says nothing about any one of them.
+    """A killed item of several files says nothing about any one of them -- only about the id it cut.
 
     Ada 2026-10-16: one 56-file item killed at its 120362 MB ask read 120219.2 MB; grown x2, 240438.4 MB
     was taught to all 56 files, and every later run of the part asked 352 GB a task.
 
-    Which file held the memory is unknown, so none is priced by it; the retry bisects the item instead.
+    Which file held the memory is unknown, so none is priced by it; the retry bisects the item instead. The id
+    in flight (here the first, none reported) carries the grown read as its own floor (run 4fb97faa904f).
     PLANTED CONTROL: the same item FINISHING teaches its peak to every file, an upper bound for each.
     """
     ids = [f'tests/sweep/test_{n}.py::t' for n in range(56)]
     measured = Measured(peaks_mb={'tests/sweep/test_0.py': 900.0})
-    measured.learn(ids, {'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 120219.2}})
+    measured.learn(ids, {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 120219.2}})
     assert measured.peaks_mb == {'tests/sweep/test_0.py': 900.0}
-    assert measured.item_gb(ids, Cost(), Policy()) == pytest.approx(900.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
+    assert measured.id_peaks_mb == {ids[0]: 120219.2 * OOM_GROWTH}
+    assert measured.item_gb(ids[1:], Cost(), Policy()) == pytest.approx(900.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
     measured.learn(ids, {'seconds': {}, 'done': {'done': 0, 'wall': 30.0, 'peak_mb': 3000.0}})
     assert set(measured.peaks_mb.values()) == {3000.0}
     assert len(measured.peaks_mb) == 56
@@ -824,6 +835,31 @@ def test_each_memory_class_is_its_own_array_at_its_own_files_peak() -> None:
     assert '--array=1%' in light
 
 
+def test_a_declared_floor_sizes_round_0_and_never_reaches_the_record() -> None:
+    """PLANTED, run 4fb97faa904f: nothing learned, the commit declares tests/a.py::t1 needs 20 GB for 600 s.
+
+    Round 0 asks it (20 GB x 1.5) in its own class with its declared wall; the undeclared file keeps the floor
+    (the control); the run's measured facts -- what the record teaches every host -- carry no declaration.
+    """
+    fake = FakeRunCluster()
+    spec = RunSpec(
+        sha=SHA,
+        repo_url='https://g/r.git',
+        builds=Builds(
+            install='true', env_key='k1', priced_floors={'tests/a.py::t1': {'mem_gb': 20.0, 'wall_s': 600.0}}
+        ),
+        vocabulary=Vocabulary(('win',)),
+    )
+    state = submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
+    asks = _asks(state)
+    assert asks[('tests/a.py::t1', 'tests/a.py::t2')] == 30720
+    assert asks[('tests/b.py::t3', 'tests/b.py::t4', 'tests/b.py::t5')] == 1024
+    [manifest] = fake.manifests
+    assert manifest['items'][0]['walls']['tests/a.py::t1'] == 6000, 'the declared wall bounds the id'
+    assert 'tests/a.py::t1' not in state['measured']['id_peaks_mb']
+    assert 'tests/a.py::t1' not in state['measured']['floors']
+
+
 def test_the_live_throttle_is_the_ceilings_free_room_bounded_by_the_tasks_and_the_qos() -> None:
     """Ada 2026-10-19: 96 cores a grant, 22 single-core tasks running -- arrays pended on their own ``%N``.
 
@@ -854,18 +890,18 @@ def test_a_gather_raises_the_throttle_when_the_accounts_other_jobs_end() -> None
     assert json.loads(fake.state)['current']['bands'][0]['throttle'] == shards, 'kept, so the next gather compares'
 
 
-def test_an_oom_grows_only_the_files_of_the_killed_item_and_a_file_that_finished_resets() -> None:
+def test_an_oom_grows_only_the_id_the_kill_cut_and_an_id_that_finished_resets() -> None:
     """Ada 2026-10-19: an OOM doubled the ask of EVERY later item of the run, so one hog sized them all.
 
-    a.py's item is OOM-killed in round 0 and b.py's finishes: only a.py grows x2. When a.py then
-    finishes, its growth is dropped -- it asks its measured peak again.
+    a.py's item is OOM-killed in round 0 while running t2, and b.py's finishes: only t2 grows x2. When t2
+    then finishes, its growth is dropped -- it asks its measured peak again.
     """
     learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
     fake = FakeRunCluster(oom=True, dies=frozenset({'tests/a.py'}))
     _submit(fake, history=learned.learned('https://g/r.git'))
     assert _gather(fake) is None
     state = json.loads(fake.state)
-    assert state['grown'] == {'tests/a.py': 2.0}, 'never every file of the run'
+    assert state['grown'] == {'tests/a.py::t2': 2.0}, 'never every file of the run: the id the kill cut'
     asked = _asks(state)
     assert asked == {('tests/a.py::t2',): 61440}, 'the killed file asks twice its peak x safety'
     record = _gather(fake)
@@ -1154,8 +1190,8 @@ def test_packing_groups_files_of_one_memory_class_so_a_heavy_file_never_sizes_a_
 def test_an_items_memory_is_its_own_files_peaks_grown_only_where_this_run_grew_them() -> None:
     measured = Measured(peaks_mb={'a.py': 2048.0, 'b.py': 4096.0})
     cost, policy = Cost(mem_gb=1), Policy(safety=1.5)
-    assert measured.item_gb(['a.py::t'], cost, policy, {'b.py': 2.0}) == 3.0, 'b grew; a did not'
-    assert measured.item_gb(['b.py::t'], cost, policy, {'b.py': 2.0}) == 12.0
+    assert measured.item_gb(['a.py::t'], cost, policy, {'b.py::t': 2.0}) == 3.0, 'b grew; a did not'
+    assert measured.item_gb(['b.py::t'], cost, policy, {'b.py::t': 2.0}) == 12.0
     assert measured.item_gb(['c.py::t'], cost, policy) == pytest.approx(3072 * 1.5 / 1024, rel=1e-12, abs=0.0), (
         "an unmeasured file asks its siblings' median, never the table's max"
     )
@@ -1607,12 +1643,15 @@ def test_two_out_of_memory_rounds_then_a_completed_one_is_gathered_from_the_late
     """
     fake = _AdaRounds(dies=frozenset({'tests/b.py'}), kills=2, peak_mb=512.0)
     record = _run(fake)
-    assert record['job_ids'] == ['4243', '4244', '4245']
+    # r1 and r2 run two bands -- only the cut id t4 grows, t5 never started (run 4fb97faa904f) -- and the fake
+    # numbers a round's jobs by its manifest, so both bands of a round carry one id
+    assert list(dict.fromkeys(record['job_ids'])) == ['4243', '4244', '4245']
     first, second, third = record['rounds']
     assert (second['mem_mb'], third['mem_mb']) == (2 * first['mem_mb'], 4 * first['mem_mb'])
+    assert [band['mem_mb'] for band in third['bands']] == [4 * first['mem_mb'], 2 * first['mem_mb']]
     assert all(_words(record['cells'])[f'tests/b.py::t{n}'] == 'ok' for n in (3, 4, 5)), 'r2 results gathered'
     asked = [c.split(' -j ')[1].split()[0] for c, _ in fake.calls if c.startswith('sacct ')]
-    assert asked == ['4243', '4244', '4245'], 'each gather asks sacct about the current round only'
+    assert list(dict.fromkeys(asked)) == ['4243', '4244', '4245'], 'each gather asks sacct about the current round only'
     assert not any(' -j ' in c for c, _ in fake.calls if 'squeue' in c), 'squeue decides no job in a gather'
 
 
@@ -1839,7 +1878,7 @@ def test_a_run_that_cannot_be_gathered_has_its_live_jobs_cancelled_before_it_is_
 
     def runner(command: str, _stdin: object) -> str:
         asked.append(command)
-        return '7738129\n' if command.startswith('squeue') else ''
+        return '1000003\n' if command.startswith('squeue') else ''
 
     machine = Machine(session=None, grants=(GRANT,))
     sha = 'a' * 40
@@ -1851,7 +1890,7 @@ def test_a_run_that_cannot_be_gathered_has_its_live_jobs_cancelled_before_it_is_
     monkeypatch.setattr(watch, 'gather_run', unreadable)
     args = ([sha], machine, lambda _grant: runner, Config(), tmp_path)
     assert watch.settle(*args, part='base', sleep=None) == 1
-    assert 'scancel 7738129' in asked, 'a dropped run leaves no live job'
+    assert 'scancel 1000003' in asked, 'a dropped run leaves no live job'
 
     asked.clear()
     monkeypatch.setattr(watch, 'gather_run', lambda *_a, **_k: None)
@@ -1978,7 +2017,7 @@ def _gather_at(fake: FakeRunCluster, minute: float) -> dict | None:
 def test_a_retry_round_refused_on_the_qos_submit_limit_waits_in_flight_and_submits_when_the_room_returns() -> None:
     """A QOS submit refusal at ANY round is capacity: a refused retry round leaves the run in flight.
 
-    Ada 2026-10-21 (motronics #4684): 42 items ran ~6 h, the retry round hit ``QOSMaxSubmitJobPerUserLimit``,
+    Ada 2026-10-21 (a downstream run): 42 items ran ~6 h, the retry round hit ``QOSMaxSubmitJobPerUserLimit``,
     and the run settled "ended without a record".
 
     PLANTED CONTROL: the same refusal lifted at the next tick submits the round and the record keeps every cell.
@@ -2047,8 +2086,39 @@ def test_a_file_whose_item_was_killed_keeps_growing_though_a_sibling_item_finish
     """Ada 2026-10-24: the finished sibling reset the killed file's growth, so it only ever doubled from 1."""
     items = [{'ids': ['tests/f.py::a']}, {'ids': ['tests/f.py::b']}]
     cells = {'tests/f.py::b': {}}
-    after = grown_after(items, cells, {0: 0, 1: 1}, {0: 'OUT_OF_MEMORY', 1: 'COMPLETED'}, {'tests/f.py': 2.0}, oom=True)
-    assert after == {'tests/f.py': 4.0}
-    assert grown_after(items[1:], cells, {0: 1}, {1: 'COMPLETED'}, {'tests/f.py': 2.0}, oom=False) == {}, (
-        'PLANTED CONTROL: a file with no killed item this round is back at its peak'
+    grown = {'tests/f.py::a': 2.0}
+    after = grown_after(items, cells, {0: 0, 1: 1}, {0: 'OUT_OF_MEMORY', 1: 'COMPLETED'}, grown, oom=True)
+    assert after == {'tests/f.py::a': 4.0}
+    assert grown_after(items[1:], cells, {0: 1}, {1: 'COMPLETED'}, {'tests/f.py::b': 2.0}, oom=False) == {}, (
+        'PLANTED CONTROL: an id no kill cut this round is back at its peak'
+    )
+
+
+def test_a_file_whose_kill_taught_its_grown_floor_is_not_grown_again() -> None:
+    """Ada 2026-10-16: a read grown twice re-asked a 20 GB kill at 120 GB. The taught floor IS the growth."""
+    items = [{'ids': ['tests/f.py::a']}, {'ids': ['tests/g.py::a']}]
+    states = {0: 'OUT_OF_MEMORY', 1: 'OUT_OF_MEMORY'}
+    after = grown_after(items, {}, {0: 0, 1: 1}, states, {'tests/f.py::a': 2.0}, oom=True, taught={'tests/f.py'})
+    assert after == {'tests/g.py::a': 2.0}, 'f was taught read x growth; g, killed with no read, grows'
+
+
+def test_an_oom_grows_only_the_id_it_cut_and_its_collateral_keeps_its_memory() -> None:
+    """Run 4fb97faa904f: one OOM task held 14 items and ``grown_after`` doubled all of them; 13 were light.
+
+    Only the id a kill interrupted is known to need more; every other id of the item -- finished, or never
+    started -- keeps its own memory. PLANTED CONTROL: the cut id does grow.
+    """
+    light = [f'tests/light_{n}.py::t' for n in range(13)]
+    items = [{'ids': ['tests/heavy.py::done', 'tests/heavy.py::cut', 'tests/heavy.py::after', *light]}]
+    cells = {'tests/heavy.py::done': {}}
+    after = grown_after(items, cells, {0: 0}, {0: 'OUT_OF_MEMORY'}, {}, oom=True)
+    assert after == {'tests/heavy.py::cut': OOM_GROWTH}
+    measured = Measured(peaks_mb={'tests/heavy.py': 1000.0, **{file_of(n): 300.0 for n in light}})
+    cost, policy = Cost(mem_gb=0.1), Policy(safety=1.0)
+    assert measured.item_gb(light[:1], cost, policy, after) == pytest.approx(300.0 / 1024, rel=1e-12, abs=0.0)
+    assert measured.item_gb(['tests/heavy.py::after'], cost, policy, after) == pytest.approx(
+        1000.0 / 1024, rel=1e-12, abs=0.0
+    ), 'a sibling id of the cut one, never started, is no more known to need more'
+    assert measured.item_gb(['tests/heavy.py::cut'], cost, policy, after) == pytest.approx(
+        1000.0 * OOM_GROWTH / 1024, rel=1e-12, abs=0.0
     )

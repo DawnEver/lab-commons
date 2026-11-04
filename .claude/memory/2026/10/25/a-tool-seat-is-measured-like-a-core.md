@@ -22,7 +22,7 @@ outside the ledger (Designer, Scheduler, jam.exe) was invisible, so a forge jmag
   `box claims [--json]`, dropped by `box release <id>`. Every admission (a forge hold) gets only the room outside
   it; forgetting to declare still counts via max(held, observed). `[reserve] cpu_margin`/`mem_margin` stay: OS
   headroom (1 core / 10%), not a reservation for people.
-- JMAG images (motronics `hamilton/adapters/jmag/processes.py`, checked against the install 2026-09-19): the
+- JMAG images (a consumer's vendor-process adapter, checked against the install 2026-09-19): the
   solver family is `jam.exe`, `jam_c.exe`, `jam_intel_mpi_b.exe`, `jam_intel_mpi_c.exe`; `execsolver.exe`
   launches `jam.exe` (counting both would count one solve twice); `scheduler.exe` and `designer.exe` are not seats.
 - A `supply` probe that fails, times out or prints no count NO LONGER falls back to the declared `seats`

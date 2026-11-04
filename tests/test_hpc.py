@@ -281,21 +281,21 @@ def test_queued_jobs_use_up_the_submit_room() -> None:
 
 
 def test_a_throttle_on_an_array_that_already_finished_is_a_no_op_and_any_other_refusal_raises() -> None:
-    """Ada 2026-10-20: a live re-throttle met ``7738129_12: Job has already finished``, exit 1, and the run was dropped.
+    """Ada 2026-10-20: a live re-throttle met ``1000003_12: Job has already finished``, exit 1, and the run was dropped.
 
     The array ended between the sacct read and the update: there is nothing left to throttle. PLANTED
     CONTROL: any other scontrol refusal still raises.
     """
 
     def finished(_command: str, _stdin: object) -> str:
-        msg = 'ssh exited 1: scontrol: error: 7738129_12: Job has already finished'
+        msg = 'ssh exited 1: scontrol: error: 1000003_12: Job has already finished'
         raise RuntimeError(msg)
 
-    throttle(finished, '7738129', 4)  # no raise
+    throttle(finished, '1000003', 4)  # no raise
 
     def refused(_command: str, _stdin: object) -> str:
         msg = 'ssh exited 1: scontrol: error: Access/permission denied'
         raise RuntimeError(msg)
 
     with pytest.raises(RuntimeError, match='permission denied'):
-        throttle(refused, '7738129', 4)
+        throttle(refused, '1000003', 4)

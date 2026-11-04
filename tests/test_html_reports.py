@@ -18,10 +18,10 @@ def html() -> ModuleType:
 
 
 def test_primary_and_secondary_report_names_preserve_identity(html) -> None:
-    primary = html.ReportIdentity('ipm_uv_cummins')
-    assert primary.stem == 'ipm_uv_cummins'
-    assert primary.filename == 'ipm_uv_cummins.html'
-    assert html.ReportIdentity('ipm_uv_cummins', 'geometry').filename == 'ipm_uv_cummins--geometry.html'
+    primary = html.ReportIdentity('case_a')
+    assert primary.stem == 'case_a'
+    assert primary.filename == 'case_a.html'
+    assert html.ReportIdentity('case_a', 'geometry').filename == 'case_a--geometry.html'
     assert html.ReportIdentity('Case 中文.v1').filename == 'Case 中文.v1.html'
 
 

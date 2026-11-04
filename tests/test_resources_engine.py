@@ -18,6 +18,7 @@ import pytest
 from lab_commons.box import GRACE_S, holdings
 from lab_commons.box._store import box_path, connect
 from lab_commons.compute.model import Resources, Supply
+from lab_commons.compute.probe import OS_NAMES
 from lab_commons.config import config_path
 from lab_commons.resources import KINDS, Actual, Claim, Engine, Kind, NotAdmitted, charged, kind_of
 
@@ -120,3 +121,9 @@ def test_a_claims_row_written_before_kinds_existed_reads_as_box_occupancy() -> N
         )
     with closing(connect()) as con:
         assert con.execute('SELECT scope, kind, window FROM claims').fetchall() == [('box', 'occupancy', None)]
+
+
+def test_every_os_name_is_an_occupancy_kind_and_a_tool_name_is_not_one() -> None:
+    assert {name: kind_of(name) for name in OS_NAMES.values()} == dict.fromkeys(OS_NAMES.values(), Kind.OCCUPANCY)
+    assert 'macos' in KINDS
+    assert 'solaris' not in KINDS, 'planted control: an OS no platform maps to is not a fixed name'

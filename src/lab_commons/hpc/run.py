@@ -36,7 +36,7 @@ only what is still unfinished after that is ``INFRA``. An item that closed witho
 recorded it ``PENDING``: never reported.
 
 AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory for
-the files of the KILLED items only (:func:`lab_commons.hpc.gather.grown_after`; a file that then finishes is back at its
+the id each kill CUT only (:func:`lab_commons.hpc.gather.grown_after`; an id that then finishes is back at its
 peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
 counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
 halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
@@ -171,6 +171,11 @@ def _no_room() -> Iterator[None]:
         raise NoRoom(msg) from refused
 
 
+def planned(state: Mapping[str, Any]) -> Measured:
+    """What a PLAN prices with: the run's learned facts raised to its commit's declared floors (``priced``)."""
+    return Measured.of(state.get('measured', {})).floored(state.get('priced', {}))
+
+
 def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
     """Each id's wall in seconds: the run's declared :class:`ItemWall` over what the id was MEASURED to take.
 
@@ -178,7 +183,7 @@ def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
     neither is unmeasured. A state written before the wall existed gets the declared defaults.
     """
     wall = ItemWall(**state.get('item_wall', {}))
-    measured = Measured.of(state.get('measured', {}))
+    measured = planned(state)
     seen = {**measured.floors, **{n: max(s, measured.floors.get(n, 0.0)) for n, s in measured.durations.items()}}
     return {node: wall.bound(seen.get(node)) for node in ids}
 
@@ -203,7 +208,7 @@ def submit_round(
     the others plan on it, since the tree lives in its home.
     """
     tag = f'{state["stamp"]}-r{len(state["rounds"])}'
-    measured = Measured.of(state['measured'])
+    measured = planned(state)
     grown = state.get('grown', {})
     grantable = grantable_gb(snapshots)
     asks = [measured.item_gb(ids, cost, policy, grown) for ids in pending]
@@ -371,12 +376,13 @@ def submit_run(
         'handed': handed,
         'cells': cells,
         'measured': Measured.of(history or {}).record(),
+        'priced': spec.builds.priced_floors,  # the commit's declared floors; only a plan reads them (planned)
         'rounds': [],
-        'grown': {},  # file -> this run's memory growth after its item was OOM-killed
+        'grown': {},  # node id -> this run's memory growth after an OOM kill cut it
         'carried': {node: held[1] for node, held in taken.items()},
     }
     files = group_items([node for node in ids if node not in handed and node not in taken])
-    measured = Measured.of(state['measured'])
+    measured = planned(state)
 
     def band(ids: list[str]) -> int:
         return memory_band(measured.item_gb(ids, cost, policy))
