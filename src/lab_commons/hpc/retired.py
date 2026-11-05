@@ -46,8 +46,6 @@ RETIRED: Final[dict[str, str]] = {
     '--lock-wait-s': '--lock-wait "<duration>" (a time quantity such as "30 s"; a bare number is refused)',
     # A model API key is one scheme: its provider's host, username api-key[-<task>] (user ruling 2026-10-19).
     'pr-review.anthropic.lab-commons': "api.anthropic.com's pr-review task key (lab_commons.credentials.api_key)",
-    # The task set is the caller's data, never a constant here (user ruling 2026-11-05): ai-lab's routes.toml.
-    'API_KEY_TASKS': 'ai_lab.client.tasks() (a task is any lab_commons.credentials.TASK_NAME the caller declares)',
     # The forge only orchestrates (plan step 5, 2026-10-20): the review is the repo's declared command, run in the
     # integration step on whichever host runs it; the forge holds no model client, prompt or key.
     'pr_review': 'nothing: the review runs inside the integration step (dev_lab.dev.forgereview.step)',

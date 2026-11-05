@@ -17,17 +17,14 @@ its username says WHICH key of that host it is, by ONE rule (:func:`key_username
 rulings 2026-10-19: each task gets its own AI API key, and every task takes several). Slot 1 is the key a
 caller uses; slots 2, 3... are its backups, read in order up to the first gap (:func:`api_keys`). A task
 reads ITS OWN slots only -- never another task's, never the default's; a task with no slot 1 is refused by
-that username. This module holds no list of tasks: which tasks exist is the CALLER's data (ai-lab derives
-them from its ``routes.toml``, user ruling 2026-11-05) and is validated there. Here a task is only a NAME
-(:data:`TASK_NAME`): lowercase words joined by ``-``, each starting with a letter, so ``api-key-<task>`` can
-never read as a slot (``api-key-<N>``) or as another task's slot (``x-2``).
-``ai_lab.auth login`` stores them.
+that username. The tasks are declared (:data:`API_KEY_TASKS`) and never a number, so a task cannot collide
+with a slot, and a misspelt one is refused rather than stored where nothing reads.
+``ai_lab.auth login <provider> [--task T] [-s N]`` stores them.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 from typing import TYPE_CHECKING, Final
@@ -39,13 +36,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
+    'API_KEY_TASKS',
     'API_KEY_USERNAME',
-    'TASK_NAME',
     'NoCredential',
     'api_key',
     'api_keys',
     'credential_for',
-    'erase_credential',
     'key_username',
     'store_credential',
 ]
@@ -53,9 +49,15 @@ __all__ = [
 #: The username of a provider host's DEFAULT model API key.
 API_KEY_USERNAME: Final = 'api-key'
 
-#: A task's spelling: lowercase words joined by ``-``, each word starting with a letter -- so no task name is a
-#: number or ends in ``-<N>``, and ``api-key-<task>[-N]`` parses one way.
-TASK_NAME: Final = re.compile(r'[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*')
+#: The tasks that own dedicated model API keys, stored as ``api-key-<task>[-N]``. Never a number:
+#: ``api-key-<N>`` is the default's Nth slot.
+API_KEY_TASKS: Final = frozenset(
+    {
+        'pr-review',  # the advisory PR review command the forge runs (ai_lab.review; dev_lab.dev.forgereview)
+        'optimization',  # the optimization decider driven through ai_lab.connect (a consumer turing campaigns)
+        'session',  # the interactive host launchers (cc-config ccc/ccds/codc/cods): the key a session runs on
+    }
+)
 
 #: Resolved once: a bare name is a PATH lookup at every call site, and a PATH that answers differently
 #: between a terminal and a detached launcher describes an environment nobody meant.
@@ -106,8 +108,8 @@ def key_username(task: str | None = None, slot: int = 1) -> str:
     if slot < 1:
         msg = f'a key slot is 1 or more, not {slot}'
         raise ValueError(msg)
-    if task is not None and not TASK_NAME.fullmatch(task):
-        msg = f'{task!r} is not a task name: lowercase words joined by "-", each starting with a letter'
+    if task is not None and task not in API_KEY_TASKS:
+        msg = f'{task!r} is not a declared API-key task; the tasks are {sorted(API_KEY_TASKS)}'
         raise ValueError(msg)
     stem = API_KEY_USERNAME if task is None else f'{API_KEY_USERNAME}-{task}'
     return stem if slot == 1 else f'{stem}-{slot}'
@@ -147,19 +149,6 @@ def store_credential(
     done = _credential('approve', {'host': host, 'username': username, 'password': secret}, cwd=cwd, env=env)
     if done.returncode != 0:
         msg = f'git credential approve failed for {host} (exit {done.returncode}); is a credential.helper configured?'
-        raise NoCredential(msg)
-
-
-def erase_credential(
-    host: str, username: str, *, cwd: Path | None = None, env: Mapping[str, str] | None = None
-) -> None:
-    """Ask the configured helper to forget *username*'s secret for ``https://<host>``; absent is already done.
-
-    The one way a stored key is replaced by FEWER keys: a slot left behind would still be walked.
-    """
-    done = _credential('reject', {'host': host, 'username': username}, cwd=cwd, env=env)
-    if done.returncode != 0:
-        msg = f'git credential reject failed for {username}@{host} (exit {done.returncode})'
         raise NoCredential(msg)
 
 
