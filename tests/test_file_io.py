@@ -5,9 +5,14 @@ package's import path. Rewritten against real filesystem behavior (``tmp_path``)
 mocked ``Path`` methods, matching the split-out style of ``test_log.py`` / ``test_paths.py``.
 """
 
-import pytest
+import datetime as dt
+import tomllib
 
-from lab_commons.file_io import check_path, list_files_in_dir, read_toml, save_toml
+import pytest
+import tomlkit
+
+from lab_commons import file_io
+from lab_commons.file_io import check_path, dumps, list_files_in_dir, read_toml, save_toml
 
 
 class TestTomlRoundTrip:
@@ -83,3 +88,35 @@ class TestListFilesInDir:
 
 if __name__ == '__main__':
     pytest.main([__file__])
+
+
+class TestOneTomlWriter:
+    """Writes go through tomlkit, reads through stdlib tomllib -- the family's one TOML pair."""
+
+    def test_the_writer_is_tomlkit_and_the_reader_is_tomllib(self) -> None:
+        assert file_io.dumps is tomlkit.dumps
+        assert file_io.loads is tomllib.loads
+
+    def test_types_round_trip(self, tmp_path) -> None:
+        data = {
+            'f': 0.1,
+            'small': 1e-12,
+            'when': dt.datetime(2026, 11, 5, 12, 0, tzinfo=dt.UTC),
+            'day': dt.date(2026, 11, 5),
+            'nested': {'inner': {'xs': [1, 2, 3]}},
+            'rows': [{'k': 1}, {'k': 2}],
+        }
+        path = tmp_path / 'r.toml'
+        save_toml(path, data)
+        assert read_toml(path) == data
+
+    def test_the_written_text_is_pinned(self) -> None:
+        # Consumer-observable: tables keep insertion order (rtoml hoisted arrays of tables above
+        # tables), floats print as repr, sub-tables are block headers, never inline.
+        text = dumps({'a': 1.0, 'b': 1e-12, 't': {'x': [1, 2]}, 'aot': [{'k': 1}, {'k': 2}]})
+        assert text == 'a = 1.0\nb = 1e-12\n\n[t]\nx = [1, 2]\n\n[[aot]]\nk = 1\n\n[[aot]]\nk = 2\n'
+
+    def test_none_is_refused_not_written_as_a_string(self, tmp_path) -> None:
+        # rtoml wrote None as the STRING "null", which reads back as 'null' -- a silent change of type.
+        with pytest.raises(TypeError):
+            save_toml(tmp_path / 'n.toml', {'n': None})

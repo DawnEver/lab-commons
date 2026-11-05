@@ -3,18 +3,17 @@
 Provenance: extracted from consumer-a's ``core/utils/file_io.py`` (byte-identical
 across the consumer-a/consumer-c/consumer-b family; see ``finding-shared-lab-infra-extraction.md``),
 the strongest of the near-identical copies — it is the only fork whose :func:`read_toml`
-accepts both a path and in-memory ``bytes``. Pure ``rtoml`` + ``pathlib``/``shutil`` mechanics,
+accepts both a path and in-memory ``bytes``. Writes through ``tomlkit``, reads through stdlib ``tomllib``
+(the family's one TOML pair), plus ``pathlib``/``shutil`` mechanics,
 no concept from any single lab's domain.
 """
 
 import os
 from pathlib import Path
 from shutil import copyfile
+from tomllib import loads
 
-from rtoml import (
-    dumps,
-    loads,
-)
+from tomlkit import dumps
 
 from lab_commons.log import log
 
@@ -36,6 +35,7 @@ def read_toml(source: Path | str | bytes) -> dict:
 
     Raises:
         OSError: Failed to open the file (path source only).
+        tomllib.TOMLDecodeError: The content is not valid TOML.
 
     """
     if isinstance(source, bytes):
@@ -56,7 +56,7 @@ def save_toml(file_path: Path, dict_data: dict) -> None:
     Args:
     ----
         file_path(Path): Path to the file.
-        dict_data(dict): Data to save.
+        dict_data(dict): Data to save. ``None`` has no TOML form and raises ``TypeError``.
 
     """
     try:

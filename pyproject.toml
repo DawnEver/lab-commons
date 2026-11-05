@@ -47,7 +47,7 @@ packages = ["src/lab_commons"]
 # Each defining module has an explicit installation capability, not a root facade.
 units = ["numpy", "pint>=0.25.2", "pydantic>=2"]
 paths = ["platformdirs"]
-io = ["rtoml"]
+io = ["tomlkit"]
 structured = ["structlog", "colorama; sys_platform == 'win32'"]
 
 # THE TWO GATES FOR ``lab_commons.viz``, AND THERE ARE TWO ON PURPOSE. The plotting vocabulary
