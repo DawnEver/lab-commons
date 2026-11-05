@@ -435,3 +435,26 @@ def test_a_re_probe_that_crashes_keeps_the_stale_reading_and_raises_nothing(tmp_
 
 def test_the_toolchecks_os_map_is_the_probe_map() -> None:
     assert toolchecks._SYSTEMS is OS_NAMES
+
+
+def _answering(code: int) -> Callable[..., subprocess.CompletedProcess[str]]:
+    return lambda *_args, **_kwargs: subprocess.CompletedProcess([], code, stdout='v1.2.3\n', stderr='')
+
+
+@pytest.mark.parametrize('tool', ['ngspice', 'node'])
+def test_a_plain_tool_is_supplied_only_where_its_probe_finds_it_answering(
+    tool: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain tool (ngspice, node) is PROBED, never assumed on every OS: absent -> unfound; present -> its version."""
+    check = CHECKS[tool]
+    monkeypatch.setattr(toolchecks, '_INSTALL_DIRS', {})
+    monkeypatch.setattr(toolchecks.shutil, 'which', lambda _binary: None)
+    assert check.find() is None, 'PLANTED CONTROL: an absent tool is not supplied'
+    exe = tmp_path / 'tool'
+    monkeypatch.setattr(toolchecks.shutil, 'which', lambda _binary: str(exe))
+    assert check.find() == ('PATH', exe)
+    monkeypatch.setattr(toolchecks, '_probe', _answering(0))
+    assert check.version(exe) == ('--version', 'v1.2.3')
+    assert check.smoke(exe)[0]
+    monkeypatch.setattr(toolchecks, '_probe', _answering(1))
+    assert not check.smoke(exe)[0], 'a tool that does not answer its version is absent'
