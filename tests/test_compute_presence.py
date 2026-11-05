@@ -59,6 +59,7 @@ class Fake:
             lambda: ('install dir', EXE) if self.found else None,
             lambda _p: ('--version', self.version) if self.version else None,
             smoke,
+            heavy=True,
         )
 
 
@@ -358,7 +359,7 @@ def test_concurrent_callers_on_one_stale_reading_share_one_probe(tmp_path: Path)
         time.sleep(0.2)
         return slow.smoke(path)
 
-    checks = {'femm': Check(slow.find, slow.version, smoke)}
+    checks = {'femm': Check(slow.find, slow.version, smoke, heavy=True)}
     later = NOW + TTL + timedelta(seconds=1)
     got: list[bool] = []
     threads = [
@@ -402,7 +403,7 @@ def test_a_probe_that_crashes_records_no_reading_and_is_retaken(tmp_path: Path) 
         crashed = 'OSError: [WinError 6] The handle is invalid'
         raise toolchecks.ProbeCrashed(crashed)
 
-    check = Check(lambda: ('install dir', EXE), lambda _p: ('--version', '5.0'), smoke)
+    check = Check(lambda: ('install dir', EXE), lambda _p: ('--version', '5.0'), smoke, heavy=True)
     assert not refresh(FLOORS, checks={'femm': check}, state=state, now=NOW)['femm'].present
     assert 'femm' not in json.loads(state.read_text(encoding='utf-8') if state.exists() else '{}')
     refresh(FLOORS, checks={'femm': check}, state=state, now=NOW + timedelta(seconds=1))
@@ -427,7 +428,7 @@ def test_a_re_probe_that_crashes_keeps_the_stale_reading_and_raises_nothing(tmp_
         crashed = 'OSError: [WinError 6] The handle is invalid'
         raise toolchecks.ProbeCrashed(crashed)
 
-    check = Check(lambda: ('install dir', EXE), lambda _p: ('--version', '5.0'), crashes)
+    check = Check(lambda: ('install dir', EXE), lambda _p: ('--version', '5.0'), crashes, heavy=True)
     one = renew('femm', checks={'femm': check}, state=state, now=NOW + TTL + timedelta(seconds=1))
     assert one.evidence[-1].source == 'ttl', 'still the stale reading, never a crash cached as absent'
     assert state.read_text(encoding='utf-8') == before
@@ -458,3 +459,12 @@ def test_a_plain_tool_is_supplied_only_where_its_probe_finds_it_answering(
     assert check.smoke(exe)[0]
     monkeypatch.setattr(toolchecks, '_probe', _answering(1))
     assert not check.smoke(exe)[0], 'a tool that does not answer its version is absent'
+
+
+def test_heavy_compute_is_the_vendor_solvers_and_nothing_else() -> None:
+    """HEAVY is a declared mark, never "every probed tool".
+
+    A light workstation withholds heavy compute; a plain tool (ngspice, node) is not heavy because it gained a probe.
+    """
+    assert {name for name, check in CHECKS.items() if check.heavy} == {'femm', 'jmag', 'matlab', 'simba'}
+    assert {name for name, check in CHECKS.items() if not check.heavy} == {'ngspice', 'node'}

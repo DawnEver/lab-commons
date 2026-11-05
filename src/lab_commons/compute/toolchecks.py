@@ -55,12 +55,14 @@ class Check:
     """How one tool is read: *find* its executable, read its *version*, run its *smoke*.
 
     *find* returns ``(source, path)`` or ``None``; *version* ``(source, value)`` or ``None``; *smoke*
-    ``(passed, detail)``.
+    ``(passed, detail)``. *heavy*: a vendor solver and its licence seat -- HEAVY COMPUTE, which a light workstation
+    withholds; a plain tool (ngspice, node) is not heavy merely because it is probed.
     """
 
     find: Callable[[], tuple[str, Path] | None]
     version: Callable[[Path], tuple[str, str] | None]
     smoke: Callable[[Path], tuple[bool, str]]
+    heavy: bool
 
 
 # --- the readers ---------------------------------------------------------------------------------------
@@ -360,10 +362,10 @@ def plain_smoke(path: Path) -> tuple[bool, str]:
 
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
-    'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke),
-    'jmag': Check(jmag_find, jmag_version, jmag_smoke),
-    'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver'])),
-    'simba': Check(simba_find, simba_version, simba_smoke),
-    'ngspice': Check(plain_find('ngspice'), _versioned(lambda p: [str(p), '--version']), plain_smoke),
-    'node': Check(plain_find('node'), _versioned(lambda p: [str(p), '--version']), plain_smoke),
+    'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke, heavy=True),
+    'jmag': Check(jmag_find, jmag_version, jmag_smoke, heavy=True),
+    'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver']), heavy=True),
+    'simba': Check(simba_find, simba_version, simba_smoke, heavy=True),
+    'ngspice': Check(plain_find('ngspice'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
+    'node': Check(plain_find('node'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
 }
