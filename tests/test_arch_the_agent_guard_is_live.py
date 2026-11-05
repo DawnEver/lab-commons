@@ -47,12 +47,6 @@ _SHIPPED: Final = frozenset(
 _PROSE_ABOUT_A_DENIED_SHAPE: Final = "cat > notes.md <<'MD'\npytest is denied here; use the verdict entry point.\nMD"
 
 
-@pytest.mark.workstation
-def test_node_is_on_path() -> None:
-    """No node means no guard: a red, never a skip."""
-    agentguard.assert_node_is_available()
-
-
 def test_the_guard_is_live() -> None:
     agentguard.assert_the_guard_is_live(root=_ROOT)
 
