@@ -45,6 +45,7 @@ __all__ = [
     'api_key',
     'api_keys',
     'credential_for',
+    'erase_credential',
     'key_username',
     'store_credential',
 ]
@@ -146,6 +147,19 @@ def store_credential(
     done = _credential('approve', {'host': host, 'username': username, 'password': secret}, cwd=cwd, env=env)
     if done.returncode != 0:
         msg = f'git credential approve failed for {host} (exit {done.returncode}); is a credential.helper configured?'
+        raise NoCredential(msg)
+
+
+def erase_credential(
+    host: str, username: str, *, cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> None:
+    """Ask the configured helper to forget *username*'s secret for ``https://<host>``; absent is already done.
+
+    The one way a stored key is replaced by FEWER keys: a slot left behind would still be walked.
+    """
+    done = _credential('reject', {'host': host, 'username': username}, cwd=cwd, env=env)
+    if done.returncode != 0:
+        msg = f'git credential reject failed for {username}@{host} (exit {done.returncode})'
         raise NoCredential(msg)
 
 
