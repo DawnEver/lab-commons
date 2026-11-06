@@ -29,7 +29,8 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import BoundaryNorm, ListedColormap, Normalize
 from matplotlib.patches import Circle as CirclePatch
-from matplotlib.patches import Polygon as PolygonPatch
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path
 
 from lab_commons.viz import (
     Bars,
@@ -51,6 +52,20 @@ from lab_commons.viz import (
 )
 
 __all__ = ['MplFrame']
+
+
+def _compound_path(rings: Sequence[np.ndarray]) -> Path:
+    """Matplotlib's nonzero fill needs opposite winding for exterior and interior rings."""
+    paths = []
+    for index, ring in enumerate(rings):
+        following = np.roll(ring, -1, axis=0)
+        area = np.sum(ring[:, 0] * following[:, 1] - following[:, 0] * ring[:, 1])
+        oriented = ring if (area > 0) == (index == 0) else ring[::-1]
+        vertices = np.concatenate((oriented, oriented[:1]))
+        codes = np.full(len(vertices), Path.LINETO, dtype=np.uint8)
+        codes[0], codes[-1] = Path.MOVETO, Path.CLOSEPOLY
+        paths.append(Path(vertices, codes))
+    return Path.make_compound_path(*paths)
 
 
 def _next_color(drawn: Iterator[int], style: Style, explicit: str | None) -> str:
@@ -223,7 +238,7 @@ class MplFrame:
         figure whose regions each need their own alpha is drawn with colours and not with values --
         and a description that asks for both at once is refused rather than silently flattened.
         """
-        polygons = [PolygonPatch(np.asarray(part.vertices, dtype=float), closed=True) for part in parts]
+        polygons = [PathPatch(_compound_path(part.rings())) for part in parts]
         values = [part.value for part in parts]
         if scale is not None and any(value is not None for value in values):
             alphas = {part.alpha for part in parts}

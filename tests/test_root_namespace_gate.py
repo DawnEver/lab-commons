@@ -19,7 +19,7 @@ def test_stdlib_logging_does_not_load_optional_capabilities() -> None:
             '-c',
             (
                 'import sys; from lab_commons.log import get_logger; '
-                "assert not {'pint', 'pydantic', 'structlog', 'platformdirs', 'rtoml', 'numpy'} & set(sys.modules)"
+                "assert not {'pint', 'pydantic', 'structlog', 'platformdirs', 'tomlkit', 'numpy'} & set(sys.modules)"
             ),
         ],
         capture_output=True,

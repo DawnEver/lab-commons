@@ -331,6 +331,8 @@ class Patch:
 
     Attributes:
         vertices: the boundary, shape ``(n, 2)``, closed implicitly (do not repeat the first point).
+        holes: interior boundaries in the same coordinates, closed implicitly. Ring winding does
+            not change which regions are empty; a separate patch may occupy a hole.
         value: the scalar this region carries, or ``None`` when it is coloured by name.
         color: the face colour, used when *value* is ``None``; ``None`` means unfilled.
         edgecolor: the boundary colour, or ``None`` for no outline.
@@ -350,6 +352,32 @@ class Patch:
     label: str | None = None
     alpha: float = 1.0
     hatch: str | None = None
+    holes: Sequence[ArrayLike] = ()
+
+    def rings(self) -> tuple[np.ndarray, ...]:
+        """Exterior then holes as finite float arrays of shape ``(n, 2)``, with at least three rows.
+
+        This validates numeric shape, not polygon topology: containment, self-intersection and
+        overlap remain the producer's responsibility. No plotting backend is imported here, and
+        mutable descriptions are read anew on every draw rather than cached.
+        """
+        rings = []
+        matrix_dimensions, coordinate_dimensions, minimum_vertices = 2, 2, 3
+        for index, boundary in enumerate((self.vertices, *self.holes)):
+            msg = f'patch boundary {index} must be a finite (n, 2) array with n >= 3'
+            try:
+                ring = np.asarray(boundary, dtype=float)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(msg) from exc
+            if (
+                ring.ndim != matrix_dimensions
+                or ring.shape[1] != coordinate_dimensions
+                or ring.shape[0] < minimum_vertices
+                or not np.isfinite(ring).all()
+            ):
+                raise ValueError(msg)
+            rings.append(ring)
+        return tuple(rings)
 
 
 @dataclass(frozen=True)

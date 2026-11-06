@@ -15,9 +15,11 @@ appends one line, fsynced.
 
 AN ITEM'S FAILURE IS DATA, A SHARD'S IS SLURM'S. Each item's line is an ``outcome`` event carrying a
 :class:`~lab_commons.outcomes.Cell` (its returned value rides in the event's data): returned -> ``OK``;
-raised the declared :class:`Rejected` -> ``REJECTED`` with the reason it carries; any other exception ->
-``ERROR``. The shard carries on either way. A shard is RETURNED only by a ``shard`` line with exit 0; a
-shard killed by Slurm (time, memory) leaves its finished items and no such line, and is re-run whole.
+raised the declared :class:`Rejected` -> ``REJECTED`` with the reason it carries; raised the declared
+:class:`Failed` -> ``ERROR`` with its reason AND the value it completed before failing (a campaign item's rows
+so far ride back beside why it stopped); any other exception -> ``ERROR`` with its traceback and no value.
+The shard carries on either way. A shard is RETURNED only by a ``shard`` line with exit 0; a shard killed by
+Slurm (time, memory) leaves its finished items and no such line, and is re-run whole.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ __all__ = [
     'RESULTS',
     'SHARD',
     'TAIL_LINES',
+    'Failed',
     'Rejected',
     'append_event',
     'close_shard',
@@ -76,6 +79,16 @@ class Rejected(Exception):
         """Carry the machine *reason* the item's cell records."""
         super().__init__(reason.text or reason.kind)
         self.reason = reason
+
+
+class Failed(Exception):
+    """Raised by an entry point that FAILED after completing work: ``ERROR`` with *reason*, *value* kept."""
+
+    def __init__(self, reason: Reason, value: object) -> None:
+        """Carry the machine *reason* the item's cell records and the *value* that rides back with it."""
+        super().__init__(reason.text or reason.kind)
+        self.reason = reason
+        self.value = value
 
 
 def load_entry(spec: str) -> Callable[[Any], Any]:
@@ -130,6 +143,9 @@ def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callab
             cell = Cell(Status.OK)
         except Rejected as rejected:
             cell = Cell(Status.REJECTED, reason=rejected.reason)
+        except Failed as failed:
+            data['value'] = failed.value
+            cell = Cell(Status.ERROR, reason=failed.reason)
         except Exception:  # noqa: BLE001 -- an item's failure is recorded, not propagated; see the module docstring
             cell = Cell(Status.ERROR, reason=Reason('exception', traceback.format_exc(limit=5)))
         append_event(results, Event(OUTCOME, str(index), cell=cell, data=data))

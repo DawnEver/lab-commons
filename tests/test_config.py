@@ -19,7 +19,8 @@ def _point(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str | None) ->
 
 def test_the_default_path_and_the_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(CONFIG_ENV, raising=False)
-    assert config_path() == Path.home() / '.config' / 'lab-commons' / 'config.toml'
+    monkeypatch.delenv('MOTRONICS_HOME', raising=False)
+    assert config_path() == Path.home() / '.motronics' / 'config' / 'motronics.toml'
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'c.toml'))
     assert config_path() == tmp_path / 'c.toml'
 
