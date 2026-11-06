@@ -39,6 +39,8 @@ __all__ = [
     'jmag_headless',
     'matlab_find',
     'matlab_version',
+    'plain_find',
+    'plain_smoke',
     'simba_find',
 ]
 
@@ -53,12 +55,14 @@ class Check:
     """How one tool is read: *find* its executable, read its *version*, run its *smoke*.
 
     *find* returns ``(source, path)`` or ``None``; *version* ``(source, value)`` or ``None``; *smoke*
-    ``(passed, detail)``.
+    ``(passed, detail)``. *heavy*: a vendor solver and its licence seat -- HEAVY COMPUTE, which a light workstation
+    withholds; a plain tool (ngspice, node) is not heavy merely because it is probed.
     """
 
     find: Callable[[], tuple[str, Path] | None]
     version: Callable[[Path], tuple[str, str] | None]
     smoke: Callable[[Path], tuple[bool, str]]
+    heavy: bool
 
 
 # --- the readers ---------------------------------------------------------------------------------------
@@ -320,10 +324,49 @@ def jmag_smoke(path: Path) -> tuple[bool, str]:
     return version is not None, detail
 
 
+#: The longest a plain tool may take to answer its ``--version``.
+VERSION_TIMEOUT_S: Final = 30.0
+
+#: A plain tool's console binary per OS (Windows' ``ngspice.exe`` is the GUI; ``ngspice_con`` is its console).
+_BINARIES: Final = {
+    'ngspice': {'windows': 'ngspice_con'},
+    'node': {},
+}
+
+#: A plain tool's standard install directories per OS, searched when ``PATH`` does not carry it.
+_INSTALL_DIRS: Final = {
+    'ngspice': {'windows': ('C:/Spice64/bin',)},
+}
+
+
+def plain_find(tool: str, *, platform: str = sys.platform) -> Callable[[], tuple[str, Path] | None]:
+    """A plain (unlicensed) tool's console binary: on ``PATH``, else in a standard install directory."""
+
+    def find() -> tuple[str, Path] | None:
+        system = _SYSTEMS.get(platform, '')
+        binary = _BINARIES[tool].get(system, tool)
+        if on_path := shutil.which(binary):
+            return 'PATH', Path(on_path)
+        for place in _INSTALL_DIRS.get(tool, {}).get(system, ()):
+            for exe in (Path(place) / binary, Path(place) / f'{binary}.exe'):
+                if exe.is_file():
+                    return 'install dir', exe
+        return None
+
+    return find
+
+
+def plain_smoke(path: Path) -> tuple[bool, str]:
+    """The tool answers ``--version`` with exit 0 within :data:`VERSION_TIMEOUT_S`."""
+    return _run([str(path), '--version'], VERSION_TIMEOUT_S)
+
+
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
-    'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke),
-    'jmag': Check(jmag_find, jmag_version, jmag_smoke),
-    'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver'])),
-    'simba': Check(simba_find, simba_version, simba_smoke),
+    'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke, heavy=True),
+    'jmag': Check(jmag_find, jmag_version, jmag_smoke, heavy=True),
+    'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver']), heavy=True),
+    'simba': Check(simba_find, simba_version, simba_smoke, heavy=True),
+    'ngspice': Check(plain_find('ngspice'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
+    'node': Check(plain_find('node'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
 }
