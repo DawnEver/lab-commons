@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.measured import (
     OOM_GROWTH,
@@ -40,7 +41,6 @@ from lab_commons.compute.measured import (
     task_gb,
 )
 from lab_commons.compute.model import Demand
-from lab_commons.config import config_path
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.needsets import needs_of
 
@@ -128,8 +128,8 @@ def _key(producer: str, needs: Iterable[str]) -> str:
 
 
 def directory() -> Path:
-    """``compute-learned/`` beside the machine config (:func:`lab_commons.config.config_path`)."""
-    return config_path().parent / 'compute-learned'
+    """``compute-learned/`` in the machine home's state (:func:`lab_commons.home.part`)."""
+    return home.part('state') / 'compute-learned'
 
 
 def _path(repo: str) -> Path:
