@@ -34,6 +34,11 @@ an ungrown read was asked again at the read times the safety, ~1.5x a run, and k
 The growth is applied ONCE: the kill's taught floor is the growth, so the round's own growth
 (:func:`lab_commons.hpc.gather.grown_after`) skips what a kill taught. Measured 2026-10-16 (Ada): a read grown
 twice re-asked a 20 GB kill at 120 GB, and taught 240 GB to each of 56 files of ONE multi-file item.
+A KILL IS FLOORED AT ITS LIMIT TOO. The read is the pytest child's; memory a grandchild holds is charged to
+the cgroup but read by nobody. Measured 2026-11-05 (Ada, motronics PR #5570): seven 24S spiral ids read
+~435 MB at each OUT_OF_MEMORY kill, so each retry was floored at ~870 MB -- what it was killed at -- never
+reached the grant ceiling, and the run re-queued them for 6 h. The floor grows from the larger of the read and
+the peak the killing limit allowed (the limit over the safety), so the retry asks the limit times OOM_GROWTH.
 The declared ``cost.mem_gb`` is a floor too: the peak is the pytest child's, and the
 task's cgroup also holds the item runner (Ada 2026-10-12: a 150 MB peak priced 225M and 429M, OOM both).
 """
@@ -134,14 +139,16 @@ class Measured:
                 walls[key] = max(walls.get(key, 0.0), wall_s)
         return floored
 
-    def learn(self, ids: Sequence[str], folded: dict[str, Any]) -> None:
+    def learn(self, ids: Sequence[str], folded: dict[str, Any], *, allowed_mb: float | None = None) -> None:
         """Take one item's folded stream (:func:`lab_commons.hpc.pytest_item.read_stream`).
 
         An item may span several files and pays ONE wall; its overhead is SHARED equally among its files,
         so :meth:`estimate`, which sums the shares, gives the same item back what it measured. Its peak is
         recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak grown by
         :data:`OOM_GROWTH` is a floor of its file when it holds ONE, and of the id it cut when it holds several
-        (the module docstring).
+        (the module docstring). *allowed_mb* is the peak a SIGNALLED item's limit allowed (the limit over the safety)
+        when Slurm said OUT_OF_MEMORY: its need exceeds it, so the floor grows from the larger of the read
+        and that peak.
         """
         self.durations.update(folded['seconds'])
         for node in folded['seconds']:
@@ -158,10 +165,12 @@ class Measured:
             overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
             for name in files:
                 self.overheads[name] = overhead
-        if peak is None:
-            return
         if signalled:
-            self._killed_peak(ids, folded, files, float(peak) * OOM_GROWTH)
+            known = max(float(peak or 0.0), float(allowed_mb or 0.0))
+            if known > 0.0:
+                self._killed_peak(ids, folded, files, known * OOM_GROWTH)
+            return
+        if peak is None:
             return
         for name in files:
             floor = self.peaks_mb.get(name, 0.0) if name in self._round else 0.0
