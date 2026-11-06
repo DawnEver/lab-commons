@@ -20,7 +20,7 @@ REPO = 'https://g/r.git'
 def test_an_unmeasured_job_is_its_prior_and_a_measured_one_its_last_run() -> None:
     prior = Run(peak_mem_gb=1.0, cpu_s=60.0, wall_s=60.0)
     assert learned.demand(REPO, 'linux', {'jmag'}, prior=prior) == Demand(cpu=1, mem_gb=1.0, jmag=1)
-    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=4 * 3600.0, wall_s=3600.0))
+    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=4 * 3600.0, wall_s=3600.0), ended='exit')
     assert learned.demand(REPO, 'linux', {'jmag'}, prior=prior) == Demand(cpu=4, mem_gb=6.0, jmag=1)
     assert learned.demand(REPO, 'linux', (), prior=prior) == Demand(cpu=1, mem_gb=1.0), (
         'PLANTED CONTROL: another need-set of the same producer learned nothing'
@@ -35,17 +35,49 @@ def test_a_run_carries_its_cpu_hours_and_refuses_an_impossible_measurement() -> 
 
 
 def test_a_killed_runs_peak_is_a_floor_that_never_lowers_what_is_known() -> None:
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=8.0, cpu_s=10.0, wall_s=10.0))
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=1.0, cpu_s=10.0, wall_s=10.0), killed=True)
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=8.0, cpu_s=10.0, wall_s=10.0), ended='exit')
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=1.0, cpu_s=10.0, wall_s=10.0), ended='memory')
     assert learned.run_of(REPO, 'windows', ()).peak_mem_gb == 8.0
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=5.0, cpu_s=10.0, wall_s=10.0), killed=True)
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=5.0, cpu_s=10.0, wall_s=10.0), ended='memory')
     assert learned.run_of(REPO, 'windows', ()).peak_mem_gb == 5.0 * OOM_GROWTH
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=3.0, cpu_s=10.0, wall_s=10.0))
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=3.0, cpu_s=10.0, wall_s=10.0), ended='exit')
     assert learned.run_of(REPO, 'windows', ()).peak_mem_gb == 3.0, 'a finished run replaces; nothing is averaged'
 
 
+def test_a_run_that_did_not_exit_by_itself_teaches_no_price() -> None:
+    """A run ended by a wall clock or a signal (``timeout 900``'s SIGTERM, exit 124) was stopped mid-climb.
+
+    Its peak is a LOWER bound of its need, never a price: kept, it refused the next run of the same work for
+    memory it was never shown to need (2026-10-26). Only a run that EXITED by itself prices; a box MEMORY kill
+    is the one kill that says something -- the declared limit was too small -- and grows a floor.
+    PLANTED CONTROL: the same sample, ended by itself, is kept.
+    """
+    sample = Run(peak_mem_gb=23.0, cpu_s=900.0, wall_s=900.0)
+    for ended in ('wall', 'signal'):
+        learned.record_run(REPO, 'native', (), sample, ended=ended)
+        assert learned.run_of(REPO, 'native', ()) is None, f'a {ended} kill taught a price'
+    learned.record_run(REPO, 'native', (), Run(peak_mem_gb=4.0, cpu_s=9.0, wall_s=9.0), ended='exit')
+    learned.record_run(REPO, 'native', (), sample, ended='wall')
+    assert learned.run_of(REPO, 'native', ()).peak_mem_gb == 4.0, 'a killed run never raises a price either'
+    learned.record_run(REPO, 'control', (), sample, ended='exit')
+    assert learned.run_of(REPO, 'control', ()).peak_mem_gb == 23.0, 'PLANTED CONTROL: a completed run prices'
+    with pytest.raises(TypeError, match='exactly once'):
+        learned.record_run(REPO, 'unsaid', (), sample)
+
+
+def test_a_row_that_does_not_say_how_its_run_ended_is_read_as_unmeasured() -> None:
+    """A row written before runs said how they ended cannot be told from a timeout's: it is ignored on read."""
+    learned.record_run(REPO, 'kept', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    table = learned.learned(REPO)
+    legacy = {'peak_mem_gb': 26.0, 'cpu_s': 900.0, 'wall_s': 900.0, 'files': 0.0}
+    learned._write(REPO, {**table, 'runs': {**table['runs'], learned._key('legacy', ()): legacy}})
+    assert learned.run_of(REPO, 'legacy', ()) is None
+    assert learned.demand(REPO, 'legacy', (), prior=Run(1.0, 1.0, 1.0))['mem_gb'] == 1.0
+    assert learned.run_of(REPO, 'kept', ()).peak_mem_gb == 2.0, 'PLANTED CONTROL: a stamped row is read'
+
+
 def test_per_test_facts_and_per_job_runs_share_one_file_without_erasing_each_other() -> None:
-    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0))
+    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0), ended='exit')
     learned.learn({'repo': REPO, 'durations': {'a.py::x': 3.0}, 'peaks_mb': {'a.py': 512.0}})
     assert learned.run_of(REPO, 'linux', ()) is not None, 'learning test facts kept the job runs'
     learned.learn_peaks(REPO, {'b.py': 2048.0})
@@ -85,7 +117,9 @@ def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
     PLANTED CONTROL: the base part learned nothing, so it declares its selection (:func:`learned.selection_gb`),
     never another need-set's run and never the whole box; a cluster reads slurm runs.
     """
-    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    learned.record_run(
+        REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=2 * 3600.0, wall_s=3600.0), ended='exit'
+    )
     jmag = learned.box_demand(REPO, frozenset({'jmag'}), cpu=8, mem_gb=64)
     assert jmag == Demand(cpu=2, mem_gb=6.0 * learned.BOX_HEADROOM, jmag=1)
     width = learned.PART_WIDTH
@@ -101,7 +135,7 @@ def test_a_cluster_part_demands_the_memory_one_task_of_its_plan_asks() -> None:
     The demand is :func:`~.measured.task_gb` of the peak -- the plan's own formula -- and a known larger ask
     (:func:`learned.record_ask`) raises it. PLANTED CONTROL: a smaller ask never lowers it.
     """
-    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=13.0, cpu_s=89875.0, wall_s=8616.0))
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=13.0, cpu_s=89875.0, wall_s=8616.0), ended='exit')
     ask = learned.cluster_demand(REPO)
     assert ask(frozenset()) == Demand(cpu=11, mem_gb=13.0 * 1.5, files=50_000, submits=1)
     learned.record_ask(REPO, learned.SLURM, (), 352.2, safety=1.5)
@@ -116,8 +150,12 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
 
     PLANTED CONTROL: a box already running a part declared at the whole box admits no second one.
     """
-    learned.record_run(REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=64.0, cpu_s=30 * 3600.0, wall_s=3600.0))
-    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0))
+    learned.record_run(
+        REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=64.0, cpu_s=30 * 3600.0, wall_s=3600.0), ended='exit'
+    )
+    learned.record_run(
+        REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0), ended='exit'
+    )
     plain, jmag = Job('', 'a' * 40, 'windows'), Job('', 'b' * 40, 'windows', frozenset({'jmag'}))
     box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1))
     measured = learned.box_demand(REPO, frozenset({'jmag'}), cpu=30, mem_gb=64)
@@ -134,10 +172,10 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
 def test_a_request_is_learned_under_its_producer_name_never_a_test_parts_record() -> None:
     """A request shares no record with a test part of its need-set: unmeasured, it asks what its row declares."""
     jmag = frozenset({'jmag'})
-    learned.record_run(REPO, learned.LOCAL, jmag, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0))
+    learned.record_run(REPO, learned.LOCAL, jmag, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0), ended='exit')
     declared = learned.request_demand(REPO, 'deck_solve', jmag, cpu=4, mem_gb=8.0)
     assert declared == Demand(cpu=4, mem_gb=8.0, jmag=1), 'the test part measured on the same need-set is not it'
-    learned.record_run(REPO, 'deck_solve', jmag, Run(peak_mem_gb=10.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    learned.record_run(REPO, 'deck_solve', jmag, Run(peak_mem_gb=10.0, cpu_s=2 * 3600.0, wall_s=3600.0), ended='exit')
     measured = learned.request_demand(REPO, 'deck_solve', jmag, cpu=4, mem_gb=8.0)
     assert measured == Demand(cpu=2, mem_gb=10.0 * learned.BOX_HEADROOM, jmag=1), 'measured beats declared'
 
@@ -167,7 +205,9 @@ def test_an_unmeasured_part_is_priced_as_its_selection_never_a_repo_wide_constan
     femm = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64, ids=2)
     assert femm == Demand(cpu=2, mem_gb=2 * 6.0 * learned.BOX_HEADROOM, femm=1), 'the learned peak of its worst file'
     assert learned.box_demand(REPO, checkout, cpu=30, mem_gb=64, ids=1) == one, 'another need-set prices nothing'
-    learned.record_run(REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=20.0, cpu_s=6 * 3600.0, wall_s=3600.0))
+    learned.record_run(
+        REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=20.0, cpu_s=6 * 3600.0, wall_s=3600.0), ended='exit'
+    )
     ran = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64, ids=2)
     assert ran == Demand(cpu=6, mem_gb=20.0 * learned.BOX_HEADROOM, femm=1), 'once run, its own peak replaces it'
 
@@ -209,10 +249,10 @@ def test_a_killed_part_is_reclaimed_at_its_grown_peak_and_narrows_to_fit_the_box
     A grown peak past the box is not a part refused forever: its cores narrow in proportion (4 x 32 / 60),
     and the producer runs exactly those (declared == used), so its memory scales down with them.
     """
-    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=6.0, cpu_s=4 * 60.0, wall_s=60.0), killed=True)
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=6.0, cpu_s=4 * 60.0, wall_s=60.0), ended='memory')
     again = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=64)
     assert again == Demand(cpu=4, mem_gb=6.0 * OOM_GROWTH * learned.BOX_HEADROOM), 'the grown figure, at its width'
-    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=20.0, cpu_s=4 * 60.0, wall_s=60.0), killed=True)
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=20.0, cpu_s=4 * 60.0, wall_s=60.0), ended='memory')
     fit = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=32)
     assert fit == Demand(cpu=2, mem_gb=30.0), 'narrowed to the workers the box can hold, 15 GB each'
 
@@ -237,12 +277,12 @@ def test_a_part_narrows_to_the_workers_the_free_memory_holds_and_waits_only_for_
 
 def test_a_reader_never_sees_a_table_half_written_while_another_writer_rewrites_it() -> None:
     prior = Run(peak_mem_gb=1.0, cpu_s=60.0, wall_s=60.0)
-    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0), ended='exit')
     stop = threading.Event()
 
     def rewrite() -> None:
         while not stop.is_set():
-            learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+            learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0), ended='exit')
 
     writers = [threading.Thread(target=rewrite) for _ in range(2)]
     for writer in writers:
@@ -267,7 +307,7 @@ def test_an_empty_table_is_retried_then_read_as_nothing_learned_never_raised(mon
 
 
 def test_a_table_emptied_for_an_instant_is_read_whole_on_the_retry(monkeypatch) -> None:
-    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0), ended='exit')
     path = learned._path(REPO)
     whole = path.read_text(encoding='utf-8')
     path.write_text('', encoding='utf-8')

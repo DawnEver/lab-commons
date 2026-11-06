@@ -9,7 +9,14 @@ from pathlib import Path
 import pytest
 
 from lab_commons.box import Capacity
-from lab_commons.box.machine import DEFAULT_CPU_MARGIN, DEFAULT_MEM_MARGIN, own_reserve, provided, reserve_table
+from lab_commons.box.machine import (
+    DEFAULT_CPU_MARGIN,
+    DEFAULT_CPU_MARGIN_SHARE,
+    DEFAULT_MEM_MARGIN,
+    own_reserve,
+    provided,
+    reserve_table,
+)
 from lab_commons.box.providers import seat_sizes
 
 
@@ -19,13 +26,37 @@ def test_the_own_reserve_is_the_declared_margin_capped_at_the_box() -> None:
     assert table.mem_margin == DEFAULT_MEM_MARGIN == 0.10
     total = {'cpu': 16.0, 'mem_gb': 64.0}
     assert own_reserve(total, table) == {'cpu': DEFAULT_CPU_MARGIN, 'mem_gb': 6.4}
-    assert own_reserve({'cpu': 0.5, 'mem_gb': 64.0}, table)['cpu'] == 0.5, 'never more than the box'
+    assert own_reserve({'cpu': 0.5, 'mem_gb': 64.0}, reserve_table({'cpu_margin_share': 1}))['cpu'] == 0.5, (
+        'never more than the box'
+    )
+
+
+def test_a_small_host_keeps_a_share_of_its_cores_not_a_whole_core() -> None:
+    """An idle 2-core box must admit 1 core: a fixed 1-core margin left it 0.96 (forge-amd2, 2026-11-04)."""
+    table = reserve_table({})
+    assert DEFAULT_CPU_MARGIN_SHARE == 0.25
+    assert own_reserve({'cpu': 2.0, 'mem_gb': 1.0}, table)['cpu'] == 0.5, 'a quarter of a 2-core box'
+    assert own_reserve({'cpu': 4.0, 'mem_gb': 1.0}, table)['cpu'] == DEFAULT_CPU_MARGIN, 'the margin from 4 cores up'
+    assert own_reserve({'cpu': 2.0, 'mem_gb': 1.0}, reserve_table({'cpu_margin_share': 1}))['cpu'] == 1.0, 'opt out'
+
+
+def test_an_idle_two_core_box_lends_one_core() -> None:
+    """The planted control: the measured room an idle 2-core box offers a 1-core claim."""
+    from lab_commons.box.supply import Reading, room  # noqa: PLC0415
+
+    kept = own_reserve({'cpu': 2.0, 'mem_gb': 1.0}, reserve_table({}))['cpu']
+    capacity = Capacity(cpu=2.0 - kept, mem_bytes=1 << 30, seats={}, kept_cpu=kept)
+    idle = Reading(cores=2.0, idle_cores=1.96, total_bytes=1 << 31, available_bytes=1 << 31)
+    assert room(capacity, [], idle)['cpu'] >= 1.0
+    busy = Reading(cores=2.0, idle_cores=1.2, total_bytes=1 << 31, available_bytes=1 << 31)
+    assert room(capacity, [], busy)['cpu'] < 1.0, 'a box already busy with one core still refuses'
 
 
 def test_the_reserve_table_declares_margins_and_refuses_the_rest() -> None:
     table = reserve_table({'cpu_margin': 2, 'mem_margin': 0.5})
     assert (table.cpu_margin, table.mem_margin) == (2.0, 0.5)
-    for bad in ({'delegates': ['bob']}, {'mem_margin': 1.5}, {'cpu_margin': -1}):
+    assert reserve_table({'cpu_margin_share': 0.5}).cpu_margin_share == 0.5
+    for bad in ({'delegates': ['bob']}, {'mem_margin': 1.5}, {'cpu_margin': -1}, {'cpu_margin_share': 1.5}):
         with pytest.raises(ValueError, match=r'\[reserve\]'):
             reserve_table(bad)
 

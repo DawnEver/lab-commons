@@ -17,15 +17,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.codeplace stray"
-          },
-          {
-            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.pushwatch"
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.branchprune post-push"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.hostalarm hook"
           }
         ]
       }
@@ -44,6 +44,14 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.handback"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.pushstop"
           }
         ]
       }
@@ -66,7 +74,28 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.reclaimrun --session-start"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.venvfollow --session-start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/py.js\" -m dev_lab.dev.hostalarm hook"
+          }
+        ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "sharp-review@cc-market": false
   }
 }
