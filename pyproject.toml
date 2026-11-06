@@ -252,13 +252,14 @@ ignore = [
 ]
 
 # THIS REPO'S CI, as TOML: rendered to .github/workflows/ by `python -m dev_lab.dev.ciworkflows render`
-# (the family base is dev_lab/dev/ci_base.toml). ci.yml takes the base as is: the one PR lifecycle
-# (parts, part, absent-parts, security, review, merge-ready, promote).
+# (the family base is dev_lab/dev/ci_base.toml). The canonical workflow family is rendered in full;
+# only the finite trusted-base review protocol is declared below.
 [tool.dev_lab.ci."ci.yml"]
 
-# TEMPORARY generated bootstrap; remove when the new kit is the trusted base.
-# Owner commits/blobs and removal condition: a-frozen-method-bootstrap-does-not-change-the-trusted-review-door.md
-# Old 2ef3d35b84d142324b4cddc2ecf27fe4f9f848db method, only run[0] from 2c8711e9cc304ba45a50b9b106719c4eec964436.
+# PHASE ONE, mechanically derived owner data; remove both lists once the new kit is the trusted base.
+# Project installer: canonical 2c8711e9cc304ba45a50b9b106719c4eec964436 method[0].
+# Trusted base ed24 still pins 2ef3d35b84d142324b4cddc2ecf27fe4f9f848db: method[1] and review[-1].
+# Provenance/removal: a-new-project-kit-does-not-replace-the-trusted-base-review-protocol.md.
 [tool.dev_lab.ci._steps]
 method = [
     { name = "Install the review method", run = '''
@@ -279,4 +280,10 @@ git -C "$RUNNER_TEMP/ai-lab-src" checkout -q --detach "$AI_LAB_REV"
 ''', env = { FAMILY_READ_TOKEN = "${{ (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && secrets.FAMILY_READ_TOKEN || '' }}", GITHUB_TOKEN = "${{ github.token }}" } },
     { name = "Store the review key", run = '''
 if [ -n "$ANTHROPIC_API_KEY" ]; then git config --global credential.helper "cache --timeout=1800 --socket=$RUNNER_TEMP/git-credential-cache/socket" && printf '%s\n' "$ANTHROPIC_API_KEY" | "$RUNNER_TEMP/ai-lab/bin/python" -I -m ai_lab.auth login anthropic --task pr-review; fi''', env = { ANTHROPIC_API_KEY = "${{ (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && secrets.ANTHROPIC_API_KEY || '' }}" } },
+]
+review = [
+    { name = "tests/review", run = '''
+trap 'git credential-cache --socket=$RUNNER_TEMP/git-credential-cache/socket exit; rm -rf "$RUNNER_TEMP/forge-secrets"' EXIT
+"$REVIEW_PYTHON" -I -m dev_lab.dev.forge review run --pr ${{ github.event.pull_request.number }} --secret-env ANTHROPIC_API_KEY --git-token-file "$RUNNER_TEMP/forge-secrets/read" --api-token-file "$RUNNER_TEMP/forge-secrets/api" --runtime "ai_lab.python=$RUNNER_TEMP/ai-lab/bin/python"
+''', env = { ANTHROPIC_API_KEY = "${{ (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && secrets.ANTHROPIC_API_KEY || '' }}" } },
 ]
