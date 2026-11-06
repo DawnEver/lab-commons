@@ -255,3 +255,28 @@ ignore = [
 # (the family base is dev_lab/dev/ci_base.toml). ci.yml takes the base as is: the one PR lifecycle
 # (parts, part, absent-parts, security, review, merge-ready, promote).
 [tool.dev_lab.ci."ci.yml"]
+
+# TEMPORARY generated bootstrap; remove when the new kit is the trusted base.
+# Owner commits/blobs and removal condition: a-frozen-method-bootstrap-does-not-change-the-trusted-review-door.md
+# Old 2ef3d35b84d142324b4cddc2ecf27fe4f9f848db method, only run[0] from 2c8711e9cc304ba45a50b9b106719c4eec964436.
+[tool.dev_lab.ci._steps]
+method = [
+    { name = "Install the review method", run = '''
+cd "$RUNNER_TEMP"
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.${FORGE_URL:-$GITHUB_SERVER_URL}/.extraHeader" GIT_CONFIG_VALUE_0="Authorization: basic $(printf 'x-access-token:%s' "${FAMILY_READ_TOKEN:-$GITHUB_TOKEN}" | base64 -w0)"
+python3 -I -m venv "$RUNNER_TEMP/ai-lab" && "$RUNNER_TEMP/ai-lab/bin/python" -I -m pip install -q uv
+AI_LAB_REV=$(python3 -I -c 'import sys, tomllib
+lock = tomllib.loads(sys.stdin.read())
+(source,) = [p["source"] for p in lock.get("package", []) if p["name"] == "ai-lab"] or sys.exit("the door lock pins no ai-lab")
+"git" in source or sys.exit(f"ai-lab is locked from {source}, not a git revision")
+print(source["git"].rpartition("#")[2])' < "$RUNNER_TEMP/dev-lab/uv.lock") || exit 1
+git clone -q --no-tags --filter=blob:none --no-checkout "${FAMILY_SOURCE}ai-lab.git" "$RUNNER_TEMP/ai-lab-src"
+git -C "$RUNNER_TEMP/ai-lab-src" fetch -q --no-tags origin "$AI_LAB_REV"
+git -C "$RUNNER_TEMP/ai-lab-src" checkout -q --detach "$AI_LAB_REV"
+"$RUNNER_TEMP/ai-lab/bin/uv" export --no-config --project "$RUNNER_TEMP/ai-lab-src" --frozen --no-hashes --no-header --no-annotate --no-emit-project > "$RUNNER_TEMP/ai-lab.txt"
+"$RUNNER_TEMP/ai-lab/bin/uv" pip install --no-config --no-deps --python "$RUNNER_TEMP/ai-lab/bin/python" -r "$RUNNER_TEMP/ai-lab.txt"
+"$RUNNER_TEMP/ai-lab/bin/uv" pip install --no-config --no-deps --python "$RUNNER_TEMP/ai-lab/bin/python" "$RUNNER_TEMP/ai-lab-src"
+''', env = { FAMILY_READ_TOKEN = "${{ (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && secrets.FAMILY_READ_TOKEN || '' }}", GITHUB_TOKEN = "${{ github.token }}" } },
+    { name = "Store the review key", run = '''
+if [ -n "$ANTHROPIC_API_KEY" ]; then git config --global credential.helper "cache --timeout=1800 --socket=$RUNNER_TEMP/git-credential-cache/socket" && printf '%s\n' "$ANTHROPIC_API_KEY" | "$RUNNER_TEMP/ai-lab/bin/python" -I -m ai_lab.auth login anthropic --task pr-review; fi''', env = { ANTHROPIC_API_KEY = "${{ (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && secrets.ANTHROPIC_API_KEY || '' }}" } },
+]
