@@ -15,6 +15,7 @@ from tomllib import loads
 
 from tomlkit import dumps
 
+from lab_commons.compute.durable import durable_text
 from lab_commons.log import log
 
 __all__ = ['check_path', 'dumps', 'list_files_in_dir', 'loads', 'read_toml', 'save_toml']
@@ -62,14 +63,12 @@ def save_toml(file_path: Path, dict_data: dict) -> None:
     try:
         # Create the parent dir if missing: save targets like the user modeling
         # library (config/lib/<file>) may not exist yet on a fresh machine.
-        # Serialise BEFORE touching the target, and replace it whole: a value TOML cannot hold (``None``) or a
-        # crash mid-write must never leave a good file truncated or a fresh path holding an empty file.
+        # Serialise BEFORE touching the target, and replace it whole through the one durable door: a value TOML
+        # cannot hold (``None``) or a crash mid-write must never truncate a good file or leave an empty one.
         text = dumps(dict_data)
         target = Path(file_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        staged = target.with_name(f'.{target.name}.tmp')
-        staged.write_text(text, encoding='utf-8')
-        staged.replace(target)
+        durable_text(target, text)
     except OSError as e:
         msg = f'Failed to save file {file_path}! {e}'
         log(msg=msg, level='ERROR')
