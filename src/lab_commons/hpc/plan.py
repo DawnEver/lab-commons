@@ -114,8 +114,15 @@ class Plan:
     top_minutes: float | None = None
     #: The task holds its node alone (``--exclusive``); :func:`lab_commons.hpc.jobs.tiered` stamps it.
     exclusive: bool = False
-    #: Items one task runs at once (``[task] lanes``); ``cpus``/``mem_mb``/``gpus`` are all lanes together.
-    lanes: int = 1
+    #: Each lane's CPU ids and NUMA nodes, as cpulists (``[task] lane_domains``, :mod:`lab_commons.hpc.topology`);
+    #: ``()``: one unbound item a task. ``cpus``/``mem_mb``/``gpus`` are all lanes together.
+    lane_cpus: tuple[str, ...] = ()
+    lane_mems: tuple[str, ...] = ()
+
+    @property
+    def lanes(self) -> int:
+        """Items one task runs at once."""
+        return len(self.lane_cpus) or 1
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""

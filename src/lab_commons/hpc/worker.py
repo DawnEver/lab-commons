@@ -1,8 +1,15 @@
-"""What one array task runs on a compute node: its shard of the manifest, ``lanes`` items at a time.
+"""What one array task runs on a compute node: its shard of the manifest, one item per lane at a time.
 
-``python -m lab_commons.hpc.worker <manifest.json> <shard index>`` runs the shard -- the manifest's ``lanes``
-(``[task] lanes``) items at once, each on its own thread, so an entry that launches its item as a job step
-(``srun --exact``) fills the task's CPUs lane by lane;
+``python -m lab_commons.hpc.worker <manifest.json> <shard index>`` runs the shard -- one item per lane of the
+manifest's ``lanes`` at once (``[task] lane_domains``, cut by :mod:`lab_commons.hpc.topology`), each on its own
+thread; without lanes, one item at a time. While an item runs, :func:`lane_env` is ITS lane's binding --
+``LC_HPC_LANE``, ``LC_HPC_LANE_CPUS`` and ``LC_HPC_LANE_MEMS`` (cpulists) -- for the item to pass to what it
+launches, so no entry hard-codes a core number::
+
+    subprocess.run(['bash', '-c', 'taskset -c "$LC_HPC_LANE_CPUS" numactl --membind="$LC_HPC_LANE_MEMS" ./solve'],
+                   env={**os.environ, **lane_env()})
+
+(Lanes share one process, so the binding is per thread, never written to ``os.environ``.)
 ``python -m lab_commons.hpc.worker --close <manifest.json> <shard index> <exit code> <log>`` closes it.
 
 ONE RESULT FILE PER JOB (a file is an HPC resource). Every array task of a run appends to the run's ONE
@@ -28,7 +35,9 @@ import contextlib
 import json
 import os
 import pkgutil
+import queue
 import sys
+import threading
 import traceback
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -48,6 +57,7 @@ __all__ = [
     'Rejected',
     'append_event',
     'close_shard',
+    'lane_env',
     'load_entry',
     'main',
     'run_shard',
@@ -122,12 +132,40 @@ def append_event(path: Path, event: Event) -> None:
         os.fsync(handle.fileno())
 
 
+_LANE = threading.local()
+
+
+def lane_env() -> dict[str, str]:
+    """The running item's lane binding, as environment variables for what it launches; ``{}`` outside a lane."""
+    return dict(getattr(_LANE, 'env', {}))
+
+
 def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callable[[Any], Any] | None = None) -> int:
     """Run shard *shard* of *manifest*, appending each item's outcome to *results*; the item count."""
     start, stop = manifest['shards'][shard]
     function = entry or load_entry(manifest['entry'])
 
+    lanes = manifest['lanes']
+    free: queue.SimpleQueue[int] = queue.SimpleQueue()
+    for lane in range(len(lanes)):
+        free.put(lane)
+
     def one(index: int) -> None:
+        if lanes:
+            lane = free.get()
+            _LANE.env = {
+                'LC_HPC_LANE': str(lane),
+                'LC_HPC_LANE_CPUS': lanes[lane]['cpus'],
+                'LC_HPC_LANE_MEMS': lanes[lane]['mems'],
+            }
+        try:
+            item(index)
+        finally:
+            if lanes:
+                _LANE.env = {}
+                free.put(lane)
+
+    def item(index: int) -> None:
         data: dict[str, Any] = {'shard': shard}
         try:
             data['value'] = function(manifest['items'][index])
@@ -138,8 +176,8 @@ def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callab
             cell = Cell(Status.ERROR, reason=Reason('exception', traceback.format_exc(limit=5)))
         append_event(results, Event(OUTCOME, str(index), cell=cell, data=data))
 
-    with ThreadPoolExecutor(max_workers=manifest.get('lanes', 1)) as lanes:
-        list(lanes.map(one, range(start, stop)))
+    with ThreadPoolExecutor(max_workers=max(1, len(lanes))) as pool:
+        list(pool.map(one, range(start, stop)))
     return stop - start
 
 

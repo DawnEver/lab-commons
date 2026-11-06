@@ -33,6 +33,7 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     qos = { devq = "dev" }                        # optional: partitions that need a --qos
     setup = ["module load git/2.42.0"]   # optional: run first in every array task
     costed = false                       # optional; true when this account's compute COSTS MONEY
+    architecture = "uon-ada"             # optional: its entry in the cluster catalog (lab_commons.hpc.topology)
 
     [hpc.paging]                         # optional; undeclared, placement ignores size and region
     page_cpus = 8                        # one page: a SMALL task fits it
@@ -172,6 +173,8 @@ class Grant:
     setup: tuple[str, ...] = ()
     #: This account's compute costs money: it runs only work no free grant can hold.
     costed: bool = False
+    #: The cluster catalog's architecture this account runs on (:mod:`lab_commons.hpc.topology`); ``''``: none.
+    architecture: str = ''
 
     def __post_init__(self) -> None:
         """A grant names who, where and which account."""

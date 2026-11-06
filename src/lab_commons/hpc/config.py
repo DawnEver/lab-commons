@@ -30,7 +30,7 @@ Example::
 
     [task]                                # optional: what ONE array task holds (default: one item, shared node)
     exclusive = true                      # the whole node (``--exclusive``), charged as the whole node
-    lanes = 8                             # items run at once in one task, each on its own [cost]
+    lane_domains = 2                      # cut it into lanes of 2 L3 domains, one item each (no [cost] cpus)
 """
 
 from __future__ import annotations
@@ -121,33 +121,25 @@ class Policy:
 
 @dataclass(frozen=True)
 class Task:
-    """What ONE array task holds: ``lanes`` items at once, each on its own :class:`Cost`, on a shared or WHOLE node.
+    """What ONE array task holds: one item on a shared node, one item on a WHOLE node, or a whole node in lanes.
 
-    A task asks Slurm for ``lanes`` times one item's cost and its worker runs ``lanes`` items concurrently
-    (:mod:`lab_commons.hpc.worker`); a shard is then a run of whole rounds of ``lanes`` items. ``exclusive``
-    asks for the node alone (``--exclusive``). Slurm charges such a task the WHOLE node against the account's
-    quota, so a plan refuses a partition whose nodes are wider than the task (:func:`lab_commons.hpc.jobs.tiered`):
-    the task's own cost is what the quota is charged, never less. Placing each lane on its cores and memory
-    (``srun --exact --cpu-bind ... --mem-bind ...``) is the item's own launch line.
+    ``exclusive`` asks for the node alone (``--exclusive``). Slurm charges such a task the WHOLE node against the
+    account's quota, so the task is always planned at the node's CPUs, never less.
+
+    ``lane_domains`` cuts that node into lanes of that many L3 domains and runs one item per lane at once. The
+    shape is relative to the architecture: lanes per node, CPUs per lane and each lane's CPU ids and NUMA nodes
+    are derived, per cluster, from the grant's entry in the cluster catalog (:mod:`lab_commons.hpc.topology`), so
+    an item's CPUs come from there and ``[cost] cpus`` is not written; its memory and gpus stay per item.
     """
 
     exclusive: bool = False
-    lanes: int = 1
+    lane_domains: int | None = None
 
     def __post_init__(self) -> None:
-        """A task runs at least one item."""
-        if self.lanes < 1:
-            msg = f'[task] lanes must be at least 1, got {self.lanes}'
+        """Lanes cut a whole node, of at least one domain."""
+        if self.lane_domains is not None and (self.lane_domains < 1 or not self.exclusive):
+            msg = f'[task] lane_domains cuts a whole node: it needs exclusive = true and is at least 1, got {self}'
             raise ValueError(msg)
-
-    def cost(self, item: Cost) -> Cost:
-        """What one task asks of Slurm: ``lanes`` times *item*'s cpus, memory and gpus, in one item's time."""
-        return Cost(
-            cpus=item.cpus * self.lanes,
-            mem_gb=item.mem_gb * self.lanes,
-            gpus=item.gpus * self.lanes,
-            seconds=item.seconds,
-        )
 
 
 @dataclass(frozen=True)
@@ -223,4 +215,7 @@ def load_config(path: Path | str) -> Config:
         msg = f'{source}: unknown sections {sorted(unknown)}; known: {sorted(_SECTIONS)}'
         raise ValueError(msg)
     sections = {name: _section(name, raw.get(name, {})) for name in _SECTIONS}
+    if sections['task'].lane_domains is not None and 'cpus' in raw.get('cost', {}):
+        msg = f'{source}: [task] lane_domains derives each item CPUs from the cluster catalog; drop [cost] cpus'
+        raise ValueError(msg)
     return Config(**sections, source=source)
