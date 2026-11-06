@@ -41,9 +41,10 @@ from lab_commons.hpc.home import (
     strays,
 )
 from lab_commons.hpc.lease import MAX_TTL_HOURS, LeaseRefused, Reaped, acquire, held, reap, release
+from lab_commons.hpc.shell import UV_CACHE
 from lab_commons.log import emit
 
-__all__ = ['HomeReport', 'QuotaRefused', 'guard', 'home_main', 'home_pass', 'reach', 'tree_main']
+__all__ = ['HomeReport', 'QuotaRefused', 'env_hint', 'guard', 'home_main', 'home_pass', 'reach', 'tree_main']
 
 #: Default lease length: a working day and a night; renew by acquiring again.
 _TTL_HOURS = 24.0
@@ -148,6 +149,18 @@ def reach(at: str | None, grant: str | None) -> tuple[Runner, str]:
     return runner_for(chosen[0]), chosen[0].name
 
 
+def env_hint(tree: str) -> str:
+    """How to build inside a leased *tree*: its env and build dirs live IN it, so the reap takes them too.
+
+    uv HARDLINKS from the one shared cache (``~/ci/uv-cache``, the run builds' own), so an env costs its directories,
+    not a copy of every file -- per-tree caches were a large part of ``~/ab``'s 2.3 M files.
+    """
+    return (
+        f'build inside the lease, never beside it: UV_CACHE_DIR={UV_CACHE} UV_LINK_MODE=hardlink uv venv {tree}/.venv; '
+        f'cargo builds use --target-dir {tree}/target'
+    )
+
+
 def _holder() -> str:
     return os.environ.get(SESSION_ENV, '').strip() or f'{getpass.getuser()}@{socket.gethostname().split(".")[0]}'
 
@@ -187,17 +200,17 @@ def tree_main(argv: list[str], *, connect: Callable[[str | None, str | None], tu
         run, where = connect(args.at, args.grant)
         if args.verb == 'acquire':
             guard(run, f'tree acquire {args.sha[:12]} on {where}', now=now)
-            emit(
-                acquire(
-                    run,
-                    args.repo_url,
-                    args.sha,
-                    holder=args.holder or _holder(),
-                    purpose=args.purpose,
-                    ttl_hours=args.ttl,
-                    now=now,
-                )
+            tree = acquire(
+                run,
+                args.repo_url,
+                args.sha,
+                holder=args.holder or _holder(),
+                purpose=args.purpose,
+                ttl_hours=args.ttl,
+                now=now,
             )
+            emit(tree)
+            _warn(env_hint(tree))
         elif args.verb == 'release':
             release(run, args.sha, args.holder or _holder())
         elif args.verb == 'list':

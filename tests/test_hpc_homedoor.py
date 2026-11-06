@@ -151,3 +151,10 @@ def test_run_submit_is_not_submitted_at_hard(monkeypatch: pytest.MonkeyPatch) ->
 
 def _grant() -> Grant:
     return Grant(user='me', hosts=('h',), slurm_account='a')
+
+
+def test_a_leases_env_and_build_dirs_live_inside_it_on_the_shared_hardlinked_cache() -> None:
+    """Per-tree uv caches and cargo targets were much of ~/ab: the hint keeps both INSIDE the reaped tree."""
+    hint = homedoor.env_hint('/h/ci/leases/trees/abc')
+    assert 'UV_CACHE_DIR="$HOME"/ci/uv-cache UV_LINK_MODE=hardlink uv venv /h/ci/leases/trees/abc/.venv' in hint
+    assert '--target-dir /h/ci/leases/trees/abc/target' in hint
