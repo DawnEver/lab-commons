@@ -145,10 +145,11 @@ def _versioned(flag_argv: Callable[[Path], Sequence[str]]) -> Callable[[Path], t
     return read
 
 
-#: The FEMM 5 headless engine per OS: its binary and the install directory used when ``FEMM_DIR`` is unset.
+#: The FEMM 5 headless engine per OS: its binary and the install directory used when ``FEMM_DIR`` is unset --
+#: the one tool root ``~/.local/opt/<tool>`` on every OS (user ruling 2026-11-06).
 FEMM_HEADLESS: Final = {
     'linux': ('femm_headless', '~/.local/opt/femm-qt/bin'),
-    'windows': ('femm_headlessw.exe', 'C:/femm-qt/bin'),
+    'windows': ('femm_headlessw.exe', '~/.local/opt/femm-qt/bin'),
 }
 
 
