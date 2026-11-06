@@ -30,13 +30,13 @@ from lab_commons.hpc.records import (
     round_losses,
     stream_sources,
 )
-from lab_commons.hpc.run import ACTIVE, OOM_ROUNDS, RETRIES, NoRoom, load_state, save_state, shares_home, submit_round
+from lab_commons.hpc.run import ACTIVE, RETRIES, NoRoom, load_state, save_state, shares_home, submit_round
 from lab_commons.hpc.sacct import shard_clock
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.testcells import TestCell
 from lab_commons.outcomes import Cell, Reason, Status
 
-__all__ = ['gather_run', 'grown_after', 'oom_bounded', 'rethrottled']
+__all__ = ['gather_run', 'grown_after', 'rethrottled']
 
 
 def gather_run(
@@ -97,6 +97,7 @@ def gather_run(
         measured,
         shards=planned['shards'],
         walls=walls,
+        oom_mb={i: band_of[shard_of[i]]['mem_mb'] / policy.safety for i in oomed},
         alone={i: band_of[shard_of[i]]['mem_mb'] for i in oomed if band_of[shard_of[i]]['at_ceiling']},
         timed_out={n for n, s in states.items() if s == 'TIMEOUT'},
         tops={n: band['top_minutes'] * 60 for n, band in band_of.items() if band.get('top_minutes')},
@@ -108,9 +109,6 @@ def gather_run(
     learned.learn({'repo': state['repo'], **state['measured']})
     timed_out = 'TIMEOUT' in states.values()
     oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
-    if oom:
-        alive = {i for i, n in shard_of.items() if states.get(n) != 'TIMEOUT'}
-        pending = oom_bounded(pending, current['items'], state, alive=alive)
     state['grown'] = grown_after(
         current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom, taught=measured.taught
     )
@@ -135,31 +133,6 @@ def gather_run(
     lost = Cell(Status.INFRA, reason=Reason('lost', f'still unfinished after {len(state["rounds"])} round(s)'))
     state['cells'].update({node: TestCell(lost).to_plain() for group in pending for node in group})
     return _recorded(state, home, account, machine, measured, cost=cost)
-
-
-def oom_bounded(
-    pending: list[list[str]], items: list[dict[str, Any]], state: dict[str, Any], *, alive: set[int]
-) -> list[list[str]]:
-    """*pending* less each lone id killed for memory in :data:`~lab_commons.hpc.run.OOM_ROUNDS` rounds.
-
-    A lone id re-queued after an OOM round, from an item that ran it alone in a shard not killed for time
-    (*alive*: item indices), counts one round in ``state['oom_lost']``; at the bound its cell is
-    ``OUT_OF_MEMORY`` -- the machine said no, never ``REJECTED`` -- and the run can close. Bisection is
-    untouched: a group of several ids is halved as before, and only a lone id ever counts.
-    """
-    ran_alone = {item['ids'][0] for index, item in enumerate(items) if len(item['ids']) == 1 and index in alive}
-    lost: dict[str, int] = state.setdefault('oom_lost', {})
-    kept = []
-    for group in pending:
-        if len(group) == 1 and group[0] in ran_alone:
-            node = group[0]
-            lost[node] = lost.get(node, 0) + 1
-            if lost[node] >= OOM_ROUNDS:
-                why = Reason('out_of_memory', f'killed for memory alone in {lost[node]} rounds')
-                state['cells'][node] = TestCell(Cell(Status.OUT_OF_MEMORY, reason=why)).to_plain()
-                continue
-        kept.append(group)
-    return kept
 
 
 def _resubmit(
@@ -220,6 +193,7 @@ def _recorded(
         learned.SLURM,
         needs_of(state['platform']),
         job_measured(state['rounds'], state['cells'], measured, cpus=cost.cpus, files=files_made(home, state)),
+        ended=learned.EXITED,  # the array is gathered: a shard Slurm killed is priced per test (Measured.killed)
     )
     return record
 

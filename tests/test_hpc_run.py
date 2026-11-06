@@ -53,7 +53,7 @@ from lab_commons.hpc.records import (
     stream_sources,
     write_record,
 )
-from lab_commons.hpc.run import OOM_ROUNDS, RETRIES, NoRoom, load_state, submit_run
+from lab_commons.hpc.run import RETRIES, NoRoom, load_state, submit_run
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
     FULL,
@@ -364,6 +364,17 @@ def test_a_test_that_declares_a_longer_timeout_outlives_the_measured_wall(
     assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
 
 
+def test_a_launch_slower_than_the_wall_is_charged_to_no_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Imports and collection are the launch's time, never a test's (measured 2026-11-04: 4-7 s on a workstation).
+
+    PLANTED: the module itself takes 3 s to import under a 1 s wall; the old watch killed the item at launch.
+    """
+    runner = _item_runner(tmp_path, monkeypatch)
+    ids = _tree(tmp_path, 'import time\n\ntime.sleep(3)\n\ndef test_quick():\n    pass\n')
+    result = runner.run({'ids': ids, 'stream': '.lab-ci/t.jsonl', 'item': 0, 'walls': dict.fromkeys(ids, 1)})
+    assert _words(result['cells']) == {ids[0]: 'ok'}, result['tail']
+
+
 def test_a_test_spinning_inside_c_with_the_gil_held_is_killed_at_its_wall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -507,6 +518,29 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_k
     later = Measured.of(known.record())  # the NEXT round's fold; within one round a file keeps its worst item
     later.learn(['a.py::t'], finished)
     assert later.peaks_mb == {'a.py': 700.0}, 'PLANTED CONTROL: a finished item is measured, a newer round wins'
+
+
+def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_outgrows_the_kill() -> None:
+    """Ada 2026-11-05, motronics PR #5570: seven 24S spiral ids, each alone, OOM-killed round after round.
+
+    The read was the pytest child's ~435 MB -- the memory blown was a grandchild's -- so the floor learned was
+    ~870 MB every round, under the limit that killed it: the retry asked what it was killed at, never reached the
+    grant ceiling, and an OOM round is not counted against RETRIES, so the run never settled. A kill says the need
+    exceeds the peak its limit allowed (3072 MB over the 1.5 safety); the floor is the larger of that and the read,
+    grown, so the retry asks the limit x OOM_GROWTH. PLANTED CONTROL: a read above it still decides.
+    """
+    killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 435.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], killed, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}
+    unread = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], unread, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}, 'a kill with no read still learns its limit'
+    over = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 4000.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], over, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 4000.0 * OOM_GROWTH}
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
@@ -754,21 +788,6 @@ def test_an_oom_item_under_the_ceiling_is_retried_not_failed() -> None:
     _gather(fake)
     assert _gather(fake) is None, 'still bisecting/growing, not settled'
     assert 'tests/b.py::t4' not in json.loads(fake.state)['cells']
-
-
-def test_a_lone_id_oom_killed_round_after_round_below_the_ceiling_settles_out_of_memory() -> None:
-    """motronics ca127cc9f5: the same 7 ids OOM-killed at ~435 MB in rounds 3-11, and the run never closed."""
-    fake = FakeRunCluster(hog='tests/b.py::t4', mem_ceiling='360G')
-    _submit(fake)
-    records = [_gather(fake) for _ in range(1 + OOM_ROUNDS)]
-    record = records[-1]
-    assert records[:-1] == [None] * OOM_ROUNDS, 'bisected, then re-asked bigger while the bound allows'
-    assert record is not None, 'a lone id lost to OOM for OOM_ROUNDS rounds settles the run'
-    assert len(record['rounds']) == 1 + OOM_ROUNDS
-    words = _words(record['cells'])
-    assert words['tests/b.py::t4'] == 'out_of_memory', 'the machine said no: never REJECTED, never INFRA'
-    assert _whys(record['cells'])['tests/b.py::t4'] == f'killed for memory alone in {OOM_ROUNDS} rounds'
-    assert [words[f'tests/b.py::t{n}'] for n in (3, 5)] == ['ok', 'ok'], 'PLANTED CONTROL: its mates got results'
 
 
 def test_a_round_no_grant_can_take_settles_as_unavailable_naming_why() -> None:

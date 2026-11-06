@@ -40,9 +40,7 @@ the id each kill CUT only (:func:`lab_commons.hpc.gather.grown_after`; an id tha
 peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
 counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
 halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
-(:func:`lab_commons.hpc.records.fold`); so is a lone test killed for memory in :data:`OOM_ROUNDS` rounds
-below it (:func:`lab_commons.hpc.gather.oom_bounded`; motronics ca127cc9f5: 7 ids killed at ~435 MB in rounds
-3-11 and the run never closed). A round that NO GRANT CAN TAKE settles at once: its ids are
+(:func:`lab_commons.hpc.records.fold`). A round that NO GRANT CAN TAKE settles at once: its ids are
 ``error`` with the refusal as their reason, and the record is written -- never a run that waits forever.
 
 THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
@@ -98,7 +96,6 @@ from lab_commons.outcomes import Cell, Reason, Status
 
 __all__ = [
     'ACTIVE',
-    'OOM_ROUNDS',
     'RETRIES',
     'NoRoom',
     'cancel_run',
@@ -130,9 +127,6 @@ ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COM
 
 #: Rounds after the first that re-run what a killed shard left unfinished.
 RETRIES: Final = 2
-
-#: Rounds a LONE id may be killed for memory below the ceiling before it is ``OUT_OF_MEMORY`` by id.
-OOM_ROUNDS: Final = 3
 
 
 def shares_home(grant: Grant, builder: Grant) -> bool:

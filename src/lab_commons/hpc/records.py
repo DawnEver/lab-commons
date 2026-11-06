@@ -97,6 +97,7 @@ def fold(
     *,
     shards: Sequence[Sequence[int]],
     walls: Sequence[float],
+    oom_mb: Mapping[int, float] | None = None,
     alone: Mapping[int, int] | None = None,
     timed_out: Collection[int] = (),
     tops: Mapping[int, float] | None = None,
@@ -113,9 +114,11 @@ def fold(
     An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
     they are retried, halved, like an item that never closed -- never stamped ``PENDING``.
 
-    AN OUT_OF_MEMORY ITEM IS BISECTED, AND A LONE HOG IS ITS OWN CELL. *alone* maps each item killed
-    OUT_OF_MEMORY at the most memory any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`) to that
-    limit in MB. Halving it again isolates the test that blows the memory; once one unfinished id is
+    AN OUT_OF_MEMORY ITEM IS BISECTED, AND A LONE HOG IS ITS OWN CELL. *oom_mb* maps each item killed
+    OUT_OF_MEMORY to the peak its limit allowed (the limit over the safety), in MB -- what its ids learn
+    their floor from (:meth:`Measured.learn`) -- and *alone* maps those killed at the most memory any grant
+    gives (:func:`lab_commons.hpc.plan.grantable_gb`) to that limit in MB. Halving it again isolates the
+    test that blows the memory; once one unfinished id is
     left, no grant can give it more, so it is ``OUT_OF_MEMORY`` by id with its peak and the limit as its
     reason -- never ``REJECTED``: the machine, not the test, said no -- and every other id of the item got
     a real result on the way down.
@@ -139,7 +142,8 @@ def fold(
     Ada 2026-10-26: two ids cut after ~1 day each learned 48 h floors, to hold defq 48 h and then retry.
     """
     pending: list[list[str]] = []
-    limits = alone or {}
+    limits = oom_mb or {}
+    hogs = alone or {}
     killed = False
     folds = [read_stream(streams.get(index, ''), item['ids']) for index, item in enumerate(items)]
     spent = _killed_after(folds, shards, walls)
@@ -148,7 +152,7 @@ def fold(
     for index, (item, folded) in enumerate(zip(items, folds, strict=True)):
         group = item['ids']
         cells.update({node: _plain(line) for node, line in folded['cells'].items()})
-        measured.learn(group, folded)
+        measured.learn(group, folded, allowed_mb=limits.get(index))
         rest = [n for n in group if n not in folded['cells']]
         signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
         killed = killed or signalled
@@ -173,12 +177,12 @@ def fold(
             rest = rest[1:]
             pending += [rest] if rest else []
             continue
-        if len(rest) == 1 and index in limits:
+        if len(rest) == 1 and index in hogs:
             peak = (folded['done'] or {}).get('peak_mb')
             cells[rest[0]] = _cell(
                 Status.OUT_OF_MEMORY,
                 'out_of_memory',
-                f'alone at {limits[index]} MB, the most any grant gives'
+                f'alone at {hogs[index]} MB, the most any grant gives'
                 f' (peak {"unread" if peak is None else f"{float(peak):.0f} MB"})',
             )
             continue
