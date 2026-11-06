@@ -224,6 +224,18 @@ def test_femm_is_found_under_femm_dir_else_on_path(tmp_path: Path, platform: str
     assert femm_find(platform='darwin', environ=env, which=nowhere) is None, 'no FEMM 5 build is known there'
 
 
+@pytest.mark.parametrize(('platform', 'binary'), [('linux', 'femm_headless'), ('win32', 'femm_headlessw.exe')])
+def test_femm_without_femm_dir_is_found_under_the_one_tool_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, binary: str
+) -> None:
+    for home in ('HOME', 'USERPROFILE'):
+        monkeypatch.setenv(home, str(tmp_path))
+    bin_dir = tmp_path / '.local' / 'opt' / 'femm-qt' / 'bin'
+    bin_dir.mkdir(parents=True)
+    (bin_dir / binary).write_bytes(b'')
+    assert femm_find(platform=platform, environ={}, which=lambda _b: None) == ('install dir', bin_dir / binary)
+
+
 @pytest.mark.parametrize(
     ('platform', 'launcher'),
     [('win32', 'R2024b/bin/matlab.exe'), ('linux', 'R2024b/bin/matlab'), ('darwin', 'MATLAB_R2024b.app/bin/matlab')],
