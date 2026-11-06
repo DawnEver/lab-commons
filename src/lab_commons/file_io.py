@@ -62,9 +62,14 @@ def save_toml(file_path: Path, dict_data: dict) -> None:
     try:
         # Create the parent dir if missing: save targets like the user modeling
         # library (config/lib/<file>) may not exist yet on a fresh machine.
-        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-        with Path.open(file_path, 'w', encoding='utf-8') as f:
-            f.write(dumps(dict_data))
+        # Serialise BEFORE touching the target, and replace it whole: a value TOML cannot hold (``None``) or a
+        # crash mid-write must never leave a good file truncated or a fresh path holding an empty file.
+        text = dumps(dict_data)
+        target = Path(file_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staged = target.with_name(f'.{target.name}.tmp')
+        staged.write_text(text, encoding='utf-8')
+        staged.replace(target)
     except OSError as e:
         msg = f'Failed to save file {file_path}! {e}'
         log(msg=msg, level='ERROR')

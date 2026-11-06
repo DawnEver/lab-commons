@@ -86,10 +86,6 @@ class TestListFilesInDir:
         assert missing.is_dir()
 
 
-if __name__ == '__main__':
-    pytest.main([__file__])
-
-
 class TestOneTomlWriter:
     """Writes go through tomlkit, reads through stdlib tomllib -- the family's one TOML pair."""
 
@@ -120,3 +116,21 @@ class TestOneTomlWriter:
         # rtoml wrote None as the STRING "null", which reads back as 'null' -- a silent change of type.
         with pytest.raises(TypeError):
             save_toml(tmp_path / 'n.toml', {'n': None})
+
+    def test_a_refused_value_leaves_an_existing_file_untouched(self, tmp_path) -> None:
+        # The value is serialised BEFORE the target is opened: a refusal must not truncate a good file.
+        path = tmp_path / 'keep.toml'
+        save_toml(path, {'a': 1})
+        with pytest.raises(TypeError):
+            save_toml(path, {'n': None})
+        assert read_toml(path) == {'a': 1}
+
+    def test_a_refused_value_leaves_no_file_on_a_fresh_path(self, tmp_path) -> None:
+        path = tmp_path / 'fresh.toml'
+        with pytest.raises(TypeError):
+            save_toml(path, {'n': None})
+        assert not path.exists()
+
+
+if __name__ == '__main__':
+    pytest.main([__file__])
