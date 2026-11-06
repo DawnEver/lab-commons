@@ -105,8 +105,8 @@ def gather_run(
     planned['clock'] = round_clock(clocks, busy)
     planned['lost'] = round_losses(current['items'], streams, shards=planned['shards'], walls=walls, states=states)
     planned['walls_s'] = walls
-    state['measured'] = measured.record()
-    learned.learn({'repo': state['repo'], **state['measured']})
+    before, state['measured'] = state['measured'], measured.record()
+    learned.learn_round(state['repo'], before, state['measured'])
     timed_out = 'TIMEOUT' in states.values()
     oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
     state['grown'] = grown_after(

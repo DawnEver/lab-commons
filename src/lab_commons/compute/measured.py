@@ -178,13 +178,18 @@ class Measured:
             self._round.add(name)
 
     def _killed_peak(self, ids: Sequence[str], folded: dict[str, Any], files: list[str], need: float) -> None:
-        """Floor a killed item's *need* (MB): on its one file, else on the id it cut; never lower a known floor."""
+        """Floor a killed item's *need* (MB) on the id it cut, and on its file when it holds one; never lower a floor.
+
+        AN OOM IS A LOWER BOUND, and the cut id carries it until that id itself finishes (:meth:`learn`). A file's
+        peak alone is not enough: Ada 2026-11-03 (run 4c4cf161110e-base) a later round's finished sibling item --
+        a subset of the file's ids -- replaced the file's grown floor with its own lower read, and the cut id was
+        re-asked at 1819, 1407, 1416 and 1337 MB after dying at 1873.
+        """
         if len(files) == 1:
             self.peaks_mb[files[0]] = max(self.peaks_mb.get(files[0], 0.0), need)
             self._round.add(files[0])
             self.taught.add(files[0])
-            return
-        cut = next((n for n in ids if n not in folded['cells']), None)
+        cut = next((n for n in ids if n not in folded.get('cells', {})), None)
         if cut is not None:
             self.id_peaks_mb[cut] = max(self.id_peaks_mb.get(cut, 0.0), need)
             self.taught.add(cut)

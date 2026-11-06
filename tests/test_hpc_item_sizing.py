@@ -184,6 +184,28 @@ def test_a_one_file_oom_kill_floors_its_files_peak_at_the_limit_grown() -> None:
     assert known.peaks_mb == {file_of(_SDM): 4000.0}, 'PLANTED CONTROL: a kill below a known peak lowers nothing'
 
 
+def test_an_oom_kill_is_a_lower_bound_a_finished_sibling_never_lowers() -> None:
+    """Ada 2026-11-02/03, run 4c4cf161110e-base: asks of 1873, 1819, 1407, 1416, 1337 MB, each OOM-killed.
+
+    A one-file kill floored only the FILE's peak, and the next round's fold -- a fresh instance -- let a
+    finished sibling item of that file (a subset of its ids) replace it with its own lower read, so the
+    cut id was re-asked below the limit it had already died at. The cut id carries the floor itself.
+    """
+    ids = [_FEA, _SDM]
+    killed = Measured(peaks_mb={file_of(_SDM): 900.0})
+    killed.learn(ids, _killed_at_498s(ids, peak_mb=1873.0))
+    later = Measured.of(killed.record())
+    sibling = _stream(
+        {'start': _FEA}, {'id': _FEA, 'outcome': 'passed', 's': 3.0}, {'done': 0, 'wall': 9.0, 'peak_mb': 700.0}
+    )
+    later.learn([_FEA], read_stream(sibling, [_FEA]))
+    policy = Policy(safety=1.0)
+    assert later.item_gb([_SDM], _COST, policy) >= 1873.0 * OOM_GROWTH / 1024
+    assert later.item_gb([_FEA], _COST, policy) == pytest.approx(700.0 / 1024, rel=1e-12, abs=0.0), (
+        'PLANTED CONTROL: the finished sibling is priced by its own read'
+    )
+
+
 def test_a_multi_file_oom_kill_floors_only_its_cut_id() -> None:
     """Which file held the memory is unknown, but the id in flight is known: it alone carries the grown limit."""
     other = 'tests/unit/workflow/test_cogging.py::test_cogging'
