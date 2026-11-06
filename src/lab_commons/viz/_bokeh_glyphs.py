@@ -80,7 +80,9 @@ def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_rang
     bokeh's own grey default instead -- a different picture from the one the matplotlib adapter
     draws for the same description.
     """
-    vertices = [np.asarray(part.vertices, dtype=float) for part in parts]
+    rings = [[np.asarray(boundary, dtype=float) for boundary in (part.vertices, *part.holes)] for part in parts]
+    xs = [[[points[:, 0].tolist() for points in boundaries]] for boundaries in rings]
+    ys = [[[points[:, 1].tolist() for points in boundaries]] for boundaries in rings]
     values = [part.value for part in parts]
     if scale is not None and any(value is not None for value in values):
         alphas = {part.alpha for part in parts}
@@ -95,12 +97,12 @@ def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_rang
         )
         source = ColumnDataSource(
             data={
-                'xs': [points[:, 0].tolist() for points in vertices],
-                'ys': [points[:, 1].tolist() for points in vertices],
+                'xs': xs,
+                'ys': ys,
                 'value': [np.nan if value is None else value for value in values],
             }
         )
-        figure.patches(
+        figure.multi_polygons(
             'xs',
             'ys',
             source=source,
@@ -110,10 +112,10 @@ def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_rang
         )
         figure.add_layout(ColorBar(color_mapper=mapper, title=scale.label), 'right')
         return
-    for points, part in zip(vertices, parts, strict=True):
-        figure.patches(
-            xs=[points[:, 0].tolist()],
-            ys=[points[:, 1].tolist()],
+    for x, y, part in zip(xs, ys, parts, strict=True):
+        figure.multi_polygons(
+            xs=[x],
+            ys=[y],
             fill_color=part.color,
             line_color=part.edgecolor,
             fill_alpha=part.alpha,

@@ -29,7 +29,8 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import BoundaryNorm, ListedColormap, Normalize
 from matplotlib.patches import Circle as CirclePatch
-from matplotlib.patches import Polygon as PolygonPatch
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path
 
 from lab_commons.viz import (
     Bars,
@@ -223,7 +224,20 @@ class MplFrame:
         figure whose regions each need their own alpha is drawn with colours and not with values --
         and a description that asks for both at once is refused rather than silently flattened.
         """
-        polygons = [PolygonPatch(np.asarray(part.vertices, dtype=float), closed=True) for part in parts]
+        polygons = []
+        for part in parts:
+            paths = []
+            for index, boundary in enumerate((part.vertices, *part.holes)):
+                ring = np.asarray(boundary, dtype=float)
+                following = np.roll(ring, -1, axis=0)
+                area = np.sum(ring[:, 0] * following[:, 1] - following[:, 0] * ring[:, 1])
+                if (area > 0) != (index == 0):
+                    ring = ring[::-1]
+                vertices = np.concatenate((ring, ring[:1]))
+                codes = np.full(len(vertices), Path.LINETO, dtype=np.uint8)
+                codes[0], codes[-1] = Path.MOVETO, Path.CLOSEPOLY
+                paths.append(Path(vertices, codes))
+            polygons.append(PathPatch(Path.make_compound_path(*paths)))
         values = [part.value for part in parts]
         if scale is not None and any(value is not None for value in values):
             alphas = {part.alpha for part in parts}

@@ -331,6 +331,8 @@ class Patch:
 
     Attributes:
         vertices: the boundary, shape ``(n, 2)``, closed implicitly (do not repeat the first point).
+        holes: interior boundaries in the same coordinates, closed implicitly. Ring winding does
+            not change which regions are empty; a separate patch may occupy a hole.
         value: the scalar this region carries, or ``None`` when it is coloured by name.
         color: the face colour, used when *value* is ``None``; ``None`` means unfilled.
         edgecolor: the boundary colour, or ``None`` for no outline.
@@ -350,6 +352,7 @@ class Patch:
     label: str | None = None
     alpha: float = 1.0
     hatch: str | None = None
+    holes: Sequence[ArrayLike] = ()
 
 
 @dataclass(frozen=True)
