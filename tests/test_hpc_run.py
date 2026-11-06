@@ -53,7 +53,7 @@ from lab_commons.hpc.records import (
     stream_sources,
     write_record,
 )
-from lab_commons.hpc.run import RETRIES, NoRoom, load_state, submit_run
+from lab_commons.hpc.run import OOM_ROUNDS, RETRIES, NoRoom, load_state, submit_run
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
     FULL,
@@ -754,6 +754,21 @@ def test_an_oom_item_under_the_ceiling_is_retried_not_failed() -> None:
     _gather(fake)
     assert _gather(fake) is None, 'still bisecting/growing, not settled'
     assert 'tests/b.py::t4' not in json.loads(fake.state)['cells']
+
+
+def test_a_lone_id_oom_killed_round_after_round_below_the_ceiling_settles_out_of_memory() -> None:
+    """motronics ca127cc9f5: the same 7 ids OOM-killed at ~435 MB in rounds 3-11, and the run never closed."""
+    fake = FakeRunCluster(hog='tests/b.py::t4', mem_ceiling='360G')
+    _submit(fake)
+    records = [_gather(fake) for _ in range(1 + OOM_ROUNDS)]
+    record = records[-1]
+    assert records[:-1] == [None] * OOM_ROUNDS, 'bisected, then re-asked bigger while the bound allows'
+    assert record is not None, 'a lone id lost to OOM for OOM_ROUNDS rounds settles the run'
+    assert len(record['rounds']) == 1 + OOM_ROUNDS
+    words = _words(record['cells'])
+    assert words['tests/b.py::t4'] == 'out_of_memory', 'the machine said no: never REJECTED, never INFRA'
+    assert _whys(record['cells'])['tests/b.py::t4'] == f'killed for memory alone in {OOM_ROUNDS} rounds'
+    assert [words[f'tests/b.py::t{n}'] for n in (3, 5)] == ['ok', 'ok'], 'PLANTED CONTROL: its mates got results'
 
 
 def test_a_round_no_grant_can_take_settles_as_unavailable_naming_why() -> None:
