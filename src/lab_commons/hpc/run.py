@@ -70,6 +70,7 @@ from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
+from lab_commons.hpc.homedoor import QuotaRefused, guard
 from lab_commons.hpc.needsets import need_sets, needs_of
 from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
@@ -340,6 +341,10 @@ def submit_run(
     )
     run = runners[grant.account]
     host = grant.hosts[0]
+    try:
+        guard(run, f'run submit {spec.sha[:12]} on {grant.name}', now=time.time())
+    except QuotaRefused as full:
+        raise NotSubmitted(str(full)) from full
     told = build_run(spec, run, f'{grant.name} ({host})')
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)

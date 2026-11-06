@@ -1,0 +1,6 @@
+                         Block Limits                                               |     File Limits
+Filesystem Fileset    type             KB      quota      limit   in_doubt    grace |    files   quota    limit in_doubt    grace  Remarks
+dss2fs01   HOME       USR       115481592 1048576000 1101004800     703432     none |  3055042 4000000  4040000      380     none
+No such device
+mmlsquota: File system  not found in cluster  or local file system mount required
+mmlsquota: Command failed. Examine previous error messages to determine cause.

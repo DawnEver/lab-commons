@@ -32,6 +32,10 @@ it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 ``clean --root <remote abs dir> [--dry-run] [--grant <user>] <name>...`` deletes named directories directly
 under that root through the grant, refusing everything if a running job works under one
 (:mod:`lab_commons.hpc.clean`).
+
+``tree acquire|release|list|reap`` is the ONE door for an ad-hoc commit tree on a cluster (a lease under
+``~/ci/leases``, reaped once it expires), and ``home`` prints the quota, the reaps and the stray directories the
+forge tick reports (:mod:`lab_commons.hpc.homedoor`). Both, and ``run submit``, pass the home quota guard.
 """
 
 from __future__ import annotations
@@ -45,7 +49,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.durable import durable_text
-from lab_commons.hpc import affinity, allocation, clean
+from lab_commons.hpc import affinity, allocation, clean, homedoor
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -369,8 +373,9 @@ def main(argv: list[str] | None = None) -> int:
     """Parse the verb and dispatch it against this machine's grants."""
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ['clean']:
-        return clean.main(argv[1:])
+    doors = {'clean': clean.main, 'tree': homedoor.tree_main, 'home': homedoor.home_main}
+    if argv[:1] and argv[0] in doors:
+        return doors[argv[0]](argv[1:])
     _refuse_retired(parser, argv)
     args = parser.parse_args(argv)
     if args.verb == 'run':

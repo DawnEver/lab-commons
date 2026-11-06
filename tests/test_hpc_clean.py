@@ -154,3 +154,19 @@ def test_several_grants_need_one_named() -> None:
     cluster = FakeCluster({f'{ROOT}/e69': 'me'})
     assert clean.main(['--root', ROOT, 'e69'], machine=two, reach=lambda _g: cluster) == 2
     assert clean.main(['--root', ROOT, '--grant', 'v', 'e69'], machine=two, reach=lambda _g: cluster) == 0
+
+
+def test_at_reaches_the_host_directly_and_reads_no_machine_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workstation with no ``[hpc]`` table can still clean: ``--at user@host`` names the target."""
+
+    def no_table() -> Machine:
+        msg = 'the machine file was read'
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(clean, 'load_grants', no_table)
+    cluster = FakeCluster({f'{ROOT}/e69': 'me'})
+    targets: list[str] = []
+    rc = clean.main(['--root', ROOT, '--at', 'me@login', 'e69'], at=lambda t: targets.append(t) or cluster)
+    assert rc == 0
+    assert targets == ['me@login']
+    assert not cluster.tree
