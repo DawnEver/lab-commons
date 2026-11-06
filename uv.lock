@@ -714,7 +714,7 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 io = [
-    { name = "rtoml" },
+    { name = "tomlkit" },
 ]
 paths = [
     { name = "platformdirs" },
@@ -753,8 +753,8 @@ requires-dist = [
     { name = "pint", marker = "extra == 'units'", specifier = ">=0.25.2" },
     { name = "platformdirs", marker = "extra == 'paths'" },
     { name = "pydantic", marker = "extra == 'units'", specifier = ">=2" },
-    { name = "rtoml", marker = "extra == 'io'" },
     { name = "structlog", marker = "extra == 'structured'" },
+    { name = "tomlkit", marker = "extra == 'io'" },
 ]
 provides-extras = ["io", "paths", "structured", "units", "viz", "viz-bokeh", "viz-mpl"]
 
