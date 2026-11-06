@@ -106,3 +106,43 @@ def test_mpl_holes_reveal_underlying_regions_and_preserve_an_independent_island(
             assert pixels[pixels.shape[0] - 1 - y, x, :3].tolist() == expected
     finally:
         renderer.close()
+
+
+@pytest.mark.parametrize('backend', ['mpl', 'bokeh'])
+@pytest.mark.parametrize('boundary', [[], [(0, 0), (1, 0)], [(0, 0), (1, np.nan), (0, 1)]])
+def test_both_adapters_refuse_invalid_holes_before_adding_any_region(backend: str, boundary) -> None:
+    renderer = MplRenderer() if backend == 'mpl' else BokehRenderer()
+    frame = renderer.frame()
+    try:
+        with pytest.raises(ValueError, match='patch boundary 1 must be a finite'):
+            frame.draw_patches([Patch(_OUTER, color='blue'), Patch(_OUTER, holes=(boundary,))])
+        if backend == 'mpl':
+            assert len(frame.axes.patches) == 0
+            assert len(frame.axes.collections) == 0
+        else:
+            assert len(frame.figure.renderers) == 0
+    finally:
+        if backend == 'mpl':
+            renderer.close()
+
+
+@pytest.mark.parametrize('backend', ['mpl', 'bokeh'])
+def test_both_adapters_consume_shared_rings_once_per_patch(backend: str, monkeypatch) -> None:
+    original = Patch.rings
+    calls = []
+
+    def rings(patch) -> tuple[np.ndarray, ...]:
+        calls.append(patch)
+        return original(patch)
+
+    monkeypatch.setattr(Patch, 'rings', rings)
+    renderer = MplRenderer() if backend == 'mpl' else BokehRenderer()
+    frame = renderer.frame()
+    parts = [Patch(_OUTER, holes=_HOLES), Patch(_HOLES[0])]
+    try:
+        frame.draw_patches(parts)
+        assert len(calls) == len(parts)
+        assert all(actual is expected for actual, expected in zip(calls, parts, strict=True))
+    finally:
+        if backend == 'mpl':
+            renderer.close()

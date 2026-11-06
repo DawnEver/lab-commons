@@ -80,7 +80,7 @@ def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_rang
     bokeh's own grey default instead -- a different picture from the one the matplotlib adapter
     draws for the same description.
     """
-    rings = [[np.asarray(boundary, dtype=float) for boundary in (part.vertices, *part.holes)] for part in parts]
+    rings = [part.rings() for part in parts]
     xs = [[[points[:, 0].tolist() for points in boundaries]] for boundaries in rings]
     ys = [[[points[:, 1].tolist() for points in boundaries]] for boundaries in rings]
     values = [part.value for part in parts]
