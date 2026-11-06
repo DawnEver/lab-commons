@@ -520,6 +520,29 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_k
     assert later.peaks_mb == {'a.py': 700.0}, 'PLANTED CONTROL: a finished item is measured, a newer round wins'
 
 
+def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_outgrows_the_kill() -> None:
+    """Ada 2026-11-05, motronics PR #5570: seven 24S spiral ids, each alone, OOM-killed round after round.
+
+    The read was the pytest child's ~435 MB -- the memory blown was a grandchild's -- so the floor learned was
+    ~870 MB every round, under the limit that killed it: the retry asked what it was killed at, never reached the
+    grant ceiling, and an OOM round is not counted against RETRIES, so the run never settled. A kill says the need
+    exceeds the peak its limit allowed (3072 MB over the 1.5 safety); the floor is the larger of that and the read,
+    grown, so the retry asks the limit x OOM_GROWTH. PLANTED CONTROL: a read above it still decides.
+    """
+    killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 435.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], killed, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}
+    unread = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], unread, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}, 'a kill with no read still learns its limit'
+    over = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 4000.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], over, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 4000.0 * OOM_GROWTH}
+
+
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
     """A killed item of several files says nothing about any one of them -- only about the id it cut.
 
