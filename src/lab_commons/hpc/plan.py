@@ -112,14 +112,20 @@ class Plan:
     #: The longest wall (minutes) any open candidate granted when planned; ``None`` when one is unbounded or unread.
     #: A shard cut at it cannot be given more (:func:`lab_commons.hpc.records.fold`).
     top_minutes: float | None = None
+    #: The task holds its node alone (``--exclusive``); :func:`lab_commons.hpc.jobs.tiered` stamps it.
+    exclusive: bool = False
+    #: Items one task runs at once (``[task] lanes``); ``cpus``/``mem_mb``/``gpus`` are all lanes together.
+    lanes: int = 1
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""
         gpu = f', {self.gpus} GPU' if self.gpus else ''
+        whole = ', whole node' if self.exclusive else ''
+        lanes = f', {self.lanes} items at once' if self.lanes > 1 else ''
         return (
             f'{len(self.shards)} array tasks on {",".join(self.partitions)} '
             f'(qos {self.qos or "default"}, account {self.account}); '
-            f'each {self.cpus} CPU, {self.mem_mb / 1024:.1f} GB{gpu}, {self.minutes} min wall; '
+            f'each {self.cpus} CPU, {self.mem_mb / 1024:.1f} GB{gpu}{whole}{lanes}, {self.minutes} min wall; '
             f'up to {self.throttle} at once ({self.free_slots} slots free now); '
             f'estimated makespan {self.makespan_minutes:.0f} min.'
         )

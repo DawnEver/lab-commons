@@ -27,6 +27,10 @@ Example::
 
     [policy]                              # optional: how the work is cut
     shard_minutes_max = 30
+
+    [task]                                # optional: what ONE array task holds (default: one item, shared node)
+    exclusive = true                      # the whole node (``--exclusive``), charged as the whole node
+    lanes = 8                             # items run at once in one task, each on its own [cost]
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ from lab_commons.resources.dimensions import CPU, GPU, MEMORY
 #: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.resources.dimensions.MEMORY` counts bytes.
 GIB: Final = 1024**3
 
-__all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'load_config']
+__all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'Task', 'load_config']
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,37 @@ class Policy:
 
 
 @dataclass(frozen=True)
+class Task:
+    """What ONE array task holds: ``lanes`` items at once, each on its own :class:`Cost`, on a shared or WHOLE node.
+
+    A task asks Slurm for ``lanes`` times one item's cost and its worker runs ``lanes`` items concurrently
+    (:mod:`lab_commons.hpc.worker`); a shard is then a run of whole rounds of ``lanes`` items. ``exclusive``
+    asks for the node alone (``--exclusive``). Slurm charges such a task the WHOLE node against the account's
+    quota, so a plan refuses a partition whose nodes are wider than the task (:func:`lab_commons.hpc.jobs.tiered`):
+    the task's own cost is what the quota is charged, never less. Placing each lane on its cores and memory
+    (``srun --exact --cpu-bind ... --mem-bind ...``) is the item's own launch line.
+    """
+
+    exclusive: bool = False
+    lanes: int = 1
+
+    def __post_init__(self) -> None:
+        """A task runs at least one item."""
+        if self.lanes < 1:
+            msg = f'[task] lanes must be at least 1, got {self.lanes}'
+            raise ValueError(msg)
+
+    def cost(self, item: Cost) -> Cost:
+        """What one task asks of Slurm: ``lanes`` times *item*'s cpus, memory and gpus, in one item's time."""
+        return Cost(
+            cpus=item.cpus * self.lanes,
+            mem_gb=item.mem_gb * self.lanes,
+            gpus=item.gpus * self.lanes,
+            seconds=item.seconds,
+        )
+
+
+@dataclass(frozen=True)
 class JobSpec:
     """What every array task executes, and where."""
 
@@ -148,6 +183,7 @@ class Config:
     job: JobSpec = field(default_factory=JobSpec)
     cost: Cost = field(default_factory=Cost)
     policy: Policy = field(default_factory=Policy)
+    task: Task = field(default_factory=Task)
     source: Path | None = None
 
     def items_path(self) -> Path:
@@ -162,10 +198,11 @@ _SECTIONS: dict[str, type] = {
     'job': JobSpec,
     'cost': Cost,
     'policy': Policy,
+    'task': Task,
 }
 
 
-def _section(name: str, raw: dict[str, Any]) -> Any:  # noqa: ANN401 -- one of the three section types
+def _section(name: str, raw: dict[str, Any]) -> Any:  # noqa: ANN401 -- one of the section types
     """Build one section, refusing a key the dataclass does not declare -- a typo is not a default."""
     kind = _SECTIONS[name]
     known = set(kind.__dataclass_fields__)

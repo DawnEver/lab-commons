@@ -37,6 +37,7 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, Unplaceable, plan_on
 from lab_commons.hpc.run import ACTIVE
 from lab_commons.hpc.sacct import shard_states
+from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.span import Placement, span
 
 __all__ = [
@@ -107,8 +108,18 @@ def _holding(
     wall = config.cost.seconds * config.policy.safety
     holders, why = [], []
     for grant, snapshot in answering:
+        if (wider := _wider_nodes(config, grant, snapshot)) is not None:
+            why.append(wider)
+            continue
         try:
-            plan = plan_on(grant, snapshot, n_items, config.cost, session=machine.session, policy=config.policy)
+            plan = plan_on(
+                grant,
+                snapshot,
+                _rounds(n_items, config),
+                config.task.cost(config.cost),
+                session=machine.session,
+                policy=config.policy,
+            )
         except Unplaceable as refused:
             why.append(str(refused))
             continue
@@ -119,6 +130,64 @@ def _holding(
                 f'{grant.name}: a {wall / 60:.0f}-min padded wall exceeds its {plan.top_minutes:.0f}-min ceiling'
             )
     return holders, '; '.join(why) or 'no free grant answers'
+
+
+def _rounds(n_items: int, config: Config) -> int:
+    """How many rounds of ``[task] lanes`` items *n_items* is: the unit a task's cost and time are planned in."""
+    return -(-n_items // config.task.lanes)
+
+
+def _in_items(placement: Placement, config: Config, n_items: int) -> Placement:
+    """*placement*, planned in rounds (:func:`_rounds`), back in items -- stamped with the task's shape."""
+    lanes = config.task.lanes
+    start, stop = placement.items
+    first, last = start * lanes, min(stop * lanes, n_items)
+    shards = tuple((a * lanes, min(b * lanes, last - first)) for a, b in placement.plan.shards)
+    plan = replace(placement.plan, shards=shards, exclusive=config.task.exclusive, lanes=lanes)
+    return Placement(placement.grant, plan, (first, last))
+
+
+def _wider_nodes(config: Config, grant: Grant, snapshot: Snapshot) -> str | None:
+    """Why an exclusive task may not run on *grant*: a node of its partitions is wider than the task; else ``None``.
+
+    Slurm charges an exclusive task its WHOLE node, so a task priced below the node's CPUs would spend quota
+    the plan never counted. A narrower node cannot hold the task at all, so it is no risk.
+    """
+    if not config.task.exclusive:
+        return None
+    cpus = config.task.cost(config.cost).cpus
+    names = set(grant.cluster().partitions or snapshot.partitions)
+    wider = {
+        n.total_cpus
+        for n in snapshot.nodes
+        if n.schedulable and not names.isdisjoint(n.partitions) and n.total_cpus > cpus
+    }
+    if not wider:
+        return None
+    return (
+        f'{grant.name}: an exclusive task of {cpus} CPU would be charged a whole {max(wider)}-CPU node; '
+        f'set [task] lanes x [cost] cpus to the node'
+    )
+
+
+def _spread(
+    config: Config, n_items: int, candidates: list[tuple[Grant, Any]], machine: Machine
+) -> tuple[Placement, ...]:
+    """*n_items* spanned over the *candidates* an exclusive task may use, planned in rounds, returned in items."""
+    wider = [w for g, s in candidates if (w := _wider_nodes(config, g, s)) is not None]
+    fitting = [(g, s) for g, s in candidates if _wider_nodes(config, g, s) is None]
+    if candidates and not fitting:
+        raise Unplaceable('; '.join(wider))
+    rounds = span(
+        _rounds(n_items, config),
+        config.task.cost(config.cost),
+        fitting,
+        session=machine.session,
+        policy=config.policy,
+        paging=machine.paging,
+        rerun_safe=config.job.rerun_safe,
+    )
+    return tuple(_in_items(p, config, n_items) for p in rounds)
 
 
 def tiered(
@@ -133,19 +202,8 @@ def tiered(
     span; any other ``ValueError`` is the request's defect and propagates.
     """
 
-    def spread(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
-        return span(
-            n_items,
-            config.cost,
-            candidates,
-            session=machine.session,
-            policy=config.policy,
-            paging=machine.paging,
-            rerun_safe=config.job.rerun_safe,
-        )
-
     def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
-        return place(candidates, machine.affinity, spread)
+        return place(candidates, machine.affinity, lambda c: _spread(config, n_items, c, machine))
 
     costed = [g for g in grants if g.costed]
     tier = [g for g in machine.grants if not g.costed]

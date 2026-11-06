@@ -1,6 +1,8 @@
-"""What one array task runs on a compute node: its shard of the manifest, one item at a time.
+"""What one array task runs on a compute node: its shard of the manifest, ``lanes`` items at a time.
 
-``python -m lab_commons.hpc.worker <manifest.json> <shard index>`` runs the shard;
+``python -m lab_commons.hpc.worker <manifest.json> <shard index>`` runs the shard -- the manifest's ``lanes``
+(``[task] lanes``) items at once, each on its own thread, so an entry that launches its item as a job step
+(``srun --exact``) fills the task's CPUs lane by lane;
 ``python -m lab_commons.hpc.worker --close <manifest.json> <shard index> <exit code> <log>`` closes it.
 
 ONE RESULT FILE PER JOB (a file is an HPC resource). Every array task of a run appends to the run's ONE
@@ -29,6 +31,7 @@ import pkgutil
 import sys
 import traceback
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Final
 
@@ -123,7 +126,8 @@ def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callab
     """Run shard *shard* of *manifest*, appending each item's outcome to *results*; the item count."""
     start, stop = manifest['shards'][shard]
     function = entry or load_entry(manifest['entry'])
-    for index in range(start, stop):
+
+    def one(index: int) -> None:
         data: dict[str, Any] = {'shard': shard}
         try:
             data['value'] = function(manifest['items'][index])
@@ -133,6 +137,9 @@ def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callab
         except Exception:  # noqa: BLE001 -- an item's failure is recorded, not propagated; see the module docstring
             cell = Cell(Status.ERROR, reason=Reason('exception', traceback.format_exc(limit=5)))
         append_event(results, Event(OUTCOME, str(index), cell=cell, data=data))
+
+    with ThreadPoolExecutor(max_workers=manifest.get('lanes', 1)) as lanes:
+        list(lanes.map(one, range(start, stop)))
     return stop - start
 
 
