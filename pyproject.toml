@@ -18,8 +18,8 @@ dependencies = []
 dev = ["dev-lab[test]"]
 
 [tool.uv.sources]
-# integrate/main until dev-lab main carries the split; then drop `branch`.
-dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", branch = "integrate/main" }
+# Held at 6f6b042a (#116): the review door runs from the base, which must take --keys-env before the render passes it; relock 2 floats it again.
+dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", rev = "6f6b042a558fd11a4ea17a0fc6f364b3ab4bb4d3" }
 
 [tool.uv]
 # dev-lab's own source pins lab-commons to its git integrate/main; HERE lab-commons is this checkout, so no
@@ -89,16 +89,13 @@ install = "uv sync --frozen --all-extras"
 # The run record's root (dev_lab.dev.platformparts).
 [tool.dev_lab.parts]
 output = "output/logs"
-# User ruling 2026-10-30: no hosted runner is a workstation, so the workstation-marked tests (host node) run
-# in no part and nothing waits on one (dev_lab.dev.unproduced; relock onto it pending).
-unproduced = ["workstation"]
 
 # One need vocabulary (lab_commons.hpc.needsets): a test marks the resources it needs, and its part is its
-# need-set -- tests/base, tests/windows and tests/workstation. A host claims a part when its machine file's
+# need-set -- tests/base and tests/windows. A host claims a part when its machine file's
 # [capabilities.<name>] give it every one; the cluster's per-sha tree has none. `produce` is the ONE local producer of every part ({part} filled); a cluster part runs
 # from [tool.lab_commons.hpc].
 [tool.lab_commons.tests]
-resources = ["windows", "workstation"]
+resources = ["windows"]
 produce = ["-m", "dev_lab.dev.verify", "--part", "{part}"]
 
 # The tool FLOORS this repo's parts need (D21): `<tool> = {floor = "<version>", reason = "<why>"}`. A
@@ -156,7 +153,6 @@ OUTPUT-REDIRECT-IS-DATED = "<command> > output/logs/<yy>/<mm>/<dd>/<kind>/<name>
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "workstation: needs a developer workstation -- the live checkout (hooks, branches, worktree placement) or the agent tooling its guards run on (`node`, the `codex` CLI); the cluster's per-sha tree has none of it",
     "windows: runs only on a Windows host (Win32 API, console windows); its part is produced by a Windows host, never skipped on Linux",
     "not_applicable: a skip of this test is NOT_APPLICABLE (lab_commons.hpc.pytest_item.judged); any other skip is refused",
 ]
