@@ -15,6 +15,7 @@ from typing import Any, Final
 
 __all__ = [
     'DEFAULT_CPU_MARGIN',
+    'DEFAULT_CPU_MARGIN_SHARE',
     'DEFAULT_MEM_MARGIN',
     'RESOURCE_NAME',
     'ReserveTable',
@@ -26,6 +27,10 @@ __all__ = [
 
 #: Cores kept free above what the box's own user is using now (measured, :mod:`lab_commons.box.supply`).
 DEFAULT_CPU_MARGIN: Final = 1.0
+
+#: The most of the box's cores the cpu margin may keep: OS headroom scales with the host, so a 2-core box keeps
+#: half a core, not half of itself -- a whole core there left an idle box unable to admit one (2026-11-04).
+DEFAULT_CPU_MARGIN_SHARE: Final = 0.25
 
 #: The fraction of the box's memory kept free above what its own user is using now.
 DEFAULT_MEM_MARGIN: Final = 0.10
@@ -42,36 +47,50 @@ class ReserveTable:
 
     It is not a reservation for people (ruling 2026-10-25): a person's or a session's use is DECLARED as an
     ordinary claim on the ledger (``python -m lab_commons.box claim``), and use nobody declared that the OS
-    measures already counts. The margin only keeps the OS itself responsive: 1 core and 10% of memory.
+    measures already counts. The margin only keeps the OS itself responsive: 1 core, but never more than
+    ``cpu_margin_share`` of the cores, and 10% of memory.
     """
 
     cpu_margin: float = DEFAULT_CPU_MARGIN
     mem_margin: float = DEFAULT_MEM_MARGIN
+    cpu_margin_share: float = DEFAULT_CPU_MARGIN_SHARE
 
 
 def reserve_table(table: Mapping[str, Any]) -> ReserveTable:
     """Read ``[reserve]``; an unknown key or a margin out of range is refused."""
     unknown = sorted(set(table) - set(ReserveTable.__dataclass_fields__))
     cpu = table.get('cpu_margin', DEFAULT_CPU_MARGIN)
+    share = table.get('cpu_margin_share', DEFAULT_CPU_MARGIN_SHARE)
     mem = table.get('mem_margin', DEFAULT_MEM_MARGIN)
     bad = [
         *(f'unknown key {key!r}' for key in unknown),
         *(['cpu_margin must be >= 0 cores'] if not isinstance(cpu, int | float) or cpu < 0 else []),
+        *(
+            ['cpu_margin_share must be a fraction in [0, 1]']
+            if not isinstance(share, int | float) or not 0 <= share <= 1
+            else []
+        ),
         *(['mem_margin must be a fraction in [0, 1]'] if not isinstance(mem, int | float) or not 0 <= mem <= 1 else []),
     ]
     if bad:
         msg = f'{_WHERE} [reserve]: {"; ".join(bad)}'
         raise ValueError(msg)
-    return ReserveTable(float(cpu), float(mem))
+    return ReserveTable(float(cpu), float(mem), cpu_margin_share=float(share))
 
 
 def own_reserve(total: Mapping[str, float], table: ReserveTable) -> dict[str, float]:
     """The margin this box keeps above what its own user uses: ``{'cpu', 'mem_gb'}``, capped at the box.
 
+    The cpu margin is ``cpu_margin`` cores but at most ``cpu_margin_share`` of them, so it scales down with the host.
+
     What the user USES is not here: it is in the OS reading the box supply is measured from
     (:mod:`lab_commons.box.supply`), so it is counted once, as it happens, and never declared.
     """
-    wanted = {'cpu': table.cpu_margin, 'mem_gb': table.mem_margin * total.get('mem_gb', 0.0)}
+    cores = total.get('cpu', 0.0)
+    wanted = {
+        'cpu': min(table.cpu_margin, table.cpu_margin_share * cores),
+        'mem_gb': table.mem_margin * total.get('mem_gb', 0.0),
+    }
     return {name: min(amount, total.get(name, 0.0)) for name, amount in wanted.items()}
 
 

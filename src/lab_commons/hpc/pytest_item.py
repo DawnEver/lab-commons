@@ -307,10 +307,11 @@ def declared_timeout(item: _Marked) -> float | None:
 
 
 def pytest_collection_finish(session: _Collected) -> None:
-    """Append the DECLARED timeouts of the selected ids: the outer wall never cuts a test below its own."""
-    declared = {item.nodeid: s for item in session.items if (s := declared_timeout(item)) is not None}
-    if declared:
-        _append({'declared': declared})
+    """Append the DECLARED timeouts of the selected ids -- possibly none: the line also marks the launch over.
+
+    The outer wall never cuts a test below its own timeout, and no wall runs before this line (:class:`_Watch`).
+    """
+    _append({'declared': {item.nodeid: s for item in session.items if (s := declared_timeout(item)) is not None}})
 
 
 def pytest_runtest_logstart(nodeid: str) -> None:
@@ -473,9 +474,14 @@ class _Watch:
     """THE PER-TEST WALL, enforced from outside pytest: reads this item's new stream lines as they land.
 
     The clock of a test starts at its START line and runs until the next one, so a hung teardown is the
-    test's own; before any START (collection, imports) the clock is the launch's and the bound the
-    largest of the ids still owed. pytest-timeout cannot do this: it lives inside the interpreter a C loop
-    holds (measured on Ada: 20 h at 100% CPU, a verdict held 4 h under a 21 h Slurm limit).
+    test's own. THE LAUNCH (interpreter start, imports, collection) IS NO TEST'S TIME, and no wall runs over it:
+    a wall is a test's measured duration, and the timeouts the tests declare are unknown until collection
+    ends -- measured 2026-11-04 on a loaded workstation, pytest took 4-7 s to collect one file, so every
+    wall test's item was killed at launch (a 1 s wall cut a test declaring 30 s before its ``declared`` line
+    could raise it). From that line until the first START the clock is the launch's, bounded by the largest
+    wall of the ids still owed; a hung import is left to the scheduler's own limit. pytest-timeout cannot do
+    this: it lives inside the interpreter a C loop holds (measured on Ada: 20 h at 100% CPU, a verdict held
+    4 h under a 21 h Slurm limit).
     """
 
     def __init__(self, target: str, index: int, ids: list[str], walls: Mapping[str, float]) -> None:
@@ -483,10 +489,11 @@ class _Watch:
         self.offset = os.stat(target).st_size  # noqa: PTH116 -- os, not pathlib: see _write
         self.reported: set[str] = set()
         self.inflight: str | None = None
+        self.collected = False
         self.since = time.monotonic()
 
     def launched(self) -> None:
-        self.inflight, self.since = None, time.monotonic()
+        self.inflight, self.collected, self.since = None, False, time.monotonic()
 
     def _read(self) -> None:
         fd = os.open(self.target, os.O_RDONLY)
@@ -510,6 +517,7 @@ class _Watch:
                 for node, seconds in line['declared'].items():
                     key = canonical(node, self.expected)
                     self.walls[key] = max(float(self.walls.get(key, 0.0)), float(seconds))
+                self.collected, self.since = True, time.monotonic()
             elif 'start' in line:
                 self.inflight, self.since = canonical(line['start'], self.expected), time.monotonic()
             elif 'id' in line:
@@ -518,6 +526,8 @@ class _Watch:
     def overdue(self, owed: list[str]) -> tuple[list[str], float] | None:
         """The ids a kill now names, and the bound they passed; ``None`` while every clock is within its wall."""
         self._read()
+        if not self.collected:
+            return None
         if self.inflight is not None and self.inflight in self.walls:
             culprits, bound = [self.inflight], float(self.walls[self.inflight])
         else:
