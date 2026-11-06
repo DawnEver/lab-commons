@@ -14,11 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.hpc import jobs
+from lab_commons.hpc import jobs, worker
 from lab_commons.hpc.cluster import render_script, submit
 from lab_commons.hpc.config import Config, Cost, JobSpec, Task, load_config
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, Unplaceable
+from lab_commons.hpc.topology import cpu_ids
 from lab_commons.hpc.worker import RESULTS, lane_env, run_shard
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
@@ -32,7 +33,7 @@ CATALOG = (
     + ''.join(f'  {{ cpus = "{6 * k}-{6 * k + 5}", numa = {k} }},\n' for k in range(16))
     + ']\n'
 )
-SHAPE = Task(exclusive=True, lane_domains=2)
+SHAPE = Task(lane_domains=2)
 
 
 @pytest.fixture(autouse=True)
@@ -65,15 +66,16 @@ def _plan(config: Config, n_items: int, grant: Grant = NODE96) -> Plan:
 
 def test_the_task_section_loads_a_topology_shape(tmp_path: Path) -> None:
     path = tmp_path / 'job.toml'
-    path.write_text('[cost]\nmem_gb = 40\n[task]\nexclusive = true\nlane_domains = 2\n', encoding='utf-8')
+    path.write_text('[cost]\nmem_gb = 40\n[task]\nlane_domains = 2\n', encoding='utf-8')
     assert load_config(path).task == SHAPE
+    assert SHAPE.whole_node, 'lanes cut a whole node: lane_domains implies exclusive'
+    assert Task(exclusive=True).whole_node
+    assert not Task().whole_node
     path.write_text('[cost]\ncpus = 12\n[task]\nexclusive = true\nlane_domains = 2\n', encoding='utf-8')
     with pytest.raises(ValueError, match='derives'):
         load_config(path)
-    with pytest.raises(ValueError, match='exclusive'):
-        Task(lane_domains=2)
     with pytest.raises(ValueError, match='lane_domains'):
-        Task(exclusive=True, lane_domains=0)
+        Task(lane_domains=0)
 
 
 def test_two_domain_lanes_on_the_architecture_are_twelve_cpus_by_eight() -> None:
@@ -88,7 +90,7 @@ def test_two_domain_lanes_on_the_architecture_are_twelve_cpus_by_eight() -> None
     assert all(a % 8 == 0 for a, _ in plan.shards), 'a shard starts on a lane boundary'
     rounds = max(-(-(b - a) // 8) for a, b in plan.shards)
     assert plan.minutes == rounds * 15, 'each round of 8 lanes is one item: 600 s x 1.5'
-    four = _plan(_config(Task(exclusive=True, lane_domains=4)), 20)
+    four = _plan(_config(Task(lane_domains=4)), 20)
     assert (four.lanes, four.lane_cpus[1]) == (4, '24-47')
     # Planted control: one item a task is planned per item, never exclusive, never bound.
     narrow = _plan(_config(Task(), Cost(cpus=12, mem_gb=40, seconds=600)), 20)
@@ -127,7 +129,7 @@ def test_a_shape_the_cluster_cannot_hold_is_refused(
 
 def test_a_lane_that_does_not_tile_the_node_is_refused() -> None:
     with pytest.raises(Unplaceable, match='lane_domains'):
-        _plan(_config(Task(exclusive=True, lane_domains=3)), 8)
+        _plan(_config(Task(lane_domains=3)), 8)
 
 
 def test_an_exclusive_one_item_task_narrower_than_its_nodes_is_refused() -> None:
@@ -179,6 +181,36 @@ def test_the_worker_runs_items_lanes_at_once_each_on_its_own_lane(tmp_path: Path
         ('12-23', '2-3'),
     ]
     assert lane_env() == {}, 'outside a lane there is no binding'
+
+
+def test_the_worker_pins_each_lane_thread_to_its_cpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Children inherit a thread's affinity, so an item is bound even if it never reads lane_env()."""
+    pinned: dict[int, set[int]] = {}
+
+    def pin(pid: int, cpus: set[int]) -> None:
+        assert pid == 0, 'the calling thread, never the process'
+        pinned[threading.get_ident()] = set(cpus)
+
+    monkeypatch.setattr(worker.os, 'sched_setaffinity', pin, raising=False)
+    together = threading.Barrier(2, timeout=10)
+
+    def entry(_item: int) -> str:
+        together.wait()
+        assert pinned[threading.get_ident()] == set(cpu_ids(lane_env()['LC_HPC_LANE_CPUS']))
+        return lane_env()['LC_HPC_LANE_CPUS']
+
+    lanes = [{'cpus': '0-11', 'mems': '0-1'}, {'cpus': '12-23', 'mems': '2-3'}]
+    manifest = {'entry': 'm:f', 'items': [0, 1], 'shards': [[0, 2]], 'lanes': lanes}
+    assert run_shard(manifest, 0, tmp_path / RESULTS, entry) == 2
+    cells = [json.loads(line) for line in (tmp_path / RESULTS).read_text().splitlines()]
+    assert sorted(c['data']['value'] for c in cells) == ['0-11', '12-23'], cells
+    assert sorted(map(sorted, pinned.values())) == [list(range(12)), list(range(12, 24))]
+
+
+def test_without_sched_setaffinity_the_worker_runs_unpinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(worker.os, 'sched_setaffinity', raising=False)
+    manifest = {'entry': 'm:f', 'items': [0], 'shards': [[0, 1]], 'lanes': [{'cpus': '0-11', 'mems': '0-1'}]}
+    assert run_shard(manifest, 0, tmp_path / RESULTS, lambda _item: lane_env()['LC_HPC_LANE_CPUS']) == 1
 
 
 def test_an_unbound_shard_has_no_lane_binding(tmp_path: Path) -> None:

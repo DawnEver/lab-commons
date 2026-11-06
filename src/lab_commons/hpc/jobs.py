@@ -198,7 +198,7 @@ def _in_items(placement: Placement, grant: Grant, shape: _Shape, config: Config,
     plan = replace(
         placement.plan,
         shards=shards,
-        exclusive=config.task.exclusive,
+        exclusive=config.task.whole_node,
         lane_cpus=tuple(lane.cpus for lane in shape.lanes),
         lane_mems=tuple(lane.mems for lane in shape.lanes),
     )

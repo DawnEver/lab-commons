@@ -9,7 +9,10 @@ launches, so no entry hard-codes a core number::
     subprocess.run(['bash', '-c', 'taskset -c "$LC_HPC_LANE_CPUS" numactl --membind="$LC_HPC_LANE_MEMS" ./solve'],
                    env={**os.environ, **lane_env()})
 
-(Lanes share one process, so the binding is per thread, never written to ``os.environ``.)
+(Lanes share one process, so the binding is per thread, never written to ``os.environ``.) On Linux the worker
+also pins the lane's thread to its CPUs (``os.sched_setaffinity``) before the item runs, and every process the
+item starts inherits it, so an item is CPU-bound even if it never reads :func:`lane_env`; memory binding is the
+item's, through ``LC_HPC_LANE_MEMS``. Where the call does not exist the thread runs unpinned.
 ``python -m lab_commons.hpc.worker --close <manifest.json> <shard index> <exit code> <log>`` closes it.
 
 ONE RESULT FILE PER JOB (a file is an HPC resource). Every array task of a run appends to the run's ONE
@@ -44,6 +47,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.hpc.topology import cpu_ids
 from lab_commons.log import emit
 from lab_commons.outcomes import Cell, Reason, Status
 from lab_commons.outcomes.jsonl import read_jsonl
@@ -158,6 +162,8 @@ def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callab
                 'LC_HPC_LANE_CPUS': lanes[lane]['cpus'],
                 'LC_HPC_LANE_MEMS': lanes[lane]['mems'],
             }
+            if hasattr(os, 'sched_setaffinity'):
+                os.sched_setaffinity(0, set(cpu_ids(lanes[lane]['cpus'])))
         try:
             item(index)
         finally:
