@@ -33,6 +33,7 @@ def _plant(root: Path, rel: str) -> Path:
     exe = root / rel
     exe.parent.mkdir(parents=True, exist_ok=True)
     exe.write_text('', encoding='utf-8')
+    exe.chmod(0o755)
     return exe
 
 

@@ -478,5 +478,14 @@ def test_heavy_compute_is_the_vendor_solvers_and_nothing_else() -> None:
 
     A light workstation withholds heavy compute; a plain tool (ngspice, node) is not heavy because it gained a probe.
     """
-    assert {name for name, check in CHECKS.items() if check.heavy} == {'femm', 'jmag', 'matlab', 'simba'}
+    assert {name for name, check in CHECKS.items() if check.heavy} == {
+        'aedt',
+        'femm',
+        'fluent',
+        'jmag',
+        'lsdyna',
+        'mapdl',
+        'matlab',
+        'simba',
+    }
     assert {name for name, check in CHECKS.items() if not check.heavy} == {'ngspice', 'node'}
