@@ -82,12 +82,6 @@ SHA = 'a' * 40
 SOURCE = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / 'pytest_item.py'
 
 
-@pytest.fixture(autouse=True)
-def _machine_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every gather learns beside the machine file: never this box's own."""
-    monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'machine' / 'config.toml'))
-
-
 def test_the_item_runner_is_standalone() -> None:
     """It is shipped as text and imported beside an arbitrary lab_commons -- it must import none."""
     source = SOURCE.read_text(encoding='utf-8')
