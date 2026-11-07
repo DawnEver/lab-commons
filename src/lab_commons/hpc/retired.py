@@ -172,11 +172,17 @@ RETIRED: Final[dict[str, str]] = {
     'branchset-push.sh': _BRANCHSET_ROW,
     'lab_commons.dev.githooks cz-push-range': 'python -m dev_lab.dev.githooks script cz-push-range',
     # A session share is temporary: derived from Slurm or one expiring forge record, never a machine file (2026-10-17).
-    '[hpc.session.': 'python -m dev_lab.dev.hpchost allocate (one expiring forge record), else the derived share',
+    '[hpc.session.': 'python -m dev_lab.dev.hpcaccount allocate (one expiring forge record), else the derived share',
     # The verbs that launch the forge moved to dev-lab with it (dev-lab cut-over, 2026-10-22).
-    'lab_commons.hpc deploy': 'python -m dev_lab.dev.hpchost deploy (a forge serve host is the forge`s)',
-    'lab_commons.hpc tick': 'python -m dev_lab.dev.hpchost tick (the cron line the dev-lab deploy writes)',
-    'lab_commons.hpc allocate': 'python -m dev_lab.dev.hpchost allocate (the record lives on the forge)',
+    'lab_commons.hpc deploy': 'python -m dev_lab.dev.hpcaccount deploy (a forge serve host is the forge`s)',
+    'lab_commons.hpc tick': 'python -m dev_lab.dev.hpcaccount tick (the cron line the dev-lab deploy writes)',
+    'lab_commons.hpc allocate': 'python -m dev_lab.dev.hpcaccount allocate (the record lives on the forge)',
+    # A remote door is named for its target's kind (user ruling 2026-11-07): a cluster account or a server.
+    'dev_lab.dev.hpchost': 'dev_lab.dev.hpcaccount (a cluster account); a server is dev_lab.dev.opsserver',
+    # Deny-row IDs renamed, read by dev_lab.dev._deny_rows.retired_row under the key `deny row <ID>`.
+    'deny row GIT-NETWORK-VERB': 'NETWORK-VERB',
+    'deny row REVIEW-HOLD-VIA-TAKEOVER': 'STATUS-VIA-DOORS',
+    'deny row REVIEW-STATUS-VIA-DOORS': 'STATUS-VIA-DOORS',
     # Where a run is and what the cluster can take are read from the forge, from any machine; no verb asks over ssh.
     'lab_commons.hpc probe': (
         'python -m dev_lab.dev.forge queue (each cluster host card carries its supply, partitions and quota)'

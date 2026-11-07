@@ -12,7 +12,7 @@ and its share lends out, and two busy sessions meet at equal halves. Past its sh
 submissions WAIT (:func:`session_room` gives them no room); nothing is ever cancelled.
 
 THE OVERRIDE IS ONE RECORD, :data:`RECORD`, on the forge's records home; only its WRITER, the verb deciding
-shares, is the forge's (``python -m dev_lab.dev.hpchost allocate``). Its shape:
+shares, is the forge's (``python -m dev_lab.dev.hpcaccount allocate``). Its shape:
 ``{"expires": <UTC iso>, "sessions": {name: {cpus, mem_gb, tasks?, task_cpus?, task_mem_gb?}}}``.
 While it is unexpired it FIXES the named sessions' shares; the remainder -- the pool less what each named
 session uses of its share, floored at 0 -- is divided by the same max-min among the unnamed active streams,
