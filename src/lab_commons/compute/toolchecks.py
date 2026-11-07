@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -31,6 +31,7 @@ if sys.platform == 'win32':
 __all__ = [
     'ANSYS_ENGINES',
     'CHECKS',
+    'LSDYNA_SOLVERS',
     'SIMBA_SMOKE',
     'AnsysEngine',
     'Check',
@@ -42,6 +43,7 @@ __all__ = [
     'file_version',
     'jmag_find',
     'jmag_headless',
+    'lsdyna_smoke',
     'matlab_find',
     'matlab_version',
     'plain_find',
@@ -371,12 +373,14 @@ class AnsysEngine:
     """Where one Ansys engine lives, per OS, and the flag its licence-free start answers.
 
     *on_path*: globs matched in each ``PATH`` directory; *in_release*: globs under one release root (``.../v251``);
-    *smoke*: the flag the smoke passes.
+    *smoke*: the flag the smoke passes; *elsewhere*: ``(directory, glob)`` installs outside a release root, searched
+    last.
     """
 
     on_path: Mapping[str, tuple[str, ...]]
     in_release: Mapping[str, tuple[str, ...]]
     smoke: tuple[str, ...]
+    elsewhere: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
 
 
 #: The roots release directories ``v<NNN>`` sit under when no ``AWP_ROOT<NNN>`` names one: the full install, then the
@@ -410,7 +414,9 @@ ANSYS_ENGINES: Final[Mapping[str, AnsysEngine]] = {
     'lsdyna': AnsysEngine(
         on_path={'linux': ('lsdyna',), 'windows': ('lsdyna*.exe',)},
         in_release={'linux': ('ansys/bin/lsdyna',), 'windows': ('ansys/bin/winx64/lsdyna*.exe',)},
-        smoke=('-h',),
+        smoke=(),
+        # The standalone LS-DYNA Suite, as motronics ``core/ansys/install.py`` finds it on G.
+        elsewhere={'windows': (('C:/Program Files', 'LS-DYNA Suite*/lsdyna/lsdyna_[sd]p.e'),)},
     ),
     'aedt': AnsysEngine(
         on_path={'linux': ('ansysedt',), 'windows': ('ansysedt.exe', 'ansysedtsv.exe')},
@@ -452,15 +458,21 @@ def ansys_find(
             for pattern in spec.in_release.get(system, ()):
                 if hits := sorted(p for p in root.glob(pattern) if p.is_file()):
                     return source, hits[-1]
+        for base, pattern in spec.elsewhere.get(system, ()):
+            if hits := sorted(p for p in Path(base).glob(pattern) if p.is_file()):
+                return 'install dir', hits[-1]
         return None
 
     return find
 
 
 def ansys_release(path: Path) -> tuple[str, str] | None:
-    """The release the path's ``v<NNN>`` directory names (``v251`` -> ``2025 R1``); the innermost one wins."""
+    """The release the path names: ``v<NNN>`` (``v251`` -> ``2025 R1``, innermost wins), else a Suite's ``R16.1``."""
     found = [m for part in Path(path).parts if (m := _RELEASE_DIR.match(part))]
-    return ('install path', f'20{found[-1].group(1)} R{found[-1].group(2)}') if found else None
+    if found:
+        return 'install path', f'20{found[-1].group(1)} R{found[-1].group(2)}'
+    suite = re.findall(r'R(\d+\.\d+)', Path(path).as_posix())
+    return ('install path', f'R{suite[-1]}') if suite else None
 
 
 def ansys_smoke(engine: str) -> Callable[[Path], tuple[bool, str]]:
@@ -473,6 +485,24 @@ def ansys_smoke(engine: str) -> Callable[[Path], tuple[bool, str]]:
     return lambda path: _run([str(path), *flags], VERSION_TIMEOUT_S)
 
 
+#: The solver binaries the LS-DYNA wrapper execs, beside it or in its ``linx64``/``winx64`` directory.
+LSDYNA_SOLVERS: Final = ('lsdyna_sp.e', 'lsdyna_dp.e', 'lsdyna_sp.exe', 'lsdyna_dp.exe')
+
+
+def lsdyna_smoke(path: Path) -> tuple[bool, str]:
+    """RUNS NOTHING: passes when a solver binary the wrapper execs exists and is executable.
+
+    The wrapper answers no flag licence-free: on Ada (2025R1) it exits 1 for ``-h``, ``-help``, ``--help``, ``-v``,
+    ``-version`` and ``help`` alike, because it always execs the licensed ``lsdyna_sp.e``, which checks out a seat
+    (MEASURED 2026-11-07). So this smoke proves the install is whole, never that a seat is free.
+    """
+    places = (path.parent, path.parent / 'linx64', path.parent / 'winx64')
+    for exe in (place / name for place in places for name in LSDYNA_SOLVERS):
+        if exe.is_file() and os.access(exe, os.X_OK):
+            return True, f'solver binary {exe} is executable'
+    return False, f'no executable {"/".join(LSDYNA_SOLVERS)} beside {path} or in its linx64/winx64'
+
+
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
     'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke, heavy=True),
@@ -480,6 +510,11 @@ CHECKS: Final[Mapping[str, Check]] = {
     'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver']), heavy=True),
     'simba': Check(simba_find, simba_version, simba_smoke, heavy=True),
     'ngspice': Check(plain_find('ngspice'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
-    **{engine: Check(ansys_find(engine), ansys_release, ansys_smoke(engine), heavy=True) for engine in ANSYS_ENGINES},
+    **{
+        engine: Check(
+            ansys_find(engine), ansys_release, lsdyna_smoke if engine == 'lsdyna' else ansys_smoke(engine), heavy=True
+        )
+        for engine in ANSYS_ENGINES
+    },
     'node': Check(plain_find('node'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
 }

@@ -123,3 +123,61 @@ def test_the_smoke_only_starts_the_binary_with_its_flag(monkeypatch: pytest.Monk
     monkeypatch.setattr(toolchecks, '_run', run)
     assert CHECKS['mapdl'].smoke(Path('mapdl')) == (True, 'exit 0: ok')
     assert seen == [['mapdl', '-v']]
+
+
+# --- lsdyna: the wrapper answers no flag licence-free, so its smoke runs nothing ------------------------
+
+
+@pytest.mark.parametrize('solver', ['lsdyna_sp.e', 'lsdyna_dp.e'])
+def test_lsdyna_smoke_passes_on_the_linux_wrappers_solver_binary(tmp_path: Path, solver: str) -> None:
+    wrapper = _plant(tmp_path / ADA, 'ansys/bin/lsdyna')
+    _plant(tmp_path / ADA, f'ansys/bin/linx64/{solver}')
+    passed, detail = CHECKS['lsdyna'].smoke(wrapper)
+    assert passed, detail
+
+
+@pytest.mark.parametrize('solver', ['lsdyna_sp.exe', 'lsdyna_dp.exe'])
+def test_lsdyna_smoke_passes_on_the_windows_solver_binary(tmp_path: Path, solver: str) -> None:
+    exe = _plant(tmp_path / 'v251', f'ansys/bin/winx64/{solver}')
+    assert CHECKS['lsdyna'].smoke(exe)[0]
+
+
+def test_lsdyna_smoke_starts_no_child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def refuse(*_a: object, **_k: object) -> object:
+        msg = 'the lsdyna smoke ran a child'
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(toolchecks, '_run', refuse)
+    monkeypatch.setattr(toolchecks, '_probe', refuse)
+    wrapper = _plant(tmp_path / ADA, 'ansys/bin/lsdyna')
+    _plant(tmp_path / ADA, 'ansys/bin/linx64/lsdyna_sp.e')
+    assert CHECKS['lsdyna'].smoke(wrapper)[0]
+
+
+def test_lsdyna_smoke_fails_when_the_solver_binary_is_missing(tmp_path: Path) -> None:
+    wrapper = _plant(tmp_path / ADA, 'ansys/bin/lsdyna')
+    _plant(tmp_path / ADA, 'ansys/bin/linx64/lsdyna_mpp.e')
+    passed, detail = CHECKS['lsdyna'].smoke(wrapper)
+    assert not passed
+    assert 'lsdyna_sp.e' in detail
+
+
+def test_lsdyna_smoke_fails_when_the_solver_binary_is_not_executable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    wrapper = _plant(tmp_path / ADA, 'ansys/bin/lsdyna')
+    solver = _plant(tmp_path / ADA, 'ansys/bin/linx64/lsdyna_sp.e')
+    monkeypatch.setattr(toolchecks.os, 'access', lambda p, _mode: Path(p) != solver)
+    assert not CHECKS['lsdyna'].smoke(wrapper)[0]
+
+
+def test_windows_finds_the_ls_dyna_suite_and_reads_its_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    suites = {'windows': ((str(tmp_path), 'LS-DYNA Suite*/lsdyna/lsdyna_[sd]p.e'),)}
+    engine = toolchecks.ANSYS_ENGINES['lsdyna']
+    monkeypatch.setitem(
+        toolchecks.ANSYS_ENGINES, 'lsdyna', toolchecks.AnsysEngine(engine.on_path, engine.in_release, (), suites)
+    )
+    exe = _plant(tmp_path / 'LS-DYNA Suite R16.1', 'lsdyna/lsdyna_dp.e')
+    assert ansys_find('lsdyna', platform='win32', environ={'PATH': ''})() == ('install dir', exe)
+    assert ansys_release(exe) == ('install path', 'R16.1')
+    assert CHECKS['lsdyna'].smoke(exe)[0]
