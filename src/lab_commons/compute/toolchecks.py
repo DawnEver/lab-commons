@@ -1,7 +1,14 @@
-"""HOW EACH VENDOR TOOL IS READ -- find its executable, read its version, run its smoke.
+"""HOW EACH VENDOR TOOL IS READ -- find its executable, read its version, check its install is whole.
 
 The readers :mod:`lab_commons.compute.presence` turns into one verdict per tool. Every reader of the OS
 is a module function, so a test passes fakes.
+
+A CHECK LAUNCHES NOTHING: every reader reads files, the registry or package metadata, and never starts the
+tool. On Windows a vendor executable handed a flag may open a window instead of answering -- Electronics
+Desktop Student's ``ansysedtsv.exe -help`` shows a modal help dialog (2026-11-07), and Fluent and others pop
+up too -- so an unattended probe blocked until its timeout and read the tool as failed. A check therefore
+proves the install is there and whole, never that it runs or that a licence seat is free; seats are what
+the host declares. ``tests/test_compute_toolchecks_launch_nothing.py`` holds every :data:`CHECKS` row to it.
 """
 
 from __future__ import annotations
@@ -13,15 +20,12 @@ import importlib.util
 import os
 import re
 import shutil
-import subprocess
 import sys
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-import lab_commons.launch as _door
 from lab_commons.compute.probe import OS_NAMES
 
 if sys.platform == 'win32':
@@ -32,38 +36,34 @@ __all__ = [
     'ANSYS_ENGINES',
     'CHECKS',
     'LSDYNA_SOLVERS',
-    'SIMBA_SMOKE',
     'AnsysEngine',
     'Check',
     'ProbeCrashed',
     'ansys_find',
     'ansys_release',
-    'ansys_smoke',
+    'binary_version',
     'femm_find',
     'file_version',
+    'installed_smoke',
     'jmag_find',
-    'jmag_headless',
     'lsdyna_smoke',
     'matlab_find',
     'matlab_version',
     'plain_find',
-    'plain_smoke',
     'simba_find',
 ]
-
-#: The longest one smoke may run (MATLAB's first start on a cold box is the slow one).
-SMOKE_TIMEOUT_S: Final = 300.0
 
 _SYSTEMS: Final = OS_NAMES
 
 
 @dataclass(frozen=True)
 class Check:
-    """How one tool is read: *find* its executable, read its *version*, run its *smoke*.
+    """How one tool is read: *find* its executable, read its *version*, *smoke*-check its install; launches nothing.
 
     *find* returns ``(source, path)`` or ``None``; *version* ``(source, value)`` or ``None``; *smoke*
-    ``(passed, detail)``. *heavy*: a vendor solver and its licence seat -- HEAVY COMPUTE, which a light workstation
-    withholds; a plain tool (ngspice, node) is not heavy merely because it is probed.
+    ``(passed, detail)``, read off the install, never by running it (the module docstring). *heavy*: a vendor
+    solver and its licence seat -- HEAVY COMPUTE, which a light workstation withholds; a plain tool
+    (ngspice, node) is not heavy merely because it is probed.
     """
 
     find: Callable[[], tuple[str, Path] | None]
@@ -76,53 +76,7 @@ class Check:
 
 
 class ProbeCrashed(RuntimeError):
-    """The PROBE failed to run its child (it measured nothing); not the tool's answer, so it is never cached."""
-
-
-def _probe(argv: Sequence[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    """THE ONE PLACE A PROBE STARTS A CHILD, with no stdin.
-
-    A probe never reads stdin, so the child gets none: from a hidden
-    detached serve the inherited stdin is invalid and the start raised ``[WinError 6]`` (2026-10-20).
-
-    Raises:
-        ProbeCrashed: the child could not be started -- the probe's own error.
-        subprocess.TimeoutExpired: the child ran and did not answer -- the tool's answer.
-
-    """
-    try:
-        return _door.run(
-            list(argv),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=timeout,
-            check=False,
-        )
-    except OSError as failed:
-        msg = f'{type(failed).__name__}: {failed}'
-        raise ProbeCrashed(msg) from failed
-
-
-def _run(argv: Sequence[str], timeout: float = SMOKE_TIMEOUT_S) -> tuple[bool, str]:
-    """Run *argv*; ``(exit 0, the last line of its output or why it did not answer)``."""
-    try:
-        done = _probe(argv, timeout)
-    except subprocess.TimeoutExpired as failed:
-        return False, f'{type(failed).__name__}: {failed}'
-    lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
-    return done.returncode == 0, f'exit {done.returncode}: {lines[-1] if lines else "no output"}'
-
-
-def _first_line(argv: Sequence[str]) -> str | None:
-    try:
-        done = _probe(argv, 60)
-    except subprocess.TimeoutExpired:
-        return None
-    lines = [line.strip() for line in done.stdout.splitlines() if line.strip()]
-    return lines[0] if done.returncode == 0 and lines else None
+    """The PROBE failed to read (it measured nothing); not the tool's answer, so it is never cached."""
 
 
 def file_version(path: Path) -> str | None:
@@ -144,16 +98,17 @@ def file_version(path: Path) -> str | None:
     return f'{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}'
 
 
-def _versioned(flag_argv: Callable[[Path], Sequence[str]]) -> Callable[[Path], tuple[str, str] | None]:
-    """The version a ``--version`` run prints, else the executable's file version."""
+def binary_version(path: Path) -> tuple[str, str] | None:
+    """The executable's Windows file version; a binary elsewhere carries none, so ``unread`` (present, unversioned)."""
+    found = file_version(path)
+    return ('file version', found) if found else ('install', 'unread')
 
-    def read(path: Path) -> tuple[str, str] | None:
-        if printed := _first_line(flag_argv(path)):
-            return '--version', printed
-        found = file_version(path)
-        return ('file version', found) if found else None
 
-    return read
+def installed_smoke(path: Path) -> tuple[bool, str]:
+    """The install is there: *path* is an executable file. Launches nothing."""
+    if path.is_file() and os.access(path, os.X_OK):
+        return True, f'{path} is installed and executable'
+    return False, f'no executable {path}'
 
 
 #: The FEMM 5 headless engine per OS: its binary and the install directory used when ``FEMM_DIR`` is unset --
@@ -184,14 +139,6 @@ def femm_find(
             return source, place / binary
     on_path = which(binary)
     return ('PATH', Path(on_path)) if on_path else None
-
-
-def femm_smoke(path: Path) -> tuple[bool, str]:
-    """``femm_headless -run`` one trivial script (FEMM 5 runs its batch scripts in embedded MicroPython)."""
-    with tempfile.TemporaryDirectory(prefix='lab-commons-femm-smoke-') as scratch:
-        script = Path(scratch) / 'smoke.py'
-        script.write_text('x = 1\n', encoding='utf-8')
-        return _run([str(path), '-run', str(script)])
 
 
 #: Where MATLAB's standard installer puts its launcher, per OS: ``(directory, glob)``; ``R*`` is the release.
@@ -245,30 +192,11 @@ def simba_version(_path: Path) -> tuple[str, str] | None:
     return None
 
 
-#: One import, the licence answering, and a tiny transient job -- in this interpreter. SIMBA refuses an
-#: EMPTY design ("The design is empty", status ``Error``), so the job is a source across a resistor.
-SIMBA_SMOKE: Final = (
-    'import aesim.simba as simba\n'
-    'assert simba.License.NumberOfAvailableParallelSimulationLicense() > 0, "no licence"\n'
-    'design = simba.Design()\n'
-    'circuit = design.Circuit\n'
-    'v = circuit.AddDevice("DC Voltage Source", 0, 0)\n'
-    'r = circuit.AddDevice("Resistor", 10, 0)\n'
-    'g = circuit.AddDevice("Ground", 0, 10)\n'
-    'circuit.AddConnection(v.P, r.P)\n'
-    'circuit.AddConnection(r.N, v.N)\n'
-    'circuit.AddConnection(v.N, g.Pin)\n'
-    'design.TransientAnalysis.TimeStep = 1e-6\n'
-    'design.TransientAnalysis.EndTime = 1e-5\n'
-    'job = design.TransientAnalysis.NewJob()\n'
-    'status = job.Run()\n'
-    'assert str(status) == "OK", job.Summary()\n'
-)
-
-
-def simba_smoke(_path: Path) -> tuple[bool, str]:
-    """:data:`SIMBA_SMOKE` in a child of this interpreter, so a crash of the API never takes the tick down."""
-    return _run([sys.executable, '-c', SIMBA_SMOKE])
+def simba_smoke(path: Path) -> tuple[bool, str]:
+    """The ``aesim.simba`` package's files are installed -- never imported, so no licence is asked."""
+    if path.is_file():
+        return True, f'aesim.simba installed at {path}'
+    return False, f'no aesim.simba at {path}'
 
 
 #: JMAG's COM registration -- read only to FIND the designer's executable; the probe never dispatches it.
@@ -290,49 +218,11 @@ def jmag_find() -> tuple[str, Path] | None:
     return ('registry', Path(exe)) if Path(exe).is_file() else None
 
 
-#: Run inside Designer's own python by ``designer.exe -w`` (no window, no COM): the in-process Application
-#: writes its version string (``25.2.01zp``) to the file ``{out!r}`` names, so the file IS the verdict --
-#: Designer exits 0 even when its script raised.
-JMAG_SMOKE: Final = (
-    'import designer\n'
-    'version = designer.GetApplication().VersionString(True)\n'
-    'with open({out!r}, "w", encoding="utf-8") as f:\n'
-    '    f.write(version)\n'
-)
-
-#: The last headless reading per executable, so one probe's version and smoke share one Designer start.
-_JMAG_READ: dict[Path, tuple[str | None, str]] = {}
-
-
-def jmag_headless(path: Path) -> tuple[str | None, str]:
-    """``designer.exe -w -l <log> <script>``: ``(the version the tool wrote, or None; what happened)``."""
-    with tempfile.TemporaryDirectory(prefix='lab-commons-jmag-smoke-') as scratch:
-        out, script = Path(scratch) / 'version.txt', Path(scratch) / 'smoke.py'
-        script.write_text(JMAG_SMOKE.format(out=str(out)), encoding='utf-8')
-        _exit, detail = _run([str(path), '-w', '-l', str(Path(scratch) / 'designer.log'), str(script)])
-        version = out.read_text(encoding='utf-8').strip() if out.is_file() else ''
-    if not version:
-        return None, f'{detail}; the script wrote no version file'
-    return version, f'{detail}; wrote version {version}'
-
-
 def jmag_version(path: Path) -> tuple[str, str] | None:
-    """The version Designer itself reports, headless; else the executable's file version (the smoke says why)."""
-    _JMAG_READ[path] = read = jmag_headless(path)
-    if read[0] is not None:
-        return 'designer -w', read[0]
+    """The designer executable's file version."""
     found = file_version(path)
     return ('file version', found) if found else None
 
-
-def jmag_smoke(path: Path) -> tuple[bool, str]:
-    """Designer ran a script headless and it wrote its version -- the route a JMAG bundle runs by."""
-    version, detail = _JMAG_READ.pop(path, None) or jmag_headless(path)
-    return version is not None, detail
-
-
-#: The longest a plain tool may take to answer its ``--version``.
-VERSION_TIMEOUT_S: Final = 30.0
 
 #: A plain tool's console binary per OS (Windows' ``ngspice.exe`` is the GUI; ``ngspice_con`` is its console).
 _BINARIES: Final = {
@@ -363,23 +253,17 @@ def plain_find(tool: str, *, platform: str = sys.platform) -> Callable[[], tuple
     return find
 
 
-def plain_smoke(path: Path) -> tuple[bool, str]:
-    """The tool answers ``--version`` with exit 0 within :data:`VERSION_TIMEOUT_S`."""
-    return _run([str(path), '--version'], VERSION_TIMEOUT_S)
-
-
 @dataclass(frozen=True)
 class AnsysEngine:
-    """Where one Ansys engine lives, per OS, and the flag its licence-free start answers.
+    """Where one Ansys engine lives, per OS.
 
     *on_path*: globs matched in each ``PATH`` directory; *in_release*: globs under one release root (``.../v251``);
-    *smoke*: the flag the smoke passes; *elsewhere*: ``(directory, glob)`` installs outside a release root, searched
+    *elsewhere*: ``(directory, glob)`` installs outside a release root, searched
     last.
     """
 
     on_path: Mapping[str, tuple[str, ...]]
     in_release: Mapping[str, tuple[str, ...]]
-    smoke: tuple[str, ...]
     elsewhere: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
 
 
@@ -401,7 +285,6 @@ ANSYS_ENGINES: Final[Mapping[str, AnsysEngine]] = {
             'linux': ('ansys/bin/mapdl', 'ansys/bin/ansys[0-9][0-9][0-9]'),
             'windows': ('ansys/bin/winx64/ANSYS[0-9][0-9][0-9].exe', 'ansys/bin/winx64/MAPDL.exe'),
         },
-        smoke=('-v',),
     ),
     'fluent': AnsysEngine(
         on_path={'linux': ('fluent',), 'windows': ('fluent.exe',)},
@@ -409,19 +292,16 @@ ANSYS_ENGINES: Final[Mapping[str, AnsysEngine]] = {
             'linux': ('fluent/bin/fluent',),
             'windows': ('fluent/ntbin/win64/fluent.exe', 'AnsysEM/fluent/ntbin/win64/fluent.exe'),
         },
-        smoke=('-help',),
     ),
     'lsdyna': AnsysEngine(
         on_path={'linux': ('lsdyna',), 'windows': ('lsdyna*.exe',)},
         in_release={'linux': ('ansys/bin/lsdyna',), 'windows': ('ansys/bin/winx64/lsdyna*.exe',)},
-        smoke=(),
         # The standalone LS-DYNA Suite, as motronics ``core/ansys/install.py`` finds it on G.
         elsewhere={'windows': (('C:/Program Files', 'LS-DYNA Suite*/lsdyna/lsdyna_[sd]p.e'),)},
     ),
     'aedt': AnsysEngine(
         on_path={'linux': ('ansysedt',), 'windows': ('ansysedt.exe', 'ansysedtsv.exe')},
         in_release={'linux': ('AnsysEM/ansysedt',), 'windows': ('AnsysEM/ansysedt.exe', 'AnsysEM/ansysedtsv.exe')},
-        smoke=('-help',),
     ),
 }
 
@@ -475,26 +355,17 @@ def ansys_release(path: Path) -> tuple[str, str] | None:
     return ('install path', f'R{suite[-1]}') if suite else None
 
 
-def ansys_smoke(engine: str) -> Callable[[Path], tuple[bool, str]]:
-    """The binary STARTS: its version/help flag exits 0 within :data:`VERSION_TIMEOUT_S`.
-
-    A real solve needs a licence seat, so the smoke never solves -- it proves the install loads (no missing DLL or
-    library), not that a seat is free; seats are what the host declares.
-    """
-    flags = ANSYS_ENGINES[engine].smoke
-    return lambda path: _run([str(path), *flags], VERSION_TIMEOUT_S)
-
-
 #: The solver binaries the LS-DYNA wrapper execs, beside it or in its ``linx64``/``winx64`` directory.
 LSDYNA_SOLVERS: Final = ('lsdyna_sp.e', 'lsdyna_dp.e', 'lsdyna_sp.exe', 'lsdyna_dp.exe')
 
 
 def lsdyna_smoke(path: Path) -> tuple[bool, str]:
-    """RUNS NOTHING: passes when a solver binary the wrapper execs exists and is executable.
+    """Passes when a solver binary the wrapper execs exists and is executable -- the install is whole.
 
-    The wrapper answers no flag licence-free: on Ada (2025R1) it exits 1 for ``-h``, ``-help``, ``--help``, ``-v``,
-    ``-version`` and ``help`` alike, because it always execs the licensed ``lsdyna_sp.e``, which checks out a seat
-    (MEASURED 2026-11-07). So this smoke proves the install is whole, never that a seat is free.
+    The wrapper would answer no flag licence-free anyway: on Ada (2025R1) it exits 1 for ``-h``, ``-help``,
+    ``--help``, ``-v``, ``-version`` and ``help`` alike, because it always execs the licensed
+    ``lsdyna_sp.e``, which checks out a seat (MEASURED 2026-11-07). So this smoke proves the
+    install is whole, never that a seat is free.
     """
     places = (path.parent, path.parent / 'linx64', path.parent / 'winx64')
     for exe in (place / name for place in places for name in LSDYNA_SOLVERS):
@@ -505,16 +376,16 @@ def lsdyna_smoke(path: Path) -> tuple[bool, str]:
 
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
-    'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke, heavy=True),
-    'jmag': Check(jmag_find, jmag_version, jmag_smoke, heavy=True),
-    'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver']), heavy=True),
+    'femm': Check(femm_find, binary_version, installed_smoke, heavy=True),
+    'jmag': Check(jmag_find, jmag_version, installed_smoke, heavy=True),
+    'matlab': Check(matlab_find, matlab_version, installed_smoke, heavy=True),
     'simba': Check(simba_find, simba_version, simba_smoke, heavy=True),
-    'ngspice': Check(plain_find('ngspice'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
+    'ngspice': Check(plain_find('ngspice'), binary_version, installed_smoke, heavy=False),
     **{
         engine: Check(
-            ansys_find(engine), ansys_release, lsdyna_smoke if engine == 'lsdyna' else ansys_smoke(engine), heavy=True
+            ansys_find(engine), ansys_release, lsdyna_smoke if engine == 'lsdyna' else installed_smoke, heavy=True
         )
         for engine in ANSYS_ENGINES
     },
-    'node': Check(plain_find('node'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
+    'node': Check(plain_find('node'), binary_version, installed_smoke, heavy=False),
 }
