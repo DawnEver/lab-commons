@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -29,14 +29,21 @@ if sys.platform == 'win32':
     import winreg
 
 __all__ = [
+    'ANSYS_ENGINES',
     'CHECKS',
+    'LSDYNA_SOLVERS',
     'SIMBA_SMOKE',
+    'AnsysEngine',
     'Check',
     'ProbeCrashed',
+    'ansys_find',
+    'ansys_release',
+    'ansys_smoke',
     'femm_find',
     'file_version',
     'jmag_find',
     'jmag_headless',
+    'lsdyna_smoke',
     'matlab_find',
     'matlab_version',
     'plain_find',
@@ -361,6 +368,141 @@ def plain_smoke(path: Path) -> tuple[bool, str]:
     return _run([str(path), '--version'], VERSION_TIMEOUT_S)
 
 
+@dataclass(frozen=True)
+class AnsysEngine:
+    """Where one Ansys engine lives, per OS, and the flag its licence-free start answers.
+
+    *on_path*: globs matched in each ``PATH`` directory; *in_release*: globs under one release root (``.../v251``);
+    *smoke*: the flag the smoke passes; *elsewhere*: ``(directory, glob)`` installs outside a release root, searched
+    last.
+    """
+
+    on_path: Mapping[str, tuple[str, ...]]
+    in_release: Mapping[str, tuple[str, ...]]
+    smoke: tuple[str, ...]
+    elsewhere: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+
+
+#: The roots release directories ``v<NNN>`` sit under when no ``AWP_ROOT<NNN>`` names one: the full install, then the
+#: Student one (Windows); the conventional Linux roots. Same places as motronics ``core/ansys/install.py``.
+ANSYS_INSTALLS: Final = {
+    'windows': ('C:/Program Files/ANSYS Inc', 'C:/Program Files/ANSYS Inc/ANSYS Student'),
+    'linux': ('/usr/ansys_inc', '/ansys_inc'),
+}
+
+#: The four engines, named as the serving repo's resources. MAPDL on Windows is ``ANSYS<NNN>.exe`` (Student:
+#: ``MAPDL.exe``); a Student AEDT is ``ansysedtsv`` and its working Fluent is the one inside ``AnsysEM`` (MEASURED on
+#: G 2026-11-05 by motronics: Student's standalone Fluent lacks its DLLs). A cluster ``module load`` puts
+#: ``mapdl``/``ansys<NNN>``/``fluent``/``lsdyna`` on ``PATH`` and no ``ansysedt``.
+ANSYS_ENGINES: Final[Mapping[str, AnsysEngine]] = {
+    'mapdl': AnsysEngine(
+        on_path={'linux': ('mapdl', 'ansys[0-9][0-9][0-9]'), 'windows': ('ANSYS[0-9][0-9][0-9].exe', 'MAPDL.exe')},
+        in_release={
+            'linux': ('ansys/bin/mapdl', 'ansys/bin/ansys[0-9][0-9][0-9]'),
+            'windows': ('ansys/bin/winx64/ANSYS[0-9][0-9][0-9].exe', 'ansys/bin/winx64/MAPDL.exe'),
+        },
+        smoke=('-v',),
+    ),
+    'fluent': AnsysEngine(
+        on_path={'linux': ('fluent',), 'windows': ('fluent.exe',)},
+        in_release={
+            'linux': ('fluent/bin/fluent',),
+            'windows': ('fluent/ntbin/win64/fluent.exe', 'AnsysEM/fluent/ntbin/win64/fluent.exe'),
+        },
+        smoke=('-help',),
+    ),
+    'lsdyna': AnsysEngine(
+        on_path={'linux': ('lsdyna',), 'windows': ('lsdyna*.exe',)},
+        in_release={'linux': ('ansys/bin/lsdyna',), 'windows': ('ansys/bin/winx64/lsdyna*.exe',)},
+        smoke=(),
+        # The standalone LS-DYNA Suite, as motronics ``core/ansys/install.py`` finds it on G.
+        elsewhere={'windows': (('C:/Program Files', 'LS-DYNA Suite*/lsdyna/lsdyna_[sd]p.e'),)},
+    ),
+    'aedt': AnsysEngine(
+        on_path={'linux': ('ansysedt',), 'windows': ('ansysedt.exe', 'ansysedtsv.exe')},
+        in_release={'linux': ('AnsysEM/ansysedt',), 'windows': ('AnsysEM/ansysedt.exe', 'AnsysEM/ansysedtsv.exe')},
+        smoke=('-help',),
+    ),
+}
+
+_RELEASE_DIR: Final = re.compile(r'^v(\d\d)(\d)$')
+_AWP_ROOT: Final = re.compile(r'^AWP_ROOT(\d{3})$')
+
+
+def _release_roots(system: str, environ: Mapping[str, str]) -> list[tuple[str, Path]]:
+    """Every release root, newest first: each ``AWP_ROOT<NNN>``, then each ``v<NNN>`` under the standard installs."""
+    named = sorted(((m.group(1), v) for k, v in environ.items() if (m := _AWP_ROOT.match(k))), reverse=True)
+    roots = [(f'AWP_ROOT{ver}', Path(value)) for ver, value in named]
+    for base in ANSYS_INSTALLS.get(system, ()):
+        found = [d for d in Path(base).glob('v*') if _RELEASE_DIR.match(d.name) and d.is_dir()]
+        roots += [('install dir', d) for d in sorted(found, key=lambda d: d.name, reverse=True)]
+    return roots
+
+
+def ansys_find(
+    engine: str, *, platform: str = sys.platform, environ: Mapping[str, str] = os.environ
+) -> Callable[[], tuple[str, Path] | None]:
+    """One Ansys engine: on ``PATH`` (a cluster module), else an ``AWP_ROOT<NNN>``, else the newest standard release.
+
+    A file under a directory not spelled ``v<NNN>`` is never a release.
+    """
+    spec = ANSYS_ENGINES[engine]
+
+    def find() -> tuple[str, Path] | None:
+        system = _SYSTEMS.get(platform, '')
+        for place in filter(None, environ.get('PATH', '').split(os.pathsep)):
+            for pattern in spec.on_path.get(system, ()):
+                if hits := sorted(p for p in Path(place).glob(pattern) if p.is_file()):
+                    return 'PATH', hits[-1]
+        for source, root in _release_roots(system, environ):
+            for pattern in spec.in_release.get(system, ()):
+                if hits := sorted(p for p in root.glob(pattern) if p.is_file()):
+                    return source, hits[-1]
+        for base, pattern in spec.elsewhere.get(system, ()):
+            if hits := sorted(p for p in Path(base).glob(pattern) if p.is_file()):
+                return 'install dir', hits[-1]
+        return None
+
+    return find
+
+
+def ansys_release(path: Path) -> tuple[str, str] | None:
+    """The release the path names: ``v<NNN>`` (``v251`` -> ``2025 R1``, innermost wins), else a Suite's ``R16.1``."""
+    found = [m for part in Path(path).parts if (m := _RELEASE_DIR.match(part))]
+    if found:
+        return 'install path', f'20{found[-1].group(1)} R{found[-1].group(2)}'
+    suite = re.findall(r'R(\d+\.\d+)', Path(path).as_posix())
+    return ('install path', f'R{suite[-1]}') if suite else None
+
+
+def ansys_smoke(engine: str) -> Callable[[Path], tuple[bool, str]]:
+    """The binary STARTS: its version/help flag exits 0 within :data:`VERSION_TIMEOUT_S`.
+
+    A real solve needs a licence seat, so the smoke never solves -- it proves the install loads (no missing DLL or
+    library), not that a seat is free; seats are what the host declares.
+    """
+    flags = ANSYS_ENGINES[engine].smoke
+    return lambda path: _run([str(path), *flags], VERSION_TIMEOUT_S)
+
+
+#: The solver binaries the LS-DYNA wrapper execs, beside it or in its ``linx64``/``winx64`` directory.
+LSDYNA_SOLVERS: Final = ('lsdyna_sp.e', 'lsdyna_dp.e', 'lsdyna_sp.exe', 'lsdyna_dp.exe')
+
+
+def lsdyna_smoke(path: Path) -> tuple[bool, str]:
+    """RUNS NOTHING: passes when a solver binary the wrapper execs exists and is executable.
+
+    The wrapper answers no flag licence-free: on Ada (2025R1) it exits 1 for ``-h``, ``-help``, ``--help``, ``-v``,
+    ``-version`` and ``help`` alike, because it always execs the licensed ``lsdyna_sp.e``, which checks out a seat
+    (MEASURED 2026-11-07). So this smoke proves the install is whole, never that a seat is free.
+    """
+    places = (path.parent, path.parent / 'linx64', path.parent / 'winx64')
+    for exe in (place / name for place in places for name in LSDYNA_SOLVERS):
+        if exe.is_file() and os.access(exe, os.X_OK):
+            return True, f'solver binary {exe} is executable'
+    return False, f'no executable {"/".join(LSDYNA_SOLVERS)} beside {path} or in its linx64/winx64'
+
+
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
     'femm': Check(femm_find, _versioned(lambda p: [str(p), '--version']), femm_smoke, heavy=True),
@@ -368,5 +510,11 @@ CHECKS: Final[Mapping[str, Check]] = {
     'matlab': Check(matlab_find, matlab_version, lambda p: _run([str(p), '-batch', 'ver']), heavy=True),
     'simba': Check(simba_find, simba_version, simba_smoke, heavy=True),
     'ngspice': Check(plain_find('ngspice'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
+    **{
+        engine: Check(
+            ansys_find(engine), ansys_release, lsdyna_smoke if engine == 'lsdyna' else ansys_smoke(engine), heavy=True
+        )
+        for engine in ANSYS_ENGINES
+    },
     'node': Check(plain_find('node'), _versioned(lambda p: [str(p), '--version']), plain_smoke, heavy=False),
 }
