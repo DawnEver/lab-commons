@@ -25,7 +25,11 @@ own managed tool root is :func:`tools`.
 
 OUTSIDE THE POLICY (:func:`exempt`): Claude's own configuration (:data:`CLAUDE_HOMES` under the user's home --
 never touched by the toolchain) and the AGENT repos of ``[agent_repos]`` (name -> absolute path; Claude Code's
-configuration and plugin market), which are not toolchain repos.
+configuration and plugin market), which are not toolchain repos. And git's credential store
+(:func:`git_credential_stores`; user ruling 2026-11-07): ``credential.helper store`` rewrites it after every
+authenticated fetch, so it is the user's own store written by git, never by the toolchain. Exactly those FILES
+are exempt -- ``~/.git-credentials`` and ``$XDG_CONFIG_HOME/git/credentials`` -- never their directory nor any
+other dotfile.
 
 SYNCED FOLDERS (:func:`sync_roots`): ``[sync] roots`` lists the globs of the folders a sync client shares with a
 live human session (OneDrive); a write there needs the user's consent for that write. Undeclared, the platform's
@@ -57,6 +61,7 @@ __all__ = [
     'canonical',
     'config_path',
     'exempt',
+    'git_credential_stores',
     'home',
     'part',
     'repo_of',
@@ -242,10 +247,19 @@ def allowed(path: Path) -> bool:
     return repo is not None and any(within(path, repo / child) for child in _WRITABLE)
 
 
+def git_credential_stores() -> tuple[Path, ...]:
+    """The files git's ``store`` helper writes: ``~/.git-credentials`` and ``$XDG_CONFIG_HOME/git/credentials``."""
+    xdg = os.environ.get('XDG_CONFIG_HOME')
+    config = Path(xdg).expanduser() if xdg else Path.home() / '.config'
+    return (Path.home() / '.git-credentials', config / 'git' / 'credentials')
+
+
 def exempt(path: Path) -> bool:
-    """Whether *path* is outside the policy: Claude's configuration or an agent repo."""
+    """Whether *path* is outside the policy: Claude's configuration, an agent repo, or git's credential store."""
     roots = [Path.home() / name for name in CLAUDE_HOMES] + list(agent_repos().values())
-    return any(within(path, root) for root in roots)
+    target = _key(str(canonical(path)), sys.platform)
+    stores = {_key(str(canonical(store)), sys.platform) for store in git_credential_stores()}
+    return target in stores or any(within(path, root) for root in roots)
 
 
 def sync_defaults(platform: str = sys.platform) -> tuple[str, ...]:
