@@ -8,6 +8,8 @@ between the id pytest collects and the id it reports -- a fake cannot reproduce 
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -29,6 +31,7 @@ from lab_commons.config import CONFIG_ENV
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc import cluster as cluster_module
+from lab_commons.hpc import records as record_module
 from lab_commons.hpc import run as run_module
 from lab_commons.hpc import shell, watch
 from lab_commons.hpc.builds import Builds, ItemWall, cargo_target
@@ -1101,6 +1104,110 @@ def test_the_record_is_named_for_its_sha_part_and_request_and_round_trips_gzippe
     path = write_record(record, tmp_path / 'runs')
     assert path == tmp_path / 'runs' / record_name(record)
     assert read_record(path) == record
+
+
+def test_record_explicit_byte_bounds_and_same_buffer_digest(tmp_path: Path) -> None:
+    record = {'sha': SHA, 'platform': 'base', 'req': 'bounded', 'cells': {}, 'metadata': 'x' * 200000}
+    path = write_record(record, tmp_path)
+    compressed = path.read_bytes()
+    expanded = gzip.decompress(compressed)
+    options = {
+        'max_compressed_bytes': len(compressed),
+        'max_decompressed_bytes': len(expanded),
+        'expected_sha256': hashlib.sha256(compressed).hexdigest(),
+    }
+    assert read_record(path, **options) == record
+    for limits in (
+        dict(options, max_compressed_bytes=len(compressed) - 1),
+        dict(options, max_decompressed_bytes=len(expanded) - 1),
+        dict(options, expected_sha256='0' * 64),
+    ):
+        with pytest.raises(record_module.RecordRefused, match='record'):
+            read_record(path, **limits)
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        b'{"a":1,"a":2}',
+        b'{"nested":{"a":1,"a":2}}',
+        b'{"x":NaN}',
+        b'{"x":Infinity}',
+        b'{"x":1e400}',
+        b'[]',
+        b'{"x":"\xff"}',
+        '{}'.encode('utf-16'),
+        b'[' * 2000 + b']' * 2000,
+    ],
+)
+def test_record_strict_json_refuses_invalid_payload(tmp_path: Path, payload: bytes) -> None:
+    path = tmp_path / 'invalid.gz'
+    path.write_bytes(gzip.compress(payload))
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        read_record(path)
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), float('-inf')])
+def test_record_writer_refuses_nonfinite_before_partial_write(tmp_path: Path, value: float) -> None:
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        write_record({'sha': SHA, 'platform': 'base', 'req': 'invalid', 'value': value}, tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_record_writer_refuses_deep_record_before_any_output_change(tmp_path: Path) -> None:
+    record: dict[str, object] = {'sha': SHA, 'platform': 'base', 'req': 'deep', 'cells': {}}
+    directory = tmp_path / 'existing'
+    target = write_record(record, directory)
+    original = target.read_bytes()
+    nested: object = 0
+    for _ in range(10000):
+        nested = [nested]
+    record['nested'] = nested
+    for destination in (directory, tmp_path / 'not-created'):
+        with pytest.raises(record_module.RecordRefused, match='record'):
+            write_record(record, destination)
+    assert target.read_bytes() == original
+    assert list(directory.iterdir()) == [target]
+    assert not (tmp_path / 'not-created').exists()
+
+
+def test_record_os_read_error_remains_os_error(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        read_record(tmp_path / 'absent.gz')
+
+
+@pytest.mark.parametrize(
+    'options',
+    [
+        {'max_compressed_bytes': 10},
+        {'max_decompressed_bytes': 10},
+        {'max_compressed_bytes': True, 'max_decompressed_bytes': 10},
+        {'max_compressed_bytes': 10, 'max_decompressed_bytes': 0},
+        {'max_compressed_bytes': -1, 'max_decompressed_bytes': 10},
+        {'expected_sha256': 'not-sha'},
+    ],
+)
+def test_record_read_limits_require_explicit_valid_pair(tmp_path: Path, options: dict[str, object]) -> None:
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        read_record(tmp_path / 'not-opened.gz', **options)
+
+
+@pytest.mark.parametrize('fault', ['truncated', 'crc', 'metadata'])
+def test_record_gzip_integrity_and_expanded_metadata_budget(tmp_path: Path, fault: str) -> None:
+    data = gzip.compress(json.dumps({'metadata': 'x' * 200000}).encode())
+    if fault == 'truncated':
+        data = data[:-1]
+    if fault == 'crc':
+        data = data[:-8] + bytes([data[-8] ^ 1]) + data[-7:]
+    path = tmp_path / 'record.gz'
+    path.write_bytes(data)
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        read_record(
+            path,
+            max_compressed_bytes=len(data),
+            max_decompressed_bytes=128 if fault == 'metadata' else 300000,
+            expected_sha256=hashlib.sha256(data).hexdigest(),
+        )
 
 
 def test_declared_inputs_share_one_env_and_native_build_and_put_the_source_on_pythonpath() -> None:
