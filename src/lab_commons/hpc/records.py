@@ -385,8 +385,26 @@ def record_name(record: dict[str, Any]) -> str:
     return f'run-{record["sha"]}-{record["platform"]}-{record["req"]}.json.gz'
 
 
+_MAX_RECORD_DEPTH = 64  # containers deep; a run record is a handful -- the bound is ours, never the C stack's
+
+
+def _within_depth(value: object) -> bool:
+    """Whether *value* nests at most :data:`_MAX_RECORD_DEPTH` lists/dicts deep, walked without recursion."""
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (list, tuple, dict)):
+            if depth >= _MAX_RECORD_DEPTH:
+                return False
+            stack.extend((child, depth + 1) for child in (item.values() if isinstance(item, dict) else item))
+    return True
+
+
 def write_record(record: dict[str, Any], directory: Path) -> Path:
     """The record gzipped under *directory* (created) at :func:`record_name`; returns its path."""
+    if not _within_depth(record):  # checked, not left to RecursionError: the C encoder's reach is per-platform
+        msg = f'record nests deeper than {_MAX_RECORD_DEPTH} containers'
+        raise RecordRefused(msg)
     try:  # encoded BEFORE any directory or file changes: a refused record leaves the tree as it was
         payload = json.dumps(record, sort_keys=True, allow_nan=False).encode('utf-8')
     except (ValueError, TypeError, UnicodeError, RecursionError) as error:
