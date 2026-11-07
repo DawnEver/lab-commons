@@ -374,14 +374,15 @@ def test_a_test_spinning_inside_c_with_the_gil_held_is_killed_at_its_wall(
 ) -> None:
     """A native loop that never yields to the interpreter is killed from outside (Ada 2026-10-24..26).
 
-    pytest-timeout, declared here at 1 s, cannot fire: catastrophic regex backtracking is one C call holding the GIL.
+    pytest-timeout, declared here at 1 s, cannot fire: ``sum(range(...))`` is one C loop holding the GIL that never
+    polls for signals. (Regex backtracking was the probe until CPython 3.14's ``re`` began to poll and so let it fire.)
     Sized for load: the claim needs only declared < wall, so 1 s under a 2 s wall (was 2 s under 4 s).
     """
     runner = _item_runner(tmp_path, monkeypatch)
     body = (
-        'import re\n\nimport pytest\n\n'
+        'import pytest\n\n'
         '@pytest.mark.timeout(1)\n'
-        'def test_spin():\n    re.match(r"(a+)+$", "a" * 64 + "b")\n\n'
+        'def test_spin():\n    sum(range(10**12))\n\n'
         'def test_after():\n    pass\n'
     )
     ids = _tree(tmp_path, body)
