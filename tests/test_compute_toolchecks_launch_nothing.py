@@ -43,8 +43,10 @@ def _fake_install(tmp_path: Path, tool: str) -> Path:
     root.mkdir(parents=True)
     exe = root / f'{tool}.exe'
     exe.write_bytes(b'MZ fake')
+    exe.chmod(0o755)
     for solver in LSDYNA_SOLVERS:
         (root / solver).write_bytes(b'MZ fake')
+        (root / solver).chmod(0o755)
     return exe
 
 

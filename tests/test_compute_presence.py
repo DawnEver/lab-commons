@@ -270,6 +270,7 @@ def test_jmag_is_present_at_the_designer_executables_file_version(
     """PLANTED CONTROL: an installed designer carrying file version 25.2.1.0 meets the floor 25.2."""
     exe = tmp_path / 'designer.exe'
     exe.write_bytes(b'')
+    exe.chmod(0o755)
     jmag = replace(CHECKS['jmag'], find=lambda: ('registry', exe))
     monkeypatch.setattr(toolchecks, 'file_version', lambda _p: '25.2.1.0')
     one = probe('jmag', jmag, Requirement('25.2', 'designer file version'), now=NOW)
