@@ -6,17 +6,13 @@ Every OS reading is a fake :class:`Check`; the cache lives in the test's own mac
 from __future__ import annotations
 
 import json
-import runpy
-import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib.machinery import ModuleSpec
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -268,48 +264,26 @@ def test_simba_is_found_where_its_python_api_imports() -> None:
     assert simba_find(find=missing_parent) is None, 'no aesim package at all is absent, never an error'
 
 
-def _fake_designer(monkeypatch: pytest.MonkeyPatch, *, writes: bool) -> list[list[str]]:
-    """``designer.exe -w``: run the smoke script against a fake in-process ``designer`` -- or ignore it, exit 0."""
-    calls: list[list[str]] = []
-
-    # JMAG's own API takes the flag positionally: ``VersionString(True)``.
-    app = SimpleNamespace(VersionString=lambda include_sub: '25.2.01zp' if include_sub else '25.2zp')
-
-    class Designer(ModuleType):
-        GetApplication: Callable[[], SimpleNamespace]
-
-    designer = Designer('designer')
-    designer.GetApplication = lambda: app
-    monkeypatch.setitem(sys.modules, 'designer', designer)
-
-    def run(argv: list[str]) -> tuple[bool, str]:
-        calls.append(argv)
-        assert argv[1:3] == ['-w', '-l'], 'headless, logged, no COM'
-        if writes:
-            runpy.run_path(argv[-1])
-        return True, 'exit 0: JMAG-Designer Stopping'
-
-    monkeypatch.setattr(toolchecks, '_run', run)
+def test_jmag_is_present_at_the_designer_executables_file_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PLANTED CONTROL: an installed designer carrying file version 25.2.1.0 meets the floor 25.2."""
+    exe = tmp_path / 'designer.exe'
+    exe.write_bytes(b'')
+    jmag = replace(CHECKS['jmag'], find=lambda: ('registry', exe))
     monkeypatch.setattr(toolchecks, 'file_version', lambda _p: '25.2.1.0')
-    return calls
-
-
-def test_jmag_is_present_at_the_version_designer_writes_headless(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PLANTED CONTROL: the script ran inside Designer and wrote ``25.2.01zp``, which meets the floor 25.2."""
-    calls = _fake_designer(monkeypatch, writes=True)
-    one = probe(
-        'jmag', replace(CHECKS['jmag'], find=lambda: ('registry', EXE)), Requirement('25.2', 'designer.exe -w'), now=NOW
-    )
+    one = probe('jmag', jmag, Requirement('25.2', 'designer file version'), now=NOW)
     assert one.present, one.evidence
-    assert one.version == '25.2.01zp'
-    assert len(calls) == 1, 'version and smoke share one Designer start'
+    assert one.version == '25.2.1.0'
 
 
-def test_jmag_exiting_0_without_the_version_file_is_absent_with_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_designer(monkeypatch, writes=False)
-    one = probe('jmag', replace(CHECKS['jmag'], find=lambda: ('registry', EXE)), None, now=NOW)
+def test_jmag_without_a_file_version_is_absent_naming_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    exe = tmp_path / 'designer.exe'
+    exe.write_bytes(b'')
+    monkeypatch.setattr(toolchecks, 'file_version', lambda _p: None)
+    one = probe('jmag', replace(CHECKS['jmag'], find=lambda: ('registry', exe)), None, now=NOW)
     assert not one.present
-    assert one.evidence[-1].value == 'FAILED: exit 0: JMAG-Designer Stopping; the script wrote no version file'
+    assert one.evidence[-1] == Evidence('version', 'unreadable', NOW.isoformat())
 
 
 # --- a stale reading is re-probed in place, never read as absent ---------------------------------------
@@ -388,22 +362,8 @@ def test_concurrent_callers_on_one_stale_reading_share_one_probe(tmp_path: Path)
 
 # INCIDENT 2026-10-20 01:25: `designer -w` smoke-run from a hidden detached serve INHERITED an invalid stdin,
 # raised `[WinError 6] The handle is invalid`, and the FAILED reading stuck for its TTL -- every run refused
-# while JMAG was fine. A probe never reads stdin, and a probe that crashed measured nothing.
-
-
-def test_a_probe_never_hands_its_child_the_inherited_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PLANTED: an inherited stdin that is invalid fails the start; the probe still answers."""
-    real = toolchecks._door.run
-
-    def run(argv: list[str], **kwargs: object) -> object:
-        if kwargs.get('stdin') is not subprocess.DEVNULL:
-            raise OSError(6, 'The handle is invalid')
-        return real(argv, **kwargs)
-
-    monkeypatch.setattr(toolchecks._door, 'run', run)
-    passed, detail = toolchecks._run([sys.executable, '-c', 'import sys; print(repr(sys.stdin.read()))'])
-    assert passed, detail
-    assert detail.endswith("''"), 'the child reads an empty stdin, never the parent console'
+# while JMAG was fine. A check now starts no child at all (toolchecks' module docstring); a probe that crashed
+# measured nothing.
 
 
 def test_a_probe_that_crashes_records_no_reading_and_is_retaken(tmp_path: Path) -> None:
@@ -450,12 +410,8 @@ def test_the_toolchecks_os_map_is_the_probe_map() -> None:
     assert toolchecks._SYSTEMS is OS_NAMES
 
 
-def _answering(code: int) -> Callable[..., subprocess.CompletedProcess[str]]:
-    return lambda *_args, **_kwargs: subprocess.CompletedProcess([], code, stdout='v1.2.3\n', stderr='')
-
-
 @pytest.mark.parametrize('tool', ['ngspice', 'node'])
-def test_a_plain_tool_is_supplied_only_where_its_probe_finds_it_answering(
+def test_a_plain_tool_is_supplied_only_where_its_probe_finds_it_installed(
     tool: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A plain tool (ngspice, node) is PROBED, never assumed on every OS: absent -> unfound; present -> its version."""
@@ -466,11 +422,14 @@ def test_a_plain_tool_is_supplied_only_where_its_probe_finds_it_answering(
     exe = tmp_path / 'tool'
     monkeypatch.setattr(toolchecks.shutil, 'which', lambda _binary: str(exe))
     assert check.find() == ('PATH', exe)
-    monkeypatch.setattr(toolchecks, '_probe', _answering(0))
-    assert check.version(exe) == ('--version', 'v1.2.3')
+    assert not check.smoke(exe)[0], 'a path with no file behind it is not installed'
+    exe.write_bytes(b'')
+    monkeypatch.setattr(toolchecks, 'file_version', lambda _p: '45.2.0.0')
+    assert check.version(exe) == ('file version', '45.2.0.0')
+    monkeypatch.setattr(toolchecks, 'file_version', lambda _p: None)
+    assert check.version(exe) == ('install', 'unread'), 'a binary with no file version is present, unversioned'
+    monkeypatch.setattr(toolchecks.os, 'access', lambda _p, _mode: True)
     assert check.smoke(exe)[0]
-    monkeypatch.setattr(toolchecks, '_probe', _answering(1))
-    assert not check.smoke(exe)[0], 'a tool that does not answer its version is absent'
 
 
 def test_heavy_compute_is_the_vendor_solvers_and_nothing_else() -> None:

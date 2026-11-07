@@ -348,9 +348,9 @@ def test_what_became_of_a_unit_is_named_settled_and_the_generic_name_is_gone() -
 
 def test_presence_check_re_probes_a_stale_reading_instead_of_refusing() -> None:
     stale = Presence(
-        'jmag', present=False, evidence=(Evidence('version: designer -w', '25.2', 't'), Evidence('ttl', 'older', 't'))
+        'jmag', present=False, evidence=(Evidence('version: file version', '25.2', 't'), Evidence('ttl', 'older', 't'))
     )
-    fresh = Presence('jmag', present=True, evidence=(Evidence('version: designer -w', '25.2', 'u'),))
+    fresh = Presence('jmag', present=True, evidence=(Evidence('version: file version', '25.2', 'u'),))
     asked: list[str] = []
     why = presence_check(None, {'jmag': stale}, renew=lambda name: asked.append(name) or fresh)
     assert why(Engine('jmag', '25.2')) == ''
