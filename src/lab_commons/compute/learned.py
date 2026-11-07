@@ -1,6 +1,6 @@
 """THE ONE MEASURED DEMAND TABLE: what a repository's finished runs measured, carried to its next admission.
 
-ONE FILE PER REPOSITORY, ``<config dir>/compute-learned/<key>.json`` (beside the machine file), keyed by
+ONE FILE PER REPOSITORY, ``<machine home>/state/compute-learned/<key>.json`` (:func:`directory`), keyed by
 the remote URL and machine-local, so it serves every host and grant the machine holds. It holds two
 kinds of fact, both written by finished runs -- a box run (:mod:`dev_lab.dev.forgeproduce`) and a
 Slurm run (:mod:`lab_commons.hpc.run`) alike -- and never by hand:
@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.measured import (
     OOM_GROWTH,
@@ -40,7 +41,6 @@ from lab_commons.compute.measured import (
     task_gb,
 )
 from lab_commons.compute.model import Demand
-from lab_commons.config import config_path
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.needsets import needs_of
 
@@ -63,9 +63,9 @@ __all__ = [
     'directory',
     'fit_width',
     'folded',
-    'learn',
     'learn_peaks',
     'learn_record',
+    'learn_round',
     'learned',
     'part_files',
     'record_ask',
@@ -128,8 +128,8 @@ def _key(producer: str, needs: Iterable[str]) -> str:
 
 
 def directory() -> Path:
-    """``compute-learned/`` beside the machine config (:func:`lab_commons.config.config_path`)."""
-    return config_path().parent / 'compute-learned'
+    """``compute-learned/`` in the machine home's state (:func:`lab_commons.home.part`)."""
+    return home.part('state') / 'compute-learned'
 
 
 def _path(repo: str) -> Path:
@@ -184,9 +184,22 @@ def learn_record(repo: str, name: str, record: Mapping[str, Any]) -> Path:
     return _write(repo, {**table, **merged, PART_FILES: parts, 'folded': folded_now})
 
 
-def learn(record: dict[str, Any]) -> Path:
-    """Keep *record*'s per-test measurements as its repository's latest, keeping its per-job runs."""
-    return _write(record['repo'], {**learned(record['repo']), **Measured.of(record).record()})
+def learn_round(repo: str, before: Mapping[str, Any], after: Mapping[str, Any]) -> Path:
+    """Fold what ONE round changed -- its measurements *after* against the *before* it planned from -- into *repo*.
+
+    A ROUND WRITES ITS DELTA, never its whole view: each run is seeded from the table at submit, and runs of
+    several shas fold concurrently. Ada 2026-11-03: five ran at once and each fold wrote its WHOLE view, so a run
+    seeded before another's OOM kill erased that kill's floor, and the next plan asked below the limit already
+    died at. A fact the round set or changed is written; one it dropped (an id that finished drops its floor) is
+    removed; every other fact stays as the table holds it.
+    """
+    table = learned(repo)
+    old, new = Measured.of(dict(before)).record(), Measured.of(dict(after)).record()
+    merged: dict[str, dict[str, float]] = {}
+    for key, facts in new.items():
+        kept = {name: value for name, value in table.get(key, {}).items() if name in facts or name not in old[key]}
+        merged[key] = {**kept, **{name: value for name, value in facts.items() if old[key].get(name) != value}}
+    return _write(repo, {**table, **merged})
 
 
 def learn_peaks(repo: str, peaks_mb: Mapping[str, float]) -> Path:

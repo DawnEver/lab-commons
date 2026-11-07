@@ -53,7 +53,7 @@ from lab_commons.hpc.records import (
     stream_sources,
     write_record,
 )
-from lab_commons.hpc.run import RETRIES, NoRoom, load_state, submit_run
+from lab_commons.hpc.run import OOM_ROUNDS, RETRIES, NoRoom, load_state, submit_run
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
     FULL,
@@ -80,12 +80,6 @@ IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
 GRANT = Grant(user='me', hosts=('login.example',), slurm_account='acct-free', partitions=('shortq', 'defq'))
 SHA = 'a' * 40
 SOURCE = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / 'pytest_item.py'
-
-
-@pytest.fixture(autouse=True)
-def _machine_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every gather learns beside the machine file: never this box's own."""
-    monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'machine' / 'config.toml'))
 
 
 def test_the_item_runner_is_standalone() -> None:
@@ -380,14 +374,15 @@ def test_a_test_spinning_inside_c_with_the_gil_held_is_killed_at_its_wall(
 ) -> None:
     """A native loop that never yields to the interpreter is killed from outside (Ada 2026-10-24..26).
 
-    pytest-timeout, declared here at 1 s, cannot fire: catastrophic regex backtracking is one C call holding the GIL.
+    pytest-timeout, declared here at 1 s, cannot fire: ``sum(range(...))`` is one C loop holding the GIL that never
+    polls for signals. (Regex backtracking was the probe until CPython 3.14's ``re`` began to poll and so let it fire.)
     Sized for load: the claim needs only declared < wall, so 1 s under a 2 s wall (was 2 s under 4 s).
     """
     runner = _item_runner(tmp_path, monkeypatch)
     body = (
-        'import re\n\nimport pytest\n\n'
+        'import pytest\n\n'
         '@pytest.mark.timeout(1)\n'
-        'def test_spin():\n    re.match(r"(a+)+$", "a" * 64 + "b")\n\n'
+        'def test_spin():\n    sum(range(10**12))\n\n'
         'def test_after():\n    pass\n'
     )
     ids = _tree(tmp_path, body)
@@ -510,7 +505,7 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_k
     measured = Measured()
     measured.learn(['a.py::t'], killed)
     assert measured.peaks_mb == {'a.py': 1120.0 * OOM_GROWTH}
-    assert measured.taught == {'a.py'}
+    assert measured.taught == {'a.py', 'a.py::t'}, 'the cut id carries the floor too'
     known = Measured(peaks_mb={'a.py': 3493.0})
     known.learn(['a.py::t'], killed)
     assert known.peaks_mb == {'a.py': 3493.0}, 'a kill at a lower limit says nothing new'
@@ -518,6 +513,29 @@ def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_k
     later = Measured.of(known.record())  # the NEXT round's fold; within one round a file keeps its worst item
     later.learn(['a.py::t'], finished)
     assert later.peaks_mb == {'a.py': 700.0}, 'PLANTED CONTROL: a finished item is measured, a newer round wins'
+
+
+def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_outgrows_the_kill() -> None:
+    """Ada 2026-11-05, motronics PR #5570: seven 24S spiral ids, each alone, OOM-killed round after round.
+
+    The read was the pytest child's ~435 MB -- the memory blown was a grandchild's -- so the floor learned was
+    ~870 MB every round, under the limit that killed it: the retry asked what it was killed at, never reached the
+    grant ceiling, and an OOM round is not counted against RETRIES, so the run never settled. A kill says the need
+    exceeds the peak its limit allowed (3072 MB over the 1.5 safety); the floor is the larger of that and the read,
+    grown, so the retry asks the limit x OOM_GROWTH. PLANTED CONTROL: a read above it still decides.
+    """
+    killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 435.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], killed, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}
+    unread = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], unread, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}, 'a kill with no read still learns its limit'
+    over = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 4000.0}}
+    measured = Measured()
+    measured.learn(['a.py::t'], over, allowed_mb=2048.0)
+    assert measured.peaks_mb == {'a.py': 4000.0 * OOM_GROWTH}
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
@@ -765,6 +783,21 @@ def test_an_oom_item_under_the_ceiling_is_retried_not_failed() -> None:
     _gather(fake)
     assert _gather(fake) is None, 'still bisecting/growing, not settled'
     assert 'tests/b.py::t4' not in json.loads(fake.state)['cells']
+
+
+def test_a_lone_id_oom_killed_round_after_round_below_the_ceiling_settles_out_of_memory() -> None:
+    """Motronics ca127cc9f5: the same 7 ids OOM-killed at ~435 MB in rounds 3-11, and the run never closed."""
+    fake = FakeRunCluster(hog='tests/b.py::t4', mem_ceiling='360G')
+    _submit(fake)
+    records = [_gather(fake) for _ in range(1 + OOM_ROUNDS)]
+    record = records[-1]
+    assert records[:-1] == [None] * OOM_ROUNDS, 'bisected, then re-asked bigger while the bound allows'
+    assert record is not None, 'a lone id lost to OOM for OOM_ROUNDS rounds settles the run'
+    assert len(record['rounds']) == 1 + OOM_ROUNDS
+    words = _words(record['cells'])
+    assert words['tests/b.py::t4'] == 'out_of_memory', 'the machine said no: never REJECTED, never INFRA'
+    assert _whys(record['cells'])['tests/b.py::t4'] == f'killed for memory alone in {OOM_ROUNDS} rounds'
+    assert [words[f'tests/b.py::t{n}'] for n in (3, 5)] == ['ok', 'ok'], 'PLANTED CONTROL: its mates got results'
 
 
 def test_a_round_no_grant_can_take_settles_as_unavailable_naming_why() -> None:

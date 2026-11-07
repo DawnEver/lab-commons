@@ -18,7 +18,6 @@ dependencies = []
 dev = ["dev-lab[test]"]
 
 [tool.uv.sources]
-# integrate/main until dev-lab main carries the split; then drop `branch`.
 dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", branch = "integrate/main" }
 
 [tool.uv]
@@ -47,7 +46,7 @@ packages = ["src/lab_commons"]
 # Each defining module has an explicit installation capability, not a root facade.
 units = ["numpy", "pint>=0.25.2", "pydantic>=2"]
 paths = ["platformdirs"]
-io = ["rtoml"]
+io = ["tomlkit"]
 structured = ["structlog", "colorama; sys_platform == 'win32'"]
 
 # THE TWO GATES FOR ``lab_commons.viz``, AND THERE ARE TWO ON PURPOSE. The plotting vocabulary
@@ -252,6 +251,5 @@ ignore = [
 ]
 
 # THIS REPO'S CI, as TOML: rendered to .github/workflows/ by `python -m dev_lab.dev.ciworkflows render`
-# (the family base is dev_lab/dev/ci_base.toml). ci.yml takes the base as is: the one PR lifecycle
-# (parts, part, absent-parts, security, review, merge-ready, promote).
+# (the family base is dev_lab/dev/ci_base.toml), rendered in full.
 [tool.dev_lab.ci."ci.yml"]

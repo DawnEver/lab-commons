@@ -2,8 +2,9 @@
 
 A test that falls through to the default root shares the HOST's live seats (a sibling's verdict, a
 stranger's directory on a cluster node) and its result then depends on who else is on the box. A
-test that means the default root says so with ``monkeypatch.delenv``. The machine config is the
-test's own for the same reason: a finished run LEARNS beside it (:mod:`lab_commons.compute.learned`).
+test that means the default root says so with ``monkeypatch.delenv``. The machine config and the
+machine home are the test's own for the same reason: a finished run LEARNS into the home's state
+(:mod:`lab_commons.compute.learned`), and a shared table made one test's peaks another's plan.
 """
 
 from __future__ import annotations
@@ -15,12 +16,14 @@ import pytest
 
 from lab_commons.box import BOX_ENV, CPU_ENV, INSIDE_ENV
 from lab_commons.config import CONFIG_ENV
+from lab_commons.home import HOME_ENV
 
 
 @pytest.fixture(autouse=True)
 def _a_box_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'lab-commons-box' / 'box.sqlite'))
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'lab-commons-machine' / 'config.toml'))
+    monkeypatch.setenv(HOME_ENV, str(tmp_path / 'machine-home'))
     monkeypatch.delenv(INSIDE_ENV, raising=False)  # the verify running these tests is boxed; a test is not
     monkeypatch.delenv(CPU_ENV, raising=False)
 

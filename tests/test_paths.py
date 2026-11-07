@@ -8,17 +8,18 @@ honors its env var and falls back correctly.
 
 import subprocess
 import sys
+from unittest.mock import Mock
 
 from lab_commons import paths
 
 
 class TestPathScheme:
-    def test_run_output_dir_nested_named_and_run_stamped(self, mocker, tmp_path) -> None:
+    def test_run_output_dir_nested_named_and_run_stamped(self, monkeypatch, tmp_path) -> None:
         """<root>/logs/<yy>/<mm>/<dd>/<name>/<HH-MM-SS>/ — memoized stamp reused."""
-        mocker.patch.object(paths, '_run_stamp', None)
-        mocker.patch.object(paths, '_run_date', None)
-        mocker.patch.object(paths, '_now_stamp', return_value='08-09-10')
-        mocker.patch.object(paths, '_now_date', return_value=('26', '07', '20'))
+        monkeypatch.setattr(paths, '_run_stamp', None)
+        monkeypatch.setattr(paths, '_run_date', None)
+        monkeypatch.setattr(paths, '_now_stamp', Mock(return_value='08-09-10'))
+        monkeypatch.setattr(paths, '_now_date', Mock(return_value=('26', '07', '20')))
 
         d = paths.run_output_dir('myapp', 'case_x', root=tmp_path)
         assert d == tmp_path / 'logs' / '26' / '07' / '20' / 'case_x' / '08-09-10'
@@ -32,11 +33,13 @@ class TestPathScheme:
         # the name segment is flattened (its parent within the date tree)
         assert d.parent.name == 'a_b_c'
 
-    def test_run_stamp_and_run_date_memoized(self, mocker) -> None:
-        mocker.patch.object(paths, '_run_stamp', None)
-        mocker.patch.object(paths, '_run_date', None)
-        stamp = mocker.patch.object(paths, '_now_stamp', return_value='01-02-03')
-        date = mocker.patch.object(paths, '_now_date', return_value=('26', '07', '20'))
+    def test_run_stamp_and_run_date_memoized(self, monkeypatch) -> None:
+        monkeypatch.setattr(paths, '_run_stamp', None)
+        monkeypatch.setattr(paths, '_run_date', None)
+        stamp = Mock(return_value='01-02-03')
+        date = Mock(return_value=('26', '07', '20'))
+        monkeypatch.setattr(paths, '_now_stamp', stamp)
+        monkeypatch.setattr(paths, '_now_date', date)
         assert paths.run_stamp() == '01-02-03'
         assert paths.run_stamp() == '01-02-03'
         assert paths.run_date() == ('26', '07', '20')
@@ -44,9 +47,9 @@ class TestPathScheme:
         stamp.assert_called_once()
         date.assert_called_once()
 
-    def test_unique_run_dir_collision_safe(self, mocker, tmp_path) -> None:
-        mocker.patch.object(paths, '_run_stamp', None)
-        mocker.patch.object(paths, '_now_stamp', return_value='12-34-56')
+    def test_unique_run_dir_collision_safe(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(paths, '_run_stamp', None)
+        monkeypatch.setattr(paths, '_now_stamp', Mock(return_value='12-34-56'))
         a = paths.unique_run_dir(tmp_path, 'model')
         b = paths.unique_run_dir(tmp_path, 'model')
         assert a.name == 'model-12-34-56'
@@ -118,29 +121,29 @@ def _two_runs_in_one_second(tmp_path, *, planted: bool) -> list[tuple[str, str]]
 class TestRunOutputDirClaim:
     """Two runs started in the same second never share one run dir (the claim, not the stamp)."""
 
-    def _freeze(self, mocker) -> None:
-        mocker.patch.object(paths, '_run_stamp', None)
-        mocker.patch.object(paths, '_run_date', None)
-        mocker.patch.object(paths, '_claimed', {})
-        mocker.patch.object(paths, '_now_stamp', return_value='16-22-39')
-        mocker.patch.object(paths, '_now_date', return_value=('26', '10', '15'))
+    def _freeze(self, monkeypatch) -> None:
+        monkeypatch.setattr(paths, '_run_stamp', None)
+        monkeypatch.setattr(paths, '_run_date', None)
+        monkeypatch.setattr(paths, '_claimed', {})
+        monkeypatch.setattr(paths, '_now_stamp', Mock(return_value='16-22-39'))
+        monkeypatch.setattr(paths, '_now_date', Mock(return_value=('26', '10', '15')))
 
-    def test_a_taken_stamp_advances_to_the_next_suffix_and_stays(self, mocker, tmp_path) -> None:
-        self._freeze(mocker)
+    def test_a_taken_stamp_advances_to_the_next_suffix_and_stays(self, monkeypatch, tmp_path) -> None:
+        self._freeze(monkeypatch)
         parent = tmp_path / 'logs' / '26' / '10' / '15' / 'case'
         (parent / '16-22-39').mkdir(parents=True)
         d = paths.run_output_dir('myapp', 'case', root=tmp_path)
         assert d == parent / '16-22-39-2'
         assert paths.run_output_dir('myapp', 'case', root=tmp_path) == d
 
-    def test_an_unclaimed_stamp_is_the_plain_stamp_and_stays(self, mocker, tmp_path) -> None:
-        self._freeze(mocker)
+    def test_an_unclaimed_stamp_is_the_plain_stamp_and_stays(self, monkeypatch, tmp_path) -> None:
+        self._freeze(monkeypatch)
         d = paths.run_output_dir('myapp', 'case', root=tmp_path)
         assert d.name == '16-22-39'
         assert paths.run_output_dir('myapp', 'case', root=tmp_path) == d
 
-    def test_a_different_name_claims_under_its_own_parent(self, mocker, tmp_path) -> None:
-        self._freeze(mocker)
+    def test_a_different_name_claims_under_its_own_parent(self, monkeypatch, tmp_path) -> None:
+        self._freeze(monkeypatch)
         a = paths.run_output_dir('myapp', 'one', root=tmp_path)
         b = paths.run_output_dir('myapp', 'two', root=tmp_path)
         assert (a.parent.name, a.name) == ('one', '16-22-39')

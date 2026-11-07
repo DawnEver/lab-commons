@@ -24,7 +24,7 @@ The base installation is the standard library alone. Select capabilities explici
 | none | `html` report identities and document delivery | Standard library only |
 | `units` | `units`, `em` | NumPy, Pint, Pydantic |
 | `paths` | `paths` | platformdirs |
-| `io` | `file_io` | rtoml |
+| `io` | `file_io` | tomlkit |
 | `structured` | `structured` | structlog, colorama on Windows |
 | `viz` | the plotting vocabulary (`viz`) | NumPy |
 | `viz-mpl` / `viz-bokeh` | named renderer adapter, beside `viz` | matplotlib / Bokeh |
