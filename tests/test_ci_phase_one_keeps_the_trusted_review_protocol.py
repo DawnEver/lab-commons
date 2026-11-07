@@ -89,7 +89,7 @@ def _check_workflows(actual: dict, tmp_path: Path) -> None:
 
 def test_phase_one_keeps_every_other_canonical_workflow_field_and_trusted_base_door(tmp_path: Path) -> None:
     actual = ciworkflows.workflows(_ROOT)
-    assert {'ci.yml', 'merge-tick.yml', 'review-claims.yml'} <= set(actual)
+    assert {'ci.yml', 'merge-tick.yml', 'review-again.yml'} <= set(actual)
     _check_workflows(actual, tmp_path)
     doors = [
         step

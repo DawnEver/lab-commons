@@ -30,6 +30,7 @@ _SHIPPED: Final = frozenset(
         'GIT-RESET',
         'GIT-STAGE-EVERYTHING',
         'GIT-STASH',
+        'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
         'PUSH-FORCE',
         'PUSH-NO-VERIFY',
         'PUSH-REMOTE-DELETE',
@@ -41,6 +42,7 @@ _SHIPPED: Final = frozenset(
         'TREE-HAS-A-LIVE-RUN',
         'WORKTREE-BASE-IS-EXPLICIT',
         'WORKTREES-STAY-INSIDE',
+        'WRITES-STAY-IN-THE-TREE',  # gained 2026-11-07 with dev-lab 8c4ab734
     }
 )
 
