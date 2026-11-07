@@ -1,6 +1,6 @@
 """THE ONE MEASURED DEMAND TABLE: what a repository's finished runs measured, carried to its next admission.
 
-ONE FILE PER REPOSITORY, ``<config dir>/compute-learned/<key>.json`` (beside the machine file), keyed by
+ONE FILE PER REPOSITORY, ``<machine home>/state/compute-learned/<key>.json`` (:func:`directory`), keyed by
 the remote URL and machine-local, so it serves every host and grant the machine holds. It holds two
 kinds of fact, both written by finished runs -- a box run (:mod:`dev_lab.dev.forgeproduce`) and a
 Slurm run (:mod:`lab_commons.hpc.run`) alike -- and never by hand:
