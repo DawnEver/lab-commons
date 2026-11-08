@@ -326,14 +326,22 @@ def test_released_on_terminal_evidence(box: Path) -> None:
 def test_a_tree_inside_a_claim_does_not_claim_again_but_a_vendor_or_a_seat_does(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(INSIDE_ENV, 'outer')
-    with hold(*_demand(cpu=4), 'nested', queue_s=1, **_ON) as claim:
-        assert claim.id == 0
-        assert holdings() == [], 'the enclosing claim already holds this tree'
+    with hold(*_demand(cpu=1), 'outer', queue_s=1, **{**_ON, 'key': 'outer'}):
+        monkeypatch.setenv(INSIDE_ENV, 'outer')
+        with hold(*_demand(cpu=1), 'nested', queue_s=1, **_ON) as claim:
+            assert claim.id == 0
+            assert [row.what for row in holdings()] == ['outer'], 'the enclosing claim already holds this tree'
     with hold(*_demand(cpu=1), 'vendor', queue_s=1, outside=True, **_ON):
         assert [row.what for row in holdings()] == ['vendor'], 'PLANTED CONTROL: outside the tree books'
     with hold(*_demand(seats={'jmag': 1}), 'seat', queue_s=1, **_ON):
         assert [row.what for row in holdings()] == ['seat'], 'a licence is not a share of a tree'
+
+
+@pytest.mark.usefixtures('box')
+def test_an_exported_inside_key_naming_no_live_claim_still_books(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(INSIDE_ENV, 'exported-by-hand')
+    with hold(*_demand(cpu=1), 'run', queue_s=1, **_ON):
+        assert [row.what for row in holdings()] == ['run'], 'the variable alone is not evidence of an enclosing claim'
 
 
 def test_a_ledger_file_from_before_the_kept_column_moves_forward(tmp_path: Path, monkeypatch) -> None:
