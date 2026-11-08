@@ -110,7 +110,7 @@ from lab_commons.resources.engine import admits
 
 __all__ = [
     'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Read', 'adopted', 'box_path', 'declare',
-    'external', 'hand_over', 'hold', 'holdings', 'persist', 'reap', 'release', 'take', 'untrusted',
+    'external', 'hand_over', 'hold', 'holdings', 'inside_a_claim', 'persist', 'reap', 'release', 'take', 'untrusted',
 ]  # fmt: skip
 
 #: Set on every boxed child to its run's key: a tree already inside a claim is not claimed twice.
@@ -128,6 +128,16 @@ GRACE_S: Final = 60.0
 
 #: Seconds between a waiter's looks at the ledger.
 POLL_S: Final = 0.5
+
+
+def inside_a_claim() -> bool:
+    """Whether this tree runs inside a claim LIVE on this box: :data:`INSIDE_ENV` names one held claim's key.
+
+    The variable alone is not evidence: it is inherited and can be exported by hand, and a run excused on its word
+    would run unbounded and unbooked.
+    """
+    key = os.environ.get(INSIDE_ENV)
+    return bool(key) and any(one.key == key for one in holdings())
 
 
 def holdings() -> list[Holding]:
@@ -370,7 +380,7 @@ def hold(
         msg = f'{what}: queue_s must lie in [0, WALL_CEILING_S={WALL_CEILING_S}], got {queue_s}'
         raise ValueError(msg)
     demand = checked(demand, wall_s)
-    if INSIDE_ENV in os.environ and not outside and not seats(demand):
+    if inside_a_claim() and not outside and not seats(demand):
         yield Claim(0, float('inf'))  # this tree's enclosing claim already holds it
         return
     capacity = Capacity.read() if capacity is None else capacity
