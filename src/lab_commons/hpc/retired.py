@@ -183,6 +183,7 @@ RETIRED: Final[dict[str, str]] = {
     'deny row GIT-NETWORK-VERB': 'NETWORK-VERB',
     'deny row REVIEW-HOLD-VIA-TAKEOVER': 'STATUS-VIA-DOORS',
     'deny row REVIEW-STATUS-VIA-DOORS': 'STATUS-VIA-DOORS',
+    'deny row CONSENT-CODE-NEVER-TYPED': 'CONSENT-CODE-FROM-THE-USER',  # 2026-11-08 user ruling
     # Where a run is and what the cluster can take are read from the forge, from any machine; no verb asks over ssh.
     'lab_commons.hpc probe': (
         'python -m dev_lab.dev.forge queue (each cluster host card carries its supply, partitions and quota)'
