@@ -37,7 +37,7 @@ _SHIPPED: Final = frozenset(
         'RECURSIVE-DELETE',
         'RECURSIVE-GREP',
         'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-07 with dev-lab #313 (agentpolicy)
-        'CONSENT-CODE-NEVER-TYPED',  # gained 2026-11-08 with dev-lab #311 (consent)
+        'CONSENT-CODE-FROM-THE-USER',  # renamed 2026-11-08 by dev-lab #325 (user ruling)
         'REPORTS-LIVE-IN-MEMORY',
         'STATUS-VIA-DOORS',
         'SUBAGENT-NO-PUSH',

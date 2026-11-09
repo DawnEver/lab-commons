@@ -46,6 +46,7 @@ from lab_commons.hpc.needsets import needs_of
 
 __all__ = [
     'ASKED',
+    'ASK_CEILING_SHARE',
     'BOX_HEADROOM',
     'BOX_WALL_S',
     'CLUSTER_PRIOR',
@@ -82,8 +83,12 @@ EXITED: Final = 'exit'
 #: The box ended the tree AT its declared memory (``ProcessEnd.reason`` ``memory``): the declaration was too small.
 MEMORY_KILLED: Final = 'memory'
 
-#: A floor raised by an ask that could not be placed (:func:`record_ask`), not by a run.
+#: A floor raised by an ask a job proved it needed (:func:`record_ask`), not by a run's own peak.
 ASKED: Final = 'ask'
+
+#: The most of a grant's memory ceiling a recorded ask may reach: strictly below it, so a learned ask still fits
+#: beside the account's other jobs (Ada 2026-11-08: 240 GB x1.5 = the whole 360 GB ceiling starved every base).
+ASK_CEILING_SHARE: Final = 0.9
 
 #: THE ENDINGS A ROW MAY PRICE FROM. A run stopped any other way -- the box's wall, ``timeout``'s SIGTERM (exit 124),
 #: a Ctrl-C, a crash -- was stopped MID-CLIMB: its peak is a LOWER bound of its need and says nothing of how much
@@ -251,12 +256,18 @@ def record_run(
     return _write(repo, {**table, 'runs': runs})
 
 
-def record_ask(repo: str, producer: str, needs: Iterable[str], ask_gb: float, *, safety: float) -> Path:
+def record_ask(
+    repo: str, producer: str, needs: Iterable[str], ask_gb: float, *, safety: float, ceiling_gb: float | None
+) -> Path:
     """Raise ``(producer, needs)``'s known peak so its next demand asks at least *ask_gb* a task (:func:`task_gb`).
 
-    A plan that could not be placed, or a job Slurm held for a resource limit, KNOWS the ask the measured run
-    peak understated; kept, this host stops admitting the part at the old size. Never lowers a known peak.
+    A job that proved its need past its ask (an OOM kill) KNOWS the ask the measured run peak understated; kept,
+    this host stops admitting the part at the old size. Never lowers a known peak. CONTENTION is never an ask:
+    waiting for room the account's own jobs hold proves no need. The ask is held to :data:`ASK_CEILING_SHARE` of
+    the grant's memory *ceiling_gb* (``None``: no ceiling), since an ask at the ceiling fits only an idle account.
     """
+    if ceiling_gb is not None:
+        ask_gb = min(ask_gb, ceiling_gb * ASK_CEILING_SHARE)
     table = learned(repo)
     runs = dict(table.get('runs', {}))
     key = _key(producer, needs)
