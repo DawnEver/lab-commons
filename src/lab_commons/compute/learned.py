@@ -83,7 +83,9 @@ EXITED: Final = 'exit'
 #: The box ended the tree AT its declared memory (``ProcessEnd.reason`` ``memory``): the declaration was too small.
 MEMORY_KILLED: Final = 'memory'
 
-#: A floor raised by an ask a job proved it needed (:func:`record_ask`), not by a run's own peak.
+#: A floor raised by an ask a job proved it needed (:func:`record_ask`), not by a run's own peak. ITS
+#: ``peak_mem_gb`` IS THE ASK ITSELF, one task's ``--mem``: it already carries its margin (OOM growth), so it is
+#: demanded as stored and never times the safety again (:func:`cluster_demand`). A measured exit replaces it.
 ASKED: Final = 'ask'
 
 #: The most of a grant's memory ceiling a recorded ask may reach: strictly below it, so a learned ask still fits
@@ -232,7 +234,8 @@ def record_run(
     *ended* is :attr:`lab_commons.box.ProcessEnd.reason`'s vocabulary and must be said: a caller that does not
     know how its run ended has a run that did not exit by itself. :data:`EXITED` replaces the row;
     :data:`MEMORY_KILLED` grows the peak it died at by :data:`OOM_GROWTH`, never lowering a known one; any other
-    ending writes nothing (:data:`PRICED_ENDINGS`).
+    ending writes nothing (:data:`PRICED_ENDINGS`). AN EXIT SUPERSEDES AN :data:`ASKED` FLOOR, even below it: the
+    ask was a floor until a run measured the need. A kill below an ask keeps the ask (a kill only raises).
 
     *killed* is dev-lab's spelling until it passes *ended* (``forgeproduce.learn_box_run``,
     ``verifybox.learn_ended``): ``True`` reads as :data:`MEMORY_KILLED`, ``False`` as :data:`EXITED`.
@@ -250,7 +253,9 @@ def record_run(
     key = _key(producer, needs)
     if ended == MEMORY_KILLED:
         known = _priced(runs.get(key))
-        floor = 0.0 if known is None else known.peak_mem_gb
+        if known is not None and runs[key]['ended'] == ASKED and known.peak_mem_gb >= run.peak_mem_gb * OOM_GROWTH:
+            return path
+        floor = 0.0 if known is None or runs[key]['ended'] == ASKED else known.peak_mem_gb
         run = Run(max(floor, run.peak_mem_gb * OOM_GROWTH), run.cpu_s, run.wall_s, run.files)
     runs[key] = _row(run, ended)
     return _write(repo, {**table, 'runs': runs})
@@ -259,12 +264,15 @@ def record_run(
 def record_ask(
     repo: str, producer: str, needs: Iterable[str], ask_gb: float, *, safety: float, ceiling_gb: float | None
 ) -> Path:
-    """Raise ``(producer, needs)``'s known peak so its next demand asks at least *ask_gb* a task (:func:`task_gb`).
+    """Raise ``(producer, needs)``'s known ask so its next demand asks at least *ask_gb* a task, stored AS the ask.
 
     A job that proved its need past its ask (an OOM kill) KNOWS the ask the measured run peak understated; kept,
     this host stops admitting the part at the old size. Never lowers a known peak. CONTENTION is never an ask:
     waiting for room the account's own jobs hold proves no need. The ask is held to :data:`ASK_CEILING_SHARE` of
     the grant's memory *ceiling_gb* (``None``: no ceiling), since an ask at the ceiling fits only an idle account.
+
+    THE ASK IS PRICED ONCE: the row stores *ask_gb* itself (:data:`ASKED`), never ``ask_gb / safety``. *safety*
+    prices a known MEASURED peak as an ask (peak times *safety*) to compare against; a known ask compares as is.
     """
     if ceiling_gb is not None:
         ask_gb = min(ask_gb, ceiling_gb * ASK_CEILING_SHARE)
@@ -272,7 +280,8 @@ def record_ask(
     runs = dict(table.get('runs', {}))
     key = _key(producer, needs)
     known = _priced(runs.get(key)) or CLUSTER_PRIOR
-    runs[key] = _row(Run(max(known.peak_mem_gb, ask_gb / safety), known.cpu_s, known.wall_s, known.files), ASKED)
+    asked = known.peak_mem_gb if runs.get(key, {}).get('ended') == ASKED else known.peak_mem_gb * safety
+    runs[key] = _row(Run(max(asked, ask_gb), known.cpu_s, known.wall_s, known.files), ASKED)
     return _write(repo, {**table, 'runs': runs})
 
 
@@ -325,7 +334,8 @@ def cluster_demand(
     defaults when omitted), the size the plan submits -- so an account whose headroom cannot hold one task of the
     part never claims it. Held to *ceiling_gb*, the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`;
     ``None``: no ceiling) as the plan holds its asks, never below the peak itself: an ask above every grant's ceiling
-    is never admitted (Ada 2026-11-09: a 216 GB peak x1.5 asked 324 GB of a 240 GB ceiling).
+    is never admitted (Ada 2026-11-09: a 216 GB peak x1.5 asked 324 GB of a 240 GB ceiling). An :data:`ASKED` row
+    is already an ask: it demands its stored ask as is (held to *ceiling_gb*), never times the safety again.
 
     A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key. It also asks the
     ``files`` it leaves in the home (measured, else :data:`CLUSTER_PRIOR`'s), against the account's file headroom,
@@ -335,9 +345,12 @@ def cluster_demand(
 
     def ask(needs: frozenset[str]) -> Demand:
         run = run_of(repo_url, SLURM, needs) or CLUSTER_PRIOR
-        memory = task_gb(run.peak_mem_gb, prior_gb=item.mem_gb, safety=cut.safety)
-        if ceiling_gb is not None:
-            memory = max(min(memory, ceiling_gb), run.peak_mem_gb)
+        if learned(repo_url).get('runs', {}).get(_key(SLURM, needs), {}).get('ended') == ASKED:
+            memory = run.peak_mem_gb if ceiling_gb is None else min(run.peak_mem_gb, ceiling_gb)
+        else:
+            memory = task_gb(run.peak_mem_gb, prior_gb=item.mem_gb, safety=cut.safety)
+            if ceiling_gb is not None:
+                memory = max(min(memory, ceiling_gb), run.peak_mem_gb)
         return Demand({**run.demand(needs), 'mem_gb': memory, 'files': run.files or CLUSTER_PRIOR.files, 'submits': 1})
 
     return ask
