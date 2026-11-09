@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import math
 import statistics
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -57,6 +57,7 @@ from lab_commons.hpc.config import Cost, Policy
 
 __all__ = [
     'ACCUMULATED_CLASSES',
+    'HEAVY_SHARE',
     'MEASURED_GROWTH',
     'OOM_GROWTH',
     'TIMEOUT_GROWTH',
@@ -78,6 +79,11 @@ OOM_GROWTH: Final = 2
 #: the need was read, so it grows by less than :data:`OOM_GROWTH`, the blind step. Bounded: above 1, since an ask
 #: at the kill dies again, and below :data:`OOM_GROWTH`.
 MEASURED_GROWTH: Final = 1.5
+
+#: HEAVY ISOLATION: the share of the grantable ceiling past which one file's item ask is HEAVY -- packed alone,
+#: never into the shared pack, and left out of the run's peak that prices the part's demand (Ada 2026-11-08: one
+#: heavy file sized every base of its part, which then waited for room only it needed).
+HEAVY_SHARE: Final = 0.25
 
 #: How much more wall a TIMED-OUT item's next plan asks than the wall it died at, held to the partition max.
 TIMEOUT_GROWTH: Final = 2
@@ -296,6 +302,8 @@ class Measured:
         cost: Cost,
         budget: float,
         band: Callable[[Sequence[str]], int] | None = None,
+        *,
+        alone: Collection[str] = frozenset(),
     ) -> list[list[str]]:
         """Whole files, joined into items of up to *budget* estimated seconds -- one process each.
 
@@ -308,13 +316,18 @@ class Measured:
         files beside it. Measured 2026-10-19 (Ada): every task of a part asked 12-47 GB on one core because the
         array's memory was its heaviest file's. And since an item's memory ACCUMULATES (:meth:`item_gb`), a file
         joins only while the item's own class stays within :data:`ACCUMULATED_CLASSES` of its files' -- dev-lab #493:
-        121 files of one 0.5-0.8 GB class shared one process that was killed at 1-2 GB.
+        121 files of one 0.5-0.8 GB class shared one process that was killed at 1-2 GB. A file in *alone*
+        (:meth:`heavy`) is an item by itself, never joined and never joined to.
         """
         by = self._byfile_of()
         ordered = sorted(files, key=band) if band is not None else list(files)
         items: list[list[str]] = []
         last = None
         for ids in ordered:
+            if any(file_of(n) in alone for n in ids):
+                items.append(list(ids))
+                last = object()  # nothing joins a heavy file's item
+                continue
             key = band(ids) if band is not None else None
             joined = [*items[-1], *ids] if items else []
             fits = band is None or key is None or band(joined) <= key + ACCUMULATED_CLASSES
@@ -324,6 +337,18 @@ class Measured:
                 items.append(list(ids))
             last = key
         return items
+
+    def heavy(
+        self, files: Iterable[Sequence[str]], cost: Cost, policy: Policy, *, ceiling_gb: float | None
+    ) -> set[str]:
+        """The files of *files* (each its ids) whose own item asks more than :data:`HEAVY_SHARE` of *ceiling_gb*.
+
+        ``None`` (no ceiling known) names none: the share is of a grant, and there is none to share.
+        """
+        if ceiling_gb is None:
+            return set()
+        bar = ceiling_gb * HEAVY_SHARE
+        return {file_of(ids[0]) for ids in files if ids and self.item_gb(ids, cost, policy) > bar}
 
     def item_gb(
         self, ids: Iterable[str], cost: Cost, policy: Policy, grown: Mapping[str, float] | None = None
@@ -378,9 +403,13 @@ class Measured:
         pool = siblings or list(self.peaks_mb.values())
         return statistics.median(pool) if pool else None
 
-    def peak_gb(self, nodes: Iterable[str]) -> float:
-        """The worst MEASURED peak of these nodes' files, in GB; an unmeasured file adds nothing."""
-        return max((self.peaks_mb.get(f, 0.0) for f in {file_of(n) for n in nodes}), default=0.0) / _MB_PER_GB
+    def peak_gb(self, nodes: Iterable[str], *, without: Collection[str] = frozenset()) -> float:
+        """The worst MEASURED peak of these nodes' files but those *without* (heavy, alone), in GB.
+
+        An unmeasured file adds nothing.
+        """
+        named = {file_of(n) for n in nodes} - set(without)
+        return max((self.peaks_mb.get(f, 0.0) for f in named), default=0.0) / _MB_PER_GB
 
     def worker_gb(self, nodes: Iterable[str], *, prior_gb: float, safety: float) -> float:
         """The worst peak of these nodes' files times *safety*, never under *prior_gb*.

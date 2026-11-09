@@ -228,7 +228,14 @@ def _recorded(
         state['repo'],
         learned.SLURM,
         needs_of(state['platform']),
-        job_measured(state['rounds'], state['cells'], measured, cpus=cost.cpus, files=files_made(home, state)),
+        job_measured(
+            state['rounds'],
+            state['cells'],
+            measured,
+            cpus=cost.cpus,
+            files=files_made(home, state),
+            heavy=state.get('heavy', ()),
+        ),
         ended=learned.EXITED,  # the array is gathered: a shard Slurm killed is priced per test (Measured.killed)
     )
     return record

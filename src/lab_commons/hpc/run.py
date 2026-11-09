@@ -396,12 +396,14 @@ def submit_run(
     def band(ids: list[str]) -> int:
         return memory_band(measured.item_gb(ids, cost, policy))
 
-    pending = measured.pack(files, cost, item_seconds(policy), band)
+    same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
+    heavy = measured.heavy(files, cost, policy, ceiling_gb=grantable_gb(same_cluster))
+    state['heavy'] = sorted(heavy)  # packed alone, and left out of the peak that prices the part (job_measured)
+    pending = measured.pack(files, cost, item_seconds(policy), band, alone=heavy)
     if not pending:  # every id was carried or handed: the record needs no job
         state['record'] = record_of(state, grant.slurm_account)
         save_state(run, state)
         return state
-    same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
     submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
     save_state(runners[state['current']['account']], state)
     return state

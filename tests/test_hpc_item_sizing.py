@@ -12,6 +12,7 @@ import json
 import pytest
 
 from lab_commons.compute.measured import (
+    HEAVY_SHARE,
     MEASURED_GROWTH,
     OOM_GROWTH,
     TIMEOUT_GROWTH,
@@ -247,3 +248,27 @@ def test_a_kill_grows_from_its_measured_peak_by_a_bounded_factor_and_doubles_onl
     measured = Measured()
     measured.learn([_SDM], _killed_alone(_SDM, peak_mb=1351.0), allowed_mb=1024.0)
     assert measured.id_peaks_mb == {_SDM: pytest.approx(1351.0 * MEASURED_GROWTH, rel=1e-12, abs=0.0)}
+
+
+def test_a_heavy_file_is_packed_alone_and_the_run_peak_is_priced_without_it() -> None:
+    """HEAVY ISOLATION: a file whose ask exceeds HEAVY_SHARE of the grant never joins the shared pack.
+
+    One heavy file sized the part's demand, so every base waited for room only it needed (Ada 2026-11-08).
+    It runs as its own item, and the run's measured peak -- the part's demand -- is priced without it.
+    PLANTED CONTROL: light files still share an item.
+    """
+    heavy, light = 'tests/heavy.py', ['tests/a.py', 'tests/b.py']
+    measured = Measured(peaks_mb={heavy: 100_000.0, **dict.fromkeys(light, 500.0)})
+    cost, policy = Cost(seconds=1.0, mem_gb=0.1), Policy(safety=1.0)
+    assert HEAVY_SHARE == 0.25
+    alone = measured.heavy([[f'{heavy}::t'], *([f'{n}::t'] for n in light)], cost, policy, ceiling_gb=360.0)
+    assert alone == {heavy}
+    items = measured.pack([[f'{n}::t'] for n in [*light, heavy]], cost, budget=1e9, alone=alone)
+    assert items == [[f'{light[0]}::t', f'{light[1]}::t'], [f'{heavy}::t']]
+    nodes = [f'{n}::t' for n in [*light, heavy]]
+    assert measured.peak_gb(nodes, without=alone) == pytest.approx(500.0 / 1024, rel=1e-12, abs=0.0)
+    assert measured.heavy([[f'{heavy}::t']], cost, policy, ceiling_gb=None) == set(), 'no ceiling, no share'
+    from lab_commons.hpc.records import job_measured  # noqa: PLC0415 -- the part's demand, read where it is made
+
+    run = job_measured([], nodes, measured, cpus=1, heavy=alone)
+    assert run.peak_mem_gb == pytest.approx(500.0 / 1024, rel=1e-12, abs=0.0), 'the part demand leaves it out'

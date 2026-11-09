@@ -472,17 +472,24 @@ def read_record(
 
 
 def job_measured(
-    rounds: Sequence[dict[str, Any]], nodes: Iterable[str], measured: Measured, *, cpus: int, files: float = 0.0
+    rounds: Sequence[dict[str, Any]],
+    nodes: Iterable[str],
+    measured: Measured,
+    *,
+    cpus: int,
+    files: float = 0.0,
+    heavy: Iterable[str] = (),
 ) -> Run:
     """What a whole Slurm run measured, as one :class:`~lab_commons.compute.learned.Run`.
 
-    Its peak is one TASK's (the worst file it ran, as :meth:`Measured.worker_gb` prices it, unpadded);
+    Its peak is one TASK's (the worst file it ran, as :meth:`Measured.worker_gb` prices it, unpadded), but a
+    *heavy* file's (:meth:`Measured.heavy`, packed alone): the part's demand is priced without it;
     its cpu-seconds are every shard's elapsed times the *cpus* each held; its wall is the rounds' makespans;
     its *files* what :func:`files_made` counted.
     """
     walls = [r.get('walls_s') or [0.0] for r in rounds]
     return Run(
-        peak_mem_gb=measured.peak_gb(nodes),
+        peak_mem_gb=measured.peak_gb(nodes, without=frozenset(heavy)),
         cpu_s=sum(sum(w) for w in walls) * cpus,
         wall_s=max(1.0, sum(max(w) for w in walls)),
         files=files,
