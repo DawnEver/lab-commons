@@ -66,13 +66,12 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, Final
 
-from lab_commons.compute import learned
 from lab_commons.compute.measured import Measured, memory_band
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
-from lab_commons.hpc.needsets import need_sets, needs_of
+from lab_commons.hpc.needsets import need_sets
 from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
     record_of,
@@ -116,7 +115,7 @@ class NoRoom(NotSubmitted):
     """The HOST had no room for the part (no headroom at first submit, or held on an account/QOS limit).
 
     A fact about the host, never a result about the sha: it is released RETRYABLE, so the part
-    stays open to every host, and the learned ask keeps this one from re-admitting it at the same size.
+    stays open to every host. Waiting is contention, never a learned ask: the part retries at the same size.
     """
 
 
@@ -243,9 +242,7 @@ def submit_round(
             paging=machine.paging,
             rerun_safe=True,  # a forge test part reruns to the same verdict
         )
-        if not state['rounds'] and plan.room == 0:
-            needs = needs_of(state['platform'])
-            learned.record_ask(state['repo'], learned.SLURM, needs, mem_gb, safety=policy.safety)
+        if not state['rounds'] and plan.room == 0:  # contention, not need: nothing is learned
             msg = (
                 f'{chosen.name} has no headroom now for one task of {cost.cpus} CPU and {mem_gb:.1f} GB beside what '
                 "the account's own jobs hold; nothing was submitted, so a host with room takes it"

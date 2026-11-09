@@ -821,18 +821,19 @@ def test_a_round_no_grant_can_take_settles_as_unavailable_naming_why() -> None:
 OTHER_CAMPAIGNS = 'acct-free|1|1|8G|N/A\n' * 29
 
 
-def test_a_first_round_the_headroom_cannot_hold_is_not_submitted_and_its_ask_is_learned() -> None:
+def test_a_first_round_the_headroom_cannot_hold_is_not_submitted_and_nothing_is_learned() -> None:
     """A 352 GB task beside 232 GB held of 360 GB: no array is queued ``%1`` to pend on ``AssocGrpMemLimit``.
 
-    The ask is learned under the part's need-set, so this host's next claim demands what the plan asks.
+    Waiting for room the account's own jobs hold is CONTENTION, not an under-priced need: nothing is learned.
+    Ada 2026-11-08: asks recorded on contention ratcheted the base row to 240 GB, x1.5 the whole 360 GB
+    ceiling, so a base fitted only an idle account.
     """
     learned.learn_peaks('https://g/r.git', {'tests/a.py': 240438.4})
     fake = FakeRunCluster(held=OTHER_CAMPAIGNS)
     with pytest.raises(NoRoom, match=r'no headroom now for one task of 1 CPU and 352\.2 GB'):
         _submit(fake, history=learned.learned('https://g/r.git'))
     assert fake.manifests == [], 'nothing was submitted'
-    asked = learned.cluster_demand('https://g/r.git')(frozenset())
-    assert asked['mem_gb'] == pytest.approx(240438.4 * 1.5 / 1024, rel=1e-9, abs=0.0)
+    assert learned.learned('https://g/r.git').get('runs', {}) == {}, 'contention writes no floor'
 
 
 def test_a_first_round_with_headroom_is_throttled_to_it_not_to_the_ceiling() -> None:
