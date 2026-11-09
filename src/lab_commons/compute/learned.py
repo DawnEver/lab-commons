@@ -23,11 +23,13 @@ See :mod:`lab_commons.compute.measured` for how the per-test facts are kept and 
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
+import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -35,9 +37,12 @@ from typing import Any, Final
 from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.measured import (
+    _MB_PER_GB,
+    HEAVY_SHARE,
     OOM_GROWTH,
     Measured,
     file_of,
+    killed_need_mb,
     task_gb,
 )
 from lab_commons.compute.model import Demand
@@ -64,12 +69,15 @@ __all__ = [
     'directory',
     'fit_width',
     'folded',
+    'forget',
     'learn_peaks',
     'learn_record',
     'learn_round',
     'learned',
+    'main',
     'part_files',
     'record_ask',
+    'record_kills',
     'record_run',
     'request_demand',
     'run_of',
@@ -285,6 +293,37 @@ def record_ask(
     return _write(repo, {**table, 'runs': runs})
 
 
+def record_kills(
+    repo: str,
+    needs: Iterable[str],
+    kills: Iterable[tuple[float, float, Collection[str]]],
+    *,
+    heavy: Collection[str],
+    safety: float,
+    ceiling_gb: float | None,
+) -> float | None:
+    """Raise the ``(slurm, needs)`` part's ask by its LIGHT OOM kills only; the ask recorded, or ``None``.
+
+    *kills* is each OOM-killed task's ``(asked MB, read MB, files it ran)`` -- the read is ``sacct``'s ``MaxRSS``,
+    ``0`` unread; a kill's need is :func:`killed_need_mb` of its read and ask. A HEAVY kill never sizes the part
+    (Ada 2026-11-09: one sdm file's kill raised ``slurm|`` to 324-412 GB, asked by every task of ~7200 light
+    files): a task that ran a *heavy* file (the run's :meth:`Measured.heavy`), or whose need is past
+    :data:`HEAVY_SHARE` of *ceiling_gb* -- the next plan finds it heavy from its file's floor (dev-lab
+    ``forgeoom``) and packs it alone at that floor. The rest raise the row (:func:`record_ask`).
+    """
+    bar_mb = math.inf if ceiling_gb is None else ceiling_gb * HEAVY_SHARE * _MB_PER_GB
+    light = [
+        need
+        for asked_mb, read_mb, files in kills
+        if not set(files) & set(heavy) and (need := killed_need_mb(read_mb, asked_mb)) <= bar_mb
+    ]
+    if not light:
+        return None
+    ask_gb = max(light) / _MB_PER_GB
+    record_ask(repo, SLURM, needs, ask_gb, safety=safety, ceiling_gb=ceiling_gb)
+    return ask_gb
+
+
 def run_of(repo: str, producer: str, needs: Iterable[str]) -> Run | None:
     """The last run of ``(producer, needs)`` measured for *repo* with a priced ending, or ``None``."""
     return _priced(learned(repo).get('runs', {}).get(_key(producer, needs)))
@@ -417,3 +456,43 @@ def request_demand(repo_url: str, producer: str, needs: frozenset[str], *, cpu: 
     if run is not None:
         cpu, mem_gb = max(1, int(run.demand(needs)['cpu'])), max(1.0, run.peak_mem_gb * BOX_HEADROOM)
     return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cpu, 'mem_gb': mem_gb})
+
+
+def forget(repo: str, row: str) -> tuple[dict[str, Any], Path]:
+    """Remove the ``runs`` *row* (``<producer>|<needs>``) from *repo*'s table: the row removed, and the backup.
+
+    The door for a row no run can supersede (Ada 2026-11-09: an asked ``slurm|`` of 324-412 GB, above what a busy
+    account admits, so no exit ever replaced it). The old file is kept beside itself as ``<name>.bak-<utc>``.
+    An unknown row is refused by name, and nothing is written.
+    """
+    table = learned(repo)
+    runs = dict(table.get('runs', {}))
+    if row not in runs:
+        msg = f'{row!r} is no row of {repo}: its rows are {sorted(runs)}'
+        raise KeyError(msg)
+    path = _path(repo)
+    backup = path.with_name(f'{path.name}.bak-{time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())}')
+    durable_text(backup, path.read_text(encoding='utf-8'))
+    removed = runs.pop(row)
+    _write(repo, {**table, 'runs': runs})
+    return removed, backup
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``python -m lab_commons.compute.learned forget --repo <url> --row <key>``: the learned table's one verb."""
+    parser = argparse.ArgumentParser(prog='python -m lab_commons.compute.learned')
+    verbs = parser.add_subparsers(dest='verb', required=True)
+    drop = verbs.add_parser('forget', help='remove one runs row, backing the table up beside itself')
+    drop.add_argument('--repo', required=True, help='the repository remote URL the table is keyed by')
+    drop.add_argument('--row', required=True, help='the runs key, <producer>|<needs> (e.g. "slurm|")')
+    args = parser.parse_args(argv)
+    try:
+        removed, backup = forget(args.repo, args.row)
+    except KeyError as why:
+        raise SystemExit(why.args[0]) from why
+    sys.stdout.write(f'removed {args.row} {json.dumps(removed)} (backup {backup})' + chr(10))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

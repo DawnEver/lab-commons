@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -417,6 +418,52 @@ def test_an_ask_never_lowers_a_measured_rows_ask() -> None:
     assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(150.0)
     learned.record_ask(REPO, learned.SLURM, (), 200.0, safety=1.5, ceiling_gb=None)
     assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(200.0)
+
+
+def test_a_heavy_kill_floors_its_file_and_never_sizes_the_part() -> None:
+    """Ada 2026-11-09: one sdm file's OOM raised the ``slurm|`` row to 324-412 GB, sizing ~7200 light files.
+
+    A kill of a task holding a heavy file (the run's ``heavy``), or whose grown ask is past
+    :data:`~lab_commons.compute.measured.HEAVY_SHARE` of the ceiling (it becomes heavy), leaves the part's row
+    alone: its file is floored (dev-lab ``forgeoom``) and the next plan packs it alone at its own ask.
+    PLANTED CONTROL: a light kill still raises the part's ask, grown.
+    """
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=4.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    ask = learned.cluster_demand(REPO, ceiling_gb=360.0)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(6.0)
+    heavy_now = (200.0 * 1024, 0.0, ('tests/test_sdm.py',))
+    becomes_heavy = (50.0 * 1024, 0.0, ('tests/test_sweep.py',))  # grown 100 GB > 0.25 x 360 GB
+    kills = [heavy_now, becomes_heavy]
+    assert learned.record_kills(REPO, (), kills, heavy={'tests/test_sdm.py'}, safety=1.5, ceiling_gb=360.0) is None
+    assert ask(frozenset())['mem_gb'] == pytest.approx(6.0)
+    light = (8.0 * 1024, 0.0, ('tests/test_a.py', 'tests/test_b.py'))
+    kills = [heavy_now, light]
+    recorded = learned.record_kills(REPO, (), kills, heavy={'tests/test_sdm.py'}, safety=1.5, ceiling_gb=360.0)
+    assert recorded == pytest.approx(8.0 * learned.OOM_GROWTH)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(16.0)
+    read = (8.0 * 1024, 12.0 * 1024, ('tests/test_a.py',))  # sacct read 12 GB: grown from the read
+    recorded = learned.record_kills(REPO, (), [read], heavy=(), safety=1.5, ceiling_gb=360.0)
+    assert recorded == pytest.approx(12.0 * MEASURED_GROWTH)
+
+
+def test_forget_removes_one_named_row_and_backs_the_table_up(capsys: pytest.CaptureFixture[str]) -> None:
+    """Ada 2026-11-09: a stuck ``slurm|`` ask row is reset through a door, never a hand edit.
+
+    PLANTED CONTROL: the other rows stay; an unknown row is refused by name and nothing is written.
+    """
+    learned.record_ask(REPO, learned.SLURM, (), 324.0, safety=1.5, ceiling_gb=None)
+    learned.record_run(REPO, learned.SLURM, ('femm',), Run(peak_mem_gb=4.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.main(['forget', '--repo', REPO, '--row', 'slurm|']) == 0
+    runs = learned.learned(REPO)['runs']
+    assert 'slurm|' not in runs
+    assert 'slurm|femm' in runs
+    backups = list(learned.directory().glob('*.bak-*'))
+    assert len(backups) == 1
+    assert '"slurm|"' in backups[0].read_text(encoding='utf-8')
+    assert 'removed slurm|' in capsys.readouterr().out
+    with pytest.raises(SystemExit, match=re.escape("'slurm|jmag'")):
+        learned.main(['forget', '--repo', REPO, '--row', 'slurm|jmag'])
+    assert list(learned.directory().glob('*.bak-*')) == backups
 
 
 def test_a_measured_exit_supersedes_an_ask_even_lower_and_a_kill_only_raises() -> None:
