@@ -394,3 +394,38 @@ def test_a_round_teaches_only_what_it_changed_so_a_concurrent_run_keeps_its_kill
     finished = {**stale, 'id_peaks_mb': {'a.py::b': 3746.0}}
     learned.learn_round(REPO, finished, {**finished, 'id_peaks_mb': {}})
     assert learned.learned(REPO)['id_peaks_mb'] == {}, 'PLANTED CONTROL: a round that drops a floor drops it'
+
+
+def test_an_asked_row_demands_its_ask_never_times_the_safety_again() -> None:
+    """An ask already carries its margin (OOM growth): the demand is the stored ask, held to the ceiling.
+
+    Ada 2026-11-09: an ``ask`` row of 229.83 GB was read as a peak and asked 344.7 GB of a 360 GB ceiling.
+    PLANTED CONTROL: a measured peak still asks its peak times the safety.
+    """
+    learned.record_ask(REPO, learned.SLURM, (), 229.83, safety=1.5, ceiling_gb=None)
+    assert learned.learned(REPO)['runs'][learned._key(learned.SLURM, ())]['peak_mem_gb'] == pytest.approx(229.83)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(229.83)
+    assert learned.cluster_demand(REPO, ceiling_gb=200.0)(frozenset())['mem_gb'] == pytest.approx(200.0)
+    learned.record_run(REPO, learned.SLURM, ('a',), Run(peak_mem_gb=100.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.cluster_demand(REPO)(frozenset({'a'}))['mem_gb'] == pytest.approx(150.0)
+
+
+def test_an_ask_never_lowers_a_measured_rows_ask() -> None:
+    """A measured peak's ask is its peak times *safety*; a smaller ask keeps it, a larger one replaces it."""
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=100.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    learned.record_ask(REPO, learned.SLURM, (), 120.0, safety=1.5, ceiling_gb=None)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(150.0)
+    learned.record_ask(REPO, learned.SLURM, (), 200.0, safety=1.5, ceiling_gb=None)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(200.0)
+
+
+def test_a_measured_exit_supersedes_an_ask_even_lower_and_a_kill_only_raises() -> None:
+    """An ask is a floor until a run measures the need: a finished run's peak REPLACES it, even below it.
+
+    PLANTED CONTROL: a memory kill below the ask leaves the ask's floor (a kill only raises).
+    """
+    learned.record_ask(REPO, learned.SLURM, (), 300.0, safety=1.5, ceiling_gb=None)
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=10.0, cpu_s=1.0, wall_s=1.0), ended='memory')
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] >= 300.0
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=40.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(60.0)
