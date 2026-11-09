@@ -419,6 +419,29 @@ def test_an_ask_never_lowers_a_measured_rows_ask() -> None:
     assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(200.0)
 
 
+def test_a_heavy_kill_floors_its_file_and_never_sizes_the_part() -> None:
+    """Ada 2026-11-09: one sdm file's OOM raised the ``slurm|`` row to 324-412 GB, sizing ~7200 light files.
+
+    A kill of a task holding a heavy file (the run's ``heavy``), or whose grown ask is past
+    :data:`~lab_commons.compute.measured.HEAVY_SHARE` of the ceiling (it becomes heavy), leaves the part's row
+    alone: its file is floored (dev-lab ``forgeoom``) and the next plan packs it alone at its own ask.
+    PLANTED CONTROL: a light kill still raises the part's ask, grown.
+    """
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=4.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    ask = learned.cluster_demand(REPO, ceiling_gb=360.0)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(6.0)
+    heavy_now = (200.0 * 1024, ('tests/test_sdm.py',))
+    becomes_heavy = (50.0 * 1024, ('tests/test_sweep.py',))  # grown 100 GB > 0.25 x 360 GB
+    kills = [heavy_now, becomes_heavy]
+    assert learned.record_kills(REPO, (), kills, heavy={'tests/test_sdm.py'}, safety=1.5, ceiling_gb=360.0) is None
+    assert ask(frozenset())['mem_gb'] == pytest.approx(6.0)
+    light = (8.0 * 1024, ('tests/test_a.py', 'tests/test_b.py'))
+    kills = [heavy_now, light]
+    recorded = learned.record_kills(REPO, (), kills, heavy={'tests/test_sdm.py'}, safety=1.5, ceiling_gb=360.0)
+    assert recorded == pytest.approx(8.0 * learned.OOM_GROWTH)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(16.0)
+
+
 def test_a_measured_exit_supersedes_an_ask_even_lower_and_a_kill_only_raises() -> None:
     """An ask is a floor until a run measures the need: a finished run's peak REPLACES it, even below it.
 

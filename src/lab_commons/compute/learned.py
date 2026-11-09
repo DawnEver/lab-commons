@@ -27,7 +27,7 @@ import hashlib
 import json
 import math
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -35,9 +35,12 @@ from typing import Any, Final
 from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.measured import (
+    _MB_PER_GB,
+    HEAVY_SHARE,
     OOM_GROWTH,
     Measured,
     file_of,
+    killed_need_mb,
     task_gb,
 )
 from lab_commons.compute.model import Demand
@@ -70,6 +73,7 @@ __all__ = [
     'learned',
     'part_files',
     'record_ask',
+    'record_kills',
     'record_run',
     'request_demand',
     'run_of',
@@ -283,6 +287,36 @@ def record_ask(
     asked = known.peak_mem_gb if runs.get(key, {}).get('ended') == ASKED else known.peak_mem_gb * safety
     runs[key] = _row(Run(max(asked, ask_gb), known.cpu_s, known.wall_s, known.files), ASKED)
     return _write(repo, {**table, 'runs': runs})
+
+
+def record_kills(
+    repo: str,
+    needs: Iterable[str],
+    kills: Iterable[tuple[float, Collection[str]]],
+    *,
+    heavy: Collection[str],
+    safety: float,
+    ceiling_gb: float | None,
+) -> float | None:
+    """Raise the ``(slurm, needs)`` part's ask by its LIGHT OOM kills only; the ask recorded, or ``None``.
+
+    *kills* is each OOM-killed task's ``(asked MB, files it ran)``; a kill's need is :func:`killed_need_mb` of its
+    ask. A HEAVY kill never sizes the part (Ada 2026-11-09: one sdm file's kill raised ``slurm|`` to 324-412 GB,
+    asked by every task of ~7200 light files): a task that ran a *heavy* file (the run's :meth:`Measured.heavy`),
+    or whose need is past :data:`HEAVY_SHARE` of *ceiling_gb* -- the next plan finds it heavy from its file's
+    floor (dev-lab ``forgeoom``) and packs it alone at that floor. The rest raise the row (:func:`record_ask`).
+    """
+    bar_mb = math.inf if ceiling_gb is None else ceiling_gb * HEAVY_SHARE * _MB_PER_GB
+    light = [
+        need
+        for asked_mb, files in kills
+        if not set(files) & set(heavy) and (need := killed_need_mb(0.0, asked_mb)) <= bar_mb
+    ]
+    if not light:
+        return None
+    ask_gb = max(light) / _MB_PER_GB
+    record_ask(repo, SLURM, needs, ask_gb, safety=safety, ceiling_gb=ceiling_gb)
+    return ask_gb
 
 
 def run_of(repo: str, producer: str, needs: Iterable[str]) -> Run | None:
