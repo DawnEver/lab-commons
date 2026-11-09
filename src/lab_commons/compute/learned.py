@@ -317,13 +317,15 @@ BOX_WALL_S: Final = 24 * 3600
 
 
 def cluster_demand(
-    repo_url: str, *, cost: Cost | None = None, policy: Policy | None = None
+    repo_url: str, *, cost: Cost | None = None, policy: Policy | None = None, ceiling_gb: float | None = None
 ) -> Callable[[frozenset[str]], Demand]:
     """``needs -> Demand`` a cluster part asks: what the last ``(slurm, need-set)`` run measured, else the prior.
 
     Its ``mem_gb`` is ONE TASK's ask -- :func:`task_gb` of the run's peak under *cost* and *policy* (the forge's
     defaults when omitted), the size the plan submits -- so an account whose headroom cannot hold one task of the
-    part never claims it.
+    part never claims it. Held to *ceiling_gb*, the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`;
+    ``None``: no ceiling) as the plan holds its asks, never below the peak itself: an ask above every grant's ceiling
+    is never admitted (Ada 2026-11-09: a 216 GB peak x1.5 asked 324 GB of a 240 GB ceiling).
 
     A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key. It also asks the
     ``files`` it leaves in the home (measured, else :data:`CLUSTER_PRIOR`'s), against the account's file headroom,
@@ -334,6 +336,8 @@ def cluster_demand(
     def ask(needs: frozenset[str]) -> Demand:
         run = run_of(repo_url, SLURM, needs) or CLUSTER_PRIOR
         memory = task_gb(run.peak_mem_gb, prior_gb=item.mem_gb, safety=cut.safety)
+        if ceiling_gb is not None:
+            memory = max(min(memory, ceiling_gb), run.peak_mem_gb)
         return Demand({**run.demand(needs), 'mem_gb': memory, 'files': run.files or CLUSTER_PRIOR.files, 'submits': 1})
 
     return ask

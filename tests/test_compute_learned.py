@@ -158,6 +158,18 @@ def test_a_recorded_ask_stays_strictly_below_the_grant_ceiling() -> None:
     assert learned.ASK_CEILING_SHARE < 1.0
 
 
+def test_a_cluster_demand_never_exceeds_what_the_grant_can_grant() -> None:
+    """Ada 2026-11-09: a 216 GB peak times the 1.5 safety asked 324 GB against a 240 GB grantable ceiling.
+
+    No grant can ever grant an ask above its ceiling, so the base was never admitted. The demand is held to
+    *ceiling_gb*, never below the peak itself. PLANTED CONTROL: no ceiling leaves the safety's ask.
+    """
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=216.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.cluster_demand(REPO, ceiling_gb=240.0)(frozenset())['mem_gb'] == pytest.approx(240.0)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(324.0)
+    assert learned.cluster_demand(REPO, ceiling_gb=200.0)(frozenset())['mem_gb'] == pytest.approx(216.0)
+
+
 def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
     """The demand a box part is ADMITTED at is the claim the box then ENFORCES, so it never exceeds the box.
 
