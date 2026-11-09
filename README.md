@@ -91,12 +91,15 @@ The base installation is the standard library alone. Select capabilities explici
   is worse than no ceiling because it is believed. Unreadable is always distinct from zero.
 - `lab_commons.resources` — the ONE resource path: kinds (`KINDS`), `Claim`, the `Provider` plug and the
   engine whose `admits` is the only caller of the admission rule; providers live beside what they measure
-  (`lab_commons.box.providers`, `lab_commons.hpc.provider`). `resources.dimensions` (**tier 1**) keeps the
-  DIMENSIONS a Slurm plan and `lab_commons.width.fits` read.
+  (`lab_commons.box.providers`, `lab_commons.hpc.provider`).
+- `lab_commons.dimensions` (**tier 1**, a leaf) -- the DIMENSIONS a Slurm plan, `lab_commons.width.fits` and the box
+  read: one name per resource -- `gpu`, `npu`, `vram_gb` among them -- and the device requirements
+  (`PRECISIONS`, `EXCLUSIVE`).
 - `lab_commons.box` (**tier 1**) — the ONE ledger per machine: a run DECLARES cores, memory, a wall and
   tool seats, is admitted by the one rule (`compute.admission.admit`) on the MEASURED room
   (`box.supply.room`: free now, less what held claims have not taken yet, less the `[reserve]` margin),
-  and runs inside a kernel limit sized to its claim. Seats (an environment, a licence) are claims too.
+  and runs inside a kernel limit sized to its claim. Seats (an environment, a licence) are claims too. GPUs and
+  NPUs are lent by device on a measured reading and named to the child once: `docs-src/devices.md`.
 - `lab_commons.outcomes` (**tier 1**, standard library only, imports no other subpackage) -- the ONE
   task-outcome vocabulary: `Status` in two families (DECIDED / RETRYABLE), `Evidence`, `Cell`, `Identity`,
   `Expectation`, an append-only fsynced `Record` with DECIDED finality, and `Conclusion`.
