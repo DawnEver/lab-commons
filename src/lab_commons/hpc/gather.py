@@ -36,7 +36,7 @@ from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.testcells import TestCell
 from lab_commons.outcomes import Cell, Reason, Status
 
-__all__ = ['gather_run', 'grown_after', 'oom_bounded', 'rethrottled']
+__all__ = ['gather_run', 'grown_after', 'held_after', 'oom_bounded', 'rethrottled']
 
 
 def gather_run(
@@ -110,6 +110,9 @@ def gather_run(
     timed_out = 'TIMEOUT' in states.values()
     oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
     pending = oom_bounded(pending, current['items'], state, shard_of=shard_of, states=states) if oom else pending
+    state['held'] = held_after(
+        current['items'], state['cells'], shard_of, states, band_of=band_of, held=state.get('held', {})
+    )
     state['grown'] = grown_after(
         current['items'], state['cells'], shard_of, states, state.get('grown', {}), oom=oom, taught=measured.taught
     )
@@ -225,7 +228,14 @@ def _recorded(
         state['repo'],
         learned.SLURM,
         needs_of(state['platform']),
-        job_measured(state['rounds'], state['cells'], measured, cpus=cost.cpus, files=files_made(home, state)),
+        job_measured(
+            state['rounds'],
+            state['cells'],
+            measured,
+            cpus=cost.cpus,
+            files=files_made(home, state),
+            heavy=state.get('heavy', ()),
+        ),
         ended=learned.EXITED,  # the array is gathered: a shard Slurm killed is priced per test (Measured.killed)
     )
     return record
@@ -261,6 +271,32 @@ def rethrottled(
     return moved
 
 
+def held_after(
+    items: list[dict[str, Any]],
+    cells: Mapping[str, Any],
+    shard_of: Mapping[int, int],
+    states: Mapping[int, str],
+    *,
+    band_of: Mapping[int, Mapping[str, Any]],
+    held: Mapping[str, float],
+) -> dict[str, float]:
+    """``{id: MB}`` -- the ask each unfinished id of an OOM-killed MULTI-ID item ran at, its retry's least ask.
+
+    ISOLATE BEFORE GROWING: the halves of a killed item re-run at the SAME ask, never grown and never below it --
+    a half's modelled ask is smaller (fewer files accumulate), but the item died at this one. An id that got a
+    cell drops out.
+    """
+    after = {node: mb for node, mb in held.items() if node not in cells}
+    for index, item in enumerate(items):
+        shard = shard_of[index]
+        if states.get(shard) != 'OUT_OF_MEMORY' or len(item['ids']) < 2:  # noqa: PLR2004 -- one id grows instead
+            continue
+        for node in item['ids']:
+            if node not in cells:
+                after[node] = max(after.get(node, 0.0), float(band_of[shard]['mem_mb']))
+    return after
+
+
 def grown_after(
     items: list[dict[str, Any]],
     cells: Mapping[str, Any],
@@ -273,11 +309,12 @@ def grown_after(
 ) -> dict[str, float]:
     """The run's memory growth per node ID after a round: the id a kill CUT grows, an id that finished resets.
 
-    In a round that ran out of memory, an item left unfinished in a shard that did not time out was killed,
-    and the id it was running -- its first id without a cell -- asks :data:`~lab_commons.compute.measured.OOM_GROWTH`
-    times more next round. Nothing else does: neither every later item (Ada 2026-10-19: one heavy file's kill
-    doubled every task of the part) nor the item's other ids, which finished or never started (run
-    4fb97faa904f: 13 light items of one killed task were doubled). An id that got a cell outside an
+    In a round that ran out of memory, a ONE-ID item left unfinished in a shard that did not time out was killed,
+    and its id asks :data:`~lab_commons.compute.measured.OOM_GROWTH` times more next round. ISOLATE BEFORE
+    GROWING: an item of several ids is split at its ask (:func:`held_after`), never grown. Nothing else
+    grows: neither every later item (Ada 2026-10-19: one heavy file's kill doubled every task of the part) nor
+    the item's other ids, which finished or never started (run 4fb97faa904f: 13 light items of one killed task
+    were doubled). An id that got a cell outside an
     OUT_OF_MEMORY shard, and was cut by no kill, is back at its measured peak: its growth is dropped. A cut id
     whose kill already floored its need at the read times ``OOM_GROWTH`` -- the id, or its one file, in
     *taught* (:meth:`Measured.learn`) -- drops its growth too, since the read held every earlier growth: the
@@ -291,7 +328,7 @@ def grown_after(
         rest = [node for node in item['ids'] if node not in cells]
         if shard != 'OUT_OF_MEMORY':
             finished |= {node for node in item['ids'] if node in cells}
-        if rest and oom and shard != 'TIMEOUT':
+        if rest and oom and shard != 'TIMEOUT' and len(item['ids']) == 1:  # several ids are split, not grown
             cut.add(rest[0])
     known = {node for node in cut if node in taught or file_of(node) in taught}
     for node in (finished - cut) | known:
