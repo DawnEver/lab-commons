@@ -11,7 +11,15 @@ import json
 
 import pytest
 
-from lab_commons.compute.measured import OOM_GROWTH, TIMEOUT_GROWTH, Measured, file_of, memory_band
+from lab_commons.compute.measured import (
+    MEASURED_GROWTH,
+    OOM_GROWTH,
+    TIMEOUT_GROWTH,
+    Measured,
+    file_of,
+    killed_need_mb,
+    memory_band,
+)
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.pytest_item import read_stream
 
@@ -178,11 +186,11 @@ def test_an_id_that_finishes_drops_its_peak_floor() -> None:
 def test_a_lone_id_oom_kill_floors_its_files_peak_at_the_limit_grown() -> None:
     """Run 4fb97faa904f: a one-file kill taught the ~limit it read, so the next run asked limit x 1.5 and died again.
 
-    The read is the limit the cgroup killed at, not the need: the lone id's file's floor is that times OOM_GROWTH.
+    The read is the limit the cgroup killed at, not the need: the lone id's file's floor is that times MEASURED_GROWTH.
     """
     measured = Measured(peaks_mb={file_of(_SDM): 900.0})
     measured.learn([_SDM], _killed_alone(_SDM, peak_mb=1351.0))
-    assert measured.peaks_mb == {file_of(_SDM): 1351.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {file_of(_SDM): 1351.0 * MEASURED_GROWTH}
     known = Measured(peaks_mb={file_of(_SDM): 4000.0})
     known.learn([_SDM], _killed_alone(_SDM, peak_mb=1351.0))
     assert known.peaks_mb == {file_of(_SDM): 4000.0}, 'PLANTED CONTROL: a kill below a known peak lowers nothing'
@@ -203,7 +211,7 @@ def test_an_oom_kill_is_a_lower_bound_a_finished_sibling_never_lowers() -> None:
     )
     later.learn([_FEA], read_stream(sibling, [_FEA]))
     policy = Policy(safety=1.0)
-    assert later.item_gb([_SDM], _COST, policy) >= 1873.0 * OOM_GROWTH / 1024
+    assert later.item_gb([_SDM], _COST, policy) >= 1873.0 * MEASURED_GROWTH / 1024
     assert later.item_gb([_FEA], _COST, policy) == pytest.approx(700.0 / 1024, rel=1e-12, abs=0.0), (
         'PLANTED CONTROL: the finished sibling is priced by its own read'
     )
@@ -221,5 +229,21 @@ def test_a_killed_item_of_several_ids_floors_nothing_and_a_lone_id_floors_itself
     assert measured.peaks_mb == {file_of(_SDM): 900.0}
     assert measured.taught == set()
     measured.learn([_SDM], _killed_alone(_SDM, peak_mb=2048.0))
-    assert measured.id_peaks_mb == {_SDM: 2048.0 * OOM_GROWTH}
-    assert measured.peaks_mb == {file_of(_SDM): 2048.0 * OOM_GROWTH}
+    assert measured.id_peaks_mb == {_SDM: 2048.0 * MEASURED_GROWTH}
+    assert measured.peaks_mb == {file_of(_SDM): 2048.0 * MEASURED_GROWTH}
+
+
+def test_a_kill_grows_from_its_measured_peak_by_a_bounded_factor_and_doubles_only_unmeasured() -> None:
+    """GROW FROM MEASUREMENT: a kill that read its peak asks that (never under its limit) x MEASURED_GROWTH.
+
+    Doubling a measured kill re-asks twice a need already read (Ada 2026-11-08: asks grown to the ceiling).
+    Only a kill with NO read -- its need unknown past the limit -- grows by OOM_GROWTH. The factor is bounded:
+    above 1 (an ask at the kill dies again) and no more than the blind growth.
+    """
+    assert 1.0 < MEASURED_GROWTH < OOM_GROWTH
+    assert killed_need_mb(3000.0, 2048.0) == pytest.approx(3000.0 * MEASURED_GROWTH, rel=1e-12, abs=0.0)
+    assert killed_need_mb(435.0, 870.0) == pytest.approx(870.0 * MEASURED_GROWTH, rel=1e-12, abs=0.0)
+    assert killed_need_mb(0.0, 2048.0) == pytest.approx(2048.0 * OOM_GROWTH, rel=1e-12, abs=0.0)
+    measured = Measured()
+    measured.learn([_SDM], _killed_alone(_SDM, peak_mb=1351.0), allowed_mb=1024.0)
+    assert measured.id_peaks_mb == {_SDM: pytest.approx(1351.0 * MEASURED_GROWTH, rel=1e-12, abs=0.0)}

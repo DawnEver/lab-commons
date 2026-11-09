@@ -27,7 +27,8 @@ rounds.
 
 A PEAK READ AT A KILL IS THE LIMIT, NOT THE NEED, AND IT IS NO FILE'S PEAK. Measured 2026-10-13 (Ada):
 children OOM-killed at 1 GB read ~1120 MB. A signalled LONE id's need is more than that read: it is FLOORED at
-the read times :data:`OOM_GROWTH` on the id (``id_peaks_mb``) and its file, never lowering a peak already known.
+:func:`killed_need_mb` on the id (``id_peaks_mb``) and its file, never lowering a peak already known -- the read
+(or the limit, if larger) times :data:`MEASURED_GROWTH`, or the limit times :data:`OOM_GROWTH` when nothing was read.
 ISOLATE BEFORE GROWING: a kill several ids shared is no id's measurement -- which held the memory is unknown --
 so it floors nothing and its retry is bisected at the same ask (:mod:`lab_commons.hpc.run`) until one id says.
 Measured 2026-10-30 (run 4fb97faa904f): an ungrown read was asked again at the read times the safety, ~1.5x a
@@ -54,7 +55,17 @@ from typing import Any, Final
 
 from lab_commons.hpc.config import Cost, Policy
 
-__all__ = ['ACCUMULATED_CLASSES', 'OOM_GROWTH', 'TIMEOUT_GROWTH', 'Measured', 'file_of', 'memory_band', 'task_gb']
+__all__ = [
+    'ACCUMULATED_CLASSES',
+    'MEASURED_GROWTH',
+    'OOM_GROWTH',
+    'TIMEOUT_GROWTH',
+    'Measured',
+    'file_of',
+    'killed_need_mb',
+    'memory_band',
+    'task_gb',
+]
 
 #: MB per GB, as the plan's memory is written.
 _MB_PER_GB = 1024
@@ -62,6 +73,11 @@ _MB_PER_GB = 1024
 #: How much more memory an OOM-KILLED item's need is than the limit it died at: a killed peak's floor, and the
 #: next round's ask of the id the kill cut.
 OOM_GROWTH: Final = 2
+
+#: How much more memory a killed lone id needs than the peak its kill MEASURED (never under the limit it died at):
+#: the need was read, so it grows by less than :data:`OOM_GROWTH`, the blind step. Bounded: above 1, since an ask
+#: at the kill dies again, and below :data:`OOM_GROWTH`.
+MEASURED_GROWTH: Final = 1.5
 
 #: How much more wall a TIMED-OUT item's next plan asks than the wall it died at, held to the partition max.
 TIMEOUT_GROWTH: Final = 2
@@ -167,9 +183,9 @@ class Measured:
             for name in files:
                 self.overheads[name] = overhead
         if signalled:
-            known = max(float(peak or 0.0), float(allowed_mb or 0.0))
-            if known > 0.0 and len(ids) == 1:  # a kill several ids shared is split, never learned
-                self._killed_peak(ids[0], known * OOM_GROWTH)
+            need = killed_need_mb(float(peak or 0.0), float(allowed_mb or 0.0))
+            if need > 0.0 and len(ids) == 1:  # a kill several ids shared is split, never learned
+                self._killed_peak(ids[0], need)
             return
         if peak is None:
             return
@@ -375,6 +391,20 @@ class Measured:
         """
         peaks = self._file_peaks_mb(nodes).values()
         return task_gb(max(peaks, default=0.0) / _MB_PER_GB, prior_gb=prior_gb, safety=safety)
+
+
+def killed_need_mb(read_mb: float, limit_mb: float) -> float:
+    """THE ONE GROWTH RULE of an OOM kill: what a killed lone task needs, from its *read_mb* peak and *limit_mb* ask.
+
+    GROW FROM MEASUREMENT: a kill that read its peak (``> 0``; the item's own read, or ``sacct``'s ``MaxRSS``)
+    needs that, never under the limit it died at, times :data:`MEASURED_GROWTH`. Only a kill with no read --
+    its need unknown past the limit -- grows the limit by :data:`OOM_GROWTH`. ``0`` when neither is known.
+    The ceiling is the caller's: the plan holds an ask to the grantable most, ``learned.record_ask`` to
+    ``ASK_CEILING_SHARE`` of it.
+    """
+    if read_mb > 0.0:
+        return max(read_mb, limit_mb) * MEASURED_GROWTH
+    return limit_mb * OOM_GROWTH
 
 
 def memory_band(gb: float) -> int:

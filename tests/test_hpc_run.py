@@ -26,7 +26,7 @@ from typing import ClassVar, Final
 import pytest
 
 from lab_commons.compute import learned
-from lab_commons.compute.measured import OOM_GROWTH, Measured, memory_band
+from lab_commons.compute.measured import MEASURED_GROWTH, OOM_GROWTH, Measured, memory_band
 from lab_commons.config import CONFIG_ENV
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
@@ -501,13 +501,13 @@ def test_a_measured_peak_raises_the_memory_and_never_lowers_it_under_the_declare
 def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_known_peak() -> None:
     """Ada 2026-10-13: 24 children OOM-killed at 1 GB read peaks of ~1120 MB -- the limit, not the need.
 
-    The read grown by ``OOM_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
+    The read grown by ``MEASURED_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
     run and killed again); the round's own growth then skips the file (``taught``), so it is applied once.
     """
     killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 1120.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed)
-    assert measured.peaks_mb == {'a.py': 1120.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 1120.0 * MEASURED_GROWTH}
     assert measured.taught == {'a.py', 'a.py::t'}, 'the cut id carries the floor too'
     known = Measured(peaks_mb={'a.py': 3493.0})
     known.learn(['a.py::t'], killed)
@@ -525,12 +525,13 @@ def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_
     ~870 MB every round, under the limit that killed it: the retry asked what it was killed at, never reached the
     grant ceiling, and an OOM round is not counted against RETRIES, so the run never settled. A kill says the need
     exceeds the peak its limit allowed (3072 MB over the 1.5 safety); the floor is the larger of that and the read,
-    grown, so the retry asks the limit x OOM_GROWTH. PLANTED CONTROL: a read above it still decides.
+    grown, so the retry asks the limit x MEASURED_GROWTH (x OOM_GROWTH when nothing was read).
+    PLANTED CONTROL: a read above it still decides.
     """
     killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 435.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed, allowed_mb=2048.0)
-    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 2048.0 * MEASURED_GROWTH}
     unread = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0}}
     measured = Measured()
     measured.learn(['a.py::t'], unread, allowed_mb=2048.0)
@@ -538,7 +539,7 @@ def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_
     over = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 4000.0}}
     measured = Measured()
     measured.learn(['a.py::t'], over, allowed_mb=2048.0)
-    assert measured.peaks_mb == {'a.py': 4000.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 4000.0 * MEASURED_GROWTH}
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
