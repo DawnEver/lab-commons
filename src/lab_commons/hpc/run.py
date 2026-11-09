@@ -35,10 +35,11 @@ and every other item keeps its own learned duration: a ``TIMEOUT`` never raises 
 only what is still unfinished after that is ``INFRA``. An item that closed without reporting an id
 recorded it ``PENDING``: never reported.
 
-AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory for
-the id each kill CUT only (:func:`lab_commons.hpc.gather.grown_after`; an id that then finishes is back at its
-peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
-counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
+AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. ISOLATE BEFORE GROWING: a killed item of several
+ids is halved and re-run at the SAME ask (:func:`lab_commons.hpc.gather.held_after`); the round after asks twice
+the memory only for a LONE id killed alone (:func:`lab_commons.hpc.gather.grown_after`; an id that then finishes
+is back at its peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM
+rounds are not counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
 halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
 (:func:`lab_commons.hpc.records.fold`); so is a lone test killed for memory in :data:`OOM_ROUNDS` rounds
 below it (:func:`lab_commons.hpc.gather.oom_bounded`; motronics ca127cc9f5: 7 ids killed at ~435 MB in rounds
@@ -216,7 +217,11 @@ def submit_round(
     measured = planned(state)
     grown = state.get('grown', {})
     grantable = grantable_gb(snapshots)
-    asks = [measured.item_gb(ids, cost, policy, grown) for ids in pending]
+    held_mb = state.get('held', {})
+    asks = [
+        max(measured.item_gb(ids, cost, policy, grown), max((held_mb.get(n, 0.0) for n in ids), default=0.0) / 1024)
+        for ids in pending
+    ]
     held = [ask if grantable is None else min(ask, grantable) for ask in asks]
     classes: dict[int, list[int]] = {}
     for index, gb in enumerate(held):
@@ -382,6 +387,7 @@ def submit_run(
         'priced': spec.builds.priced_floors,  # the commit's declared floors; only a plan reads them (planned)
         'rounds': [],
         'grown': {},  # node id -> this run's memory growth after an OOM kill cut it
+        'held': {},  # node id -> the ask (MB) the OOM-killed multi-id item it was in ran at: its halves' least
         'carried': {node: held[1] for node, held in taken.items()},
     }
     files = group_items([node for node in ids if node not in handed and node not in taken])
