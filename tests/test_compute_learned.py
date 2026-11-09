@@ -138,11 +138,36 @@ def test_a_cluster_part_demands_the_memory_one_task_of_its_plan_asks() -> None:
     learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=13.0, cpu_s=89875.0, wall_s=8616.0), ended='exit')
     ask = learned.cluster_demand(REPO)
     assert ask(frozenset()) == Demand(cpu=11, mem_gb=13.0 * 1.5, files=50_000, submits=1)
-    learned.record_ask(REPO, learned.SLURM, (), 352.2, safety=1.5)
+    learned.record_ask(REPO, learned.SLURM, (), 352.2, safety=1.5, ceiling_gb=None)
     assert ask(frozenset())['mem_gb'] == pytest.approx(352.2, rel=1e-12, abs=0.0)
-    learned.record_ask(REPO, learned.SLURM, (), 8.0, safety=1.5)
+    learned.record_ask(REPO, learned.SLURM, (), 8.0, safety=1.5, ceiling_gb=None)
     assert ask(frozenset())['mem_gb'] == pytest.approx(352.2, rel=1e-12, abs=0.0)
     assert ask(frozenset())['cpu'] == 11, 'the ask moves memory only'
+
+
+def test_a_recorded_ask_stays_strictly_below_the_grant_ceiling() -> None:
+    """An ask learned at the grant's memory ceiling fits only an idle account (Ada 2026-11-08: 360 of 360 GB).
+
+    PLANTED CONTROL: an ask below the ceiling is recorded as asked.
+    """
+    ask = learned.cluster_demand(REPO)
+    learned.record_ask(REPO, learned.SLURM, ('a',), 100.0, safety=1.5, ceiling_gb=360.0)
+    assert ask(frozenset({'a'}))['mem_gb'] == pytest.approx(100.0, rel=1e-12, abs=0.0)
+    learned.record_ask(REPO, learned.SLURM, (), 360.0, safety=1.5, ceiling_gb=360.0)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(360.0 * learned.ASK_CEILING_SHARE, rel=1e-12, abs=0.0)
+    assert learned.ASK_CEILING_SHARE < 1.0
+
+
+def test_a_cluster_demand_never_exceeds_what_the_grant_can_grant() -> None:
+    """Ada 2026-11-09: a 216 GB peak times the 1.5 safety asked 324 GB against a 240 GB grantable ceiling.
+
+    No grant can ever grant an ask above its ceiling, so the base was never admitted. The demand is held to
+    *ceiling_gb*, never below the peak itself. PLANTED CONTROL: no ceiling leaves the safety's ask.
+    """
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=216.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.cluster_demand(REPO, ceiling_gb=240.0)(frozenset())['mem_gb'] == pytest.approx(240.0)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(324.0)
+    assert learned.cluster_demand(REPO, ceiling_gb=200.0)(frozenset())['mem_gb'] == pytest.approx(216.0)
 
 
 def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
