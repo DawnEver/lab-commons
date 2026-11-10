@@ -35,6 +35,7 @@ from lab_commons.box import (
 )
 from lab_commons.box.demand import checked, cores, mem_bytes, seats
 from lab_commons.box.ledger import _decide
+from lab_commons.box.machine import own_reserve, reserve_table
 from lab_commons.box.supply import Reading
 from lab_commons.compute.model import Demand
 
@@ -259,10 +260,17 @@ def test_capacity_reads_the_reserve_margins_compute_reads(tmp_path: Path, monkey
     loose = Capacity.read()
     config.write_text('[reserve]\ncpu_margin = 2\nmem_margin = 0.5\n[capabilities.jmag]\nseats = 3\n', encoding='utf-8')
     tight = Capacity.read()
-    assert loose.cpu - tight.cpu == pytest.approx(1, abs=1e-9)  # cores
+    host = float(os.cpu_count() or 1)
+
+    def kept(table: dict[str, float]) -> float:
+        return own_reserve({'cpu': host, 'mem_gb': 0.0}, reserve_table(table))['cpu']
+
+    assert loose.cpu == pytest.approx(host - kept({'cpu_margin': 1}), abs=1e-9)  # cores
+    assert tight.cpu == pytest.approx(host - kept({'cpu_margin': 2}), abs=1e-9)  # cores
     assert tight.mem_bytes < loose.mem_bytes
     assert loose.seats == {'jmag': 3}
-    assert loose.cpu == pytest.approx((os.cpu_count() or 1) - 1, abs=1e-9)  # cores
+    config.write_text('[reserve]\ncpu_margin = 0.5\ncpu_margin_share = 1\n', encoding='utf-8')
+    assert Capacity.read().cpu == pytest.approx(host - min(0.5, host), abs=1e-9), 'the share is read, not assumed'
 
 
 def _external_rows(path: Path) -> list[tuple[int, int]]:
@@ -318,14 +326,22 @@ def test_released_on_terminal_evidence(box: Path) -> None:
 def test_a_tree_inside_a_claim_does_not_claim_again_but_a_vendor_or_a_seat_does(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(INSIDE_ENV, 'outer')
-    with hold(*_demand(cpu=4), 'nested', queue_s=1, **_ON) as claim:
-        assert claim.id == 0
-        assert holdings() == [], 'the enclosing claim already holds this tree'
+    with hold(*_demand(cpu=1), 'outer', queue_s=1, **{**_ON, 'key': 'outer'}):
+        monkeypatch.setenv(INSIDE_ENV, 'outer')
+        with hold(*_demand(cpu=1), 'nested', queue_s=1, **_ON) as claim:
+            assert claim.id == 0
+            assert [row.what for row in holdings()] == ['outer'], 'the enclosing claim already holds this tree'
     with hold(*_demand(cpu=1), 'vendor', queue_s=1, outside=True, **_ON):
         assert [row.what for row in holdings()] == ['vendor'], 'PLANTED CONTROL: outside the tree books'
     with hold(*_demand(seats={'jmag': 1}), 'seat', queue_s=1, **_ON):
         assert [row.what for row in holdings()] == ['seat'], 'a licence is not a share of a tree'
+
+
+@pytest.mark.usefixtures('box')
+def test_an_exported_inside_key_naming_no_live_claim_still_books(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(INSIDE_ENV, 'exported-by-hand')
+    with hold(*_demand(cpu=1), 'run', queue_s=1, **_ON):
+        assert [row.what for row in holdings()] == ['run'], 'the variable alone is not evidence of an enclosing claim'
 
 
 def test_a_ledger_file_from_before_the_kept_column_moves_forward(tmp_path: Path, monkeypatch) -> None:

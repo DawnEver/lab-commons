@@ -35,12 +35,15 @@ and every other item keeps its own learned duration: a ``TIMEOUT`` never raises 
 only what is still unfinished after that is ``INFRA``. An item that closed without reporting an id
 recorded it ``PENDING``: never reported.
 
-AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. The round after one asks twice the memory for
-the id each kill CUT only (:func:`lab_commons.hpc.gather.grown_after`; an id that then finishes is back at its
-peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM rounds are not
-counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
+AN ``OUT_OF_MEMORY`` BISECTS, IT NEVER OUTGROWS EVERY GRANT. ISOLATE BEFORE GROWING: a killed item of several
+ids is halved and re-run at the SAME ask (:func:`lab_commons.hpc.gather.held_after`); the round after asks twice
+the memory only for a LONE id killed alone (:func:`lab_commons.hpc.gather.grown_after`; an id that then finishes
+is back at its peak), HELD TO the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`), and OOM
+rounds are not counted against :data:`RETRIES` while that ceiling exists: each one either grows the ask toward it or
 halves the killed items, so they end. A lone test still killed at the ceiling is ``failed`` by id
-(:func:`lab_commons.hpc.records.fold`). A round that NO GRANT CAN TAKE settles at once: its ids are
+(:func:`lab_commons.hpc.records.fold`); so is a lone test killed for memory in :data:`OOM_ROUNDS` rounds
+below it (:func:`lab_commons.hpc.gather.oom_bounded`; motronics ca127cc9f5: 7 ids killed at ~435 MB in rounds
+3-11 and the run never closed). A round that NO GRANT CAN TAKE settles at once: its ids are
 ``error`` with the refusal as their reason, and the record is written -- never a run that waits forever.
 
 THE PLAN IS MEASURED. The record keeps ``durations`` (seconds per id), ``overheads`` (per file: wall time
@@ -64,13 +67,12 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, Final
 
-from lab_commons.compute import learned
 from lab_commons.compute.measured import Measured, memory_band
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
-from lab_commons.hpc.needsets import need_sets, needs_of
+from lab_commons.hpc.needsets import need_sets
 from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
     record_of,
@@ -96,6 +98,7 @@ from lab_commons.outcomes import Cell, Reason, Status
 
 __all__ = [
     'ACTIVE',
+    'OOM_ROUNDS',
     'RETRIES',
     'NoRoom',
     'cancel_run',
@@ -113,7 +116,7 @@ class NoRoom(NotSubmitted):
     """The HOST had no room for the part (no headroom at first submit, or held on an account/QOS limit).
 
     A fact about the host, never a result about the sha: it is released RETRYABLE, so the part
-    stays open to every host, and the learned ask keeps this one from re-admitting it at the same size.
+    stays open to every host. Waiting is contention, never a learned ask: the part retries at the same size.
     """
 
 
@@ -127,6 +130,9 @@ ACTIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'CONFIGURING', 'COM
 
 #: Rounds after the first that re-run what a killed shard left unfinished.
 RETRIES: Final = 2
+
+#: Rounds a LONE id may be killed for memory below the ceiling before it is ``OUT_OF_MEMORY`` by id.
+OOM_ROUNDS: Final = 3
 
 
 def shares_home(grant: Grant, builder: Grant) -> bool:
@@ -211,7 +217,11 @@ def submit_round(
     measured = planned(state)
     grown = state.get('grown', {})
     grantable = grantable_gb(snapshots)
-    asks = [measured.item_gb(ids, cost, policy, grown) for ids in pending]
+    held_mb = state.get('held', {})
+    asks = [
+        max(measured.item_gb(ids, cost, policy, grown), max((held_mb.get(n, 0.0) for n in ids), default=0.0) / 1024)
+        for ids in pending
+    ]
     held = [ask if grantable is None else min(ask, grantable) for ask in asks]
     classes: dict[int, list[int]] = {}
     for index, gb in enumerate(held):
@@ -237,9 +247,7 @@ def submit_round(
             paging=machine.paging,
             rerun_safe=True,  # a forge test part reruns to the same verdict
         )
-        if not state['rounds'] and plan.room == 0:
-            needs = needs_of(state['platform'])
-            learned.record_ask(state['repo'], learned.SLURM, needs, mem_gb, safety=policy.safety)
+        if not state['rounds'] and plan.room == 0:  # contention, not need: nothing is learned
             msg = (
                 f'{chosen.name} has no headroom now for one task of {cost.cpus} CPU and {mem_gb:.1f} GB beside what '
                 "the account's own jobs hold; nothing was submitted, so a host with room takes it"
@@ -379,6 +387,7 @@ def submit_run(
         'priced': spec.builds.priced_floors,  # the commit's declared floors; only a plan reads them (planned)
         'rounds': [],
         'grown': {},  # node id -> this run's memory growth after an OOM kill cut it
+        'held': {},  # node id -> the ask (MB) the OOM-killed multi-id item it was in ran at: its halves' least
         'carried': {node: held[1] for node, held in taken.items()},
     }
     files = group_items([node for node in ids if node not in handed and node not in taken])
@@ -387,12 +396,14 @@ def submit_run(
     def band(ids: list[str]) -> int:
         return memory_band(measured.item_gb(ids, cost, policy))
 
-    pending = measured.pack(files, cost, item_seconds(policy), band)
+    same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
+    heavy = measured.heavy(files, cost, policy, ceiling_gb=grantable_gb(same_cluster))
+    state['heavy'] = sorted(heavy)  # packed alone, and left out of the peak that prices the part (job_measured)
+    pending = measured.pack(files, cost, item_seconds(policy), band, alone=heavy)
     if not pending:  # every id was carried or handed: the record needs no job
         state['record'] = record_of(state, grant.slurm_account)
         save_state(run, state)
         return state
-    same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
     submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
     save_state(runners[state['current']['account']], state)
     return state

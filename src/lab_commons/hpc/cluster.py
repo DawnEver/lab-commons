@@ -441,7 +441,8 @@ def _returned(text: str) -> dict[int, list[dict[str, Any]]]:
         data = items[index]
         if data['shard'] in returned:
             result = {'index': index, 'ok': data['ok'], 'status': data['status']}
-            result |= {'value': data['value']} if data['ok'] else {'error': data['error']}
+            result |= {} if data['ok'] else {'error': data['error']}
+            result |= {'value': data['value']} if 'value' in data else {}  # a Failed item's value rides back
             returned[data['shard']].append(result)
     return returned
 

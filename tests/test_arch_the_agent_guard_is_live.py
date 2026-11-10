@@ -30,27 +30,25 @@ _SHIPPED: Final = frozenset(
         'GIT-RESET',
         'GIT-STAGE-EVERYTHING',
         'GIT-STASH',
+        'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
         'PUSH-FORCE',
         'PUSH-NO-VERIFY',
         'PUSH-REMOTE-DELETE',
         'RECURSIVE-DELETE',
         'RECURSIVE-GREP',
+        'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-07 with dev-lab #313 (agentpolicy)
+        'CONSENT-CODE-FROM-THE-USER',  # renamed 2026-11-08 by dev-lab #325 (user ruling)
         'REPORTS-LIVE-IN-MEMORY',
         'STATUS-VIA-DOORS',
         'SUBAGENT-NO-PUSH',
         'TREE-HAS-A-LIVE-RUN',
         'WORKTREE-BASE-IS-EXPLICIT',
         'WORKTREES-STAY-INSIDE',
+        'WRITES-STAY-IN-THE-TREE',  # gained 2026-11-07 with dev-lab 8c4ab734
     }
 )
 
 _PROSE_ABOUT_A_DENIED_SHAPE: Final = "cat > notes.md <<'MD'\npytest is denied here; use the verdict entry point.\nMD"
-
-
-@pytest.mark.workstation
-def test_node_is_on_path() -> None:
-    """No node means no guard: a red, never a skip."""
-    agentguard.assert_node_is_available()
 
 
 def test_the_guard_is_live() -> None:

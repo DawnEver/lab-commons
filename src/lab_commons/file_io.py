@@ -3,19 +3,19 @@
 Provenance: extracted from consumer-a's ``core/utils/file_io.py`` (byte-identical
 across the consumer-a/consumer-c/consumer-b family; see ``finding-shared-lab-infra-extraction.md``),
 the strongest of the near-identical copies — it is the only fork whose :func:`read_toml`
-accepts both a path and in-memory ``bytes``. Pure ``rtoml`` + ``pathlib``/``shutil`` mechanics,
+accepts both a path and in-memory ``bytes``. Writes through ``tomlkit``, reads through stdlib ``tomllib``
+(the family's one TOML pair), plus ``pathlib``/``shutil`` mechanics,
 no concept from any single lab's domain.
 """
 
 import os
 from pathlib import Path
 from shutil import copyfile
+from tomllib import loads
 
-from rtoml import (
-    dumps,
-    loads,
-)
+from tomlkit import dumps
 
+from lab_commons.compute.durable import durable_text
 from lab_commons.log import log
 
 __all__ = ['check_path', 'dumps', 'list_files_in_dir', 'loads', 'read_toml', 'save_toml']
@@ -36,6 +36,7 @@ def read_toml(source: Path | str | bytes) -> dict:
 
     Raises:
         OSError: Failed to open the file (path source only).
+        tomllib.TOMLDecodeError: The content is not valid TOML.
 
     """
     if isinstance(source, bytes):
@@ -56,15 +57,18 @@ def save_toml(file_path: Path, dict_data: dict) -> None:
     Args:
     ----
         file_path(Path): Path to the file.
-        dict_data(dict): Data to save.
+        dict_data(dict): Data to save. ``None`` has no TOML form and raises ``TypeError``.
 
     """
     try:
         # Create the parent dir if missing: save targets like the user modeling
         # library (config/lib/<file>) may not exist yet on a fresh machine.
-        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-        with Path.open(file_path, 'w', encoding='utf-8') as f:
-            f.write(dumps(dict_data))
+        # Serialise BEFORE touching the target, and replace it whole through the one durable door: a value TOML
+        # cannot hold (``None``) or a crash mid-write must never truncate a good file or leave an empty one.
+        text = dumps(dict_data)
+        target = Path(file_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        durable_text(target, text)
     except OSError as e:
         msg = f'Failed to save file {file_path}! {e}'
         log(msg=msg, level='ERROR')

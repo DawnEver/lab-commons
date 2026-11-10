@@ -2,11 +2,12 @@
 
 ``systemd-run --scope`` puts the command into its own cgroup with ``MemoryMax`` (the claim's
 bytes, the whole tree), ``MemorySwapMax=0`` (no escape into swap) and ``CPUQuota`` (``cpu * 100%``); the wall is the
-launcher's (systemd 239 refuses ``RuntimeMaxSec`` on a scope). The MANAGER follows the caller: root
-(a system service, e.g. the supervisor) scopes in the system manager, anyone else in its own
-``--user`` manager, which needs the ``memory`` and ``cpu`` controllers DELEGATED. Probed once per
-process; a manager that cannot bind the limits REFUSES the run -- an unenforced run would make the
-ledger a list of hopes.
+launcher's (systemd 239 refuses ``RuntimeMaxSec`` on a scope). The MANAGER is decided by capability
+(:func:`manager_for`): root of the initial namespace (a system service, e.g. the supervisor) scopes in the
+system manager, anyone else -- a user-namespace root included -- in its own ``--user`` manager, which needs
+the ``memory`` and ``cpu`` controllers DELEGATED. Probed once per process by a scope that must READ BACK
+its own limit (:func:`probe_argv`); a manager that cannot bind the limits REFUSES the run -- an unenforced
+run would make the ledger a list of hopes. ``enforcer`` names the manager (``systemd-scope:system|user``).
 
 A SLURM COMPUTE NODE (this process in the cgroup of job ``SLURM_JOB_ID``, no scope) is enforced by the
 LAUNCHER, per run: the allocation's cgroup bounds the whole job, not this run, so the launcher watches the run's process
@@ -43,9 +44,14 @@ from lab_commons.proc import working_set_bytes
 if sys.platform != 'win32':
     import resource
 
-__all__ = ['Manager', 'contain', 'in_slurm_job', 'manager', 'refusal', 'scope_argv']
+__all__ = [
+    'PROBE_BYTES', 'Manager', 'binds', 'contain', 'in_slurm_job', 'manager', 'manager_for', 'probe_argv', 'refusal',
+    'scope_argv',
+]  # fmt: skip
 
 _PROBE_S: Final = 10.0
+#: The limit the probe's scope is given and must read back from its own cgroup: proof the limits BIND.
+PROBE_BYTES: Final = 64 * 1024 * 1024
 _KIB: Final = 1024
 #: POSIX SIGKILL; spelled as a number because :mod:`signal` lacks the name on Windows, where this imports.
 _SIGKILL: Final = 9
@@ -57,8 +63,9 @@ _PGRP_FIELD: Final = 2
 
 @dataclass(frozen=True)
 class Manager:
-    """The systemd manager a scope is started in: its ``systemd-run`` flags and its cgroup's controller list."""
+    """The systemd manager a scope is started in: its name, its ``systemd-run`` flags and its controller list."""
 
+    name: str
     flags: tuple[str, ...]
     controllers: Path
 
@@ -66,9 +73,36 @@ class Manager:
 def manager(uid: int) -> Manager:
     """Root's scopes go to the system manager; any other *uid*'s to its own user manager."""
     if uid == 0:
-        return Manager((), Path('/sys/fs/cgroup/cgroup.controllers'))
+        return Manager('system', (), Path('/sys/fs/cgroup/cgroup.controllers'))
     slice_ = f'/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service'
-    return Manager(('--user',), Path(f'{slice_}/cgroup.controllers'))
+    return Manager('user', ('--user',), Path(f'{slice_}/cgroup.controllers'))
+
+
+def manager_for(euid: int, uid_map: str) -> Manager:
+    """The manager *euid* can actually use, by CAPABILITY: root of the initial namespace is the system manager.
+
+    Root inside a user namespace (``/proc/self/uid_map`` maps 0 to an outer uid, not to 0) owns no system
+    manager; it is that outer user, scoped in its user manager.
+    """
+    if euid != 0:
+        return manager(euid)
+    for line in uid_map.splitlines():
+        inner, outer, _count = (int(field) for field in line.split())
+        if inner == 0:
+            return manager(outer)
+    return manager(0)
+
+
+def probe_argv(systemd_run: str, where: Manager) -> list[str]:
+    """A scope of *where* limited to :data:`PROBE_BYTES` whose child prints the ``memory.max`` of its own cgroup."""
+    read_back = 'cat "/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup)/memory.max"'
+    return [systemd_run, *where.flags, '--scope', '--quiet', '-p', f'MemoryMax={PROBE_BYTES}', '--', 'sh', '-c',
+            read_back]  # fmt: skip
+
+
+def binds(stdout: str) -> bool:
+    """Whether the probe read back the limit it was given -- a scope that merely starts reads ``max`` or nothing."""
+    return stdout.strip() == str(PROBE_BYTES)
 
 
 def scope_argv(systemd_run: str, where: Manager, argv: Sequence[str], demand: Demand) -> list[str]:
@@ -102,7 +136,7 @@ def _systemd_run() -> str | None:
         return None
     try:
         probe = _door.run(
-            [found, *_here().flags, '--scope', '--quiet', '--', 'true'],
+            probe_argv(found, _here()),
             capture_output=True,
             text=True,
             encoding='utf-8',
@@ -111,12 +145,18 @@ def _systemd_run() -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return found if probe.returncode == 0 else None
+    return found if probe.returncode == 0 and binds(probe.stdout) else None
 
 
 def _here() -> Manager:
-    """Return the manager of the running process, by its effective uid."""
-    return manager(os.geteuid() if sys.platform != 'win32' else 0)
+    """Return the manager the running process can use (:func:`manager_for` its euid and uid map)."""
+    if sys.platform == 'win32':
+        return manager(0)
+    try:
+        uid_map = Path('/proc/self/uid_map').read_text(encoding='utf-8')
+    except OSError:
+        uid_map = ''
+    return manager_for(os.geteuid(), uid_map)
 
 
 def _delegated() -> bool:
@@ -183,7 +223,7 @@ def contain(
     if why == 'exit' and child.returncode == -_SIGKILL:
         why = 'memory'  # a SIGKILL the launcher did not send is the scope's OOM killer
     usage = _children_usage()
-    enforcer = 'slurm' if watch else 'systemd-scope'
+    enforcer = 'slurm' if watch else f'systemd-scope:{_here().name}'  # which manager held the limits
     return ProcessEnd(child.returncode, why, max(peak, usage[0]), usage[1], time.monotonic() - start, enforcer, *tag)
 
 

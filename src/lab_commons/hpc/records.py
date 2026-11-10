@@ -10,7 +10,12 @@ on read (:func:`upgraded_state`). A run RECORD is regenerable: one in the retire
 from __future__ import annotations
 
 import gzip
+import hashlib
+import io
 import json
+import math
+import re
+import zlib
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
@@ -26,6 +31,7 @@ from lab_commons.hpc.testcells import TestCell, counts, upgraded
 from lab_commons.outcomes import Cell, Reason, Status
 
 __all__ = [
+    'RecordRefused',
     'RetiredRecord',
     'cells_of',
     'files_made',
@@ -72,6 +78,47 @@ class RetiredRecord(ValueError):
     """A run record in the retired word shape: regenerable, so refused -- the forge re-produces its sha."""
 
 
+class RecordRefused(ValueError):
+    """A record breaks its declared read budgets, its digest, or the strict UTF-8 JSON protocol."""
+
+
+_SHA256: Final = re.compile('[0-9a-f]{64}')
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            msg = 'record has duplicate JSON object keys'
+            raise RecordRefused(msg)
+        result[key] = value
+    return result
+
+
+def _finite_float(token: str) -> float:
+    value = float(token)
+    if not math.isfinite(value):
+        msg = 'record contains a nonfinite number'
+        raise RecordRefused(msg)
+    return value
+
+
+def _reject_constant(token: str) -> None:
+    msg = f'record contains a nonstandard JSON number: {token}'
+    raise RecordRefused(msg)
+
+
+def _read_limits(compressed: int | None, decompressed: int | None, digest: str | None) -> None:
+    if (compressed is None) != (decompressed is None) or any(
+        value is not None and (type(value) is not int or value < 1) for value in (compressed, decompressed)
+    ):
+        msg = 'record read budgets must be declared together as positive integers'
+        raise RecordRefused(msg)
+    if digest is not None and (type(digest) is not str or _SHA256.fullmatch(digest) is None):
+        msg = 'record expected SHA256 must be a lowercase 64-digit digest'
+        raise RecordRefused(msg)
+
+
 def _plain(line: dict[str, Any]) -> dict[str, Any]:
     """A stream's plain test cell, a retired ``{"outcome", "why"}`` line upgraded (a round in flight)."""
     one = TestCell.from_plain(line) if 'status' in line else upgraded(str(line['outcome']), str(line.get('why', '')))
@@ -97,6 +144,7 @@ def fold(
     *,
     shards: Sequence[Sequence[int]],
     walls: Sequence[float],
+    oom_mb: Mapping[int, float] | None = None,
     alone: Mapping[int, int] | None = None,
     timed_out: Collection[int] = (),
     tops: Mapping[int, float] | None = None,
@@ -113,9 +161,11 @@ def fold(
     An item closed by a signal (``done`` < 0: the cgroup's OOM killer, a timeout) did not finish its ids;
     they are retried, halved, like an item that never closed -- never stamped ``PENDING``.
 
-    AN OUT_OF_MEMORY ITEM IS BISECTED, AND A LONE HOG IS ITS OWN CELL. *alone* maps each item killed
-    OUT_OF_MEMORY at the most memory any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`) to that
-    limit in MB. Halving it again isolates the test that blows the memory; once one unfinished id is
+    AN OUT_OF_MEMORY ITEM IS BISECTED, AND A LONE HOG IS ITS OWN CELL. *oom_mb* maps each item killed
+    OUT_OF_MEMORY to the peak its limit allowed (the limit over the safety), in MB -- what its ids learn
+    their floor from (:meth:`Measured.learn`) -- and *alone* maps those killed at the most memory any grant
+    gives (:func:`lab_commons.hpc.plan.grantable_gb`) to that limit in MB. Halving it again isolates the
+    test that blows the memory; once one unfinished id is
     left, no grant can give it more, so it is ``OUT_OF_MEMORY`` by id with its peak and the limit as its
     reason -- never ``REJECTED``: the machine, not the test, said no -- and every other id of the item got
     a real result on the way down.
@@ -139,7 +189,8 @@ def fold(
     Ada 2026-10-26: two ids cut after ~1 day each learned 48 h floors, to hold defq 48 h and then retry.
     """
     pending: list[list[str]] = []
-    limits = alone or {}
+    limits = oom_mb or {}
+    hogs = alone or {}
     killed = False
     folds = [read_stream(streams.get(index, ''), item['ids']) for index, item in enumerate(items)]
     spent = _killed_after(folds, shards, walls)
@@ -148,7 +199,7 @@ def fold(
     for index, (item, folded) in enumerate(zip(items, folds, strict=True)):
         group = item['ids']
         cells.update({node: _plain(line) for node, line in folded['cells'].items()})
-        measured.learn(group, folded)
+        measured.learn(group, folded, allowed_mb=limits.get(index))
         rest = [n for n in group if n not in folded['cells']]
         signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
         killed = killed or signalled
@@ -173,12 +224,12 @@ def fold(
             rest = rest[1:]
             pending += [rest] if rest else []
             continue
-        if len(rest) == 1 and index in limits:
+        if len(rest) == 1 and index in hogs:
             peak = (folded['done'] or {}).get('peak_mb')
             cells[rest[0]] = _cell(
                 Status.OUT_OF_MEMORY,
                 'out_of_memory',
-                f'alone at {limits[index]} MB, the most any grant gives'
+                f'alone at {hogs[index]} MB, the most any grant gives'
                 f' (peak {"unread" if peak is None else f"{float(peak):.0f} MB"})',
             )
             continue
@@ -334,15 +385,83 @@ def record_name(record: dict[str, Any]) -> str:
     return f'run-{record["sha"]}-{record["platform"]}-{record["req"]}.json.gz'
 
 
+_MAX_RECORD_DEPTH = 64  # containers deep; a run record is a handful -- the bound is ours, never the C stack's
+
+
+def _within_depth(value: object) -> bool:
+    """Whether *value* nests at most :data:`_MAX_RECORD_DEPTH` lists/dicts deep, walked without recursion."""
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (list, tuple, dict)):
+            if depth >= _MAX_RECORD_DEPTH:
+                return False
+            stack.extend((child, depth + 1) for child in (item.values() if isinstance(item, dict) else item))
+    return True
+
+
 def write_record(record: dict[str, Any], directory: Path) -> Path:
     """The record gzipped under *directory* (created) at :func:`record_name`; returns its path."""
-    data = gzip.compress(json.dumps(record, sort_keys=True).encode('utf-8'), mtime=0)
+    if not _within_depth(record):  # checked, not left to RecursionError: the C encoder's reach is per-platform
+        msg = f'record nests deeper than {_MAX_RECORD_DEPTH} containers'
+        raise RecordRefused(msg)
+    try:  # encoded BEFORE any directory or file changes: a refused record leaves the tree as it was
+        payload = json.dumps(record, sort_keys=True, allow_nan=False).encode('utf-8')
+    except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+        msg = 'record cannot be encoded as finite UTF-8 JSON'
+        raise RecordRefused(msg) from error
+    data = gzip.compress(payload, mtime=0)
     return durable_write(directory / record_name(record), data)  # a crash never leaves half a record
 
 
-def read_record(path: Path) -> dict[str, Any]:
-    """The record :func:`write_record` wrote; one in the retired word shape raises :class:`RetiredRecord`."""
-    record = json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))
+def read_record(
+    path: Path,
+    *,
+    max_compressed_bytes: int | None = None,
+    max_decompressed_bytes: int | None = None,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    """The record :func:`write_record` wrote, read as STRICT UTF-8 JSON; malformed data is :class:`RecordRefused`.
+
+    Strict: one object root, no duplicate key, no NaN/Infinity or overflowing number. The two byte budgets
+    are declared together or not at all (``None`` declares none); they bound the compressed and expanded
+    bytes, not the RSS of the decoded value. *expected_sha256* binds the SAME compressed buffer that is
+    decompressed; its provenance is the caller's. A filesystem :class:`OSError` stays an ``OSError``; a
+    record in the retired word shape raises :class:`RetiredRecord`.
+    """
+    _read_limits(max_compressed_bytes, max_decompressed_bytes, expected_sha256)
+    with path.open('rb') as source:
+        compressed = source.read(-1 if max_compressed_bytes is None else max_compressed_bytes + 1)
+    if max_compressed_bytes is not None and len(compressed) > max_compressed_bytes:
+        msg = 'record exceeds its compressed byte budget'
+        raise RecordRefused(msg)
+    if expected_sha256 is not None and hashlib.sha256(compressed).hexdigest() != expected_sha256:
+        msg = 'record compressed SHA256 differs'
+        raise RecordRefused(msg)
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode='rb') as stream:
+            payload = stream.read(-1 if max_decompressed_bytes is None else max_decompressed_bytes + 1)
+    except (gzip.BadGzipFile, EOFError, zlib.error) as error:
+        msg = f'record data refused: {error}'
+        raise RecordRefused(msg) from error
+    if max_decompressed_bytes is not None and len(payload) > max_decompressed_bytes:
+        msg = 'record exceeds its decompressed byte budget'
+        raise RecordRefused(msg)
+    try:
+        record = json.loads(
+            payload.decode('utf-8', errors='strict'),
+            object_pairs_hook=_unique_object,
+            parse_float=_finite_float,
+            parse_constant=_reject_constant,
+        )
+    except RecordRefused:
+        raise
+    except (ValueError, UnicodeError, RecursionError) as error:
+        msg = f'record data refused: {error}'
+        raise RecordRefused(msg) from error
+    if not isinstance(record, dict):
+        msg = 'record JSON root must be an object'
+        raise RecordRefused(msg)
     if 'cells' not in record:
         msg = (
             f'{path.name} is a run record of the retired word shape ({_RETIRED_KEY}: passed/failed/...); a record '
@@ -353,17 +472,24 @@ def read_record(path: Path) -> dict[str, Any]:
 
 
 def job_measured(
-    rounds: Sequence[dict[str, Any]], nodes: Iterable[str], measured: Measured, *, cpus: int, files: float = 0.0
+    rounds: Sequence[dict[str, Any]],
+    nodes: Iterable[str],
+    measured: Measured,
+    *,
+    cpus: int,
+    files: float = 0.0,
+    heavy: Iterable[str] = (),
 ) -> Run:
     """What a whole Slurm run measured, as one :class:`~lab_commons.compute.learned.Run`.
 
-    Its peak is one TASK's (the worst file it ran, as :meth:`Measured.worker_gb` prices it, unpadded);
+    Its peak is one TASK's (the worst file it ran, as :meth:`Measured.worker_gb` prices it, unpadded), but a
+    *heavy* file's (:meth:`Measured.heavy`, packed alone): the part's demand is priced without it;
     its cpu-seconds are every shard's elapsed times the *cpus* each held; its wall is the rounds' makespans;
     its *files* what :func:`files_made` counted.
     """
     walls = [r.get('walls_s') or [0.0] for r in rounds]
     return Run(
-        peak_mem_gb=measured.peak_gb(nodes),
+        peak_mem_gb=measured.peak_gb(nodes, without=frozenset(heavy)),
         cpu_s=sum(sum(w) for w in walls) * cpus,
         wall_s=max(1.0, sum(max(w) for w in walls)),
         files=files,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from lab_commons.compute import learned
 from lab_commons.compute.admission import admit
 from lab_commons.compute.durable import durable_write
 from lab_commons.compute.learned import Run
-from lab_commons.compute.measured import OOM_GROWTH, Measured
+from lab_commons.compute.measured import MEASURED_GROWTH, OOM_GROWTH, Measured
 from lab_commons.compute.model import Demand, Job, Resources, Supply
 
 REPO = 'https://g/r.git'
@@ -20,7 +21,7 @@ REPO = 'https://g/r.git'
 def test_an_unmeasured_job_is_its_prior_and_a_measured_one_its_last_run() -> None:
     prior = Run(peak_mem_gb=1.0, cpu_s=60.0, wall_s=60.0)
     assert learned.demand(REPO, 'linux', {'jmag'}, prior=prior) == Demand(cpu=1, mem_gb=1.0, jmag=1)
-    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=4 * 3600.0, wall_s=3600.0))
+    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=4 * 3600.0, wall_s=3600.0), ended='exit')
     assert learned.demand(REPO, 'linux', {'jmag'}, prior=prior) == Demand(cpu=4, mem_gb=6.0, jmag=1)
     assert learned.demand(REPO, 'linux', (), prior=prior) == Demand(cpu=1, mem_gb=1.0), (
         'PLANTED CONTROL: another need-set of the same producer learned nothing'
@@ -35,18 +36,50 @@ def test_a_run_carries_its_cpu_hours_and_refuses_an_impossible_measurement() -> 
 
 
 def test_a_killed_runs_peak_is_a_floor_that_never_lowers_what_is_known() -> None:
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=8.0, cpu_s=10.0, wall_s=10.0))
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=1.0, cpu_s=10.0, wall_s=10.0), killed=True)
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=8.0, cpu_s=10.0, wall_s=10.0), ended='exit')
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=1.0, cpu_s=10.0, wall_s=10.0), ended='memory')
     assert learned.run_of(REPO, 'windows', ()).peak_mem_gb == 8.0
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=5.0, cpu_s=10.0, wall_s=10.0), killed=True)
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=5.0, cpu_s=10.0, wall_s=10.0), ended='memory')
     assert learned.run_of(REPO, 'windows', ()).peak_mem_gb == 5.0 * OOM_GROWTH
-    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=3.0, cpu_s=10.0, wall_s=10.0))
+    learned.record_run(REPO, 'windows', (), Run(peak_mem_gb=3.0, cpu_s=10.0, wall_s=10.0), ended='exit')
     assert learned.run_of(REPO, 'windows', ()).peak_mem_gb == 3.0, 'a finished run replaces; nothing is averaged'
 
 
+def test_a_run_that_did_not_exit_by_itself_teaches_no_price() -> None:
+    """A run ended by a wall clock or a signal (``timeout 900``'s SIGTERM, exit 124) was stopped mid-climb.
+
+    Its peak is a LOWER bound of its need, never a price: kept, it refused the next run of the same work for
+    memory it was never shown to need (2026-10-26). Only a run that EXITED by itself prices; a box MEMORY kill
+    is the one kill that says something -- the declared limit was too small -- and grows a floor.
+    PLANTED CONTROL: the same sample, ended by itself, is kept.
+    """
+    sample = Run(peak_mem_gb=23.0, cpu_s=900.0, wall_s=900.0)
+    for ended in ('wall', 'signal'):
+        learned.record_run(REPO, 'native', (), sample, ended=ended)
+        assert learned.run_of(REPO, 'native', ()) is None, f'a {ended} kill taught a price'
+    learned.record_run(REPO, 'native', (), Run(peak_mem_gb=4.0, cpu_s=9.0, wall_s=9.0), ended='exit')
+    learned.record_run(REPO, 'native', (), sample, ended='wall')
+    assert learned.run_of(REPO, 'native', ()).peak_mem_gb == 4.0, 'a killed run never raises a price either'
+    learned.record_run(REPO, 'control', (), sample, ended='exit')
+    assert learned.run_of(REPO, 'control', ()).peak_mem_gb == 23.0, 'PLANTED CONTROL: a completed run prices'
+    with pytest.raises(TypeError, match='exactly once'):
+        learned.record_run(REPO, 'unsaid', (), sample)
+
+
+def test_a_row_that_does_not_say_how_its_run_ended_is_read_as_unmeasured() -> None:
+    """A row written before runs said how they ended cannot be told from a timeout's: it is ignored on read."""
+    learned.record_run(REPO, 'kept', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    table = learned.learned(REPO)
+    legacy = {'peak_mem_gb': 26.0, 'cpu_s': 900.0, 'wall_s': 900.0, 'files': 0.0}
+    learned._write(REPO, {**table, 'runs': {**table['runs'], learned._key('legacy', ()): legacy}})
+    assert learned.run_of(REPO, 'legacy', ()) is None
+    assert learned.demand(REPO, 'legacy', (), prior=Run(1.0, 1.0, 1.0))['mem_gb'] == 1.0
+    assert learned.run_of(REPO, 'kept', ()).peak_mem_gb == 2.0, 'PLANTED CONTROL: a stamped row is read'
+
+
 def test_per_test_facts_and_per_job_runs_share_one_file_without_erasing_each_other() -> None:
-    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0))
-    learned.learn({'repo': REPO, 'durations': {'a.py::x': 3.0}, 'peaks_mb': {'a.py': 512.0}})
+    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    learned.learn_round(REPO, {}, {'durations': {'a.py::x': 3.0}, 'peaks_mb': {'a.py': 512.0}})
     assert learned.run_of(REPO, 'linux', ()) is not None, 'learning test facts kept the job runs'
     learned.learn_peaks(REPO, {'b.py': 2048.0})
     table = learned.learned(REPO)
@@ -85,7 +118,9 @@ def test_what_serve_admits_against_is_keyed_by_the_need_set_it_ran() -> None:
     PLANTED CONTROL: the base part learned nothing, so it declares its selection (:func:`learned.selection_gb`),
     never another need-set's run and never the whole box; a cluster reads slurm runs.
     """
-    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    learned.record_run(
+        REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=2 * 3600.0, wall_s=3600.0), ended='exit'
+    )
     jmag = learned.box_demand(REPO, frozenset({'jmag'}), cpu=8, mem_gb=64)
     assert jmag == Demand(cpu=2, mem_gb=6.0 * learned.BOX_HEADROOM, jmag=1)
     width = learned.PART_WIDTH
@@ -101,14 +136,39 @@ def test_a_cluster_part_demands_the_memory_one_task_of_its_plan_asks() -> None:
     The demand is :func:`~.measured.task_gb` of the peak -- the plan's own formula -- and a known larger ask
     (:func:`learned.record_ask`) raises it. PLANTED CONTROL: a smaller ask never lowers it.
     """
-    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=13.0, cpu_s=89875.0, wall_s=8616.0))
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=13.0, cpu_s=89875.0, wall_s=8616.0), ended='exit')
     ask = learned.cluster_demand(REPO)
     assert ask(frozenset()) == Demand(cpu=11, mem_gb=13.0 * 1.5, files=50_000, submits=1)
-    learned.record_ask(REPO, learned.SLURM, (), 352.2, safety=1.5)
+    learned.record_ask(REPO, learned.SLURM, (), 352.2, safety=1.5, ceiling_gb=None)
     assert ask(frozenset())['mem_gb'] == pytest.approx(352.2, rel=1e-12, abs=0.0)
-    learned.record_ask(REPO, learned.SLURM, (), 8.0, safety=1.5)
+    learned.record_ask(REPO, learned.SLURM, (), 8.0, safety=1.5, ceiling_gb=None)
     assert ask(frozenset())['mem_gb'] == pytest.approx(352.2, rel=1e-12, abs=0.0)
     assert ask(frozenset())['cpu'] == 11, 'the ask moves memory only'
+
+
+def test_a_recorded_ask_stays_strictly_below_the_grant_ceiling() -> None:
+    """An ask learned at the grant's memory ceiling fits only an idle account (Ada 2026-11-08: 360 of 360 GB).
+
+    PLANTED CONTROL: an ask below the ceiling is recorded as asked.
+    """
+    ask = learned.cluster_demand(REPO)
+    learned.record_ask(REPO, learned.SLURM, ('a',), 100.0, safety=1.5, ceiling_gb=360.0)
+    assert ask(frozenset({'a'}))['mem_gb'] == pytest.approx(100.0, rel=1e-12, abs=0.0)
+    learned.record_ask(REPO, learned.SLURM, (), 360.0, safety=1.5, ceiling_gb=360.0)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(360.0 * learned.ASK_CEILING_SHARE, rel=1e-12, abs=0.0)
+    assert learned.ASK_CEILING_SHARE < 1.0
+
+
+def test_a_cluster_demand_never_exceeds_what_the_grant_can_grant() -> None:
+    """Ada 2026-11-09: a 216 GB peak times the 1.5 safety asked 324 GB against a 240 GB grantable ceiling.
+
+    No grant can ever grant an ask above its ceiling, so the base was never admitted. The demand is held to
+    *ceiling_gb*, never below the peak itself. PLANTED CONTROL: no ceiling leaves the safety's ask.
+    """
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=216.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.cluster_demand(REPO, ceiling_gb=240.0)(frozenset())['mem_gb'] == pytest.approx(240.0)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(324.0)
+    assert learned.cluster_demand(REPO, ceiling_gb=200.0)(frozenset())['mem_gb'] == pytest.approx(216.0)
 
 
 def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
@@ -116,8 +176,12 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
 
     PLANTED CONTROL: a box already running a part declared at the whole box admits no second one.
     """
-    learned.record_run(REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=64.0, cpu_s=30 * 3600.0, wall_s=3600.0))
-    learned.record_run(REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0))
+    learned.record_run(
+        REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=64.0, cpu_s=30 * 3600.0, wall_s=3600.0), ended='exit'
+    )
+    learned.record_run(
+        REPO, learned.LOCAL, {'jmag'}, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0), ended='exit'
+    )
     plain, jmag = Job('', 'a' * 40, 'windows'), Job('', 'b' * 40, 'windows', frozenset({'jmag'}))
     box = Supply('G', Resources(cpu=30, mem_gb=64.0, jmag=1))
     measured = learned.box_demand(REPO, frozenset({'jmag'}), cpu=30, mem_gb=64)
@@ -134,10 +198,10 @@ def test_a_box_part_declares_what_it_kept_busy_capped_at_the_box() -> None:
 def test_a_request_is_learned_under_its_producer_name_never_a_test_parts_record() -> None:
     """A request shares no record with a test part of its need-set: unmeasured, it asks what its row declares."""
     jmag = frozenset({'jmag'})
-    learned.record_run(REPO, learned.LOCAL, jmag, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0))
+    learned.record_run(REPO, learned.LOCAL, jmag, Run(peak_mem_gb=60.0, cpu_s=64 * 3600.0, wall_s=3600.0), ended='exit')
     declared = learned.request_demand(REPO, 'deck_solve', jmag, cpu=4, mem_gb=8.0)
     assert declared == Demand(cpu=4, mem_gb=8.0, jmag=1), 'the test part measured on the same need-set is not it'
-    learned.record_run(REPO, 'deck_solve', jmag, Run(peak_mem_gb=10.0, cpu_s=2 * 3600.0, wall_s=3600.0))
+    learned.record_run(REPO, 'deck_solve', jmag, Run(peak_mem_gb=10.0, cpu_s=2 * 3600.0, wall_s=3600.0), ended='exit')
     measured = learned.request_demand(REPO, 'deck_solve', jmag, cpu=4, mem_gb=8.0)
     assert measured == Demand(cpu=2, mem_gb=10.0 * learned.BOX_HEADROOM, jmag=1), 'measured beats declared'
 
@@ -167,7 +231,9 @@ def test_an_unmeasured_part_is_priced_as_its_selection_never_a_repo_wide_constan
     femm = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64, ids=2)
     assert femm == Demand(cpu=2, mem_gb=2 * 6.0 * learned.BOX_HEADROOM, femm=1), 'the learned peak of its worst file'
     assert learned.box_demand(REPO, checkout, cpu=30, mem_gb=64, ids=1) == one, 'another need-set prices nothing'
-    learned.record_run(REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=20.0, cpu_s=6 * 3600.0, wall_s=3600.0))
+    learned.record_run(
+        REPO, learned.LOCAL, {'femm'}, Run(peak_mem_gb=20.0, cpu_s=6 * 3600.0, wall_s=3600.0), ended='exit'
+    )
     ran = learned.box_demand(REPO, frozenset({'femm'}), cpu=30, mem_gb=64, ids=2)
     assert ran == Demand(cpu=6, mem_gb=20.0 * learned.BOX_HEADROOM, femm=1), 'once run, its own peak replaces it'
 
@@ -209,10 +275,10 @@ def test_a_killed_part_is_reclaimed_at_its_grown_peak_and_narrows_to_fit_the_box
     A grown peak past the box is not a part refused forever: its cores narrow in proportion (4 x 32 / 60),
     and the producer runs exactly those (declared == used), so its memory scales down with them.
     """
-    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=6.0, cpu_s=4 * 60.0, wall_s=60.0), killed=True)
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=6.0, cpu_s=4 * 60.0, wall_s=60.0), ended='memory')
     again = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=64)
     assert again == Demand(cpu=4, mem_gb=6.0 * OOM_GROWTH * learned.BOX_HEADROOM), 'the grown figure, at its width'
-    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=20.0, cpu_s=4 * 60.0, wall_s=60.0), killed=True)
+    learned.record_run(REPO, learned.LOCAL, (), Run(peak_mem_gb=20.0, cpu_s=4 * 60.0, wall_s=60.0), ended='memory')
     fit = learned.box_demand(REPO, frozenset(), cpu=16, mem_gb=32)
     assert fit == Demand(cpu=2, mem_gb=30.0), 'narrowed to the workers the box can hold, 15 GB each'
 
@@ -237,12 +303,12 @@ def test_a_part_narrows_to_the_workers_the_free_memory_holds_and_waits_only_for_
 
 def test_a_reader_never_sees_a_table_half_written_while_another_writer_rewrites_it() -> None:
     prior = Run(peak_mem_gb=1.0, cpu_s=60.0, wall_s=60.0)
-    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+    learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0), ended='exit')
     stop = threading.Event()
 
     def rewrite() -> None:
         while not stop.is_set():
-            learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+            learned.record_run(REPO, 'linux', {'jmag'}, Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0), ended='exit')
 
     writers = [threading.Thread(target=rewrite) for _ in range(2)]
     for writer in writers:
@@ -267,7 +333,7 @@ def test_an_empty_table_is_retried_then_read_as_nothing_learned_never_raised(mon
 
 
 def test_a_table_emptied_for_an_instant_is_read_whole_on_the_retry(monkeypatch) -> None:
-    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0))
+    learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=6.0, cpu_s=60.0, wall_s=60.0), ended='exit')
     path = learned._path(REPO)
     whole = path.read_text(encoding='utf-8')
     path.write_text('', encoding='utf-8')
@@ -299,13 +365,114 @@ def test_a_finished_sibling_never_lowers_the_peak_its_files_kill_read_in_the_sam
 
     Ada 2026-10-24 (a downstream run): one test of a file was killed at 3447 MB while three sibling items
     of the same file finished near 1 GB; the last finished one overwrote the kill, and the retry asked 2048M.
-    The kill's floor is its read grown by ``OOM_GROWTH`` (run 4fb97faa904f).
+    The kill's floor is its read grown by ``MEASURED_GROWTH`` (run 4fb97faa904f).
     """
     for order in ((3447.0, -9), (1000.0, 0)), ((1000.0, 0), (3447.0, -9)):
         measured = Measured(peaks_mb={'t.py': 500.0})
         for n, (peak, done) in enumerate(order):
             measured.learn([f't.py::x{n}'], _item(peak, done, f't.py::x{n}'))
-        assert measured.peaks_mb['t.py'] == 3447.0 * OOM_GROWTH, f'in either order: {order}'
+        assert measured.peaks_mb['t.py'] == 3447.0 * MEASURED_GROWTH, f'in either order: {order}'
     later = Measured(peaks_mb={'t.py': 3447.0})
     later.learn(['t.py::x'], _item(800.0, 0, 't.py::x'))
     assert later.peaks_mb['t.py'] == 800.0, 'PLANTED CONTROL: a newer round that finishes still replaces'
+
+
+def test_a_round_teaches_only_what_it_changed_so_a_concurrent_run_keeps_its_kill_floor() -> None:
+    """A round writes its delta -- what it changed, and what it dropped -- never its whole view.
+
+    Ada 2026-11-03: five shas ran at once, each seeded from the table at submit; every fold wrote its WHOLE
+    view back, so a run started before another's OOM kill erased that kill's floor and the next plan asked
+    below the limit already died at.
+    """
+    learned.learn_round(REPO, {}, {'peaks_mb': {'a.py': 600.0}})
+    seeded = learned.learned(REPO)
+    stale = {'peaks_mb': dict(seeded['peaks_mb']), 'id_peaks_mb': {}, 'durations': {}}
+    learned.learn_round(REPO, stale, {**stale, 'id_peaks_mb': {'a.py::b': 3746.0}})
+    learned.learn_round(REPO, stale, {**stale, 'durations': {'a.py::c': 2.0}})
+    table = learned.learned(REPO)
+    assert table['id_peaks_mb'] == {'a.py::b': 3746.0}, 'the concurrent run kept the kill floor'
+    assert table['durations'] == {'a.py::c': 2.0}
+    finished = {**stale, 'id_peaks_mb': {'a.py::b': 3746.0}}
+    learned.learn_round(REPO, finished, {**finished, 'id_peaks_mb': {}})
+    assert learned.learned(REPO)['id_peaks_mb'] == {}, 'PLANTED CONTROL: a round that drops a floor drops it'
+
+
+def test_an_asked_row_demands_its_ask_never_times_the_safety_again() -> None:
+    """An ask already carries its margin (OOM growth): the demand is the stored ask, held to the ceiling.
+
+    Ada 2026-11-09: an ``ask`` row of 229.83 GB was read as a peak and asked 344.7 GB of a 360 GB ceiling.
+    PLANTED CONTROL: a measured peak still asks its peak times the safety.
+    """
+    learned.record_ask(REPO, learned.SLURM, (), 229.83, safety=1.5, ceiling_gb=None)
+    assert learned.learned(REPO)['runs'][learned._key(learned.SLURM, ())]['peak_mem_gb'] == pytest.approx(229.83)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(229.83)
+    assert learned.cluster_demand(REPO, ceiling_gb=200.0)(frozenset())['mem_gb'] == pytest.approx(200.0)
+    learned.record_run(REPO, learned.SLURM, ('a',), Run(peak_mem_gb=100.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.cluster_demand(REPO)(frozenset({'a'}))['mem_gb'] == pytest.approx(150.0)
+
+
+def test_an_ask_never_lowers_a_measured_rows_ask() -> None:
+    """A measured peak's ask is its peak times *safety*; a smaller ask keeps it, a larger one replaces it."""
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=100.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    learned.record_ask(REPO, learned.SLURM, (), 120.0, safety=1.5, ceiling_gb=None)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(150.0)
+    learned.record_ask(REPO, learned.SLURM, (), 200.0, safety=1.5, ceiling_gb=None)
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(200.0)
+
+
+def test_a_heavy_kill_floors_its_file_and_never_sizes_the_part() -> None:
+    """Ada 2026-11-09: one sdm file's OOM raised the ``slurm|`` row to 324-412 GB, sizing ~7200 light files.
+
+    A kill of a task holding a heavy file (the run's ``heavy``), or whose grown ask is past
+    :data:`~lab_commons.compute.measured.HEAVY_SHARE` of the ceiling (it becomes heavy), leaves the part's row
+    alone: its file is floored (dev-lab ``forgeoom``) and the next plan packs it alone at its own ask.
+    PLANTED CONTROL: a light kill still raises the part's ask, grown.
+    """
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=4.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    ask = learned.cluster_demand(REPO, ceiling_gb=360.0)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(6.0)
+    heavy_now = (200.0 * 1024, 0.0, ('tests/test_sdm.py',))
+    becomes_heavy = (50.0 * 1024, 0.0, ('tests/test_sweep.py',))  # grown 100 GB > 0.25 x 360 GB
+    kills = [heavy_now, becomes_heavy]
+    assert learned.record_kills(REPO, (), kills, heavy={'tests/test_sdm.py'}, safety=1.5, ceiling_gb=360.0) is None
+    assert ask(frozenset())['mem_gb'] == pytest.approx(6.0)
+    light = (8.0 * 1024, 0.0, ('tests/test_a.py', 'tests/test_b.py'))
+    kills = [heavy_now, light]
+    recorded = learned.record_kills(REPO, (), kills, heavy={'tests/test_sdm.py'}, safety=1.5, ceiling_gb=360.0)
+    assert recorded == pytest.approx(8.0 * learned.OOM_GROWTH)
+    assert ask(frozenset())['mem_gb'] == pytest.approx(16.0)
+    read = (8.0 * 1024, 12.0 * 1024, ('tests/test_a.py',))  # sacct read 12 GB: grown from the read
+    recorded = learned.record_kills(REPO, (), [read], heavy=(), safety=1.5, ceiling_gb=360.0)
+    assert recorded == pytest.approx(12.0 * MEASURED_GROWTH)
+
+
+def test_forget_removes_one_named_row_and_backs_the_table_up(capsys: pytest.CaptureFixture[str]) -> None:
+    """Ada 2026-11-09: a stuck ``slurm|`` ask row is reset through a door, never a hand edit.
+
+    PLANTED CONTROL: the other rows stay; an unknown row is refused by name and nothing is written.
+    """
+    learned.record_ask(REPO, learned.SLURM, (), 324.0, safety=1.5, ceiling_gb=None)
+    learned.record_run(REPO, learned.SLURM, ('femm',), Run(peak_mem_gb=4.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.main(['forget', '--repo', REPO, '--row', 'slurm|']) == 0
+    runs = learned.learned(REPO)['runs']
+    assert 'slurm|' not in runs
+    assert 'slurm|femm' in runs
+    backups = list(learned.directory().glob('*.bak-*'))
+    assert len(backups) == 1
+    assert '"slurm|"' in backups[0].read_text(encoding='utf-8')
+    assert 'removed slurm|' in capsys.readouterr().out
+    with pytest.raises(SystemExit, match=re.escape("'slurm|jmag'")):
+        learned.main(['forget', '--repo', REPO, '--row', 'slurm|jmag'])
+    assert list(learned.directory().glob('*.bak-*')) == backups
+
+
+def test_a_measured_exit_supersedes_an_ask_even_lower_and_a_kill_only_raises() -> None:
+    """An ask is a floor until a run measures the need: a finished run's peak REPLACES it, even below it.
+
+    PLANTED CONTROL: a memory kill below the ask leaves the ask's floor (a kill only raises).
+    """
+    learned.record_ask(REPO, learned.SLURM, (), 300.0, safety=1.5, ceiling_gb=None)
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=10.0, cpu_s=1.0, wall_s=1.0), ended='memory')
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] >= 300.0
+    learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=40.0, cpu_s=1.0, wall_s=1.0), ended='exit')
+    assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(60.0)

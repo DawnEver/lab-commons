@@ -10,14 +10,15 @@ A tool is PRESENT on a host only when all four agree:
    its stated ``incompatible``). A declaration is a floor, never a pin (user ruling 2026-10-17: no pin
    unless a reason requires it -- record, don't pin): a tool with no declaration is present at any version
    that reads, and the version read is RECORDED in every run record (:func:`measured`);
-3. a SMOKE run passes -- the tool does one trivial thing end to end (:data:`~lab_commons.compute.toolchecks.CHECKS`);
+3. a SMOKE check passes -- the install is there and whole, read without launching it
+   (:data:`~lab_commons.compute.toolchecks.CHECKS`);
 4. no real unit on that tool has failed on this host since that smoke (:func:`demote`).
 
 Each step leaves :class:`Evidence` (source, value, time), and the host card shows it
 (:mod:`dev_lab.dev.forgehosts`): the card is the probe's reading, never a declaration. Seat counts
 are the one thing a person declares (:mod:`lab_commons.box.machine`), because no probe can read a licence.
 
-A smoke costs seconds to minutes (MATLAB starting), so a reading is CACHED for :data:`TTL` in
+A reading is CACHED for :data:`TTL` in
 ``tool-presence.json`` beside the machine file, with the requirement it was taken against. :func:`refresh`
 re-probes what is due -- older than the TTL, demoted since its smoke, or taken against another requirement
 -- and ``forge serve`` calls it once per tick; :func:`cached` only reads, and a reading past its TTL is
@@ -40,9 +41,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed
-from lab_commons.config import config_path
 
 __all__ = [
     'TTL',
@@ -205,7 +206,7 @@ def probe(tool: str, check: Check, declared: Requirement | None, *, now: datetim
 
 
 def _state(path: Path | None) -> Path:
-    return path or config_path().parent / 'tool-presence.json'
+    return path or home.part('state') / 'tool-presence.json'
 
 
 def _load(path: Path) -> dict[str, Any]:
