@@ -32,12 +32,14 @@ from typing import Any
 from lab_commons.hpc.affinity import place
 from lab_commons.hpc.artifact import enter_lines, require
 from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, submit
-from lab_commons.hpc.config import Config
+from lab_commons.hpc.config import Config, Cost
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, Unplaceable, plan_on
 from lab_commons.hpc.run import ACTIVE
 from lab_commons.hpc.sacct import shard_states
+from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.span import Placement, span
+from lab_commons.hpc.topology import Lane, architecture
 
 __all__ = [
     'Ensure',
@@ -108,7 +110,15 @@ def _holding(
     holders, why = [], []
     for grant, snapshot in answering:
         try:
-            plan = plan_on(grant, snapshot, n_items, config.cost, session=machine.session, policy=config.policy)
+            shape = _shape(config, grant, snapshot)
+            plan = plan_on(
+                shape.grant,
+                snapshot,
+                shape.rounds(n_items),
+                shape.cost,
+                session=machine.session,
+                policy=config.policy,
+            )
         except Unplaceable as refused:
             why.append(str(refused))
             continue
@@ -119,6 +129,133 @@ def _holding(
                 f'{grant.name}: a {wall / 60:.0f}-min padded wall exceeds its {plan.top_minutes:.0f}-min ceiling'
             )
     return holders, '; '.join(why) or 'no free grant answers'
+
+
+@dataclass(frozen=True)
+class _Shape:
+    """One task of a job on one grant: the grant narrowed to its node class, one task's cost, and its lanes."""
+
+    grant: Grant
+    cost: Cost
+    lanes: tuple[Lane, ...] = ()
+
+    def rounds(self, n_items: int) -> int:
+        """How many rounds of one item a lane *n_items* is: the unit a task's cost and time are planned in."""
+        return -(-n_items // max(1, len(self.lanes)))
+
+
+def _shape(config: Config, grant: Grant, snapshot: Snapshot) -> _Shape:
+    """One task of *config* on *grant*, its lanes derived from the grant's architecture in the cluster catalog.
+
+    Raises:
+        Unplaceable: the grant's cluster cannot hold the shape -- it names no architecture, no node class
+            describes its partitions, Slurm reports another node width, or the lanes do not tile the node; or
+            an exclusive one-item task is narrower than its nodes, which Slurm would charge whole.
+        ValueError: the catalog is missing, malformed, or has no entry the grant names -- a defect, not room.
+
+    """
+    task = config.task
+    if task.lane_domains is None:
+        if task.exclusive and (wider := _wider_nodes(config.cost.cpus, grant, snapshot)) is not None:
+            raise Unplaceable(wider)
+        return _Shape(grant, config.cost)
+    if not grant.architecture:
+        msg = f'{grant.name} names no architecture; [task] lane_domains needs its entry in the cluster catalog'
+        raise Unplaceable(msg)
+    try:
+        arch = architecture(grant.architecture)
+    except FileNotFoundError as missing:
+        raise ValueError(str(missing)) from missing
+    partitions = grant.partitions or tuple(snapshot.partitions)
+    node = arch.node_class(partitions)
+    if node is None:
+        msg = f'{grant.name}: no node class of {arch.name} describes its partitions {list(partitions)}'
+        raise Unplaceable(msg)
+    held = tuple(p for p in partitions if p in node.partitions)
+    reported = {n.total_cpus for n in snapshot.nodes if n.schedulable and not set(held).isdisjoint(n.partitions)}
+    if reported - {node.cpus}:
+        msg = (
+            f'{grant.name}: Slurm reports {sorted(reported)}-CPU nodes in {list(held)}, but the catalog '
+            f'gives {arch.name} {node.name} {node.cpus} CPUs; correct the catalog'
+        )
+        raise Unplaceable(msg)
+    try:
+        lanes = node.lanes(task.lane_domains)
+    except ValueError as refused:
+        msg = f'{grant.name}: {refused}'
+        raise Unplaceable(msg) from refused
+    item, n = config.cost, len(lanes)
+    cost = Cost(cpus=node.cpus, mem_gb=item.mem_gb * n, gpus=item.gpus * n, seconds=item.seconds)
+    return _Shape(replace(grant, partitions=held), cost, lanes)
+
+
+def _in_items(placement: Placement, grant: Grant, shape: _Shape, config: Config, n_items: int) -> Placement:
+    """*placement*, planned in rounds, back in items on *grant* -- stamped with the task's shape."""
+    lanes = max(1, len(shape.lanes))
+    start, stop = placement.items
+    first, last = start * lanes, min(stop * lanes, n_items)
+    shards = tuple((a * lanes, min(b * lanes, last - first)) for a, b in placement.plan.shards)
+    plan = replace(
+        placement.plan,
+        shards=shards,
+        exclusive=config.task.whole_node,
+        lane_cpus=tuple(lane.cpus for lane in shape.lanes),
+        lane_mems=tuple(lane.mems for lane in shape.lanes),
+    )
+    return Placement(grant, plan, (first, last))
+
+
+def _wider_nodes(cpus: int, grant: Grant, snapshot: Snapshot) -> str | None:
+    """Why an exclusive task of *cpus* may not run on *grant*: a node of its partitions is wider; else ``None``.
+
+    Slurm charges an exclusive task its WHOLE node, so a task priced below the node's CPUs would spend quota
+    the plan never counted. A narrower node cannot hold the task at all, so it is no risk.
+    """
+    names = set(grant.cluster().partitions or snapshot.partitions)
+    wider = {
+        n.total_cpus
+        for n in snapshot.nodes
+        if n.schedulable and not names.isdisjoint(n.partitions) and n.total_cpus > cpus
+    }
+    if not wider:
+        return None
+    return (
+        f'{grant.name}: an exclusive task of {cpus} CPU would be charged a whole {max(wider)}-CPU node; '
+        f'set [cost] cpus to the node, or cut it into lanes with [task] lane_domains'
+    )
+
+
+def _spread(
+    config: Config, n_items: int, candidates: list[tuple[Grant, Any]], machine: Machine
+) -> tuple[Placement, ...]:
+    """*n_items* spanned over the *candidates* that hold the task's shape, planned in rounds, returned in items.
+
+    One span plans one task cost, so every candidate must derive the SAME shape; candidates on architectures
+    that cut the task differently are refused together rather than one silently preferred.
+    """
+    shaped, why = [], []
+    for grant, snapshot in candidates:
+        try:
+            shaped.append((grant, snapshot, _shape(config, grant, snapshot)))
+        except Unplaceable as refused:
+            why.append(str(refused))
+    if candidates and not shaped:
+        raise Unplaceable('; '.join(why))
+    if len({(s.cost, s.lanes) for _, _, s in shaped}) > 1:
+        msg = 'the candidate grants cut this task differently (several architectures); name one architecture'
+        raise Unplaceable(msg)
+    by_account = {s.grant.account: (g, s) for g, _, s in shaped}
+    shape = shaped[0][2] if shaped else _Shape(Grant('-', ('-',), '-'), config.cost)
+    rounds = span(
+        shape.rounds(n_items),
+        shape.cost,
+        [(s.grant, snapshot) for _, snapshot, s in shaped],
+        session=machine.session,
+        policy=config.policy,
+        paging=machine.paging,
+        rerun_safe=config.job.rerun_safe,
+    )
+    return tuple(_in_items(p, *by_account[p.grant.account], config, n_items) for p in rounds)
 
 
 def tiered(
@@ -133,19 +270,8 @@ def tiered(
     span; any other ``ValueError`` is the request's defect and propagates.
     """
 
-    def spread(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
-        return span(
-            n_items,
-            config.cost,
-            candidates,
-            session=machine.session,
-            policy=config.policy,
-            paging=machine.paging,
-            rerun_safe=config.job.rerun_safe,
-        )
-
     def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
-        return place(candidates, machine.affinity, spread)
+        return place(candidates, machine.affinity, lambda c: _spread(config, n_items, c, machine))
 
     costed = [g for g in grants if g.costed]
     tier = [g for g in machine.grants if not g.costed]
@@ -362,6 +488,8 @@ def retry_job(
                 'shards': tuple(map(tuple, raw['shards'])),
                 'partitions': tuple(raw['partitions']),
                 'setup': tuple(raw['setup']),
+                'lane_cpus': tuple(raw['lane_cpus']),
+                'lane_mems': tuple(raw['lane_mems']),
             }
         )
         sub = submit(run, plan, config, [], stamp=placement['stamp'], only=redo)

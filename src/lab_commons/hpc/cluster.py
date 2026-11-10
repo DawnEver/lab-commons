@@ -207,6 +207,11 @@ def _sh_path(path: str) -> str:
     return shlex.quote(path)
 
 
+def lanes_of(plan: Plan) -> list[dict[str, str]]:
+    """The manifest's ``lanes``: each lane's CPU ids and NUMA nodes (cpulists); ``[]`` for one unbound item."""
+    return [{'cpus': c, 'mems': m} for c, m in zip(plan.lane_cpus, plan.lane_mems, strict=True)]
+
+
 def render_script(plan: Plan, config: Config, run_dir: str) -> str:
     """The array task script. The array range itself is an ``sbatch`` argument, so a resubmit reuses this."""
     directives = [
@@ -215,6 +220,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         f'--account={plan.account}' if plan.account else '',
         f'--qos={plan.qos}' if plan.qos else '',
         '--nodes=1',
+        '--exclusive' if plan.exclusive else '',
         '--ntasks=1',
         f'--cpus-per-task={plan.cpus}',
         f'--mem={plan.mem_mb}M',
@@ -225,13 +231,12 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         '--output=/dev/null',
     ]
     worker = f'{config.job.python} -m lab_commons.hpc.worker'
+    lane = plan.cpus // plan.lanes
     lines = ['#!/bin/bash', *(f'#SBATCH {d}' for d in directives if d), 'set -eo pipefail']
     lines += [*plan.setup, f'cd {_sh_path(config.job.workdir)}', *config.job.setup]
     lines += [
-        (
-            'export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK" OPENBLAS_NUM_THREADS="$SLURM_CPUS_PER_TASK" '
-            'MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"'
-        ),
+        # Each of the task's lanes runs one item on its own lane's CPUs.
+        f'export OMP_NUM_THREADS={lane} OPENBLAS_NUM_THREADS={lane} MKL_NUM_THREADS={lane}',
         f'M={_sh_path(run_dir)}/manifest.json',
         'LOG="${TMPDIR:-/tmp}/lab-hpc-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}.log"',
         'code=0',
@@ -292,7 +297,12 @@ def submit(
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
     if only is None:
-        manifest = {'entry': config.job.entry, 'items': items, 'shards': [list(s) for s in plan.shards]}
+        manifest = {
+            'entry': config.job.entry,
+            'items': items,
+            'shards': [list(s) for s in plan.shards],
+            'lanes': lanes_of(plan),
+        }
         run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
         run(f'cat > {quoted}/job.sh', render_script(plan, config, run_dir))
     indices = list(range(len(plan.shards))) if only is None else sorted(only)
@@ -321,7 +331,7 @@ def submit_bands(
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
     shards = [list(s) for plan in plans for s in plan.shards]
-    manifest = {'entry': config.job.entry, 'items': items, 'shards': shards}
+    manifest = {'entry': config.job.entry, 'items': items, 'shards': shards, 'lanes': lanes_of(plans[0])}
     run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
     run(f'cat > {quoted}/job.sh', render_script(plans[0], config, run_dir))
     job_ids, first = [], 0
