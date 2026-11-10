@@ -97,6 +97,53 @@ def test_one_worker_rule_prices_a_box_worker_and_a_slurm_task_alike() -> None:
     assert measured.worker_gb(['tests/b.py'], prior_gb=1.0, safety=1.5) == 4.5
 
 
+def test_a_heavy_runs_file_peak_prices_a_heavy_worker_and_never_a_light_one() -> None:
+    """A run's WEIGHT keys its peaks: a heavy run (live vendor heaps) never prices the next light one.
+
+    Measured 2026-11-10 (motronics, WS5 24 cores / 63 GB): a ``--with-heavy`` run's peak priced the next
+    LIGHT measure at 18 GB a worker -- width 1, the box at ~15 % CPU. PLANTED: the same heavy peak does
+    narrow a heavy worker, so a reader that ignored the weight altogether fails one side or the other.
+    """
+    learned.learn_peaks(REPO, {'tests/a.py': 1024.0}, weight=learned.LIGHT)
+    learned.learn_peaks(REPO, {'tests/a.py': 12288.0}, weight=learned.HEAVY)
+    light = learned.worker_gb(REPO, ['tests/a.py'], prior_gb=0.5, safety=1.5, weight=learned.LIGHT)
+    heavy = learned.worker_gb(REPO, ['tests/a.py'], prior_gb=0.5, safety=1.5, weight=learned.HEAVY)
+    assert light == 1.5, 'the heavy peak narrowed a light worker'
+    assert heavy == 18.0, 'PLANTED CONTROL: the heavy peak must narrow a heavy worker'
+    assert learned.selection_gb(REPO, ['tests/a.py'], 4, weight=learned.LIGHT) == 6.0
+    assert learned.selection_gb(REPO, ['tests/a.py'], 4, weight=learned.HEAVY) == 72.0
+    assert learned.file_peaks_mb(REPO, weight=learned.LIGHT) == {'tests/a.py': 1024.0}
+    assert learned.file_peaks_mb(REPO, weight=learned.HEAVY) == {'tests/a.py': 12288.0}
+
+
+def test_a_heavy_worker_is_never_priced_under_the_light_peak_of_the_same_file() -> None:
+    """A heavy run also runs the file's light tests, so its worker reads the larger of the two peaks."""
+    learned.learn_peaks(REPO, {'tests/a.py': 4096.0}, weight=learned.LIGHT)
+    learned.learn_peaks(REPO, {'tests/a.py': 1024.0}, weight=learned.HEAVY)
+    assert learned.worker_gb(REPO, ['tests/a.py'], prior_gb=0.5, safety=1.0, weight=learned.HEAVY) == 4.0
+    with pytest.raises(ValueError, match='weight'):
+        learned.learn_peaks(REPO, {'tests/a.py': 1.0}, weight='medium')
+
+
+def test_a_scopes_worker_peak_is_the_worst_of_its_last_runs_of_the_same_weight() -> None:
+    """One whole-run per-worker peak per (scope, weight): a heavy run never narrows a light one; only an exit prices.
+
+    PLANTED: the heavy 12.1 GB does price the heavy read, and a run stopped mid-climb (``wall``) teaches nothing.
+    """
+    assert learned.worker_peak(REPO, 'measure', weight=learned.LIGHT) is None
+    learned.record_worker_peak(REPO, 'measure', 2.0, weight=learned.LIGHT, ended=learned.EXITED)
+    learned.record_worker_peak(REPO, 'measure', 12.1, weight=learned.HEAVY, ended=learned.EXITED)
+    learned.record_worker_peak(REPO, 'measure', 30.0, weight=learned.LIGHT, ended='wall')
+    assert learned.worker_peak(REPO, 'measure', weight=learned.LIGHT) == 2.0, 'a heavy or cut run priced light'
+    assert learned.worker_peak(REPO, 'measure', weight=learned.HEAVY) == 12.1, 'PLANTED CONTROL'
+    assert learned.worker_peak(REPO, 'gate', weight=learned.LIGHT) is None, 'another scope learned nothing'
+    for gb in (3.0, 1.0, 1.0, 1.0, 1.0, 1.0):
+        learned.record_worker_peak(REPO, 'measure', gb, weight=learned.LIGHT, ended=learned.EXITED)
+    assert learned.worker_peak(REPO, 'measure', weight=learned.LIGHT) == 1.0, (
+        f'only the last {learned.WORKER_RUNS} runs count: an old worst ages out'
+    )
+
+
 def test_an_unmeasured_file_is_priced_at_its_measured_siblings_median_never_the_global_max() -> None:
     """D5: the prior of an unmeasured file is the median of its directory's measured files, else the table's.
 
