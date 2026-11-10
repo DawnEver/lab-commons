@@ -197,4 +197,6 @@ COMPUTE: Final[dict[str, str]] = {
     'compute.admission import claimable': 'nothing: the forge claim pass walks its order through lab_commons.resources',
     'lab_commons.resource.': 'lab_commons.resources. (one package: the engine, its kinds and the dimensions)',
     'from lab_commons.resource import': 'from lab_commons.resources import',
+    # The dimension table is a leaf the box reads too (GPU, 2026-11-08): out of the engine's package.
+    'lab_commons.resources.dimensions': 'lab_commons.dimensions',
 }

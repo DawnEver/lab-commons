@@ -105,6 +105,7 @@ def _claims(*, as_json: bool) -> int:
             'cpu': h.cpu,
             'mem_gb': h.mem_bytes / GB,
             'seats': dict(h.seats),
+            'devices': list(h.devices),
             'left_s': round(h.deadline - time.time()),
         }
         for h in holdings()
@@ -115,7 +116,7 @@ def _claims(*, as_json: bool) -> int:
     for row in rows:
         emit(
             f'{row["id"]:>6}  {row["what"]}  cpu={row["cpu"]} mem_gb={row["mem_gb"]:g} seats={row["seats"]} '
-            f'left={row["left_s"]} s'
+            f'devices={row["devices"]} left={row["left_s"]} s'
         )
     return 0
 

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 import lab_commons.launch as _door
+from lab_commons.dimensions import GPU
 from lab_commons.hpc.config import Config, JobSpec
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.plan import Plan
@@ -218,7 +219,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         '--ntasks=1',
         f'--cpus-per-task={plan.cpus}',
         f'--mem={plan.mem_mb}M',
-        f'--gres=gpu:{plan.gpus}' if plan.gpus else '',
+        f'--gres={GPU.name}:{plan.gpus}' if plan.gpus else '',  # Slurm's GRES name is the dimension's
         f'--time={plan.minutes}',
         f'--comment={plan.comment}' if plan.comment else '',
         # A task's output is node-local (below); Slurm writes no file of its own on the shared home.

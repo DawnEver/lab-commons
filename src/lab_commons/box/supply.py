@@ -23,6 +23,11 @@ MAX, not sum: a claim's own solver is a process the table shows too. An observat
 (:attr:`Reading.unseen`), or a supply probe that could not say (:attr:`Capacity.blind`), lends none of its seat,
 naming why.
 
+A DEVICE (GPU, NPU) IS DECIDED BY DEVICE, not by count (:func:`lab_commons.box.devices.assign`, which the ledger
+calls): a GPU is shared by memory or taken whole, and a count cannot say which one. What :func:`room` reports for
+the device names is the view of that: devices usable whole now, and the largest share a GPU has free; a blind look
+(:attr:`Reading.devices`) lends none.
+
 :func:`room` is the one formula, read by the ledger (:func:`lab_commons.box.ledger.hold`) and by the
 box's providers (:mod:`lab_commons.box.providers`); :meth:`Reading.now` is the one OS reader.
 """
@@ -36,13 +41,17 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from lab_commons.box.demand import GB, Capacity, Holding
+from lab_commons.box.devices import KINDS, NAMES, PRECISIONS, VRAM_GB, Devices, free, free_gib, read_devices
 from lab_commons.box.machine import provided, watched
 from lab_commons.compute.model import Resources
 from lab_commons.config import section
 from lab_commons.proc import _process_rows, process_tree, system_memory, working_set_bytes
 from lab_commons.proccpu import process_times, system_cpu_seconds
 
-__all__ = ['SAMPLE_S', 'Reading', 'Usage', 'observe', 'room']
+__all__ = ['NO_DEVICE_LOOK', 'SAMPLE_S', 'Reading', 'Usage', 'observe', 'room']
+
+#: The device look of a reading that took none: blind, so it lends no device (never "none in use").
+NO_DEVICE_LOOK: Final = Devices(blind={'reading': 'this reading took no device look'})
 
 #: Seconds between the two cpu readings that make "busy now": long enough to average a scheduler tick.
 SAMPLE_S: Final = 0.25
@@ -61,7 +70,8 @@ class Reading:
     """The OS now: cores and those idle, total and available memory, each claim pid's :class:`Usage`.
 
     ``seats_in_use`` is each watched seat's observed count; ``unseen`` names each one that could not be
-    observed, and why.
+    observed, and why. ``devices`` is the device look (:func:`~lab_commons.box.devices.read_devices`);
+    a reading that took none is blind to them.
     """
 
     cores: float
@@ -71,6 +81,12 @@ class Reading:
     usage: Mapping[int, Usage] = field(default_factory=dict)
     seats_in_use: Mapping[str, int] = field(default_factory=dict)
     unseen: Mapping[str, str] = field(default_factory=dict)
+    devices: Devices = NO_DEVICE_LOOK
+
+    @property
+    def unread(self) -> dict[str, str]:
+        """Every name this reading could not observe, and why: the watched seats and each blind device kind."""
+        return {**self.unseen, **self.devices.unread()}
 
     @classmethod
     def now(cls, pids: Iterable[int], *, sample_s: float = SAMPLE_S) -> Reading:
@@ -101,7 +117,7 @@ class Reading:
         }
         watch = watched(provided(section('capabilities')))
         seen, unseen = observe(watch, _process_rows()) if watch else ({}, {})
-        return cls(cores, idle, memory.total_bytes, memory.available_bytes, usage, seen, unseen)
+        return cls(cores, idle, memory.total_bytes, memory.available_bytes, usage, seen, unseen, read_devices())
 
 
 def observe(
@@ -159,8 +175,24 @@ def _seats_left(name: str, capacity: Capacity, held: Sequence[Holding], reading:
     claimed = sum(h.seats.get(name, 0) for h in held)
     if name in capacity.blind:
         return 0
+    if name in NAMES:
+        return _device_view(name, reading.devices, held)
     if name in capacity.watched:
         if name in reading.unseen or name not in reading.seats_in_use:
             return 0
         claimed = max(claimed, reading.seats_in_use[name])
     return capacity.seats.get(name, 1) - claimed
+
+
+def _device_view(name: str, devices: Devices, held: Sequence[Holding]) -> int:
+    """The status view of one device name; the decision itself is :func:`~lab_commons.box.devices.assign`.
+
+    Devices of a kind (or doing a precision) usable whole now; for ``vram_gb`` the largest share a GPU has free.
+    """
+    if name in KINDS:
+        return len(free(devices, held, kind=name))
+    if name in PRECISIONS:
+        return len(free(devices, held, needs=[name]))
+    if name == VRAM_GB:
+        return max((free_gib(d, held) for d in devices.devices if d.kind == 'gpu'), default=0)
+    return 0

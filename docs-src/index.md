@@ -4,3 +4,4 @@
 - The development mechanism (forge, hooks, verify, gate, integration, HPC hosting, refusals) lives in
   dev-lab, and so do its pages: dev-lab's `docs-src/dev/` (start at `index.md`).
 - There is no build step here: `docs-src/` is the source and also what a reader reads.
+- Heterogeneous devices (GPU, NPU) on the box: what a run asks, what it is told -- `devices.md`.

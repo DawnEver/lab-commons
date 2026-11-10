@@ -5,6 +5,11 @@ was admitted for cannot use more -- the memory is a hard limit on the whole proc
 hard rate cap, and the wall clock ends the tree. The row is released when the tree is gone, so a
 claim is never idle-but-held and a held claim is never exceeded.
 
+THE CHILD IS TOLD ITS CLAIM: its cores (:data:`~lab_commons.box.ledger.CPU_ENV` and :data:`BLAS_THREAD_VARS`) and
+its devices (:func:`lab_commons.box.devices.binding` -- ``CUDA_VISIBLE_DEVICES``, the OpenVINO names, every one
+empty when it claimed none). A device is told, not limited: no kernel caps one, so a run that ignores the binding
+is outside its claim.
+
 ENFORCERS, per platform (:attr:`ProcessEnd.enforcer` names which one held the run):
 
 * Windows -- a Job Object (:mod:`lab_commons.box._win`).
@@ -30,6 +35,7 @@ from typing import Protocol
 
 from lab_commons.box import _linux, _win
 from lab_commons.box.demand import MEM_GB, Capacity, ProcessEnd, Refused, checked, cores, seats
+from lab_commons.box.devices import binding
 from lab_commons.box.ledger import CPU_ENV, INSIDE_ENV, Read, adopted, hold
 from lab_commons.box.supply import Reading
 from lab_commons.compute.model import Demand
@@ -113,8 +119,9 @@ def run(
         if claim
         else hold(demand, wall_s, what, queue_s, capacity=capacity, read=read, key=key, fingerprint=fingerprint)
     )
-    with held:
-        return contain(argv, demand, wall_s, cwd=cwd, env=inside, tag=(key, fingerprint))
+    with held as admitted:
+        told = {**inside, **binding(admitted.devices)}
+        return contain(argv, demand, wall_s, cwd=cwd, env=told, tag=(key, fingerprint))
 
 
 def command(

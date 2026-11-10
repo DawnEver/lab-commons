@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -220,6 +221,18 @@ def test_the_script_keeps_home_expandable(tmp_path: Path) -> None:
     assert 'cd "$HOME"/proj' in script
     assert 'source .venv/bin/activate' in script
     assert script.startswith('#!/bin/bash\n#SBATCH --job-name=sweep')
+
+
+def test_a_gpu_plan_asks_slurm_for_its_gpus_by_the_one_dimension_name(tmp_path: Path) -> None:
+    """``--gres=gpu:N`` is derived from the plan's GPUs; untested live (no cluster reachable), the mapping is pinned.
+
+    PLANTED CONTROL: a plan of no GPU asks for no GRES.
+    """
+    plan = make_plan(
+        10, Cost(seconds=60), parse_snapshot(IDLE_CALLER), cluster=CLUSTER, policy=Policy(), limits=Limits()
+    )
+    assert '--gres' not in render_script(plan, _config(tmp_path), '~/r')
+    assert '#SBATCH --gres=gpu:2' in render_script(replace(plan, gpus=2), _config(tmp_path), '~/r')
 
 
 def test_states_expand_pending_ranges_and_a_resubmit_supersedes() -> None:
