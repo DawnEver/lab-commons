@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc clean --root <abs> [--dry-run] [--grant <user>] <name>...`` -- delete named dirs.
+"""``python -m lab_commons.hpc clean --root <abs> [--dry-run] [--at <user@host> | --grant <user>] <name>...``.
 
 THE ONE NARROW DOOR for removing finished output on a cluster: an ad-hoc ``rm -rf`` on a shared path is
 refused by an agent's permission classifier unless the exact target is named, and a categorical authority
@@ -14,6 +14,9 @@ refused by an agent's permission classifier unless the exact target is named, an
 - After ``rm -rf`` each target is verified absent; what remains is reported with its owner (a ``.lab-hpc``
   record dir written by another account cannot be removed by this one -- report only, no escalation).
 
+``--at user@host`` reaches the login host directly over ``ssh`` and needs no machine file; without it the grant
+comes from the ``[hpc]`` table (:mod:`lab_commons.hpc.grants`).
+
 Exit 2: usage, validation or a refusal (nothing deleted). Exit 1: any target left behind. Runs over ``ssh``
 through the grant like ``status``/``gather``; it never touches the workstation.
 """
@@ -27,7 +30,7 @@ import shlex
 from collections.abc import Callable, Iterable
 from typing import Final
 
-from lab_commons.hpc.cluster import Runner, runner_for
+from lab_commons.hpc.cluster import Runner, runner_for, ssh_runner
 from lab_commons.hpc.grants import Grant, Machine, load_grants
 from lab_commons.log import emit
 
@@ -81,6 +84,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc clean', description=__doc__.splitlines()[0])
     parser.add_argument('--root', required=True, help='REMOTE absolute directory the names sit directly under')
     parser.add_argument('--dry-run', action='store_true', help='print each target and its size; delete nothing')
+    parser.add_argument('--at', help='ssh target user@host; reaches it directly, no machine file needed')
     parser.add_argument('--grant', help='the grant user to act as; needed only when the machine holds several')
     parser.add_argument('names', nargs='+', help='plain directory names directly under --root')
     return parser
@@ -141,7 +145,13 @@ def _delete(run: Runner, root: str, target: str) -> int:
     return 1
 
 
-def main(argv: list[str], *, machine: Machine | None = None, reach: Reach = runner_for) -> int:
+def main(
+    argv: list[str],
+    *,
+    machine: Machine | None = None,
+    reach: Reach = runner_for,
+    at: Callable[[str], Runner] = ssh_runner,
+) -> int:
     """Validate, guard, then delete and verify each named directory; see the module docstring for exits."""
     try:
         args = _parser().parse_args(argv)
@@ -149,9 +159,12 @@ def main(argv: list[str], *, machine: Machine | None = None, reach: Reach = runn
         return 2 if usage.code else 0
     try:
         _validate(args.root, args.names)
-        grant = _grant(machine or load_grants(), args.grant)
-        run = reach(grant)
-        targets = _resolve(run, args.root, args.names, grant.name)
+        if args.at:
+            run, where = at(args.at), args.at
+        else:
+            grant = _grant(machine or load_grants(), args.grant)
+            run, where = reach(grant), grant.name
+        targets = _resolve(run, args.root, args.names, where)
     except _Refused as refused:
         emit(f'clean refused: {refused}', err=True)
         return 2
