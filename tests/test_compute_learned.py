@@ -112,6 +112,8 @@ def test_a_heavy_runs_file_peak_prices_a_heavy_worker_and_never_a_light_one() ->
     assert heavy == 18.0, 'PLANTED CONTROL: the heavy peak must narrow a heavy worker'
     assert learned.selection_gb(REPO, ['tests/a.py'], 4, weight=learned.LIGHT) == 6.0
     assert learned.selection_gb(REPO, ['tests/a.py'], 4, weight=learned.HEAVY) == 72.0
+    assert learned.file_peaks_mb(REPO, weight=learned.LIGHT) == {'tests/a.py': 1024.0}
+    assert learned.file_peaks_mb(REPO, weight=learned.HEAVY) == {'tests/a.py': 12288.0}
 
 
 def test_a_heavy_worker_is_never_priced_under_the_light_peak_of_the_same_file() -> None:

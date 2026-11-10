@@ -71,6 +71,7 @@ __all__ = [
     'cluster_demand',
     'demand',
     'directory',
+    'file_peaks_mb',
     'fit_width',
     'folded',
     'forget',
@@ -265,6 +266,11 @@ def _weighed(table: Mapping[str, Any], weight: str) -> Measured:
         for name, mb in table.get(_HEAVY_PEAKS, {}).items():
             measured.peaks_mb[name] = max(float(mb), measured.peaks_mb.get(name, 0.0))
     return measured
+
+
+def file_peaks_mb(repo: str, *, weight: str) -> dict[str, float]:
+    """The per-file peaks (MB) a run of *weight* is priced from; a file absent is unmeasured, never free."""
+    return dict(_weighed(learned(repo), weight).peaks_mb)
 
 
 def record_worker_peak(repo: str, scope: str, peak_gb: float, *, weight: str, ended: str) -> Path:
