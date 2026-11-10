@@ -56,12 +56,16 @@ __all__ = [
     'BOX_WALL_S',
     'CLUSTER_PRIOR',
     'EXITED',
+    'HEAVY',
+    'LIGHT',
     'LOCAL',
     'MEMORY_KILLED',
     'PART_FILES',
     'PART_WIDTH',
     'PRICED_ENDINGS',
     'SLURM',
+    'WEIGHTS',
+    'WORKER_RUNS',
     'Run',
     'box_demand',
     'cluster_demand',
@@ -79,10 +83,12 @@ __all__ = [
     'record_ask',
     'record_kills',
     'record_run',
+    'record_worker_peak',
     'request_demand',
     'run_of',
     'selection_gb',
     'worker_gb',
+    'worker_peak',
 ]
 
 #: A run that ENDED BY ITSELF (``ProcessEnd.reason`` ``exit``): the one ending whose peak is a price.
@@ -217,10 +223,72 @@ def learn_round(repo: str, before: Mapping[str, Any], after: Mapping[str, Any]) 
     return _write(repo, {**table, **merged})
 
 
-def learn_peaks(repo: str, peaks_mb: Mapping[str, float]) -> Path:
-    """Fold per-FILE peaks a box run measured into *repo*'s table; a newer peak replaces an older one."""
+#: A run's WEIGHT: LIGHT is the default selection; HEAVY also runs the tests a repo marks heavy (live vendor
+#: heaps, whole-machine solves). It KEYS every peak a box run teaches, because one name -- a file, a tier --
+#: runs at both weights: measured 2026-11-10 (motronics, 24 cores / 63 GB), a ``--with-heavy`` run's 12.1 GB
+#: worker priced the next LIGHT measure at 18 GB a worker -- width 1, the box at ~15 % CPU. A heavy run also
+#: runs the light tests, so a HEAVY read takes the larger of both weights; a LIGHT read never sees a heavy peak.
+LIGHT: Final = 'light'
+HEAVY: Final = 'heavy'
+WEIGHTS: Final = (LIGHT, HEAVY)
+
+#: The table key of the per-file peaks a HEAVY run measured; :data:`LIGHT` peaks (and every forge record's,
+#: :func:`learn_record`) live under :class:`Measured`'s own ``peaks_mb``.
+_HEAVY_PEAKS: Final = 'heavy_peaks_mb'
+
+#: The table key of the per-worker whole-run peaks, ``'<scope>|<weight>' -> [GB, ...]`` (:func:`record_worker_peak`).
+_WORKER_PEAKS: Final = 'worker_peaks_gb'
+
+#: The completed runs a scope's worker peak is the worst of: one fat worker of a long run is what the next run
+#: must hold, and a newer run ages an old worst out instead of pinning it forever.
+WORKER_RUNS: Final = 5
+
+
+def _weight(weight: str) -> str:
+    if weight not in WEIGHTS:
+        msg = f'a run weight is one of {WEIGHTS}, got {weight!r}'
+        raise ValueError(msg)
+    return weight
+
+
+def learn_peaks(repo: str, peaks_mb: Mapping[str, float], *, weight: str = LIGHT) -> Path:
+    """Fold per-FILE peaks a box run of *weight* measured into *repo*'s table; a newer peak replaces an older one."""
+    key = 'peaks_mb' if _weight(weight) == LIGHT else _HEAVY_PEAKS
     table = learned(repo)
-    return _write(repo, {**table, 'peaks_mb': {**table.get('peaks_mb', {}), **peaks_mb}})
+    return _write(repo, {**table, key: {**table.get(key, {}), **peaks_mb}})
+
+
+def _weighed(table: Mapping[str, Any], weight: str) -> Measured:
+    """*table*'s per-test facts as a run of *weight* reads them: HEAVY takes each file's larger peak."""
+    measured = Measured.of(dict(table))
+    if _weight(weight) == HEAVY:
+        for name, mb in table.get(_HEAVY_PEAKS, {}).items():
+            measured.peaks_mb[name] = max(float(mb), measured.peaks_mb.get(name, 0.0))
+    return measured
+
+
+def record_worker_peak(repo: str, scope: str, peak_gb: float, *, weight: str, ended: str) -> Path:
+    """Keep the worst WORKER's peak RSS of one run of *scope* (a tier, a selection's name) at *weight*.
+
+    Only a run that :data:`EXITED` by itself prices: one cut by a wall, a stall or a crash under-reads
+    (:data:`PRICED_ENDINGS`), and kept it would lower the next run's price on the evidence that saw least.
+    """
+    path = _path(repo)
+    key = _key(scope, (_weight(weight),))
+    if ended != EXITED:
+        return path
+    table = learned(repo)
+    peaks = dict(table.get(_WORKER_PEAKS, {}))
+    peaks[key] = [*peaks.get(key, ()), float(peak_gb)][-WORKER_RUNS:]
+    return _write(repo, {**table, _WORKER_PEAKS: peaks})
+
+
+def worker_peak(repo: str, scope: str, *, weight: str) -> float | None:
+    """The worst worker peak (GB) of *scope*'s last :data:`WORKER_RUNS` runs at *weight*; HEAVY also reads LIGHT."""
+    peaks = learned(repo).get(_WORKER_PEAKS, {})
+    weights = (LIGHT, HEAVY) if _weight(weight) == HEAVY else (LIGHT,)
+    seen = [gb for one in weights for gb in peaks.get(_key(scope, (one,)), ())]
+    return max(seen) if seen else None
 
 
 def _priced(row: Mapping[str, Any] | None) -> Run | None:
@@ -335,9 +403,9 @@ def demand(repo: str, producer: str, needs: Iterable[str], *, prior: Run) -> Dem
     return (run_of(repo, producer, named) or prior).demand(named)
 
 
-def worker_gb(repo: str, files: Iterable[str], *, prior_gb: float, safety: float) -> float:
-    """GB one worker running *files* needs, from *repo*'s per-file peaks (:meth:`Measured.worker_gb`)."""
-    return Measured.of(learned(repo)).worker_gb(files, prior_gb=prior_gb, safety=safety)
+def worker_gb(repo: str, files: Iterable[str], *, prior_gb: float, safety: float, weight: str = LIGHT) -> float:
+    """GB one worker of a *weight* run over *files* needs, from *repo*'s per-file peaks (:meth:`Measured.worker_gb`)."""
+    return _weighed(learned(repo), weight).worker_gb(files, prior_gb=prior_gb, safety=safety)
 
 
 #: What an unmeasured cluster run is taken to hold: one core (the run sizes its array to what is free), and
@@ -400,7 +468,7 @@ def part_files(repo_url: str, needs: Iterable[str]) -> tuple[str, ...]:
     return tuple(learned(repo_url).get(PART_FILES, {}).get(_key(LOCAL, needs), ()))
 
 
-def selection_gb(repo: str, files: Iterable[str], workers: int, *, whole_gb: float = 0.0) -> float:
+def selection_gb(repo: str, files: Iterable[str], workers: int, *, whole_gb: float = 0.0, weight: str = LIGHT) -> float:
     """THE ONE SELECTION ARITHMETIC: the memory a tree of *workers* pytest workers over *files* declares.
 
     Each worker at :func:`worker_gb` -- the worst file's learned peak times :data:`BOX_HEADROOM`, an unmeasured
@@ -408,8 +476,9 @@ def selection_gb(repo: str, files: Iterable[str], workers: int, *, whole_gb: flo
     runner a worker carries) -- and never under a measured *whole_gb* tree peak times the headroom. A verify
     selection (:func:`dev_lab.dev.verifybox.selection_mem_gb`) and an unmeasured box part
     (:func:`box_demand`) both read it, so a part of ONE cheap test asks one floor, not a repo-wide constant.
+    A *weight* run reads its own peaks (:data:`LIGHT`, :data:`HEAVY`): a heavy peak never prices a light run.
     """
-    per = worker_gb(repo, files, prior_gb=Cost().mem_gb, safety=BOX_HEADROOM)
+    per = worker_gb(repo, files, prior_gb=Cost().mem_gb, safety=BOX_HEADROOM, weight=weight)
     return round(max(max(1, workers) * per, whole_gb * BOX_HEADROOM), 3)
 
 
