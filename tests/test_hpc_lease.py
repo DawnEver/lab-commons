@@ -43,6 +43,7 @@ def cluster(tmp_path: Path) -> tuple[Runner, Path, str, list[str]]:
     _git('push', '-q', str(origin), 'main', cwd=work)
     queue: list[str] = []
     (stub / 'squeue').write_text('#!/bin/sh\ncat "$HOME/queue.txt" 2>/dev/null\n', encoding='utf-8', newline='\n')
+    (stub / 'squeue').chmod(0o755)  # Linux runs only an executable stub; Git Bash runs any shebang file
     bash = bash_executable()
 
     def run(command: str, stdin: str | None = None) -> str:
