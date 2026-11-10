@@ -25,7 +25,7 @@ the repository's last record measured
 (:mod:`lab_commons.compute.learned`); a file never measured is priced at ``[cost]``. A retired verb is
 refused by name (:mod:`lab_commons.hpc.retired`). Making a login host a ``forge serve`` host
 (``deploy``, its cron ``tick``) and the forge's expiring allocation record (``allocate``) are the forge's,
-so they live in dev-lab (``python -m dev_lab.dev.hpchost``). The record itself is a runtime fact: every
+so they live in dev-lab (``python -m dev_lab.dev.hpcaccount``). The record itself is a runtime fact: every
 planning verb here (``plan``, ``submit``, ``retry``, ``run submit``) resolves ``$LC_HPC_SESSION``'s share from
 it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 

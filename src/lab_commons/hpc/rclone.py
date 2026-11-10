@@ -4,7 +4,7 @@ Several HPC accounts write the one shared artefact library, each through its OWN
 (:mod:`dev_lab.dev.artefacts`). :func:`probe` runs ``rclone lsd <name>: --max-depth 1`` and returns why
 the remote is missing or unusable, ``''`` when it answers. :func:`declared_remote` reads the remote a repo
 declares for ``backend = "rclone"``. Both are account facts, so they live with the account here; the dev-lab
-deploy (:mod:`dev_lab.dev.hpchost.deploy`) asks them, and the artefact store's own validation stays in
+deploy (:mod:`dev_lab.dev.hpcaccount.deploy`) asks them, and the artefact store's own validation stays in
 :mod:`dev_lab.dev.artefacts`.
 """
 

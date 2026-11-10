@@ -113,6 +113,21 @@ def test_claude_homes_and_agent_repos_are_outside_the_policy(tmp_path: Path, mon
     assert not home.exempt(tmp_path / 'user' / 'Documents' / 'x')  # planted: an ordinary path
 
 
+@pytest.mark.usefixtures('machine')
+def test_the_git_credential_store_is_outside_the_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, 'home', classmethod(lambda _cls: tmp_path / 'user'))
+    monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
+    assert home.exempt(tmp_path / 'user' / '.git-credentials')
+    assert home.exempt(tmp_path / 'user' / '.config' / 'git' / 'credentials')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+    assert home.exempt(tmp_path / 'xdg' / 'git' / 'credentials')
+    assert not home.exempt(tmp_path / 'user' / '.git-credentials.bak')  # planted: a near-miss name
+    assert not home.exempt(tmp_path / 'user' / '.gitconfig')  # planted: another dotfile
+    assert not home.exempt(tmp_path / 'xdg' / 'git' / 'config')  # planted: a sibling of the store
+    assert not home.exempt(tmp_path / 'xdg' / 'git')  # planted: the store's directory
+    assert not home.exempt(tmp_path / 'user')  # planted: the home itself
+
+
 def test_the_managed_tool_root_is_one_function(machine: Path) -> None:
     assert home.tools() == machine / 'tools'
 

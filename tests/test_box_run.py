@@ -29,7 +29,7 @@ from lab_commons.box import (
     write_ended,
 )
 from lab_commons.box.__main__ import _parser, main
-from lab_commons.box._linux import in_slurm_job, manager, scope_argv
+from lab_commons.box._linux import PROBE_BYTES, binds, in_slurm_job, manager, manager_for, probe_argv, scope_argv
 from lab_commons.box.run import _ENFORCERS, BLAS_THREAD_VARS
 from lab_commons.compute.model import Demand
 from lab_commons.outcomes import Status
@@ -116,6 +116,27 @@ def test_root_scopes_in_the_system_manager_and_a_user_in_its_delegated_one() -> 
     assert user.controllers == Path(f'{slice_}/cgroup.controllers')
     argv = scope_argv('/usr/bin/systemd-run', root, ['git', 'fetch'], Demand(cpu=1, mem_gb=0.25))
     assert argv[:3] == ['/usr/bin/systemd-run', '--scope', '--quiet']
+
+
+def test_the_probe_reads_back_the_limit_its_own_scope_was_given() -> None:
+    """A scope that merely STARTS proves nothing (Ada, 2026-10-14: MemoryMax accepted, a 400 MB child ran)."""
+    argv = probe_argv('/usr/bin/systemd-run', manager(1000))
+    assert argv[:4] == ['/usr/bin/systemd-run', '--user', '--scope', '--quiet']
+    assert f'MemoryMax={PROBE_BYTES}' in argv
+    assert 'memory.max' in argv[-1], 'the child reads its own cgroup limit back'
+    assert binds(f'{PROBE_BYTES}\n')
+    assert not binds('max\n'), 'PLANTED CONTROL: a limit that did not bind reads back as max'
+    assert not binds(''), 'no cgroup v2 file: nothing bound'
+
+
+def test_root_is_decided_by_capability_not_by_euid_alone() -> None:
+    """Root of the INITIAL namespace scopes in the system manager; root inside a user namespace is its outer user."""
+    initial = '         0          0 4294967295\n'
+    assert manager_for(0, initial) == manager(0)
+    assert manager_for(0, '         0       1000          1\n') == manager(1000), 'a user-namespace root'
+    assert manager_for(1000, initial) == manager(1000), 'PLANTED CONTROL: a user is its own manager'
+    assert manager(0).name == 'system'
+    assert manager(1000).name == 'user'
 
 
 def test_only_the_jobs_own_cgroup_makes_a_slurm_run() -> None:

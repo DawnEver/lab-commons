@@ -8,6 +8,8 @@ between the id pytest collects and the id it reports -- a fake cannot reproduce 
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -24,11 +26,12 @@ from typing import ClassVar, Final
 import pytest
 
 from lab_commons.compute import learned
-from lab_commons.compute.measured import OOM_GROWTH, Measured, file_of, memory_band
+from lab_commons.compute.measured import MEASURED_GROWTH, OOM_GROWTH, Measured, memory_band
 from lab_commons.config import CONFIG_ENV
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc import cluster as cluster_module
+from lab_commons.hpc import records as record_module
 from lab_commons.hpc import run as run_module
 from lab_commons.hpc import shell, watch
 from lab_commons.hpc.builds import Builds, ItemWall, cargo_target
@@ -498,13 +501,13 @@ def test_a_measured_peak_raises_the_memory_and_never_lowers_it_under_the_declare
 def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_known_peak() -> None:
     """Ada 2026-10-13: 24 children OOM-killed at 1 GB read peaks of ~1120 MB -- the limit, not the need.
 
-    The read grown by ``OOM_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
+    The read grown by ``MEASURED_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
     run and killed again); the round's own growth then skips the file (``taught``), so it is applied once.
     """
     killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 1120.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed)
-    assert measured.peaks_mb == {'a.py': 1120.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 1120.0 * MEASURED_GROWTH}
     assert measured.taught == {'a.py', 'a.py::t'}, 'the cut id carries the floor too'
     known = Measured(peaks_mb={'a.py': 3493.0})
     known.learn(['a.py::t'], killed)
@@ -522,12 +525,13 @@ def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_
     ~870 MB every round, under the limit that killed it: the retry asked what it was killed at, never reached the
     grant ceiling, and an OOM round is not counted against RETRIES, so the run never settled. A kill says the need
     exceeds the peak its limit allowed (3072 MB over the 1.5 safety); the floor is the larger of that and the read,
-    grown, so the retry asks the limit x OOM_GROWTH. PLANTED CONTROL: a read above it still decides.
+    grown, so the retry asks the limit x MEASURED_GROWTH (x OOM_GROWTH when nothing was read).
+    PLANTED CONTROL: a read above it still decides.
     """
     killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 435.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed, allowed_mb=2048.0)
-    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 2048.0 * MEASURED_GROWTH}
     unread = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0}}
     measured = Measured()
     measured.learn(['a.py::t'], unread, allowed_mb=2048.0)
@@ -535,7 +539,7 @@ def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_
     over = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 4000.0}}
     measured = Measured()
     measured.learn(['a.py::t'], over, allowed_mb=2048.0)
-    assert measured.peaks_mb == {'a.py': 4000.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 4000.0 * MEASURED_GROWTH}
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
@@ -545,14 +549,14 @@ def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
     was taught to all 56 files, and every later run of the part asked 352 GB a task.
 
     Which file held the memory is unknown, so none is priced by it; the retry bisects the item instead. The id
-    in flight (here the first, none reported) carries the grown read as its own floor (run 4fb97faa904f).
+    in flight is no more known than its mates to hold it: no id is floored either (isolate before growing).
     PLANTED CONTROL: the same item FINISHING teaches its peak to every file, an upper bound for each.
     """
     ids = [f'tests/sweep/test_{n}.py::t' for n in range(56)]
     measured = Measured(peaks_mb={'tests/sweep/test_0.py': 900.0})
     measured.learn(ids, {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 120219.2}})
     assert measured.peaks_mb == {'tests/sweep/test_0.py': 900.0}
-    assert measured.id_peaks_mb == {ids[0]: 120219.2 * OOM_GROWTH}
+    assert measured.id_peaks_mb == {}
     assert measured.item_gb(ids[1:], Cost(), Policy()) == pytest.approx(900.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
     measured.learn(ids, {'seconds': {}, 'done': {'done': 0, 'wall': 30.0, 'peak_mb': 3000.0}})
     assert set(measured.peaks_mb.values()) == {3000.0}
@@ -756,11 +760,14 @@ def test_what_is_still_unfinished_after_the_retries_is_infra() -> None:
     assert [words[f'tests/b.py::t{n}'] for n in (4, 5)] == ['infra', 'infra'], 'the machine, not the test, said no'
 
 
-def test_an_out_of_memory_round_doubles_the_memory_of_the_next() -> None:
-    """The finished sibling peaks under the cost floor (512 x 1.5 < 1024 MB), so only the OOM growth moves it."""
+def test_an_out_of_memory_round_splits_a_multi_id_item_at_the_same_ask() -> None:
+    """ISOLATE BEFORE GROWING: the killed multi-id item's halves re-run at its ask, never doubled.
+
+    The finished sibling peaks under the cost floor (512 x 1.5 < 1024 MB), so only an OOM growth could move it.
+    """
     record = _run(FakeRunCluster(dies=frozenset({'tests/b.py'}), oom=True, peak_mb=512.0))
     first, second = record['rounds']
-    assert second['mem_mb'] == 2 * first['mem_mb']
+    assert second['mem_mb'] == first['mem_mb']
 
 
 def test_an_oom_item_is_bisected_at_the_grantable_ceiling_and_its_lone_hog_is_out_of_memory_by_id() -> None:
@@ -818,18 +825,19 @@ def test_a_round_no_grant_can_take_settles_as_unavailable_naming_why() -> None:
 OTHER_CAMPAIGNS = 'acct-free|1|1|8G|N/A\n' * 29
 
 
-def test_a_first_round_the_headroom_cannot_hold_is_not_submitted_and_its_ask_is_learned() -> None:
+def test_a_first_round_the_headroom_cannot_hold_is_not_submitted_and_nothing_is_learned() -> None:
     """A 352 GB task beside 232 GB held of 360 GB: no array is queued ``%1`` to pend on ``AssocGrpMemLimit``.
 
-    The ask is learned under the part's need-set, so this host's next claim demands what the plan asks.
+    Waiting for room the account's own jobs hold is CONTENTION, not an under-priced need: nothing is learned.
+    Ada 2026-11-08: asks recorded on contention ratcheted the base row to 240 GB, x1.5 the whole 360 GB
+    ceiling, so a base fitted only an idle account.
     """
     learned.learn_peaks('https://g/r.git', {'tests/a.py': 240438.4})
     fake = FakeRunCluster(held=OTHER_CAMPAIGNS)
     with pytest.raises(NoRoom, match=r'no headroom now for one task of 1 CPU and 352\.2 GB'):
         _submit(fake, history=learned.learned('https://g/r.git'))
     assert fake.manifests == [], 'nothing was submitted'
-    asked = learned.cluster_demand('https://g/r.git')(frozenset())
-    assert asked['mem_gb'] == pytest.approx(240438.4 * 1.5 / 1024, rel=1e-9, abs=0.0)
+    assert learned.learned('https://g/r.git').get('runs', {}) == {}, 'contention writes no floor'
 
 
 def test_a_first_round_with_headroom_is_throttled_to_it_not_to_the_ceiling() -> None:
@@ -934,23 +942,24 @@ def test_a_gather_raises_the_throttle_when_the_accounts_other_jobs_end() -> None
     assert json.loads(fake.state)['current']['bands'][0]['throttle'] == shards, 'kept, so the next gather compares'
 
 
-def test_an_oom_grows_only_the_id_the_kill_cut_and_an_id_that_finished_resets() -> None:
+def test_an_oom_splits_the_multi_id_item_at_its_ask_and_an_id_that_finished_drops_it() -> None:
     """Ada 2026-10-19: an OOM doubled the ask of EVERY later item of the run, so one hog sized them all.
 
-    a.py's item is OOM-killed in round 0 while running t2, and b.py's finishes: only t2 grows x2. When t2
-    then finishes, its growth is dropped -- it asks its measured peak again.
+    a.py's two-id item is OOM-killed in round 0 while running t2, and b.py's finishes: nothing grows (isolate
+    before growing) -- t2 is re-asked at the ask its item died at, never below it. When t2 then finishes, its
+    held ask is dropped.
     """
     learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
     fake = FakeRunCluster(oom=True, dies=frozenset({'tests/a.py'}))
     _submit(fake, history=learned.learned('https://g/r.git'))
     assert _gather(fake) is None
     state = json.loads(fake.state)
-    assert state['grown'] == {'tests/a.py::t2': 2.0}, 'never every file of the run: the id the kill cut'
-    asked = _asks(state)
-    assert asked == {('tests/a.py::t2',): 61440}, 'the killed file asks twice its peak x safety'
+    assert state['grown'] == {}, 'a multi-id kill grows no id'
+    assert state['held'] == {'tests/a.py::t2': 30720.0}, 'the id the kill cut keeps the ask it died at'
+    assert _asks(state) == {('tests/a.py::t2',): 30720}, 'the half asks its item ask: peak x safety, not doubled'
     record = _gather(fake)
     assert record is not None
-    assert json.loads(fake.state)['grown'] == {}, 'a file that ran fine is back at its measured peak'
+    assert json.loads(fake.state)['held'] == {}, 'an id that ran fine drops its held ask'
 
 
 def test_every_folded_round_teaches_its_repo_not_only_the_record() -> None:
@@ -1101,6 +1110,110 @@ def test_the_record_is_named_for_its_sha_part_and_request_and_round_trips_gzippe
     path = write_record(record, tmp_path / 'runs')
     assert path == tmp_path / 'runs' / record_name(record)
     assert read_record(path) == record
+
+
+def test_record_explicit_byte_bounds_and_same_buffer_digest(tmp_path: Path) -> None:
+    record = {'sha': SHA, 'platform': 'base', 'req': 'bounded', 'cells': {}, 'metadata': 'x' * 200000}
+    path = write_record(record, tmp_path)
+    compressed = path.read_bytes()
+    expanded = gzip.decompress(compressed)
+    options = {
+        'max_compressed_bytes': len(compressed),
+        'max_decompressed_bytes': len(expanded),
+        'expected_sha256': hashlib.sha256(compressed).hexdigest(),
+    }
+    assert read_record(path, **options) == record
+    for limits in (
+        dict(options, max_compressed_bytes=len(compressed) - 1),
+        dict(options, max_decompressed_bytes=len(expanded) - 1),
+        dict(options, expected_sha256='0' * 64),
+    ):
+        with pytest.raises(record_module.RecordRefused, match='record'):
+            read_record(path, **limits)
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        b'{"a":1,"a":2}',
+        b'{"nested":{"a":1,"a":2}}',
+        b'{"x":NaN}',
+        b'{"x":Infinity}',
+        b'{"x":1e400}',
+        b'[]',
+        b'{"x":"\xff"}',
+        '{}'.encode('utf-16'),
+        b'[' * 2000 + b']' * 2000,
+    ],
+)
+def test_record_strict_json_refuses_invalid_payload(tmp_path: Path, payload: bytes) -> None:
+    path = tmp_path / 'invalid.gz'
+    path.write_bytes(gzip.compress(payload))
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        read_record(path)
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), float('-inf')])
+def test_record_writer_refuses_nonfinite_before_partial_write(tmp_path: Path, value: float) -> None:
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        write_record({'sha': SHA, 'platform': 'base', 'req': 'invalid', 'value': value}, tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_record_writer_refuses_deep_record_before_any_output_change(tmp_path: Path) -> None:
+    record: dict[str, object] = {'sha': SHA, 'platform': 'base', 'req': 'deep', 'cells': {}}
+    directory = tmp_path / 'existing'
+    target = write_record(record, directory)
+    original = target.read_bytes()
+    nested: object = 0
+    for _ in range(10000):
+        nested = [nested]
+    record['nested'] = nested
+    for destination in (directory, tmp_path / 'not-created'):
+        with pytest.raises(record_module.RecordRefused, match='record'):
+            write_record(record, destination)
+    assert target.read_bytes() == original
+    assert list(directory.iterdir()) == [target]
+    assert not (tmp_path / 'not-created').exists()
+
+
+def test_record_os_read_error_remains_os_error(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        read_record(tmp_path / 'absent.gz')
+
+
+@pytest.mark.parametrize(
+    'options',
+    [
+        {'max_compressed_bytes': 10},
+        {'max_decompressed_bytes': 10},
+        {'max_compressed_bytes': True, 'max_decompressed_bytes': 10},
+        {'max_compressed_bytes': 10, 'max_decompressed_bytes': 0},
+        {'max_compressed_bytes': -1, 'max_decompressed_bytes': 10},
+        {'expected_sha256': 'not-sha'},
+    ],
+)
+def test_record_read_limits_require_explicit_valid_pair(tmp_path: Path, options: dict[str, object]) -> None:
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        read_record(tmp_path / 'not-opened.gz', **options)
+
+
+@pytest.mark.parametrize('fault', ['truncated', 'crc', 'metadata'])
+def test_record_gzip_integrity_and_expanded_metadata_budget(tmp_path: Path, fault: str) -> None:
+    data = gzip.compress(json.dumps({'metadata': 'x' * 200000}).encode())
+    if fault == 'truncated':
+        data = data[:-1]
+    if fault == 'crc':
+        data = data[:-8] + bytes([data[-8] ^ 1]) + data[-7:]
+    path = tmp_path / 'record.gz'
+    path.write_bytes(data)
+    with pytest.raises(record_module.RecordRefused, match='record'):
+        read_record(
+            path,
+            max_compressed_bytes=len(data),
+            max_decompressed_bytes=128 if fault == 'metadata' else 300000,
+            expected_sha256=hashlib.sha256(data).hexdigest(),
+        )
 
 
 def test_declared_inputs_share_one_env_and_native_build_and_put_the_source_on_pythonpath() -> None:
@@ -1687,12 +1800,12 @@ def test_two_out_of_memory_rounds_then_a_completed_one_is_gathered_from_the_late
     """
     fake = _AdaRounds(dies=frozenset({'tests/b.py'}), kills=2, peak_mb=512.0)
     record = _run(fake)
-    # r1 and r2 run two bands -- only the cut id t4 grows, t5 never started (run 4fb97faa904f) -- and the fake
-    # numbers a round's jobs by its manifest, so both bands of a round carry one id
+    # r1 splits the killed item at its ask; r2 grows only the lone t4 killed alone -- and the fake
+    # numbers a round's jobs by its manifest
     assert list(dict.fromkeys(record['job_ids'])) == ['4243', '4244', '4245']
     first, second, third = record['rounds']
-    assert (second['mem_mb'], third['mem_mb']) == (2 * first['mem_mb'], 4 * first['mem_mb'])
-    assert [band['mem_mb'] for band in third['bands']] == [4 * first['mem_mb'], 2 * first['mem_mb']]
+    assert (second['mem_mb'], third['mem_mb']) == (first['mem_mb'], 2 * first['mem_mb'])
+    assert [band['mem_mb'] for band in third['bands']] == [2 * first['mem_mb']]
     assert all(_words(record['cells'])[f'tests/b.py::t{n}'] == 'ok' for n in (3, 4, 5)), 'r2 results gathered'
     asked = [c.split(' -j ')[1].split()[0] for c, _ in fake.calls if c.startswith('sacct ')]
     assert list(dict.fromkeys(asked)) == ['4243', '4244', '4245'], 'each gather asks sacct about the current round only'
@@ -2146,23 +2259,9 @@ def test_a_file_whose_kill_taught_its_grown_floor_is_not_grown_again() -> None:
     assert after == {'tests/g.py::a': 2.0}, 'f was taught read x growth; g, killed with no read, grows'
 
 
-def test_an_oom_grows_only_the_id_it_cut_and_its_collateral_keeps_its_memory() -> None:
-    """Run 4fb97faa904f: one OOM task held 14 items and ``grown_after`` doubled all of them; 13 were light.
-
-    Only the id a kill interrupted is known to need more; every other id of the item -- finished, or never
-    started -- keeps its own memory. PLANTED CONTROL: the cut id does grow.
-    """
-    light = [f'tests/light_{n}.py::t' for n in range(13)]
-    items = [{'ids': ['tests/heavy.py::done', 'tests/heavy.py::cut', 'tests/heavy.py::after', *light]}]
-    cells = {'tests/heavy.py::done': {}}
-    after = grown_after(items, cells, {0: 0}, {0: 'OUT_OF_MEMORY'}, {}, oom=True)
-    assert after == {'tests/heavy.py::cut': OOM_GROWTH}
-    measured = Measured(peaks_mb={'tests/heavy.py': 1000.0, **{file_of(n): 300.0 for n in light}})
-    cost, policy = Cost(mem_gb=0.1), Policy(safety=1.0)
-    assert measured.item_gb(light[:1], cost, policy, after) == pytest.approx(300.0 / 1024, rel=1e-12, abs=0.0)
-    assert measured.item_gb(['tests/heavy.py::after'], cost, policy, after) == pytest.approx(
-        1000.0 / 1024, rel=1e-12, abs=0.0
-    ), 'a sibling id of the cut one, never started, is no more known to need more'
-    assert measured.item_gb(['tests/heavy.py::cut'], cost, policy, after) == pytest.approx(
-        1000.0 * OOM_GROWTH / 1024, rel=1e-12, abs=0.0
-    )
+def test_an_oom_grows_no_id_of_a_multi_id_item() -> None:
+    """A multi-id item's kill grows nothing (it is split); a one-id item's kill grows its id."""
+    items = [{'ids': ['tests/f.py::a', 'tests/f.py::b']}, {'ids': ['tests/g.py::a']}]
+    states = {0: 'OUT_OF_MEMORY', 1: 'OUT_OF_MEMORY'}
+    after = grown_after(items, {}, {0: 0, 1: 1}, states, {}, oom=True)
+    assert after == {'tests/g.py::a': OOM_GROWTH}

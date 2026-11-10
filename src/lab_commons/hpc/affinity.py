@@ -7,7 +7,7 @@ non-verify accounts only. Work they cannot take now WAITS there (a plan with ``r
 at all it is refused for room (:class:`~lab_commons.hpc.plan.Unplaceable`) and a later submit tries again.
 
 THE ONE WAY TO BORROW is the user's explicit opt-in: :data:`lab_commons.hpc.allocation.RESEARCH_BORROWS_VERIFY` in
-the expiring allocation record (``python -m dev_lab.dev.hpchost allocate --until <iso> --borrow research->verify``).
+the expiring allocation record (``python -m dev_lab.dev.hpcaccount allocate --until <iso> --borrow research->verify``).
 While it is unexpired the verify accounts are candidates like any other; expired or absent, they are not.
 
 A forge verify run (``run submit``) is never placed here: an affined seat submits its own parts under its own login.

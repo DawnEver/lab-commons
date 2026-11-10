@@ -22,7 +22,7 @@ def test_primary_and_secondary_report_names_preserve_identity(html) -> None:
     assert primary.stem == 'case_a'
     assert primary.filename == 'case_a.html'
     assert html.ReportIdentity('case_a', 'geometry').filename == 'case_a--geometry.html'
-    assert html.ReportIdentity('Case 中文.v1').filename == 'Case 中文.v1.html'
+    assert html.ReportIdentity('Case \u4e2d\u6587.v1').filename == 'Case \u4e2d\u6587.v1.html'
 
 
 @pytest.mark.parametrize(
@@ -94,7 +94,7 @@ def test_report_kind_uses_the_same_validation_and_length_limit(html) -> None:
     with pytest.raises(ValueError, match='255-byte'):
         html.ReportIdentity('a' * 251)
     with pytest.raises(ValueError, match='255-byte'):
-        html.ReportIdentity('中' * 84)
+        html.ReportIdentity('\u4e2d' * 84)
 
 
 def test_primary_and_secondary_identity_composition_has_no_ambiguous_dot_split(html) -> None:
@@ -153,10 +153,10 @@ def test_document_rejects_script_identifier_injection(html) -> None:
 
 def test_writer_uses_identity_and_utf8_with_no_extra_deliverables(html, tmp_path) -> None:
     directory = tmp_path / 'run'
-    identity = html.ReportIdentity('case_中文')
-    report = html.write_html_report(directory, identity, 'first\r\n中文')
-    assert report == directory / 'case_中文.html'
-    assert report.read_bytes() == 'first\n中文'.encode()
+    identity = html.ReportIdentity('case_\u4e2d\u6587')
+    report = html.write_html_report(directory, identity, 'first\r\n\u4e2d\u6587')
+    assert report == directory / 'case_\u4e2d\u6587.html'
+    assert report.read_bytes() == 'first\n\u4e2d\u6587'.encode()
     assert list(directory.iterdir()) == [report]
     assert html.write_html_report(directory, identity, 'second') == report
     assert report.read_text(encoding='utf-8') == 'second'

@@ -108,6 +108,21 @@ def test_a_bad_grants_table_is_refused_by_name(table: str | dict, match: str) ->
         load_grants(raw)
 
 
+def test_a_grant_declares_its_role_and_the_roles_table_is_carried_uninterpreted() -> None:
+    """A workstation's machine file names each grant's role and an ``[hpc.roles.<name>]`` table; dev-lab reads them.
+
+    lab-commons carries both and interprets neither. PLANTED CONTROL: an unknown grant key is still refused by name.
+    """
+    raw = tomllib.loads(_grant(role='"verify"') + '[roles.verify]\nanything = 1\n')
+    machine = load_grants(raw)
+    assert machine.grants[0].role == 'verify'
+    assert machine.roles == {'verify': {'anything': 1}}
+    assert load_grants(tomllib.loads(_grant())).grants[0].role == ''
+    assert load_grants(tomllib.loads(_grant())).roles == {}
+    with pytest.raises(ValueError, match=r"unknown keys \['rolle'\]"):
+        load_grants(tomllib.loads(_grant(rolle='"verify"')))
+
+
 def test_no_machine_file_refuses_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'absent.toml'))
     with pytest.raises(ValueError, match=r'absent\.toml \[hpc\]: no \[hpc\] table'):
@@ -359,7 +374,7 @@ def test_a_leftover_session_table_is_refused_by_name(monkeypatch: pytest.MonkeyP
     """User ruling 2026-10-17: an allocation between sessions is temporary and never lives in a machine file."""
     monkeypatch.setenv('LC_HPC_SESSION', 'G')
     leftover = _grant() + '[session.G]\ntasks = 1\ncpus = 1\nmem_gb = 1\n'
-    with pytest.raises(ValueError, match=r'\[hpc\] session is retired.*dev_lab\.dev\.hpchost allocate'):
+    with pytest.raises(ValueError, match=r'\[hpc\] session is retired.*dev_lab\.dev\.hpcaccount allocate'):
         load_grants(tomllib.loads(leftover))
     # Planted control: the same file without the table loads.
     load_grants(tomllib.loads(_grant()))
