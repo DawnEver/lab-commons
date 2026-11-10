@@ -34,7 +34,7 @@ def _gathered(results: Path) -> list[dict]:
 def test_a_failed_item_returns_its_completed_rows_beside_its_reason(tmp_path: Path) -> None:
     """A :class:`Failed` item is an ERROR whose value rides back; a bare crash carries none (control)."""
     results = tmp_path / RESULTS
-    run_shard({'items': [3, -1, 0], 'shards': [[0, 3]]}, 0, results, entry=_entry)
+    run_shard({'items': [3, -1, 0], 'shards': [[0, 3]], 'lanes': []}, 0, results, entry=_entry)
     events = [Event.from_plain(row) for row in read_jsonl(results).rows]
     assert [e.cell.status for e in events] == [Status.OK, Status.ERROR, Status.ERROR]
     assert events[1].cell.reason == Reason('budget', '-1 spent past its cap')

@@ -164,8 +164,11 @@ def test_the_manifest_carries_each_lanes_cpus_and_memory_nodes() -> None:
     assert lanes[1] == {'cpus': '12-23', 'mems': '2-3'}
 
 
-def test_the_worker_runs_items_lanes_at_once_each_on_its_own_lane(tmp_path: Path) -> None:
+def test_the_worker_runs_items_lanes_at_once_each_on_its_own_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Each item waits for the other: run one at a time, the barrier would break."""
+    monkeypatch.setattr(worker.os, 'sched_setaffinity', lambda _pid, _cpus: None, raising=False)  # host may lack CPU 12
     together = threading.Barrier(2, timeout=10)
 
     def entry(_item: int) -> dict[str, str]:
