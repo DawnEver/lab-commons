@@ -27,6 +27,10 @@ Example::
 
     [policy]                              # optional: how the work is cut
     shard_minutes_max = 30
+
+    [task]                                # optional: what ONE array task holds (default: one item, shared node)
+    lane_domains = 2                      # a WHOLE node in lanes of 2 L3 domains, one item each (no [cost] cpus)
+    # or: exclusive = true                # one item on the whole node (``--exclusive``), charged the whole node
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ from lab_commons.resources.dimensions import CPU, GPU, MEMORY
 #: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.resources.dimensions.MEMORY` counts bytes.
 GIB: Final = 1024**3
 
-__all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'load_config']
+__all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'Task', 'load_config']
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,35 @@ class Policy:
 
 
 @dataclass(frozen=True)
+class Task:
+    """What ONE array task holds: one item on a shared node, one item on a WHOLE node, or a whole node in lanes.
+
+    ``exclusive`` asks for the node alone (``--exclusive``). Slurm charges such a task the WHOLE node against the
+    account's quota, so the task is always planned at the node's CPUs, never less.
+
+    ``lane_domains`` cuts a whole node (it implies ``exclusive``) into lanes of that many L3 domains
+    and runs one item per lane at once. The
+    shape is relative to the architecture: lanes per node, CPUs per lane and each lane's CPU ids and NUMA nodes
+    are derived, per cluster, from the grant's entry in the cluster catalog (:mod:`lab_commons.hpc.topology`), so
+    an item's CPUs come from there and ``[cost] cpus`` is not written; its memory and gpus stay per item.
+    """
+
+    exclusive: bool = False
+    lane_domains: int | None = None
+
+    def __post_init__(self) -> None:
+        """A lane is at least one domain."""
+        if self.lane_domains is not None and self.lane_domains < 1:
+            msg = f'[task] lane_domains is at least 1, got {self.lane_domains}'
+            raise ValueError(msg)
+
+    @property
+    def whole_node(self) -> bool:
+        """The task holds its node alone: ``exclusive``, or cut into lanes."""
+        return self.exclusive or self.lane_domains is not None
+
+
+@dataclass(frozen=True)
 class JobSpec:
     """What every array task executes, and where."""
 
@@ -148,6 +181,7 @@ class Config:
     job: JobSpec = field(default_factory=JobSpec)
     cost: Cost = field(default_factory=Cost)
     policy: Policy = field(default_factory=Policy)
+    task: Task = field(default_factory=Task)
     source: Path | None = None
 
     def items_path(self) -> Path:
@@ -162,10 +196,11 @@ _SECTIONS: dict[str, type] = {
     'job': JobSpec,
     'cost': Cost,
     'policy': Policy,
+    'task': Task,
 }
 
 
-def _section(name: str, raw: dict[str, Any]) -> Any:  # noqa: ANN401 -- one of the three section types
+def _section(name: str, raw: dict[str, Any]) -> Any:  # noqa: ANN401 -- one of the section types
     """Build one section, refusing a key the dataclass does not declare -- a typo is not a default."""
     kind = _SECTIONS[name]
     known = set(kind.__dataclass_fields__)
@@ -186,4 +221,7 @@ def load_config(path: Path | str) -> Config:
         msg = f'{source}: unknown sections {sorted(unknown)}; known: {sorted(_SECTIONS)}'
         raise ValueError(msg)
     sections = {name: _section(name, raw.get(name, {})) for name in _SECTIONS}
+    if sections['task'].lane_domains is not None and 'cpus' in raw.get('cost', {}):
+        msg = f'{source}: [task] lane_domains derives each item CPUs from the cluster catalog; drop [cost] cpus'
+        raise ValueError(msg)
     return Config(**sections, source=source)
