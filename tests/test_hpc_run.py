@@ -26,7 +26,7 @@ from typing import ClassVar, Final
 import pytest
 
 from lab_commons.compute import learned
-from lab_commons.compute.measured import OOM_GROWTH, Measured, file_of, memory_band
+from lab_commons.compute.measured import MEASURED_GROWTH, OOM_GROWTH, Measured, memory_band
 from lab_commons.config import CONFIG_ENV
 from lab_commons.envkey import env_key
 from lab_commons.hpc import __main__ as cli
@@ -501,13 +501,13 @@ def test_a_measured_peak_raises_the_memory_and_never_lowers_it_under_the_declare
 def test_a_peak_read_at_a_kill_is_its_one_files_floor_grown_and_never_lowers_a_known_peak() -> None:
     """Ada 2026-10-13: 24 children OOM-killed at 1 GB read peaks of ~1120 MB -- the limit, not the need.
 
-    The read grown by ``OOM_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
+    The read grown by ``MEASURED_GROWTH`` is the file's floor (run 4fb97faa904f: ungrown, it was re-asked at ~1.5x a
     run and killed again); the round's own growth then skips the file (``taught``), so it is applied once.
     """
     killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 1120.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed)
-    assert measured.peaks_mb == {'a.py': 1120.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 1120.0 * MEASURED_GROWTH}
     assert measured.taught == {'a.py', 'a.py::t'}, 'the cut id carries the floor too'
     known = Measured(peaks_mb={'a.py': 3493.0})
     known.learn(['a.py::t'], killed)
@@ -525,12 +525,13 @@ def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_
     ~870 MB every round, under the limit that killed it: the retry asked what it was killed at, never reached the
     grant ceiling, and an OOM round is not counted against RETRIES, so the run never settled. A kill says the need
     exceeds the peak its limit allowed (3072 MB over the 1.5 safety); the floor is the larger of that and the read,
-    grown, so the retry asks the limit x OOM_GROWTH. PLANTED CONTROL: a read above it still decides.
+    grown, so the retry asks the limit x MEASURED_GROWTH (x OOM_GROWTH when nothing was read).
+    PLANTED CONTROL: a read above it still decides.
     """
     killed = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 435.0}}
     measured = Measured()
     measured.learn(['a.py::t'], killed, allowed_mb=2048.0)
-    assert measured.peaks_mb == {'a.py': 2048.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 2048.0 * MEASURED_GROWTH}
     unread = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0}}
     measured = Measured()
     measured.learn(['a.py::t'], unread, allowed_mb=2048.0)
@@ -538,7 +539,7 @@ def test_a_kill_read_under_its_limit_is_floored_at_the_limit_grown_so_its_retry_
     over = {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 4000.0}}
     measured = Measured()
     measured.learn(['a.py::t'], over, allowed_mb=2048.0)
-    assert measured.peaks_mb == {'a.py': 4000.0 * OOM_GROWTH}
+    assert measured.peaks_mb == {'a.py': 4000.0 * MEASURED_GROWTH}
 
 
 def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
@@ -548,14 +549,14 @@ def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
     was taught to all 56 files, and every later run of the part asked 352 GB a task.
 
     Which file held the memory is unknown, so none is priced by it; the retry bisects the item instead. The id
-    in flight (here the first, none reported) carries the grown read as its own floor (run 4fb97faa904f).
+    in flight is no more known than its mates to hold it: no id is floored either (isolate before growing).
     PLANTED CONTROL: the same item FINISHING teaches its peak to every file, an upper bound for each.
     """
     ids = [f'tests/sweep/test_{n}.py::t' for n in range(56)]
     measured = Measured(peaks_mb={'tests/sweep/test_0.py': 900.0})
     measured.learn(ids, {'cells': {}, 'seconds': {}, 'done': {'done': -9, 'wall': 30.0, 'peak_mb': 120219.2}})
     assert measured.peaks_mb == {'tests/sweep/test_0.py': 900.0}
-    assert measured.id_peaks_mb == {ids[0]: 120219.2 * OOM_GROWTH}
+    assert measured.id_peaks_mb == {}
     assert measured.item_gb(ids[1:], Cost(), Policy()) == pytest.approx(900.0 * 1.5 / 1024, rel=1e-12, abs=0.0)
     measured.learn(ids, {'seconds': {}, 'done': {'done': 0, 'wall': 30.0, 'peak_mb': 3000.0}})
     assert set(measured.peaks_mb.values()) == {3000.0}
@@ -759,11 +760,14 @@ def test_what_is_still_unfinished_after_the_retries_is_infra() -> None:
     assert [words[f'tests/b.py::t{n}'] for n in (4, 5)] == ['infra', 'infra'], 'the machine, not the test, said no'
 
 
-def test_an_out_of_memory_round_doubles_the_memory_of_the_next() -> None:
-    """The finished sibling peaks under the cost floor (512 x 1.5 < 1024 MB), so only the OOM growth moves it."""
+def test_an_out_of_memory_round_splits_a_multi_id_item_at_the_same_ask() -> None:
+    """ISOLATE BEFORE GROWING: the killed multi-id item's halves re-run at its ask, never doubled.
+
+    The finished sibling peaks under the cost floor (512 x 1.5 < 1024 MB), so only an OOM growth could move it.
+    """
     record = _run(FakeRunCluster(dies=frozenset({'tests/b.py'}), oom=True, peak_mb=512.0))
     first, second = record['rounds']
-    assert second['mem_mb'] == 2 * first['mem_mb']
+    assert second['mem_mb'] == first['mem_mb']
 
 
 def test_an_oom_item_is_bisected_at_the_grantable_ceiling_and_its_lone_hog_is_out_of_memory_by_id() -> None:
@@ -938,23 +942,24 @@ def test_a_gather_raises_the_throttle_when_the_accounts_other_jobs_end() -> None
     assert json.loads(fake.state)['current']['bands'][0]['throttle'] == shards, 'kept, so the next gather compares'
 
 
-def test_an_oom_grows_only_the_id_the_kill_cut_and_an_id_that_finished_resets() -> None:
+def test_an_oom_splits_the_multi_id_item_at_its_ask_and_an_id_that_finished_drops_it() -> None:
     """Ada 2026-10-19: an OOM doubled the ask of EVERY later item of the run, so one hog sized them all.
 
-    a.py's item is OOM-killed in round 0 while running t2, and b.py's finishes: only t2 grows x2. When t2
-    then finishes, its growth is dropped -- it asks its measured peak again.
+    a.py's two-id item is OOM-killed in round 0 while running t2, and b.py's finishes: nothing grows (isolate
+    before growing) -- t2 is re-asked at the ask its item died at, never below it. When t2 then finishes, its
+    held ask is dropped.
     """
     learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
     fake = FakeRunCluster(oom=True, dies=frozenset({'tests/a.py'}))
     _submit(fake, history=learned.learned('https://g/r.git'))
     assert _gather(fake) is None
     state = json.loads(fake.state)
-    assert state['grown'] == {'tests/a.py::t2': 2.0}, 'never every file of the run: the id the kill cut'
-    asked = _asks(state)
-    assert asked == {('tests/a.py::t2',): 61440}, 'the killed file asks twice its peak x safety'
+    assert state['grown'] == {}, 'a multi-id kill grows no id'
+    assert state['held'] == {'tests/a.py::t2': 30720.0}, 'the id the kill cut keeps the ask it died at'
+    assert _asks(state) == {('tests/a.py::t2',): 30720}, 'the half asks its item ask: peak x safety, not doubled'
     record = _gather(fake)
     assert record is not None
-    assert json.loads(fake.state)['grown'] == {}, 'a file that ran fine is back at its measured peak'
+    assert json.loads(fake.state)['held'] == {}, 'an id that ran fine drops its held ask'
 
 
 def test_every_folded_round_teaches_its_repo_not_only_the_record() -> None:
@@ -1795,12 +1800,12 @@ def test_two_out_of_memory_rounds_then_a_completed_one_is_gathered_from_the_late
     """
     fake = _AdaRounds(dies=frozenset({'tests/b.py'}), kills=2, peak_mb=512.0)
     record = _run(fake)
-    # r1 and r2 run two bands -- only the cut id t4 grows, t5 never started (run 4fb97faa904f) -- and the fake
-    # numbers a round's jobs by its manifest, so both bands of a round carry one id
+    # r1 splits the killed item at its ask; r2 grows only the lone t4 killed alone -- and the fake
+    # numbers a round's jobs by its manifest
     assert list(dict.fromkeys(record['job_ids'])) == ['4243', '4244', '4245']
     first, second, third = record['rounds']
-    assert (second['mem_mb'], third['mem_mb']) == (2 * first['mem_mb'], 4 * first['mem_mb'])
-    assert [band['mem_mb'] for band in third['bands']] == [4 * first['mem_mb'], 2 * first['mem_mb']]
+    assert (second['mem_mb'], third['mem_mb']) == (first['mem_mb'], 2 * first['mem_mb'])
+    assert [band['mem_mb'] for band in third['bands']] == [2 * first['mem_mb']]
     assert all(_words(record['cells'])[f'tests/b.py::t{n}'] == 'ok' for n in (3, 4, 5)), 'r2 results gathered'
     asked = [c.split(' -j ')[1].split()[0] for c, _ in fake.calls if c.startswith('sacct ')]
     assert list(dict.fromkeys(asked)) == ['4243', '4244', '4245'], 'each gather asks sacct about the current round only'
@@ -2254,23 +2259,9 @@ def test_a_file_whose_kill_taught_its_grown_floor_is_not_grown_again() -> None:
     assert after == {'tests/g.py::a': 2.0}, 'f was taught read x growth; g, killed with no read, grows'
 
 
-def test_an_oom_grows_only_the_id_it_cut_and_its_collateral_keeps_its_memory() -> None:
-    """Run 4fb97faa904f: one OOM task held 14 items and ``grown_after`` doubled all of them; 13 were light.
-
-    Only the id a kill interrupted is known to need more; every other id of the item -- finished, or never
-    started -- keeps its own memory. PLANTED CONTROL: the cut id does grow.
-    """
-    light = [f'tests/light_{n}.py::t' for n in range(13)]
-    items = [{'ids': ['tests/heavy.py::done', 'tests/heavy.py::cut', 'tests/heavy.py::after', *light]}]
-    cells = {'tests/heavy.py::done': {}}
-    after = grown_after(items, cells, {0: 0}, {0: 'OUT_OF_MEMORY'}, {}, oom=True)
-    assert after == {'tests/heavy.py::cut': OOM_GROWTH}
-    measured = Measured(peaks_mb={'tests/heavy.py': 1000.0, **{file_of(n): 300.0 for n in light}})
-    cost, policy = Cost(mem_gb=0.1), Policy(safety=1.0)
-    assert measured.item_gb(light[:1], cost, policy, after) == pytest.approx(300.0 / 1024, rel=1e-12, abs=0.0)
-    assert measured.item_gb(['tests/heavy.py::after'], cost, policy, after) == pytest.approx(
-        1000.0 / 1024, rel=1e-12, abs=0.0
-    ), 'a sibling id of the cut one, never started, is no more known to need more'
-    assert measured.item_gb(['tests/heavy.py::cut'], cost, policy, after) == pytest.approx(
-        1000.0 * OOM_GROWTH / 1024, rel=1e-12, abs=0.0
-    )
+def test_an_oom_grows_no_id_of_a_multi_id_item() -> None:
+    """A multi-id item's kill grows nothing (it is split); a one-id item's kill grows its id."""
+    items = [{'ids': ['tests/f.py::a', 'tests/f.py::b']}, {'ids': ['tests/g.py::a']}]
+    states = {0: 'OUT_OF_MEMORY', 1: 'OUT_OF_MEMORY'}
+    after = grown_after(items, {}, {0: 0, 1: 1}, states, {}, oom=True)
+    assert after == {'tests/g.py::a': OOM_GROWTH}

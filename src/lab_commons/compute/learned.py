@@ -23,11 +23,13 @@ See :mod:`lab_commons.compute.measured` for how the per-test facts are kept and 
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
+import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -35,9 +37,12 @@ from typing import Any, Final
 from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
 from lab_commons.compute.measured import (
+    _MB_PER_GB,
+    HEAVY_SHARE,
     OOM_GROWTH,
     Measured,
     file_of,
+    killed_need_mb,
     task_gb,
 )
 from lab_commons.compute.model import Demand
@@ -64,12 +69,15 @@ __all__ = [
     'directory',
     'fit_width',
     'folded',
+    'forget',
     'learn_peaks',
     'learn_record',
     'learn_round',
     'learned',
+    'main',
     'part_files',
     'record_ask',
+    'record_kills',
     'record_run',
     'request_demand',
     'run_of',
@@ -83,7 +91,9 @@ EXITED: Final = 'exit'
 #: The box ended the tree AT its declared memory (``ProcessEnd.reason`` ``memory``): the declaration was too small.
 MEMORY_KILLED: Final = 'memory'
 
-#: A floor raised by an ask a job proved it needed (:func:`record_ask`), not by a run's own peak.
+#: A floor raised by an ask a job proved it needed (:func:`record_ask`), not by a run's own peak. ITS
+#: ``peak_mem_gb`` IS THE ASK ITSELF, one task's ``--mem``: it already carries its margin (OOM growth), so it is
+#: demanded as stored and never times the safety again (:func:`cluster_demand`). A measured exit replaces it.
 ASKED: Final = 'ask'
 
 #: The most of a grant's memory ceiling a recorded ask may reach: strictly below it, so a learned ask still fits
@@ -232,7 +242,8 @@ def record_run(
     *ended* is :attr:`lab_commons.box.ProcessEnd.reason`'s vocabulary and must be said: a caller that does not
     know how its run ended has a run that did not exit by itself. :data:`EXITED` replaces the row;
     :data:`MEMORY_KILLED` grows the peak it died at by :data:`OOM_GROWTH`, never lowering a known one; any other
-    ending writes nothing (:data:`PRICED_ENDINGS`).
+    ending writes nothing (:data:`PRICED_ENDINGS`). AN EXIT SUPERSEDES AN :data:`ASKED` FLOOR, even below it: the
+    ask was a floor until a run measured the need. A kill below an ask keeps the ask (a kill only raises).
 
     *killed* is dev-lab's spelling until it passes *ended* (``forgeproduce.learn_box_run``,
     ``verifybox.learn_ended``): ``True`` reads as :data:`MEMORY_KILLED`, ``False`` as :data:`EXITED`.
@@ -250,7 +261,9 @@ def record_run(
     key = _key(producer, needs)
     if ended == MEMORY_KILLED:
         known = _priced(runs.get(key))
-        floor = 0.0 if known is None else known.peak_mem_gb
+        if known is not None and runs[key]['ended'] == ASKED and known.peak_mem_gb >= run.peak_mem_gb * OOM_GROWTH:
+            return path
+        floor = 0.0 if known is None or runs[key]['ended'] == ASKED else known.peak_mem_gb
         run = Run(max(floor, run.peak_mem_gb * OOM_GROWTH), run.cpu_s, run.wall_s, run.files)
     runs[key] = _row(run, ended)
     return _write(repo, {**table, 'runs': runs})
@@ -259,12 +272,15 @@ def record_run(
 def record_ask(
     repo: str, producer: str, needs: Iterable[str], ask_gb: float, *, safety: float, ceiling_gb: float | None
 ) -> Path:
-    """Raise ``(producer, needs)``'s known peak so its next demand asks at least *ask_gb* a task (:func:`task_gb`).
+    """Raise ``(producer, needs)``'s known ask so its next demand asks at least *ask_gb* a task, stored AS the ask.
 
     A job that proved its need past its ask (an OOM kill) KNOWS the ask the measured run peak understated; kept,
     this host stops admitting the part at the old size. Never lowers a known peak. CONTENTION is never an ask:
     waiting for room the account's own jobs hold proves no need. The ask is held to :data:`ASK_CEILING_SHARE` of
     the grant's memory *ceiling_gb* (``None``: no ceiling), since an ask at the ceiling fits only an idle account.
+
+    THE ASK IS PRICED ONCE: the row stores *ask_gb* itself (:data:`ASKED`), never ``ask_gb / safety``. *safety*
+    prices a known MEASURED peak as an ask (peak times *safety*) to compare against; a known ask compares as is.
     """
     if ceiling_gb is not None:
         ask_gb = min(ask_gb, ceiling_gb * ASK_CEILING_SHARE)
@@ -272,8 +288,40 @@ def record_ask(
     runs = dict(table.get('runs', {}))
     key = _key(producer, needs)
     known = _priced(runs.get(key)) or CLUSTER_PRIOR
-    runs[key] = _row(Run(max(known.peak_mem_gb, ask_gb / safety), known.cpu_s, known.wall_s, known.files), ASKED)
+    asked = known.peak_mem_gb if runs.get(key, {}).get('ended') == ASKED else known.peak_mem_gb * safety
+    runs[key] = _row(Run(max(asked, ask_gb), known.cpu_s, known.wall_s, known.files), ASKED)
     return _write(repo, {**table, 'runs': runs})
+
+
+def record_kills(
+    repo: str,
+    needs: Iterable[str],
+    kills: Iterable[tuple[float, float, Collection[str]]],
+    *,
+    heavy: Collection[str],
+    safety: float,
+    ceiling_gb: float | None,
+) -> float | None:
+    """Raise the ``(slurm, needs)`` part's ask by its LIGHT OOM kills only; the ask recorded, or ``None``.
+
+    *kills* is each OOM-killed task's ``(asked MB, read MB, files it ran)`` -- the read is ``sacct``'s ``MaxRSS``,
+    ``0`` unread; a kill's need is :func:`killed_need_mb` of its read and ask. A HEAVY kill never sizes the part
+    (Ada 2026-11-09: one sdm file's kill raised ``slurm|`` to 324-412 GB, asked by every task of ~7200 light
+    files): a task that ran a *heavy* file (the run's :meth:`Measured.heavy`), or whose need is past
+    :data:`HEAVY_SHARE` of *ceiling_gb* -- the next plan finds it heavy from its file's floor (dev-lab
+    ``forgeoom``) and packs it alone at that floor. The rest raise the row (:func:`record_ask`).
+    """
+    bar_mb = math.inf if ceiling_gb is None else ceiling_gb * HEAVY_SHARE * _MB_PER_GB
+    light = [
+        need
+        for asked_mb, read_mb, files in kills
+        if not set(files) & set(heavy) and (need := killed_need_mb(read_mb, asked_mb)) <= bar_mb
+    ]
+    if not light:
+        return None
+    ask_gb = max(light) / _MB_PER_GB
+    record_ask(repo, SLURM, needs, ask_gb, safety=safety, ceiling_gb=ceiling_gb)
+    return ask_gb
 
 
 def run_of(repo: str, producer: str, needs: Iterable[str]) -> Run | None:
@@ -325,7 +373,8 @@ def cluster_demand(
     defaults when omitted), the size the plan submits -- so an account whose headroom cannot hold one task of the
     part never claims it. Held to *ceiling_gb*, the most any grant gives (:func:`lab_commons.hpc.plan.grantable_gb`;
     ``None``: no ceiling) as the plan holds its asks, never below the peak itself: an ask above every grant's ceiling
-    is never admitted (Ada 2026-11-09: a 216 GB peak x1.5 asked 324 GB of a 240 GB ceiling).
+    is never admitted (Ada 2026-11-09: a 216 GB peak x1.5 asked 324 GB of a 240 GB ceiling). An :data:`ASKED` row
+    is already an ask: it demands its stored ask as is (held to *ceiling_gb*), never times the safety again.
 
     A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the need-set is the key. It also asks the
     ``files`` it leaves in the home (measured, else :data:`CLUSTER_PRIOR`'s), against the account's file headroom,
@@ -335,9 +384,12 @@ def cluster_demand(
 
     def ask(needs: frozenset[str]) -> Demand:
         run = run_of(repo_url, SLURM, needs) or CLUSTER_PRIOR
-        memory = task_gb(run.peak_mem_gb, prior_gb=item.mem_gb, safety=cut.safety)
-        if ceiling_gb is not None:
-            memory = max(min(memory, ceiling_gb), run.peak_mem_gb)
+        if learned(repo_url).get('runs', {}).get(_key(SLURM, needs), {}).get('ended') == ASKED:
+            memory = run.peak_mem_gb if ceiling_gb is None else min(run.peak_mem_gb, ceiling_gb)
+        else:
+            memory = task_gb(run.peak_mem_gb, prior_gb=item.mem_gb, safety=cut.safety)
+            if ceiling_gb is not None:
+                memory = max(min(memory, ceiling_gb), run.peak_mem_gb)
         return Demand({**run.demand(needs), 'mem_gb': memory, 'files': run.files or CLUSTER_PRIOR.files, 'submits': 1})
 
     return ask
@@ -404,3 +456,43 @@ def request_demand(repo_url: str, producer: str, needs: frozenset[str], *, cpu: 
     if run is not None:
         cpu, mem_gb = max(1, int(run.demand(needs)['cpu'])), max(1.0, run.peak_mem_gb * BOX_HEADROOM)
     return Demand({**dict.fromkeys(needs, 1.0), 'cpu': cpu, 'mem_gb': mem_gb})
+
+
+def forget(repo: str, row: str) -> tuple[dict[str, Any], Path]:
+    """Remove the ``runs`` *row* (``<producer>|<needs>``) from *repo*'s table: the row removed, and the backup.
+
+    The door for a row no run can supersede (Ada 2026-11-09: an asked ``slurm|`` of 324-412 GB, above what a busy
+    account admits, so no exit ever replaced it). The old file is kept beside itself as ``<name>.bak-<utc>``.
+    An unknown row is refused by name, and nothing is written.
+    """
+    table = learned(repo)
+    runs = dict(table.get('runs', {}))
+    if row not in runs:
+        msg = f'{row!r} is no row of {repo}: its rows are {sorted(runs)}'
+        raise KeyError(msg)
+    path = _path(repo)
+    backup = path.with_name(f'{path.name}.bak-{time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())}')
+    durable_text(backup, path.read_text(encoding='utf-8'))
+    removed = runs.pop(row)
+    _write(repo, {**table, 'runs': runs})
+    return removed, backup
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``python -m lab_commons.compute.learned forget --repo <url> --row <key>``: the learned table's one verb."""
+    parser = argparse.ArgumentParser(prog='python -m lab_commons.compute.learned')
+    verbs = parser.add_subparsers(dest='verb', required=True)
+    drop = verbs.add_parser('forget', help='remove one runs row, backing the table up beside itself')
+    drop.add_argument('--repo', required=True, help='the repository remote URL the table is keyed by')
+    drop.add_argument('--row', required=True, help='the runs key, <producer>|<needs> (e.g. "slurm|")')
+    args = parser.parse_args(argv)
+    try:
+        removed, backup = forget(args.repo, args.row)
+    except KeyError as why:
+        raise SystemExit(why.args[0]) from why
+    sys.stdout.write(f'removed {args.row} {json.dumps(removed)} (backup {backup})' + chr(10))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

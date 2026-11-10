@@ -11,7 +11,16 @@ import json
 
 import pytest
 
-from lab_commons.compute.measured import OOM_GROWTH, TIMEOUT_GROWTH, Measured, file_of, memory_band
+from lab_commons.compute.measured import (
+    HEAVY_SHARE,
+    MEASURED_GROWTH,
+    OOM_GROWTH,
+    TIMEOUT_GROWTH,
+    Measured,
+    file_of,
+    killed_need_mb,
+    memory_band,
+)
 from lab_commons.hpc.config import Cost, Policy
 from lab_commons.hpc.pytest_item import read_stream
 
@@ -117,6 +126,11 @@ def _killed_at_498s(ids: list[str], peak_mb: float = 1351.0) -> dict[str, object
     )
 
 
+def _killed_alone(node: str, peak_mb: float) -> dict[str, object]:
+    """A LONE id's item, OOM-killed while it ran: the one shape a kill teaches a memory floor from."""
+    return read_stream(_stream({'start': node}, {'done': -9, 'wall': 498.0, 'peak_mb': peak_mb}), [node])
+
+
 def test_an_oom_killed_item_floors_its_cut_id_at_the_wall_it_died_at_grown() -> None:
     """Run 4fb97faa904f: ``back_emf[spm_slotted-sdm-A1]`` ran 498 s before its OOM kill and learned a 38.3 s floor.
 
@@ -170,17 +184,16 @@ def test_an_id_that_finishes_drops_its_peak_floor() -> None:
     assert measured.peaks_mb == {file_of(_SDM): 5000.0}
 
 
-def test_a_one_file_oom_kill_floors_its_files_peak_at_the_limit_grown() -> None:
+def test_a_lone_id_oom_kill_floors_its_files_peak_at_the_limit_grown() -> None:
     """Run 4fb97faa904f: a one-file kill taught the ~limit it read, so the next run asked limit x 1.5 and died again.
 
-    The read is the limit the cgroup killed at, not the need: the file's floor is that times ``OOM_GROWTH``.
+    The read is the limit the cgroup killed at, not the need: the lone id's file's floor is that times MEASURED_GROWTH.
     """
-    ids = [_FEA, _SDM]
     measured = Measured(peaks_mb={file_of(_SDM): 900.0})
-    measured.learn(ids, _killed_at_498s(ids, peak_mb=1351.0))
-    assert measured.peaks_mb == {file_of(_SDM): 1351.0 * OOM_GROWTH}
+    measured.learn([_SDM], _killed_alone(_SDM, peak_mb=1351.0))
+    assert measured.peaks_mb == {file_of(_SDM): 1351.0 * MEASURED_GROWTH}
     known = Measured(peaks_mb={file_of(_SDM): 4000.0})
-    known.learn(ids, _killed_at_498s(ids, peak_mb=1351.0))
+    known.learn([_SDM], _killed_alone(_SDM, peak_mb=1351.0))
     assert known.peaks_mb == {file_of(_SDM): 4000.0}, 'PLANTED CONTROL: a kill below a known peak lowers nothing'
 
 
@@ -189,33 +202,73 @@ def test_an_oom_kill_is_a_lower_bound_a_finished_sibling_never_lowers() -> None:
 
     A one-file kill floored only the FILE's peak, and the next round's fold -- a fresh instance -- let a
     finished sibling item of that file (a subset of its ids) replace it with its own lower read, so the
-    cut id was re-asked below the limit it had already died at. The cut id carries the floor itself.
+    cut id was re-asked below the limit it had already died at. The lone killed id carries the floor itself.
     """
-    ids = [_FEA, _SDM]
     killed = Measured(peaks_mb={file_of(_SDM): 900.0})
-    killed.learn(ids, _killed_at_498s(ids, peak_mb=1873.0))
+    killed.learn([_SDM], _killed_alone(_SDM, peak_mb=1873.0))
     later = Measured.of(killed.record())
     sibling = _stream(
         {'start': _FEA}, {'id': _FEA, 'outcome': 'passed', 's': 3.0}, {'done': 0, 'wall': 9.0, 'peak_mb': 700.0}
     )
     later.learn([_FEA], read_stream(sibling, [_FEA]))
     policy = Policy(safety=1.0)
-    assert later.item_gb([_SDM], _COST, policy) >= 1873.0 * OOM_GROWTH / 1024
+    assert later.item_gb([_SDM], _COST, policy) >= 1873.0 * MEASURED_GROWTH / 1024
     assert later.item_gb([_FEA], _COST, policy) == pytest.approx(700.0 / 1024, rel=1e-12, abs=0.0), (
         'PLANTED CONTROL: the finished sibling is priced by its own read'
     )
 
 
-def test_a_multi_file_oom_kill_floors_only_its_cut_id() -> None:
-    """Which file held the memory is unknown, but the id in flight is known: it alone carries the grown limit."""
-    other = 'tests/unit/workflow/test_cogging.py::test_cogging'
-    ids = [_FEA, _SDM, other]
-    measured = Measured(peaks_mb={file_of(_SDM): 900.0, file_of(other): 300.0})
+def test_a_killed_item_of_several_ids_floors_nothing_and_a_lone_id_floors_itself_and_its_file() -> None:
+    """ISOLATE BEFORE GROWING: a kill shared by several ids is no id's or file's measurement; the retry splits it.
+
+    PLANTED CONTROL: the same kill of ONE id floors that id and its file at the grown read.
+    """
+    ids = [_SDM, f'{file_of(_SDM)}::test_other']
+    measured = Measured(peaks_mb={file_of(_SDM): 900.0})
     measured.learn(ids, _killed_at_498s(ids, peak_mb=2048.0))
-    assert measured.id_peaks_mb == {_SDM: 2048.0 * OOM_GROWTH}
-    assert measured.peaks_mb == {file_of(_SDM): 900.0, file_of(other): 300.0}, 'no file is priced by the kill'
-    policy = Policy(safety=1.0)
-    assert measured.item_gb([_FEA], _COST, policy) == pytest.approx(900.0 / 1024, rel=1e-12, abs=0.0), (
-        'PLANTED CONTROL: the finished sibling keeps its file peak'
-    )
-    assert measured.item_gb([_SDM], _COST, policy) == pytest.approx(2048.0 * OOM_GROWTH / 1024, rel=1e-12, abs=0.0)
+    assert measured.id_peaks_mb == {}
+    assert measured.peaks_mb == {file_of(_SDM): 900.0}
+    assert measured.taught == set()
+    measured.learn([_SDM], _killed_alone(_SDM, peak_mb=2048.0))
+    assert measured.id_peaks_mb == {_SDM: 2048.0 * MEASURED_GROWTH}
+    assert measured.peaks_mb == {file_of(_SDM): 2048.0 * MEASURED_GROWTH}
+
+
+def test_a_kill_grows_from_its_measured_peak_by_a_bounded_factor_and_doubles_only_unmeasured() -> None:
+    """GROW FROM MEASUREMENT: a kill that read its peak asks that (never under its limit) x MEASURED_GROWTH.
+
+    Doubling a measured kill re-asks twice a need already read (Ada 2026-11-08: asks grown to the ceiling).
+    Only a kill with NO read -- its need unknown past the limit -- grows by OOM_GROWTH. The factor is bounded:
+    above 1 (an ask at the kill dies again) and no more than the blind growth.
+    """
+    assert 1.0 < MEASURED_GROWTH < OOM_GROWTH
+    assert killed_need_mb(3000.0, 2048.0) == pytest.approx(3000.0 * MEASURED_GROWTH, rel=1e-12, abs=0.0)
+    assert killed_need_mb(435.0, 870.0) == pytest.approx(870.0 * MEASURED_GROWTH, rel=1e-12, abs=0.0)
+    assert killed_need_mb(0.0, 2048.0) == pytest.approx(2048.0 * OOM_GROWTH, rel=1e-12, abs=0.0)
+    measured = Measured()
+    measured.learn([_SDM], _killed_alone(_SDM, peak_mb=1351.0), allowed_mb=1024.0)
+    assert measured.id_peaks_mb == {_SDM: pytest.approx(1351.0 * MEASURED_GROWTH, rel=1e-12, abs=0.0)}
+
+
+def test_a_heavy_file_is_packed_alone_and_the_run_peak_is_priced_without_it() -> None:
+    """HEAVY ISOLATION: a file whose ask exceeds HEAVY_SHARE of the grant never joins the shared pack.
+
+    One heavy file sized the part's demand, so every base waited for room only it needed (Ada 2026-11-08).
+    It runs as its own item, and the run's measured peak -- the part's demand -- is priced without it.
+    PLANTED CONTROL: light files still share an item.
+    """
+    heavy, light = 'tests/heavy.py', ['tests/a.py', 'tests/b.py']
+    measured = Measured(peaks_mb={heavy: 100_000.0, **dict.fromkeys(light, 500.0)})
+    cost, policy = Cost(seconds=1.0, mem_gb=0.1), Policy(safety=1.0)
+    assert HEAVY_SHARE == 0.25
+    alone = measured.heavy([[f'{heavy}::t'], *([f'{n}::t'] for n in light)], cost, policy, ceiling_gb=360.0)
+    assert alone == {heavy}
+    items = measured.pack([[f'{n}::t'] for n in [*light, heavy]], cost, budget=1e9, alone=alone)
+    assert items == [[f'{light[0]}::t', f'{light[1]}::t'], [f'{heavy}::t']]
+    nodes = [f'{n}::t' for n in [*light, heavy]]
+    assert measured.peak_gb(nodes, without=alone) == pytest.approx(500.0 / 1024, rel=1e-12, abs=0.0)
+    assert measured.heavy([[f'{heavy}::t']], cost, policy, ceiling_gb=None) == set(), 'no ceiling, no share'
+    from lab_commons.hpc.records import job_measured  # noqa: PLC0415 -- the part's demand, read where it is made
+
+    run = job_measured([], nodes, measured, cpus=1, heavy=alone)
+    assert run.peak_mem_gb == pytest.approx(500.0 / 1024, rel=1e-12, abs=0.0), 'the part demand leaves it out'

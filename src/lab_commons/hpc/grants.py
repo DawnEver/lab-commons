@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -172,6 +173,9 @@ class Grant:
     setup: tuple[str, ...] = ()
     #: This account's compute costs money: it runs only work no free grant can hold.
     costed: bool = False
+    #: The role this account plays for the machine (a name in ``[hpc.roles]``); its meaning is the reader's, not
+    #: lab-commons' (dev-lab's forge reads it). ``''``: none declared.
+    role: str = ''
 
     def __post_init__(self) -> None:
         """A grant names who, where and which account."""
@@ -227,6 +231,8 @@ class Machine:
     paging: Paging | None = None
     #: The verify accounts a research submission yields (:mod:`lab_commons.hpc.affinity`); ``None``: none known.
     affinity: Affinity | None = None
+    #: ``[hpc.roles.<name>]`` as written, carried UNINTERPRETED: the roles' meaning is the reader's (dev-lab).
+    roles: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     @property
     def comment(self) -> str:
@@ -260,9 +266,13 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
         if key in raw:
             msg = f'{source}: [hpc] {key} is retired: {remedy}'
             raise ValueError(msg)
-    unknown = set(raw) - {'grant', 'paging'}
+    unknown = set(raw) - {'grant', 'paging', 'roles'}
     if unknown:
-        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging"]'
+        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging", "roles"]'
+        raise ValueError(msg)
+    roles = raw.get('roles', {})
+    if not isinstance(roles, dict) or not all(isinstance(row, dict) for row in roles.values()):
+        msg = f'{source}: [hpc.roles] holds one [hpc.roles.<name>] table per role'
         raise ValueError(msg)
     grants = tuple(_grant(g, source) for g in raw.get('grant', []))
     if not grants:
@@ -275,4 +285,4 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
             raise ValueError(msg)
         seen.add(grant.account)
     session = _session(source)
-    return Machine(session=session, grants=grants, paging=_paging(raw.get('paging'), source))
+    return Machine(session=session, grants=grants, paging=_paging(raw.get('paging'), source), roles=roles)
