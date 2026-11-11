@@ -68,3 +68,22 @@ def test_an_unreachable_host_is_one_line_not_a_traceback(capsys: pytest.CaptureF
 
     assert logread.main(['--at', DEST, 'envs/abc.log'], at=at) == 3
     assert 'unreachable' in capsys.readouterr().err
+
+
+def test_a_repos_forge_tick_log_is_read_by_name() -> None:
+    code, sent = _run(['--at', DEST, '--tick', 'motronics-studio'])
+    assert code == 0
+    assert 'tail -n 120 -- "$HOME/.cache/lab-forge-motronics-studio.log"' in sent[0]
+
+
+@pytest.mark.parametrize('repo', ['../x', 'a b', 'x;rm', ''])
+def test_a_tick_name_that_is_not_a_repo_name_is_refused(repo: str) -> None:
+    code, sent = _run(['--at', DEST, '--tick', repo])
+    assert code == 2
+    assert sent == []
+
+
+def test_a_path_and_a_tick_together_are_refused() -> None:
+    code, sent = _run(['--at', DEST, '--tick', 'dev-lab', 'envs/abc.log'])
+    assert code == 2
+    assert sent == []

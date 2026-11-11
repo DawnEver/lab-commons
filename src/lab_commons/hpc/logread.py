@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc log --at <user@host> [--lines N] <path>``: read a run's log on a cluster account.
+"""``python -m lab_commons.hpc log --at <user@host> [--lines N] <path> | --tick <repo>``: read a cluster log.
 
 User ruling 2026-11-11: every agent publishes, GATHERS and cleans Ada work through the key-only doors; a forge
 status naming ``log=<path>`` had no door that could read it. This is that door, and it is READ-ONLY and CONFINED:
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import posixpath
+import re
 import shlex
 from collections.abc import Callable
 from typing import Final
@@ -29,6 +30,8 @@ MAX_LINES: Final = 400
 #: What the remote side prints for a path that resolves outside ``~/ci``.
 OUTSIDE: Final = 'LOG-OUTSIDE-CI'
 _TIMEOUT_S: Final = 60.0
+#: A repo name as the forge tick names its log ``~/.cache/lab-forge-<repo>.log``.
+_REPO: Final = re.compile(r'[a-z0-9][a-z0-9-]*')
 
 
 class _Refused(ValueError):
@@ -65,11 +68,27 @@ def _command(relative: str, lines: int) -> str:
     )
 
 
+def _tick_command(repo: str, lines: int) -> str:
+    if not _REPO.fullmatch(repo):
+        msg = f'--tick {repo!r} is not a repo name ([a-z0-9-])'
+        raise _Refused(msg)
+    return f'tail -n {lines} -- "$HOME/.cache/lab-forge-{repo}.log"'
+
+
+def _chosen(tick: str | None, path: str | None, lines: int) -> str:
+    """The one remote command: a repo's tick log or a file under ``~/ci`` -- exactly one of them."""
+    if (tick is None) == (path is None):
+        msg = 'name exactly one of --tick <repo> or a path under ~/ci'
+        raise _Refused(msg)
+    return _tick_command(tick, lines) if tick is not None else _command(_relative(path), lines)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc log', description=__doc__.splitlines()[0])
     parser.add_argument('--at', required=True, help='ssh target user@host')
     parser.add_argument('--lines', type=int, default=120, help=f'tail lines, 1..{MAX_LINES}')
-    parser.add_argument('path', help='a file under ~/ci: relative, or absolute with a /ci/ component')
+    parser.add_argument('--tick', help="a repo's forge tick log, ~/.cache/lab-forge-<repo>.log (instead of a path)")
+    parser.add_argument('path', nargs='?', help='a file under ~/ci: relative, or absolute with a /ci/ component')
     return parser
 
 
@@ -80,12 +99,12 @@ def main(argv: list[str], *, at: Callable[[str, float], Runner] = ssh_runner) ->
     except SystemExit as usage:
         return 2 if usage.code else 0
     try:
-        lines, relative = _lines(args.lines), _relative(args.path)
+        command = _chosen(args.tick, args.path, _lines(args.lines))
     except _Refused as refused:
         emit(f'log refused: {refused}', err=True)
         return 2
     try:
-        said = at(args.at, _TIMEOUT_S)(_command(relative, lines), None)
+        said = at(args.at, _TIMEOUT_S)(command, None)
     except Unreachable as down:
         emit(f'log: host unreachable -- {down}; nothing was read, try again later', err=True)
         return 3
