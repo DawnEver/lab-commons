@@ -275,7 +275,7 @@ def _wait_cli(monkeypatch: pytest.MonkeyPatch, polls: list[object]) -> tuple[lis
 
     monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=None, grants=(NEAR,)))
     monkeypatch.setattr(cli, 'runner_for', lambda _g, *_a: None)
-    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: Config(policy=Policy(poll_seconds=7)))
+    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: Config(policy=Policy(poll_seconds=70)))
     monkeypatch.setattr(cli, '_record', lambda _c: RECORD)
     monkeypatch.setattr(cli, '_out', out.append)
     monkeypatch.setattr(cli, '_sleep', slept.append)
@@ -306,7 +306,7 @@ def test_gather_wait_prints_each_status_change_once_and_gathers_once_nothing_is_
     ]
     assert out[4].startswith('2/2 shards returned')
     assert gathered == [1], 'one gather, after the last shard left RUNNING'
-    assert slept == [7] * 5
+    assert slept == [70] * 5
 
 
 def test_gather_without_wait_gathers_at_once_and_wait_belongs_to_gather(

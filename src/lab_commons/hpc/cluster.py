@@ -30,6 +30,7 @@ from lab_commons.hpc.config import Config, JobSpec
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
+from lab_commons.hpc.sshgate import Gate
 from lab_commons.hpc.worker import ITEM, RESULTS, SHARD
 from lab_commons.log import log
 from lab_commons.outcomes import Status
@@ -141,11 +142,13 @@ def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
     return lambda _grant: run
 
 
-def ssh_runner(host: str, timeout: float = _TIMEOUT) -> Runner:
+def ssh_runner(host: str, timeout: float = _TIMEOUT, *, gate: Gate | None = None) -> Runner:
     """A runner that executes on *host* over key-based, non-interactive ``ssh``.
 
-    *timeout* is per command; a login-node build (a per-tree install) needs far more than a probe.
+    *timeout* is per command; a login-node build (a per-tree install) needs far more than a probe. Every
+    command passes the host's :class:`~lab_commons.hpc.sshgate.Gate`: one shared connection, a machine-wide rate.
     """
+    held = gate or Gate(host)
 
     def run(command: str, stdin: str | None = None) -> str:
         argv = [
@@ -154,10 +157,12 @@ def ssh_runner(host: str, timeout: float = _TIMEOUT) -> Runner:
             'BatchMode=yes',
             '-o',
             f'ConnectTimeout={CONNECT_TIMEOUT}',
+            *held.options(),
             host,
             f'bash -lc {shlex.quote(command)}',
         ]
-        return _completed(argv, stdin, timeout)
+        with held.call():
+            return _completed(argv, stdin, timeout)
 
     return run
 

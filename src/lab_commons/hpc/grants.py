@@ -269,9 +269,9 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
         if key in raw:
             msg = f'{source}: [hpc] {key} is retired: {remedy}'
             raise ValueError(msg)
-    unknown = set(raw) - {'grant', 'paging', 'roles'}
+    unknown = set(raw) - {'grant', 'paging', 'roles', 'ssh'}
     if unknown:
-        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging", "roles"]'
+        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging", "roles", "ssh"]'
         raise ValueError(msg)
     roles = raw.get('roles', {})
     if not isinstance(roles, dict) or not all(isinstance(row, dict) for row in roles.values()):
