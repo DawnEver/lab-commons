@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from lab_commons.hpc import logread
+from lab_commons.hpc.cluster import Unreachable
 
 if TYPE_CHECKING:
     from lab_commons.hpc.cluster import Runner
@@ -55,3 +56,15 @@ def test_the_line_count_is_bounded() -> None:
 def test_a_file_the_remote_refuses_is_a_refusal() -> None:
     code, _ = _run(['--at', DEST, 'envs/abc.log'], answer=logread.OUTSIDE + '\n')
     assert code == 2
+
+
+def test_an_unreachable_host_is_one_line_not_a_traceback(capsys: pytest.CaptureFixture[str]) -> None:
+    def at(_dest: str, _timeout: float) -> Runner:
+        def run(_command: str, _stdin: str | None) -> str:
+            msg = 'ssh could not reach alice@hpclogin01.example.org: Connection timed out'
+            raise Unreachable(msg)
+
+        return run
+
+    assert logread.main(['--at', DEST, 'envs/abc.log'], at=at) == 3
+    assert 'unreachable' in capsys.readouterr().err

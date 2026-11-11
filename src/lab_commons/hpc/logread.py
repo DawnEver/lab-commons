@@ -8,7 +8,7 @@ status naming ``log=<path>`` had no door that could read it. This is that door, 
 - at most :data:`MAX_LINES` lines, the file's tail; one ssh session through the gated runner
   (:func:`lab_commons.hpc.cluster.ssh_runner`: shared connection, rate-limited).
 
-Exit 0 printed, 2 refused.
+Exit 0 printed, 2 refused, 3 the host did not answer (one line, no traceback; try again later).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import shlex
 from collections.abc import Callable
 from typing import Final
 
-from lab_commons.hpc.cluster import Runner, ssh_runner
+from lab_commons.hpc.cluster import Runner, Unreachable, ssh_runner
 from lab_commons.log import emit
 
 __all__ = ['MAX_LINES', 'OUTSIDE', 'main']
@@ -84,7 +84,11 @@ def main(argv: list[str], *, at: Callable[[str, float], Runner] = ssh_runner) ->
     except _Refused as refused:
         emit(f'log refused: {refused}', err=True)
         return 2
-    said = at(args.at, _TIMEOUT_S)(_command(relative, lines), None)
+    try:
+        said = at(args.at, _TIMEOUT_S)(_command(relative, lines), None)
+    except Unreachable as down:
+        emit(f'log: host unreachable -- {down}; nothing was read, try again later', err=True)
+        return 3
     if said.strip() == OUTSIDE:
         emit(f'log refused: {args.path!r} resolves outside ~/ci', err=True)
         return 2
