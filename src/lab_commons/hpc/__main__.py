@@ -49,7 +49,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.durable import durable_text
-from lab_commons.hpc import affinity, allocation, clean, homedoor
+from lab_commons.hpc import affinity, allocation, clean, homedoor, logread
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -373,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
     """Parse the verb and dispatch it against this machine's grants."""
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
-    doors = {'clean': clean.main, 'tree': homedoor.tree_main, 'home': homedoor.home_main}
+    doors = {'clean': clean.main, 'log': logread.main, 'tree': homedoor.tree_main, 'home': homedoor.home_main}
     if argv[:1] and argv[0] in doors:
         return doors[argv[0]](argv[1:])
     _refuse_retired(parser, argv)
