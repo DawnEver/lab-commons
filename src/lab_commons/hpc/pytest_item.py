@@ -55,6 +55,7 @@ __all__ = [
     'NOT_APPLICABLE_LINE',
     'NOT_APPLICABLE_MARKER',
     'STREAM_ENV',
+    'TEMP_PREFIX',
     'badness',
     'canonical',
     'declared_resources',
@@ -83,6 +84,9 @@ IDS_ENV = 'LAB_CI_IDS'
 #: The statuses that are a conclusion about the test: :class:`lab_commons.outcomes.Status`'s DECIDED family,
 #: restated by token because this file imports nothing (``tests/test_hpc_pytest_mapping.py`` pins the two equal).
 DECIDED: Final = frozenset({'ok', 'rejected', 'not_applicable'})
+
+#: :data:`lab_commons.temp.TEMP_PREFIX`, restated for the same reason (``tests/test_hpc_pytest_mapping.py`` pins it).
+TEMP_PREFIX: Final = 'dev-lab-'
 
 #: The marker DECLARING that a test may not apply here: a skip of a test carrying it is ``not_applicable``.
 NOT_APPLICABLE_MARKER: Final = 'not_applicable'
@@ -598,7 +602,10 @@ def run(item: dict[str, Any]) -> dict[str, Any]:
     target = str(stream.resolve())
     _write(target, index, {'begin': time.time()})
     start = time.monotonic()
-    with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryFile() as out:  # node-local, never GPFS
+    with (  # node-local, never GPFS
+        tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as scratch,
+        tempfile.TemporaryFile(prefix=TEMP_PREFIX) as out,
+    ):
         chosen = Path(scratch) / 'ids.json'
         env = {**os.environ, STREAM_ENV: target, ITEM_ENV: str(index), IDS_ENV: str(chosen)}
         rc, peak = _supervise(item, ids, target, index, env=env, out=out)
