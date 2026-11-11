@@ -352,7 +352,7 @@ def submit_run(
     try:
         guard(run, f'run submit {spec.sha[:12]} on {grant.name}', now=time.time())
     except QuotaRefused as full:
-        raise NotSubmitted(str(full)) from full
+        raise NoRoom(str(full)) from full  # the ACCOUNT is full: retryable, never a verdict on the sha
     told = build_run(spec, run, f'{grant.name} ({host})')
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)
