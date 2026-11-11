@@ -1048,6 +1048,16 @@ def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
     assert 'git uv cargo' in needs_script(spec)
 
 
+def test_a_build_marks_its_tree_in_flight_before_the_env_step() -> None:
+    """Measured 2026-11-11 (Ada, ezxmw9): a re-run REUSED an old tree, touched none of its mtimes, and retention's
+    ``tree-not-in-flight`` (dev_lab.dev.retentionplan: active = tree or ``.lab-ci`` touched within min_age_hours)
+    removed it under ``uv sync`` -- the env log ended ``Current directory does not exist``."""
+    script = build_script(RunSpec(sha=SHA, repo_url='u', builds=Builds(install='uv sync', env_key='k1')))
+    mark = 'touch .lab-ci'
+    assert mark in script, 'a reused tree must read as being built, or retention removes the cwd of the build'
+    assert script.index(f'cd "$HOME"/ci/trees/{SHA}') < script.index(mark) < script.index('uv venv')
+
+
 def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
     """Measured 2026-10-09: built as one user, submitted as another on the same cluster -- no venv there."""
     other = Grant(user='you', hosts=GRANT.hosts, slurm_account='acct-free', partitions=GRANT.partitions)
