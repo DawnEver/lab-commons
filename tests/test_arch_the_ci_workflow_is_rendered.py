@@ -20,15 +20,14 @@ def test_every_workflow_matches_its_render() -> None:
 def test_ci_runs_the_one_pr_lifecycle() -> None:
     jobs = set(ciworkflows.workflows(ROOT)['ci.yml']['jobs'])
     # 'head-gates' gained 2026-11-08 with dev-lab #314 (the pre-push rows became forge head statuses);
-    # 'merge-rejudge' 2026-11-10 with dev-lab #365 (the merge is judged again after the review posts).
+    # 'review' and 'merge-rejudge' left 2026-11-11 with dev-lab #424: this repo's reviewer is the judge host
+    # (`where = "judge"`), so no runner review job, and no review-again workflow, is rendered.
     assert jobs == {
         'parts',
         'part',
         'absent-parts',
         'head-gates',
         'security',
-        'review',
         'merge-ready',
-        'merge-rejudge',
         'promote',
     }
