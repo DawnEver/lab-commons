@@ -17,6 +17,7 @@ from lab_commons.hpc.records import RetiredRecord, read_record, upgraded_state, 
 from lab_commons.hpc.retired import TEST_WORDS
 from lab_commons.hpc.testcells import TestCell, conclude, merged, upgraded
 from lab_commons.outcomes import Cell, Conclusion, Expectation, Reason, Status
+from lab_commons.temp import TEMP_PREFIX
 
 RESOURCES = ('femm',)
 
@@ -153,3 +154,8 @@ def test_a_live_run_states_file_keyed_growth_is_read_onto_the_ids_in_flight() ->
         'grown': {'a.py': 2.0, 'c.py': 4.0, 'b.py::z': 8.0},
     }
     assert upgraded_state(state)['grown'] == {'a.py::x': 2.0, 'a.py::y': 2.0, 'b.py::z': 8.0}
+
+
+def test_the_item_runner_restates_exactly_the_family_temp_prefix() -> None:
+    """It imports nothing, so it spells the family's temp prefix; this pins the two equal."""
+    assert pytest_item.TEMP_PREFIX == TEMP_PREFIX
