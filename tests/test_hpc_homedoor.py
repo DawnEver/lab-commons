@@ -12,7 +12,6 @@ from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.home import CENSUS_PREFIX, QUOTA, QUOTA_SCRIPT, STRAY_FILES, census_script
 from lab_commons.hpc.homedoor import QuotaRefused
 from lab_commons.hpc.shell import RunSpec
-from lab_commons.hpc.tree import NotSubmitted
 
 LIMIT: Final = 4_000_000
 HEADER: Final = (
@@ -136,15 +135,20 @@ def test_at_names_the_target_and_needs_no_machine_file() -> None:
     assert callable(run)
 
 
-def test_run_submit_is_not_submitted_at_hard(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``run submit`` passes the same guard: past hard, nothing is built or queued, and it is INCONCLUSIVE."""
+def test_run_submit_at_hard_is_no_room(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``run submit`` passes the same guard: past hard, nothing is built or queued, and it is NO ROOM.
+
+    A full home is a fact about the ACCOUNT, never a result about the sha: it is released RETRYABLE like any
+    host without room. Read as INCONCLUSIVE it settled ``error`` and was never re-claimed (Ada 2026-11-11:
+    integrate/main@0db3a2551c47 base refused at 91% of the files quota, then nothing produced it).
+    """
     home = Home(_at(QUOTA.hard))
     monkeypatch.setattr(run_module, 'probe', lambda *_a, **_k: None)
     monkeypatch.setattr(run_module, 'allocate', lambda *_a, **_k: (_grant(), None))
     built: list[str] = []
     monkeypatch.setattr(run_module, 'build_run', lambda *_a: built.append('built'))
     machine = Machine(session=None, grants=(_grant(),))
-    with pytest.raises(NotSubmitted, match='HOME-QUOTA-HARD: run submit'):
+    with pytest.raises(run_module.NoRoom, match='HOME-QUOTA-HARD: run submit'):
         run_module.submit_run(RunSpec(sha='a' * 40, repo_url='u'), machine, lambda _g: home, cost=None, policy=None)
     assert built == []
 
