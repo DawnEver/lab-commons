@@ -25,9 +25,14 @@ class Clock:
     def __call__(self) -> float:
         return self.now
 
+    def sleep(self, seconds: float) -> None:
+        """A sleep that moves this clock, recorded so a test can read the wait."""
+        self.slept = [*getattr(self, 'slept', []), seconds]
+        self.now += seconds
+
 
 def _gate(root: Path, clock: Clock, platform: str = 'linux', limits: Limits = LIMITS) -> Gate:
-    return Gate(HOST, root=root, limits=limits, platform=platform, clock=clock)
+    return Gate(HOST, root=root, limits=limits, platform=platform, clock=clock, sleep=clock.sleep)
 
 
 def _enter(gate: Gate) -> None:
@@ -35,16 +40,26 @@ def _enter(gate: Gate) -> None:
         pass
 
 
-def test_a_second_session_inside_the_interval_is_refused_naming_the_wait(tmp_path: Path) -> None:
+def test_a_second_session_inside_the_interval_waits_it_out_in_the_door(tmp_path: Path) -> None:
+    """The interval PACES a pipeline's back-to-back doors; it never refuses them (the window cap does)."""
     clock = Clock()
     _enter(_gate(tmp_path, clock))
     clock.now += 2
-    with pytest.raises(RateLimited, match=r'allowed in 3s') as refused:
-        _enter(_gate(tmp_path, clock))
+    _enter(_gate(tmp_path, clock))
+    assert clock.slept == [3.0]  # the planted control: inside the interval, it waited exactly the remainder
+    clock.now += 10
+    _enter(_gate(tmp_path, clock))
+    assert clock.slept == [3.0]  # outside it, no wait
+
+
+def test_the_window_refusal_names_the_wait_and_the_doors(tmp_path: Path) -> None:
+    clock = Clock()
+    limits = Limits(min_interval_s=0, max_per_window=1, window_s=60)
+    _enter(_gate(tmp_path, clock, limits=limits))
+    with pytest.raises(RateLimited, match=r'allowed in 60s') as refused:
+        _enter(_gate(tmp_path, clock, limits=limits))
     assert 'forge queue' in str(refused.value)
     assert 'gather -c <job> --wait' in str(refused.value)
-    clock.now += 3
-    _enter(_gate(tmp_path, clock))
 
 
 def test_one_runner_takes_one_slot_however_many_commands(tmp_path: Path) -> None:
@@ -108,11 +123,12 @@ def test_the_ssh_runner_carries_the_gate(tmp_path: Path, monkeypatch: pytest.Mon
     seen: list[list[str]] = []
     monkeypatch.setattr(cluster, '_completed', lambda argv, _s, _t: seen.append(argv) or 'ok')
     clock = Clock()
-    run = cluster.ssh_runner(HOST, gate=_gate(tmp_path, clock))
+    one = Limits(min_interval_s=0, max_per_window=1, window_s=60)
+    run = cluster.ssh_runner(HOST, gate=_gate(tmp_path, clock, limits=one))
     assert run('true', None) == 'ok'
     assert 'ControlMaster=auto' in seen[0]
     with pytest.raises(RateLimited):
-        cluster.ssh_runner(HOST, gate=_gate(tmp_path, clock))('true', None)
+        cluster.ssh_runner(HOST, gate=_gate(tmp_path, clock, limits=one))('true', None)
     assert len(seen) == 1
 
 
