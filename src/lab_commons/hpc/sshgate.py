@@ -11,7 +11,8 @@ dozens of ssh connections in poll loops until the login nodes refused ssh. So th
 - RATE, machine-wide, per host (a state file under the same lock): a door invocation (one runner, however many
   commands it sends) takes one slot; slots are at least ``min_interval_s`` apart and at most ``max_per_window``
   per ``window_s``. Over the limit it REFUSES (:class:`RateLimited`) naming the wait and the server-side
-  pollers -- it never sleeps. Defaults :data:`LIMITS`; the machine file's ``[hpc.ssh]`` overrides them.
+  pollers; only the window refuses -- the interval is waited out in the door, at most one interval.
+  Defaults :data:`LIMITS`; the machine file's ``[hpc.ssh]`` overrides them.
 """
 
 from __future__ import annotations
@@ -107,6 +108,7 @@ class Gate:
     limits: Limits | None = None
     platform: str = sys.platform
     clock: Callable[[], float] = time.time
+    sleep: Callable[[float], None] = time.sleep
     _admitted: bool = False
 
     @property
@@ -133,20 +135,21 @@ class Gate:
             now = self.clock()
             stamps = json.loads(state.read_text(encoding='utf-8')) if state.is_file() else []
             stamps = [s for s in stamps if now - s < limits.window_s]
-            waits = []
-            if stamps and now - stamps[-1] < limits.min_interval_s:
-                waits.append(limits.min_interval_s - (now - stamps[-1]))
             if len(stamps) >= limits.max_per_window:
-                waits.append(limits.window_s - (now - stamps[0]))
-            if waits:
+                wait = limits.window_s - (now - stamps[0])
                 msg = (
-                    f'hpc ssh rate limit: the next session to this host is allowed in {max(waits):.0f}s '
+                    f'hpc ssh rate limit: the next session to this host is allowed in {wait:.0f}s '
                     f'({len(stamps)}/{limits.max_per_window} in {limits.window_s:g}s, at least '
                     f'{limits.min_interval_s:g}s apart; [hpc.ssh] in the machine file). Do not poll in a loop: '
                     'read where a run is with `python -m dev_lab.dev.forge queue`, or let ONE '
                     '`python -m lab_commons.hpc gather -c <job> --wait` poll (one session, polls >= 60 s apart).'
                 )
                 raise RateLimited(msg)
+            if stamps and now - stamps[-1] < limits.min_interval_s:
+                # PACED, not refused: a pipeline's back-to-back doors wait out at most one interval here,
+                # under the rate lock, so concurrent callers queue in order rather than fail.
+                self.sleep(limits.min_interval_s - (now - stamps[-1]))
+                now = self.clock()
             state.parent.mkdir(parents=True, exist_ok=True)
             state.write_text(json.dumps([*stamps, now]), encoding='utf-8')
         self._admitted = True
