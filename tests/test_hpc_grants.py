@@ -96,7 +96,7 @@ priority = 2
 
 _CLUSTER = 'reach = ["r"]\n[clusters.c]\nhosts = ["h"]\nslurm_accounts = { s = { billed = false } }\n'
 _ROW = '[[grant]]\nuser = "u"\ncluster = "c"\nslurm_account = "s"\nrole = "r"\n'
-_BUDGETED = 'billed = false, budget = { core_hours = 1, since = "2026-01-01" }'
+_BUDGETED = 'billed = false, budget = { core_hours = 1, since = "2026-01-01", until = "2027-01-01" }'
 
 
 def _grant(**extra: object) -> str:
