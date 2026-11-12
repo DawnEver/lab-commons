@@ -389,8 +389,8 @@ wheels = [
 
 [[package]]
 name = "dev-lab"
-version = "0.0.1.dev3113+g0e96ea6f8"
-source = { git = "https://github.com/DawnEver/dev-lab.git?branch=integrate%2Fmain#0e96ea6f8b724374df2018eec7450929041d037b" }
+version = "0.0.1.dev3117+gac7e2d753"
+source = { git = "https://github.com/DawnEver/dev-lab.git?branch=integrate%2Fmain#ac7e2d7539548482b5ae441e55e414038b7fe0cf" }
 dependencies = [
     { name = "cryptography" },
     { name = "lab-commons", extra = ["io", "paths", "structured", "units"] },

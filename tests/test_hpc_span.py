@@ -256,6 +256,160 @@ RECORD = {
 }
 
 
+def test_an_only_submission_records_its_selection_and_gathers_at_the_items_file_index(tmp_path: Path) -> None:
+    machine, logins = _cluster()
+    reach = _reach(logins)
+    config = _config(tmp_path)
+    record = submit_job(config, list(range(10, 20)), machine, reach, stamp='t0', selected=[7, 3])
+    assert (record['selected'], record['sha']) == ([7, 3], '')
+    manifest = json.loads(next(v for k, v in logins['near'].stdin.items() if 'manifest' in k))
+    assert manifest['items'] == [17, 13], 'only the chosen items, in the chosen order'
+    logins['near'].results = _lines(('item', '1', {'shard': 0, 'index': 1, 'ok': True}), ('shard', '0', _OK))
+    got = gather_job(record, machine, reach, budget=10)
+    assert [r['index'] for r in got.results] == [3], 'batch position 1 is items-file index 3'
+    with pytest.raises(ValueError, match=r'\[10\] are not in the items file'):
+        submit_job(config, list(range(10)), machine, reach, stamp='t1', selected=[10])
+
+
+def _submit_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: dict | None = None
+) -> tuple[Path, dict[str, object]]:
+    """``main`` with the cluster faked: what ``submit_job``/``retry_job`` were handed lands in the returned dict."""
+    job = tmp_path / 'j.toml'
+    job.write_text(
+        f'[job]\nname = "sweep"\nentry = "m:f"\nitems = "items.json"\nsha = "{"a" * 40}"\n'
+        'repo_url = "https://x/r.git"\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'items.json').write_text(json.dumps(list(range(5))), encoding='utf-8')
+    got: dict[str, object] = {}
+
+    def submit(config: Config, items: list, *_a: object, selected: list | None = None, **_k: object) -> dict:
+        got.update(sha=config.job.sha, items=items, selected=selected)
+        return {'placements': []}
+
+    def retry(config: Config, items: list, *_a: object, **_k: object) -> list[str]:
+        got.update(sha=config.job.sha, items=items)
+        return []
+
+    monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=None, grants=(NEAR,)))
+    monkeypatch.setattr(cli.allocation, 'resolve', lambda m: m)
+    monkeypatch.setattr(cli.affinity, 'resolve', lambda m: m)
+    monkeypatch.setattr(cli, '_ensure', lambda _c, _r: None)
+    monkeypatch.setattr(cli, 'submit_job', submit)
+    monkeypatch.setattr(cli, 'retry_job', retry)
+    monkeypatch.setattr(cli, '_save_record', lambda _c, _r: None)
+    monkeypatch.setattr(cli, '_record', lambda _c: record or {})
+    monkeypatch.setattr(cli, '_out', lambda _t: None)
+    return job, got
+
+
+def test_submit_sha_runs_the_job_file_at_that_commit_and_only_picks_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job, got = _submit_cli(tmp_path, monkeypatch)
+    assert cli.main(['submit', '-c', str(job), '--sha', 'b' * 40, '--only', '3,1']) == 0
+    assert (got['sha'], got['selected']) == ('b' * 40, [3, 1])
+    assert cli.main(['submit', '-c', str(job)]) == 0
+    assert (got['sha'], got['selected']) == ('a' * 40, None), 'no flag: the job file as written (control)'
+    for bad in ['x', '1,1', ',']:
+        with pytest.raises(SystemExit):
+            cli.main(['submit', '-c', str(job), '--only', bad])
+        assert '--only' in capsys.readouterr().err
+
+
+def test_retry_re_runs_the_recorded_commit_and_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    job, got = _submit_cli(tmp_path, monkeypatch, {'sha': 'c' * 40, 'selected': [4, 0], 'placements': []})
+    assert cli.main(['retry', '-c', str(job)]) == 0
+    assert (got['sha'], got['items']) == ('c' * 40, [4, 0])
+
+
+def test_sha_only_watch_and_several_job_files_are_refused_where_they_do_not_belong(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job, _got = _submit_cli(tmp_path, monkeypatch)
+    refusals = {
+        ('status', '-c', str(job), '--sha', 'b' * 40): '--sha and --only belong to submit',
+        ('gather', '-c', str(job), '--only', '1'): '--sha and --only belong to submit',
+        ('gather', '-c', str(job), '--watch'): '--watch belongs to status',
+        ('gather', '-c', str(job), '-c', str(job)): 'only status takes several',
+    }
+    for argv, why in refusals.items():
+        with pytest.raises(SystemExit):
+            cli.main(list(argv))
+        assert why in capsys.readouterr().err
+
+
+# -- status over several jobs: one sacct per grant; --watch returns on the first change, bounded ----------------
+
+
+def _placement(grant: Grant, job_id: str, shards: int = 1) -> dict:
+    return {'grant': grant.name, 'account': list(grant.account), 'targets': [f'{grant.user}@{grant.hosts[0]}'],
+            'job_ids': [job_id], 'shards': shards, 'items': [0, shards], 'run_dir': '~/r'}  # fmt: skip
+
+
+def _status_cli(
+    monkeypatch: pytest.MonkeyPatch, polls: list[dict[str, dict[int, str]]]
+) -> tuple[list[str], list[float], list[list[str]]]:
+    """Jobs ``a`` (job 1 on NEAR) and ``b`` (job 2 on NEAR, job 3 on FAR); each poll answers every job id."""
+    out: list[str] = []
+    slept: list[float] = []
+    asked: list[list[str]] = []
+    script = iter(polls)
+    answer: dict[str, dict[int, str]] = {}
+    records = {'a': {'placements': [_placement(NEAR, '1')]},
+               'b': {'placements': [_placement(NEAR, '2'), _placement(FAR, '3')]}}  # fmt: skip
+
+    def states(_run: object, ids: list[str]) -> dict[str, dict[int, str]]:
+        nonlocal answer
+        if ids[0] == '1':  # the first grant asked opens each poll
+            answer = next(script)
+        asked.append(list(ids))
+        return {i: answer.get(i, {}) for i in ids}
+
+    configs = [Config(source=Path(f'{n}.toml'), policy=Policy(poll_seconds=90)) for n in records]
+    monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=None, grants=(NEAR, FAR)))
+    monkeypatch.setattr(cli, 'runner_for', lambda _g, *_a: None)
+    monkeypatch.setattr(cli, '_job_configs', lambda _p, _a: configs)
+    monkeypatch.setattr(cli, '_record', lambda c: records[c.source.stem])
+    monkeypatch.setattr(cli, '_out', out.append)
+    monkeypatch.setattr(cli, '_sleep', slept.append)
+    monkeypatch.setattr(jobs, 'job_states', states)
+    return out, slept, asked
+
+
+RUN = {'1': {0: 'RUNNING'}, '2': {0: 'PENDING'}, '3': {0: 'RUNNING'}}
+
+
+def test_status_over_several_jobs_asks_each_grant_once_and_names_each_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    out, slept, asked = _status_cli(monkeypatch, [RUN])
+    assert cli.main(['status', '-c', 'a.toml', '-c', 'b.toml']) == 0
+    assert asked == [['1', '2'], ['3']], 'one sacct per grant, every job on it at once'
+    assert out == [f'a: {NEAR.name}: RUNNING=1', f'b: {NEAR.name}: PENDING=1', f'b: {FAR.name}: RUNNING=1']
+    assert slept == []
+
+
+def test_watch_prints_the_first_change_and_returns(monkeypatch: pytest.MonkeyPatch) -> None:
+    moved = {**RUN, '2': {0: 'RUNNING'}}
+    out, slept, _asked = _status_cli(monkeypatch, [RUN, RUN, moved])
+    assert cli.main(['status', '-c', 'a.toml', '-c', 'b.toml', '--watch']) == 0
+    assert out[3:] == [f'changed b: {NEAR.name}: RUNNING=1']
+    assert slept == [90, 90]
+
+
+def test_watch_ends_itself_after_its_bound_and_at_once_when_nothing_can_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out, slept, _asked = _status_cli(monkeypatch, [RUN] * 5)
+    assert cli.main(['status', '-c', 'a.toml', '-c', 'b.toml', '--watch', '--watch-minutes', '6']) == cli.PENDING
+    assert slept == [90] * 4, '6 min of 90-s polls'
+    assert out[-1] == 'no change in 6 min'
+    done = {'1': {0: 'COMPLETED'}, '2': {0: 'FAILED'}, '3': {0: 'COMPLETED'}}
+    out, slept, _asked = _status_cli(monkeypatch, [done])
+    assert cli.main(['status', '-c', 'a.toml', '-c', 'b.toml', '--watch']) == 0
+    assert (len(out), slept) == (3, []), 'every shard settled: no poll'
+
+
 def _wait_cli(monkeypatch: pytest.MonkeyPatch, polls: list[object]) -> tuple[list[str], list[float], list[int]]:
     """``main`` over scripted polls: each a ``{shard: state}`` answer or an :class:`Unreachable` to raise."""
     out: list[str] = []
@@ -275,12 +429,12 @@ def _wait_cli(monkeypatch: pytest.MonkeyPatch, polls: list[object]) -> tuple[lis
 
     monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=None, grants=(NEAR,)))
     monkeypatch.setattr(cli, 'runner_for', lambda _g, *_a: None)
-    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: Config(policy=Policy(poll_seconds=70)))
+    monkeypatch.setattr(cli, '_job_configs', lambda _p, _a: [Config(policy=Policy(poll_seconds=70))])
     monkeypatch.setattr(cli, '_record', lambda _c: RECORD)
     monkeypatch.setattr(cli, '_out', out.append)
     monkeypatch.setattr(cli, '_sleep', slept.append)
     monkeypatch.setattr(cli, 'gather_job', gather)
-    monkeypatch.setattr(jobs, 'shard_states', states)
+    monkeypatch.setattr(jobs, 'job_states', lambda run, ids: {'1': states(run, ids)})
     return out, slept, gathered
 
 
@@ -409,7 +563,7 @@ def test_gather_without_output_writes_beside_the_job_file_and_names_it(
     """No ``-o``: the merged results still land (``<job>.gathered.json``) and the line names them; ``-o`` wins."""
     out, _slept, _gathered = _wait_cli(monkeypatch, [])
     job = tmp_path / 'j.toml'
-    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: Config(source=job, policy=Policy(poll_seconds=70)))
+    monkeypatch.setattr(cli, '_job_configs', lambda _p, _a: [Config(source=job, policy=Policy(poll_seconds=70))])
     assert cli.main(['gather', '-c', str(job)]) == 0
     default = tmp_path / 'j.gathered.json'
     assert default.read_text(encoding='utf-8') == '[]'

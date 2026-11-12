@@ -4,9 +4,13 @@ ONE SUBMISSION, ONE RECORD. ``submit`` spans the items (:func:`lab_commons.hpc.s
 chosen grant has the job's artifact (*ensure*; ``[job] sha`` builds that commit's one file,
 :mod:`lab_commons.hpc.artifact`), submits one array per grant and writes ``<job>.submission.json``::
 
-    {"stamp": ..., "placements": [{"grant", "stamp", "account", "targets", "items": [start, stop], "run_dir",
+    {"stamp": ..., "sha": <[job] sha or "">, "selected": <batch indices into the items file, or null>,
+     "placements": [{"grant", "stamp", "account", "targets", "items": [start, stop], "run_dir",
                                    "job_ids", "shards", "plan"}, ...],
      "moved": [<a placement whose grant stopped answering>, ...]}
+
+``submit --sha`` runs the same job file at another commit and ``--only`` submits chosen items; the record
+keeps both, so ``retry`` re-runs that commit and ``gather`` reports each item at its index in the items file.
 
 ``status``/``gather`` walk the placements and merge them into one result, item indices back in the batch's
 order. A grant whose login hosts all fail to answer is NAMED, never read as empty.
@@ -37,7 +41,7 @@ from lab_commons.hpc.config import Config, Cost
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, Unplaceable, plan_on
 from lab_commons.hpc.run import ACTIVE
-from lab_commons.hpc.sacct import shard_states
+from lab_commons.hpc.sacct import job_states, shard_states
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.span import Placement, span
 from lab_commons.hpc.topology import Lane, architecture
@@ -51,8 +55,10 @@ __all__ = [
     'grant_of',
     'plan_job',
     'retry_job',
+    'selected_items',
     'settled',
     'shard_counts',
+    'shard_counts_of',
     'status_job',
     'status_lines',
     'submit_job',
@@ -367,12 +373,31 @@ def _place(
     return records
 
 
+def selected_items(items: list[Any], selected: list[int] | None) -> list[Any]:
+    """The batch a record ran: *items* themselves, or the *selected* indices of them in that order."""
+    if selected is None:
+        return items
+    missing = [i for i in selected if not 0 <= i < len(items)]
+    if missing:
+        msg = f'item indices {missing} are not in the items file (0-{len(items) - 1})'
+        raise ValueError(msg)
+    return [items[i] for i in selected]
+
+
 def submit_job(
-    config: Config, items: list[Any], machine: Machine, reach: Reach, *, stamp: str, ensure: Ensure | None = None
+    config: Config,
+    items: list[Any],
+    machine: Machine,
+    reach: Reach,
+    *,
+    stamp: str,
+    ensure: Ensure | None = None,
+    selected: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Span, ensure, submit -- the submission record."""
-    placed = _place(config, items, 0, machine.grants, machine=machine, reach=reach, ensure=ensure, stamp=stamp)
-    return {'stamp': stamp, 'placements': placed, 'moved': []}
+    """Span, ensure, submit *items* (or only the *selected* indices of them) -- the submission record."""
+    batch = selected_items(items, selected)
+    placed = _place(config, batch, 0, machine.grants, machine=machine, reach=reach, ensure=ensure, stamp=stamp)
+    return {'stamp': stamp, 'sha': config.job.sha, 'selected': selected, 'placements': placed, 'moved': []}
 
 
 def grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
@@ -385,23 +410,49 @@ def grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
     return Grant(user=account[0], hosts=hosts, slurm_account=account[1])
 
 
-def shard_counts(
-    record: dict[str, Any], machine: Machine, reach: Reach
-) -> list[tuple[str, dict[str, int] | Unreachable]]:
-    """Each placement's grant with its shards counted by Slurm state, or why its grant did not answer."""
-    found: list[tuple[str, dict[str, int] | Unreachable]] = []
-    for placement in record['placements']:
+type Found = list[tuple[str, dict[str, int] | Unreachable]]
+
+
+def shard_counts_of(records: list[dict[str, Any]], machine: Machine, reach: Reach) -> list[Found]:
+    """Per record, each placement's grant with its shards counted by Slurm state, or why its grant did not answer.
+
+    ONE ``sacct`` per grant answers every placement of every record on it, so watching several jobs costs
+    one ssh per grant per poll, not one per job.
+    """
+    by_grant: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for record in records:
+        for placement in record['placements']:
+            by_grant.setdefault(tuple(placement['account']), []).append(placement)
+    answers: dict[tuple[str, ...], dict[str, dict[int, str]] | Unreachable] = {}
+    for account, placements in by_grant.items():
+        ids = list(dict.fromkeys(j for p in placements for j in p['job_ids']))
         try:
-            states = shard_states(reach(grant_of(placement, machine)), placement['job_ids'])
+            answers[account] = job_states(reach(grant_of(placements[0], machine)), ids)
         except Unreachable as silent:
-            found.append((placement['grant'], silent))
-            continue
-        counts: dict[str, int] = {}
-        for shard in range(placement['shards']):
-            state = states.get(shard, 'UNKNOWN')
-            counts[state] = counts.get(state, 0) + 1
-        found.append((placement['grant'], counts))
+            answers[account] = silent
+    found: list[Found] = []
+    for record in records:
+        rows: Found = []
+        for placement in record['placements']:
+            answer = answers[tuple(placement['account'])]
+            if isinstance(answer, Unreachable):
+                rows.append((placement['grant'], answer))
+                continue
+            states: dict[int, str] = {}
+            for job_id in placement['job_ids']:  # a resubmit supersedes, shard by shard
+                states.update(answer.get(job_id, {}))
+            counts: dict[str, int] = {}
+            for shard in range(placement['shards']):
+                state = states.get(shard, 'UNKNOWN')
+                counts[state] = counts.get(state, 0) + 1
+            rows.append((placement['grant'], counts))
+        found.append(rows)
     return found
+
+
+def shard_counts(record: dict[str, Any], machine: Machine, reach: Reach) -> Found:
+    """Each placement's grant with its shards counted by Slurm state, or why its grant did not answer."""
+    return shard_counts_of([record], machine, reach)[0]
 
 
 def status_lines(found: list[tuple[str, dict[str, int] | Unreachable]]) -> list[str]:
@@ -440,7 +491,10 @@ class Gathered:
 
 
 def gather_job(record: dict[str, Any], machine: Machine, reach: Reach, *, budget: int) -> Gathered:
-    """Every placement's returned results, merged, with its run directory's files counted against *budget*."""
+    """Every placement's returned results, merged at their items-file index; each run directory's files counted.
+
+    A run directory holding more files than *budget* is named in :attr:`Gathered.over`.
+    """
     merged, returned, silent, over, earlier = [], 0, [], [], []
     for placement in record['placements']:
         run, where = reach(grant_of(placement, machine)), placement['run_dir']
@@ -455,8 +509,12 @@ def gather_job(record: dict[str, Any], machine: Machine, reach: Reach, *, budget
         elif files > budget:
             over.append(f'{placement["grant"]}: {where} holds {files} files, over file_budget = {budget}')
         returned += len(results)
-        offset = placement['items'][0]
-        merged += [{**r, 'index': offset + r['index']} for shard in results.values() for r in shard]
+        offset, selected = placement['items'][0], record.get('selected')
+        merged += [
+            {**r, 'index': offset + r['index'] if selected is None else selected[offset + r['index']]}
+            for shard in results.values()
+            for r in shard
+        ]
     return Gathered(sorted(merged, key=lambda r: r['index']), returned, silent, over, earlier)
 
 
