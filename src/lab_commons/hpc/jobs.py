@@ -47,6 +47,7 @@ __all__ = [
     'Reach',
     'built_config',
     'gather_job',
+    'grant_of',
     'plan_job',
     'retry_job',
     'settled',
@@ -371,7 +372,7 @@ def submit_job(
     return {'stamp': stamp, 'placements': placed, 'moved': []}
 
 
-def _grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
+def grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
     """The machine's grant for a recorded placement; its recorded targets when the machine no longer holds it."""
     account = tuple(placement['account'])
     known = next((g for g in machine.grants if g.account == account), None)
@@ -388,7 +389,7 @@ def shard_counts(
     found: list[tuple[str, dict[str, int] | Unreachable]] = []
     for placement in record['placements']:
         try:
-            states = shard_states(reach(_grant_of(placement, machine)), placement['job_ids'])
+            states = shard_states(reach(grant_of(placement, machine)), placement['job_ids'])
         except Unreachable as silent:
             found.append((placement['grant'], silent))
             continue
@@ -439,7 +440,7 @@ def gather_job(record: dict[str, Any], machine: Machine, reach: Reach, *, budget
     """Every placement's returned results, merged, with its run directory's files counted against *budget*."""
     merged, returned, silent, over, earlier = [], 0, [], [], []
     for placement in record['placements']:
-        run, where = reach(_grant_of(placement, machine)), placement['run_dir']
+        run, where = reach(grant_of(placement, machine)), placement['run_dir']
         try:
             results = gather(run, where)
             files, upgraded = files_of(run, where)
@@ -471,7 +472,7 @@ def retry_job(
     """
     said, dead = [], []
     for placement in record['placements']:
-        run = reach(_grant_of(placement, machine))
+        run = reach(grant_of(placement, machine))
         try:
             states = shard_states(run, placement['job_ids'])
             returned = gather(run, placement['run_dir'])
