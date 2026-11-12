@@ -102,6 +102,11 @@ def _out(text: str) -> None:
     emit(text)
 
 
+def _gathered_path(config: Config) -> Path:
+    """Where ``gather`` writes when ``-o`` is not given: beside the job file, as its submission record is."""
+    return _state_path(config).with_name(_state_path(config).name.replace('.submission.json', '.gathered.json'))
+
+
 def _record(config: Config) -> dict[str, Any]:
     record = json.loads(_state_path(config).read_text(encoding='utf-8'))
     if 'placements' not in record:
@@ -193,6 +198,7 @@ def _jobs(
             _out(line)
         return 0
     if verb == 'gather':
+        output = output or _gathered_path(config)  # a gather always writes, and names where (never a silent loss)
         if wait:
             return _gather_when_settled(config, record, machine, reach, output)
         return _gather(record, machine, reach, output, config.policy.file_budget)
@@ -290,7 +296,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument('step', nargs='?', choices=list(_RUN_NEEDS), help='run only: submit, then gather')
     parser.add_argument('-c', '--config', type=Path, help='the job file; run needs none ([cost]/[policy])')
     parser.add_argument(
-        '-o', '--output', type=Path, help='gather: merged item results (JSON); run gather: the record directory'
+        '-o',
+        '--output',
+        type=Path,
+        help=(
+            'gather: merged item results (JSON; default <job>.gathered.json beside the job file); '
+            'run gather: the record directory'
+        ),
     )
     parser.add_argument(
         '--wait',

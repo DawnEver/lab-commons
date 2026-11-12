@@ -401,3 +401,20 @@ def test_a_wall_refusal_with_costed_down_names_the_free_tier_reason(tmp_path: Pa
         jobs.plan_job(_config(tmp_path, LONG), 4, machine, _reach(logins))
     with pytest.raises(Unplaceable, match=r'headroom.*no costed grant answers'):
         jobs.plan_job(_config(tmp_path, Cost(cpus=500, mem_gb=2, seconds=600)), 4, machine, _reach(logins))
+
+
+def test_gather_without_output_writes_beside_the_job_file_and_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ``-o``: the merged results still land (``<job>.gathered.json``) and the line names them; ``-o`` wins."""
+    out, _slept, _gathered = _wait_cli(monkeypatch, [])
+    job = tmp_path / 'j.toml'
+    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: Config(source=job, policy=Policy(poll_seconds=70)))
+    assert cli.main(['gather', '-c', str(job)]) == 0
+    default = tmp_path / 'j.gathered.json'
+    assert default.read_text(encoding='utf-8') == '[]'
+    assert out[-1] == f'written {default}'
+    chosen = tmp_path / 'chosen.json'
+    assert cli.main(['gather', '-c', str(job), '-o', str(chosen)]) == 0
+    assert chosen.exists()
+    assert out[-1] == f'written {chosen}'
