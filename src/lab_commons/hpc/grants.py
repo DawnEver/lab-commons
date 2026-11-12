@@ -43,7 +43,7 @@ The ``[hpc]`` table (:mod:`lab_commons.config`; the declarations usually come fr
 
     [hpc.clusters.<name>.slurm_accounts.<slurm account>]
     billed = false                       # true: every job here spends money
-    budget = { core_hours = 1000, since = "2026-01-01" }   # a billed account's TOTAL allocation
+    budget = { core_hours = 1000, since = 2026-01-01, until = 2028-01-01 }   # TOTAL, until exclusive
 
     [[hpc.grant]]
     user = "me"
@@ -60,7 +60,7 @@ The ``[hpc]`` table (:mod:`lab_commons.config`; the declarations usually come fr
     movable_minutes = 30                 # a rerun-safe task this short may borrow the large-job region
 
 A BILLED ACCOUNT IS CHARGED AGAINST ITS BUDGET BEFORE EVERY ``sbatch`` (:mod:`lab_commons.hpc.budget`): what it
-has spent since ``since`` plus what its queued work may still spend plus this ask must fit ``core_hours``, or the
+has spent in ``[since, until)`` plus what its queued work may still spend plus this ask must fit ``core_hours``, or the
 submission is refused; a billed account with no budget is refused. A free account is never budget-checked.
 
 PAGING IS OS MEMORY MANAGEMENT OVER THE POOL (user design 2026-10-17). Tasks are page-sized so free memory
@@ -196,15 +196,22 @@ _ISO_DATE: Final = re.compile(r'\d{4}-\d{2}-\d{2}')
 
 @dataclass(frozen=True)
 class Budget:
-    """A billed Slurm account's TOTAL allocation: *core_hours* from the ISO date *since* on."""
+    """A billed Slurm account's TOTAL allocation: *core_hours* over the window ``[since, until)``.
+
+    Both ends are ISO dates (a TOML date or its string); *until* is EXCLUSIVE -- the first day the allocation is over.
+    """
 
     core_hours: float
     since: str
+    until: str
 
     def __post_init__(self) -> None:
-        """A budget is positive and starts on a date."""
-        if not self.core_hours > 0 or not _ISO_DATE.fullmatch(str(self.since)):
-            msg = f'a budget is positive core_hours since an ISO date (YYYY-MM-DD), got {self}'
+        """A budget is positive and spans a non-empty window of dates; both ends are kept as ISO strings."""
+        object.__setattr__(self, 'since', str(self.since))
+        object.__setattr__(self, 'until', str(self.until))
+        dated = _ISO_DATE.fullmatch(self.since) and _ISO_DATE.fullmatch(self.until)
+        if not self.core_hours > 0 or not dated or self.until <= self.since:
+            msg = f'a budget is positive core_hours over ISO dates since < until (YYYY-MM-DD), got {self}'
             raise ValueError(msg)
 
 
