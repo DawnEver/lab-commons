@@ -1,13 +1,13 @@
 """QUOTA PROTECTION FOR A BILLED ACCOUNT: every ``sbatch`` on it is charged against its declared TOTAL budget first.
 
 A billed Slurm account (``[hpc.clusters.<name>.slurm_accounts.<account>] billed = true``) declares
-``budget = { core_hours, since }`` (:class:`lab_commons.hpc.grants.Budget`). Before any submission on it,
+``budget = { core_hours, since, until }`` (:class:`lab_commons.hpc.grants.Budget`). Before any submission on it,
 :func:`charge` reads the account's ledger ONCE from ``sacct`` and refuses (:class:`OverBudget`) unless
 
     spent + committed + ask <= core_hours
 
-* ``spent``: ``CPUTimeRAW`` of every finished job of the account since ``since`` (every user: the budget is the
-  account's, not one login's);
+* ``spent``: ``CPUTimeRAW`` of every finished job of the account inside ``[since, until)`` (every user: the budget
+  is the account's, not one login's);
 * ``committed``: a job still pending or running may spend up to its requested CPUs times its time limit -- counted
   WHOLE, so a running job's elapsed part is counted twice. The bound errs toward refusing, never toward overspending;
 * ``ask``: this submission's tasks x CPUs x wall.
@@ -20,6 +20,7 @@ never charged and never read. Nothing here submits; the callers (:mod:`lab_commo
 from __future__ import annotations
 
 import shlex
+from datetime import date, timedelta
 from typing import Final
 
 from lab_commons.hpc.cluster import Runner
@@ -39,11 +40,12 @@ class OverBudget(ValueError):
     """A billed submission would pass its account's declared budget, or the account declares none."""
 
 
-def ledger_command(grant: Grant) -> str:
-    """The ONE ``sacct`` read of *grant*'s Slurm account since its budget began: parent rows, every user."""
+def ledger_command(grant: Grant, *, today: date) -> str:
+    """The ONE ``sacct`` read of *grant*'s Slurm account inside its window, up to *today*: parent rows, every user."""
     assert grant.budget is not None  # noqa: S101 -- charge() refuses a missing budget first
     account = shlex.quote(grant.slurm_account)
-    return f'sacct -n -P -X -a -A {account} -S {grant.budget.since}T00:00:00 -E now -o {FIELDS}'
+    last = min(today, date.fromisoformat(grant.budget.until) - timedelta(days=1))
+    return f'sacct -n -P -X -a -A {account} -S {grant.budget.since}T00:00:00 -E {last}T23:59:59 -o {FIELDS}'
 
 
 def _number(text: str) -> float:
@@ -74,11 +76,12 @@ def ask_of(plan: Plan, tasks: int | None = None) -> float:
     return count * plan.cpus * plan.minutes / 60
 
 
-def charge(run: Runner, grant: Grant, ask_core_hours: float) -> None:
+def charge(run: Runner, grant: Grant, ask_core_hours: float, *, today: date | None = None) -> None:
     """Refuse a submission of *ask_core_hours* on *grant* past its budget; a free grant passes unread.
 
     Raises:
-        OverBudget: the account is billed and declares no budget, or the ask does not fit what is left.
+        OverBudget: the account is billed and declares no budget, *today* (default: the local date) is outside its
+            window ``[since, until)``, or the ask does not fit what is left.
 
     """
     if not grant.billed:
@@ -86,16 +89,25 @@ def charge(run: Runner, grant: Grant, ask_core_hours: float) -> None:
     if grant.budget is None:
         msg = (
             f'{grant.name} is billed and declares no budget: declare [hpc.clusters.{grant.cluster_name or "<name>"}] '
-            f'slurm_accounts.{grant.slurm_account} budget = {{ core_hours = <total>, since = "<YYYY-MM-DD>" }} '
+            f'slurm_accounts.{grant.slurm_account} budget = {{ core_hours = <total>, since = <YYYY-MM-DD>, '
+            'until = <YYYY-MM-DD> } '
             'before any submission spends it'
         )
         raise OverBudget(msg)
-    spent, committed = spent_and_committed(run(ledger_command(grant), None))
+    day = date.today() if today is None else today  # noqa: DTZ011 -- the cluster's calendar day, near enough
+    budget = grant.budget
+    if day < date.fromisoformat(budget.since):
+        msg = f'{grant.name}: its budget has not begun (since {budget.since}) -- refused before sbatch'
+        raise OverBudget(msg)
+    if day >= date.fromisoformat(budget.until):
+        msg = f'{grant.name}: its allocation has ended (until {budget.until}, exclusive) -- refused before sbatch'
+        raise OverBudget(msg)
+    spent, committed = spent_and_committed(run(ledger_command(grant, today=day), None))
     left = grant.budget.core_hours - spent - committed
     if ask_core_hours > left:
         msg = (
             f'{grant.name}: this submission asks {ask_core_hours:.1f} core-h and the budget of '
-            f'{grant.budget.core_hours:g} core-h since {grant.budget.since} has {left:.1f} left '
+            f'{grant.budget.core_hours:g} core-h in [{budget.since}, {budget.until}) has {left:.1f} left '
             f'({spent:.1f} spent, {committed:.1f} committed to queued and running jobs) -- refused before sbatch'
         )
         raise OverBudget(msg)
