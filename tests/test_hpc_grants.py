@@ -61,15 +61,24 @@ def test_a_machine_holds_several_grants(tmp_path: Path, monkeypatch: pytest.Monk
         monkeypatch,
         """
 [hpc]
-[[hpc.grant]]
-user = "me"
+reach = ["research"]
+[hpc.clusters.one]
 hosts = ["login2", "login1"]
-slurm_account = "acct-free"
 partitions = ["shortq"]
+slurm_accounts = { acct-free = { billed = false } }
+[hpc.clusters.two]
+hosts = ["other"]
+slurm_accounts = { x = { billed = false } }
 [[hpc.grant]]
 user = "me"
-hosts = ["other"]
+cluster = "one"
+slurm_account = "acct-free"
+role = "research"
+[[hpc.grant]]
+user = "me"
+cluster = "two"
 slurm_account = "x"
+role = "research"
 priority = 2
 """,
     )
@@ -85,21 +94,33 @@ priority = 2
     assert not machine.grants[0].same_cluster(machine.grants[1])
 
 
+_CLUSTER = 'reach = ["r"]\n[clusters.c]\nhosts = ["h"]\nslurm_accounts = { s = { billed = false } }\n'
+_ROW = '[[grant]]\nuser = "u"\ncluster = "c"\nslurm_account = "s"\nrole = "r"\n'
+_BUDGETED = 'billed = false, budget = { core_hours = 1, since = "2026-01-01" }'
+
+
 def _grant(**extra: object) -> str:
-    keys = {'hosts': '["h"]', **extra}
-    return '[[grant]]\nuser = "u"\nslurm_account = "s"\n' + ''.join(f'{k} = {v}\n' for k, v in keys.items())
+    """One declared cluster and one grant on it, the grant carrying *extra* keys."""
+    return _CLUSTER + _ROW + ''.join(f'{k} = {v}\n' for k, v in extra.items())
 
 
 @pytest.mark.parametrize(
     ('table', 'match'),
     [
         ({}, r'no \[hpc\] table'),
-        (_grant() + '[[grant]]\nuser = "u"\nhosts = ["g"]\nslurm_account = "s"\n', 'granted twice'),
+        (_grant() + _ROW, 'granted twice'),
         (_grant(cpus='64'), r'\[\[hpc\.grant\]\] cpus is retired.*admission fits'),
         (_grant(key='"x"'), 'unknown keys'),
         (_grant(account='"u@h"'), 'unknown keys'),
-        (_grant(hosts='[]'), 'at least one login host'),
-        ({'grant': []}, r'no \[\[hpc\.grant\]\]'),
+        (_grant(hosts='["h"]'), r'\[\[hpc\.grant\]\] hosts is retired.*\[hpc\.clusters'),
+        (_grant(costed='true'), r'\[\[hpc\.grant\]\] costed is retired.*billed'),
+        (_grant().replace('hosts = ["h"]', 'hosts = []'), 'declares its login hosts'),
+        (_grant().replace('role = "r"\n', ''), 'declares no role'),
+        (_grant().replace('cluster = "c"', 'cluster = "elsewhere"'), 'names cluster'),
+        (_grant().replace('{ s = {', '{ t = {'), 'names slurm_account'),
+        (_grant().replace('billed = false', _BUDGETED), 'a budget belongs to a billed account'),
+        (_grant().replace('reach = ["r"]\n', ''), 'reach must list the roles'),
+        ({'grant': [], 'reach': []}, r'no \[\[hpc\.grant\]\]'),
     ],
 )
 def test_a_bad_grants_table_is_refused_by_name(table: str | dict, match: str) -> None:
@@ -113,11 +134,10 @@ def test_a_grant_declares_its_role_and_the_roles_table_is_carried_uninterpreted(
 
     lab-commons carries both and interprets neither. PLANTED CONTROL: an unknown grant key is still refused by name.
     """
-    raw = tomllib.loads(_grant(role='"verify"') + '[roles.verify]\nanything = 1\n')
+    raw = tomllib.loads(_grant() + '[roles.r]\nanything = 1\n')
     machine = load_grants(raw)
-    assert machine.grants[0].role == 'verify'
-    assert machine.roles == {'verify': {'anything': 1}}
-    assert load_grants(tomllib.loads(_grant())).grants[0].role == ''
+    assert machine.grants[0].role == 'r'
+    assert machine.roles == {'r': {'anything': 1}}
     assert load_grants(tomllib.loads(_grant())).roles == {}
     with pytest.raises(ValueError, match=r"unknown keys \['rolle'\]"):
         load_grants(tomllib.loads(_grant(rolle='"verify"')))
@@ -279,11 +299,8 @@ def test_a_grants_setup_runs_first_in_every_task(tmp_path: Path) -> None:
 
 
 def test_the_grant_table_reads_setup() -> None:
-    table = {'grant': [{**_GRANT_ROW, 'setup': ['module load git']}]}
-    assert load_grants(table).grants[0].setup == ('module load git',)
-
-
-_GRANT_ROW = {'user': 'me', 'hosts': ['h'], 'slurm_account': 'a'}
+    table = tomllib.loads(_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nsetup = ["module load git"]'))
+    assert load_grants(table).grants[0].setup == ('module load git',), "the cluster's set-up reaches its grants"
 
 
 def test_an_untagged_plan_carries_no_comment(tmp_path: Path) -> None:

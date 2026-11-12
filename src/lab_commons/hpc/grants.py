@@ -14,26 +14,44 @@ pool is derived from Slurm at plan time, or set by one expiring forge record
 WAITS (:func:`lab_commons.hpc.plan.allocate` gives it no room); only a task past a per-task ceiling is
 refused. No ``$LC_HPC_SESSION`` tags nothing and caps nothing.
 
-AN ACCOUNT IS ``(user, slurm_account)``, REACHED THROUGH ANY OF ITS LOGIN HOSTS. ``hosts`` is ordered: the
-runner (:func:`lab_commons.hpc.cluster.runner_for`) tries each with ``BatchMode`` ssh and a short connect timeout
-and uses the first that answers. Every host of one grant shares Slurm and the home directory, so a run
-submitted through one is read back through another. Quota is per account; a session's tags span them all.
+AN ACCOUNT IS ``(user, slurm_account)`` ON ONE DECLARED CLUSTER. A cluster's facts -- its login hosts, partitions,
+QOS, compute-node set-up, architecture, where an account's trees live, and which of its Slurm accounts are billed --
+are declared ONCE under ``[hpc.clusters.<name>]``; a grant names its cluster and inherits them, so no fact of a
+cluster is repeated per account. ``hosts`` is ordered: the runner (:func:`lab_commons.hpc.cluster.runner_for`)
+tries each with ``BatchMode`` ssh and a short connect timeout and uses the first that answers. Every host of one
+cluster shares Slurm and the home directory, so a run submitted through one is read back through another.
+
+A MACHINE REACHES AN ACCOUNT BY ITS ROLE (HPC-ACCESS-BY-ROLE). Every grant declares a ``role``; the machine's
+``[hpc] reach`` lists the roles it may use, and :func:`load_grants` keeps only the grants whose role it lists.
+An account another role reaches is REFUSED by name (:class:`AccessRefused`), never silently skipped, and a machine
+whose reach holds no grant is refused outright. What a role DOES is its reader's (``[hpc.roles]``).
 
 NO SECRETS. ``user@host`` is the ``ssh`` target; keys, ports and jump hosts stay in ``~/.ssh/config``.
 
-The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
+The ``[hpc]`` table (:mod:`lab_commons.config`; the declarations usually come from the family layer)::
 
     [hpc]
+    reach = ["research"]                 # the roles THIS machine may use; [] reaches nothing
+
+    [hpc.clusters.<name>]
+    hosts = ["login1.cluster.example", "login2.cluster.example"]   # tried in order, >= 1
+    partitions = ["shortq", "defq"]      # optional: candidates, in preference order
+    qos = { devq = "dev" }               # optional: partitions that need a --qos
+    setup = ["module load git/2.42.0"]   # optional: run first in every array task
+    architecture = "site-arch"           # optional: its entry in the cluster catalog (lab_commons.hpc.topology)
+    root = "/work/proj/{user}"           # optional: an account's trees, when compute nodes cannot see home
+
+    [hpc.clusters.<name>.slurm_accounts.<slurm account>]
+    billed = false                       # true: every job here spends money
+    budget = { core_hours = 1000, since = "2026-01-01" }   # a billed account's TOTAL allocation
+
     [[hpc.grant]]
     user = "me"
-    hosts = ["login1.cluster.example", "login2.cluster.example"]   # tried in order, >= 1
-    slurm_account = "acct-free"
-    priority = 0                                  # optional; breaks a tie between equally fast grants
-    partitions = ["shortq", "defq"]               # optional cluster facts: candidates, in preference order
-    qos = { devq = "dev" }                        # optional: partitions that need a --qos
-    setup = ["module load git/2.42.0"]   # optional: run first in every array task
-    costed = false                       # optional; true when this account's compute COSTS MONEY
-    architecture = "uon-ada"             # optional: its entry in the cluster catalog (lab_commons.hpc.topology)
+    cluster = "<name>"
+    slurm_account = "acct-free"          # one of the cluster's [slurm_accounts]
+    role = "research"                    # matched against [hpc] reach
+    owner = "A. Person"                  # optional: who holds the account
+    priority = 0                         # optional; breaks a tie between equally fast grants
 
     [hpc.paging]                         # optional; undeclared, placement ignores size and region
     page_cpus = 8                        # one page: a SMALL task fits it
@@ -41,26 +59,32 @@ The ``[hpc]`` table of the per-machine file (:mod:`lab_commons.config`)::
     large_pages = 4                      # more pages than this is LARGE; between, MEDIUM
     movable_minutes = 30                 # a rerun-safe task this short may borrow the large-job region
 
+A BILLED ACCOUNT IS CHARGED AGAINST ITS BUDGET BEFORE EVERY ``sbatch`` (:mod:`lab_commons.hpc.budget`): what it
+has spent since ``since`` plus what its queued work may still spend plus this ask must fit ``core_hours``, or the
+submission is refused; a billed account with no budget is refused. A free account is never budget-checked.
+
 PAGING IS OS MEMORY MANAGEMENT OVER THE POOL (user design 2026-10-17). Tasks are page-sized so free memory
 is never shattered into holes no task fits; the emptiest account is the large-job region, borrowed only by
 small movable tasks, and drained -- never killed -- while a large job waits (:func:`lab_commons.hpc.region.region`).
 
-A COSTED GRANT RUNS ONLY WHAT NO FREE GRANT CAN HOLD (user ruling 2026-10-27). Work is spanned over the
+A BILLED GRANT RUNS ONLY WHAT NO FREE GRANT CAN HOLD (user ruling 2026-10-27). Work is spanned over the
 free grants alone; only when they cannot hold its wall -- the span refuses, or an item's padded wall exceeds
-every free partition+QOS ceiling (2 days on Ada's ``free`` QOS) -- is it spanned over the costed grants alone,
-never a mix. A free-grant OUTAGE is not that: with free grants declared and none answering, the work is
-refused rather than billed (:func:`lab_commons.hpc.jobs.tiered`).
+every free partition+QOS ceiling -- is it spanned over the billed grants alone, never a mix. A free-grant
+OUTAGE is not that: with free grants declared and none answering, the work is refused
+rather than billed (:func:`lab_commons.hpc.jobs.tiered`).
 
-``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster.s
+``setup`` IS THE CLUSTER'S, NOT THE JOB'S. A compute node's environment is a fact of the cluster -- a real cluster's
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
-``FileNotFoundError: 'git'`` there, while the login node has it) -- so it is declared once per grant and
-prepended to every shard script that grant submits, before the job's own set-up.
+``FileNotFoundError: 'git'`` there, while the login node has it) -- so it is declared once per cluster and
+prepended to every shard script its grants submit, before the job's own set-up.
 """
 
 from __future__ import annotations
 
+import importlib
 import math
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -69,13 +93,19 @@ from lab_commons.config import config_path, section
 from lab_commons.hpc.config import Cluster, Cost
 from lab_commons.hpc.retired import RETIRED
 
-__all__ = ['COMMENT_PREFIX', 'SESSION_ENV', 'Grant', 'Machine', 'Paging', 'Session', 'load_grants']
+__all__ = [
+    'ACCESS_RULE', 'COMMENT_PREFIX', 'SESSION_ENV', 'AccessRefused', 'Budget', 'Grant', 'Machine', 'Paging', 'Session',
+    'check_target', 'declared_grants', 'load_grants',
+]  # fmt: skip
 
 #: Every submitted job's ``--comment`` starts with this, followed by the session name.
 COMMENT_PREFIX: Final = 'lc:session='
 
 #: The session this process submits for; the one source of the tag.
 SESSION_ENV: Final = 'LC_HPC_SESSION'
+
+#: The rule a refusal of an unreached account names.
+ACCESS_RULE: Final = 'HPC-ACCESS-BY-ROLE'
 
 #: Keys of ``[hpc]`` that were retired, each with its remedy.
 _RETIRED_KEYS: Final = {
@@ -161,9 +191,30 @@ def _session(source: str) -> Session | None:
     return Session(name)
 
 
+_ISO_DATE: Final = re.compile(r'\d{4}-\d{2}-\d{2}')
+
+
+@dataclass(frozen=True)
+class Budget:
+    """A billed Slurm account's TOTAL allocation: *core_hours* from the ISO date *since* on."""
+
+    core_hours: float
+    since: str
+
+    def __post_init__(self) -> None:
+        """A budget is positive and starts on a date."""
+        if not self.core_hours > 0 or not _ISO_DATE.fullmatch(str(self.since)):
+            msg = f'a budget is positive core_hours since an ISO date (YYYY-MM-DD), got {self}'
+            raise ValueError(msg)
+
+
 @dataclass(frozen=True)
 class Grant:
-    """One share of one Slurm account, reached over ``ssh`` as ``user`` at the first answering host."""
+    """One Slurm account on one cluster, reached over ``ssh`` as ``user`` at the first answering host.
+
+    The cluster's facts (hosts, partitions, qos, setup, architecture, root, billed, budget) are copied from its
+    ``[hpc.clusters.<name>]`` by :func:`load_grants`; a grant table never states them.
+    """
 
     user: str
     hosts: tuple[str, ...]
@@ -172,13 +223,20 @@ class Grant:
     partitions: tuple[str, ...] = ()
     qos: dict[str, str] = field(default_factory=dict)
     setup: tuple[str, ...] = ()
-    #: This account's compute costs money: it runs only work no free grant can hold.
-    costed: bool = False
+    #: This account's compute costs money: it runs only work no free grant can hold, inside its :attr:`budget`.
+    billed: bool = False
+    #: A billed account's total allocation; ``None``: undeclared, and a billed submission is then refused.
+    budget: Budget | None = None
     #: The cluster catalog's architecture this account runs on (:mod:`lab_commons.hpc.topology`); ``''``: none.
     architecture: str = ''
-    #: The role this account plays for the machine (a name in ``[hpc.roles]``); its meaning is the reader's, not
-    #: lab-commons' (dev-lab's forge reads it). ``''``: none declared.
+    #: The role this account plays, matched against ``[hpc] reach``; what a role DOES is ``[hpc.roles]``' reader's.
     role: str = ''
+    #: The declared cluster's name; ``''`` for a grant built in code.
+    cluster_name: str = ''
+    #: Where this account's trees live when its compute nodes cannot see home; ``''``: under home.
+    root: str = ''
+    #: Who holds the account; ``''``: undeclared.
+    owner: str = ''
 
     def __post_init__(self) -> None:
         """A grant names who, where and which account."""
@@ -225,9 +283,22 @@ class Affinity:
     borrow: bool = False
 
 
+class AccessRefused(PermissionError):
+    """An account this machine's ``[hpc] reach`` does not reach was asked for; the message names rule and remedy."""
+
+
+def _refusal(grant: Grant, reach: frozenset[str]) -> str:
+    return (
+        f'{grant.user} ({grant.cluster_name} {grant.slurm_account}) is a {grant.role!r} account and this machine '
+        f'reaches {sorted(reach)} -- {ACCESS_RULE}: a machine uses only the accounts whose role its declaration '
+        f"lists. Run it from a machine that reaches {grant.role!r}, or change this machine's declared reach in the "
+        'config source, never by a local edit'
+    )
+
+
 @dataclass(frozen=True)
 class Machine:
-    """The session this process submits for, and every grant the machine holds."""
+    """The session this process submits for, and every grant the machine REACHES."""
 
     session: Session | None
     grants: tuple[Grant, ...]
@@ -236,32 +307,175 @@ class Machine:
     affinity: Affinity | None = None
     #: ``[hpc.roles.<name>]`` as written, carried UNINTERPRETED: the roles' meaning is the reader's (dev-lab).
     roles: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: The declared grants this machine's reach does NOT hold: named by :meth:`grant`'s refusal, never used.
+    refused: tuple[Grant, ...] = ()
+    #: The roles this machine reaches (``[hpc] reach``, plus what a verified session role adds).
+    reach: frozenset[str] = frozenset()
+    #: Per refused role: how a session comes to reach it (``[hpc] session_reach``); ``''``: no session role does.
+    hints: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def comment(self) -> str:
         """The ``--comment`` every job of this session carries; ``''`` without one."""
         return COMMENT_PREFIX + self.session.name if self.session else ''
 
+    def grant(self, user: str) -> Grant:
+        """The reached grant of *user*.
 
-_GRANT_KEYS: Final = frozenset(Grant.__dataclass_fields__)
+        Raises:
+            AccessRefused: *user* is a declared account another role reaches.
+            LookupError: no grant declares *user*.
+
+        """
+        for grant in self.grants:
+            if grant.user == user:
+                return grant
+        for grant in self.refused:
+            if grant.user == user:
+                raise AccessRefused(_refusal(grant, self.reach) + self.hints.get(grant.role, ''))
+        msg = f'no [[hpc.grant]] declares user {user!r}; reached: {sorted({g.user for g in self.grants})}'
+        raise LookupError(msg)
 
 
-def _grant(raw: dict[str, Any], source: str) -> Grant:
+#: The keys a ``[[hpc.grant]]`` table may carry: who, which cluster and account, its role. The rest is the cluster's.
+_GRANT_KEYS: Final = frozenset({'user', 'cluster', 'slurm_account', 'role', 'owner', 'priority'})
+#: The keys of one ``[hpc.clusters.<name>]``.
+_CLUSTER_KEYS: Final = frozenset({'hosts', 'partitions', 'qos', 'setup', 'architecture', 'root', 'slurm_accounts'})
+#: The keys of one ``[hpc.clusters.<name>.slurm_accounts.<account>]``.
+_ACCOUNT_KEYS: Final = frozenset({'billed', 'budget'})
+#: The keys of ``[hpc]``.
+_HPC_KEYS: Final = frozenset(
+    {'reach', 'session_reach', 'session_verifier', 'clusters', 'grant', 'paging', 'roles', 'ssh'}
+)
+
+
+def _refuse_keys(raw: Mapping[str, Any], known: frozenset[str], where: str, source: str) -> None:
     for key in raw:
-        if (remedy := RETIRED.get(f'[[hpc.grant]] {key}')) is not None:
-            msg = f'{source}: [[hpc.grant]] {key} is retired: {remedy}'
+        if (remedy := RETIRED.get(f'{where} {key}')) is not None:
+            msg = f'{source}: {where} {key} is retired: {remedy}'
             raise ValueError(msg)
-    unknown = set(raw) - _GRANT_KEYS
-    if unknown:
-        msg = f'{source}: [[hpc.grant]] has unknown keys {sorted(unknown)}; known: {sorted(_GRANT_KEYS)}'
+    if unknown := set(raw) - known:
+        msg = f'{source}: {where} has unknown keys {sorted(unknown)}; known: {sorted(known)}'
         raise ValueError(msg)
-    return Grant(**{k: tuple(v) if isinstance(v, list) else v for k, v in raw.items()})
 
 
-def load_grants(table: dict[str, Any] | None = None) -> Machine:
-    """Read the ``[hpc]`` table (default: this machine's). No table or a duplicate account is refused."""
-    source = f'{config_path()} [hpc]'
-    raw = section('hpc') if table is None else table
+def _account(facts: object, where: str, source: str) -> tuple[bool, Budget | None]:
+    if not isinstance(facts, dict) or not isinstance(facts.get('billed'), bool):
+        msg = f'{source}: {where} declares billed = true|false'
+        raise ValueError(msg)  # noqa: TRY004 -- a declaration defect, refused like every other
+    _refuse_keys(facts, _ACCOUNT_KEYS, where, source)
+    budget = facts.get('budget')
+    if budget is not None and not facts['billed']:
+        msg = f'{source}: {where} is free: a budget belongs to a billed account'
+        raise ValueError(msg)
+    return facts['billed'], None if budget is None else Budget(**budget)
+
+
+def _clusters(raw: object, source: str) -> dict[str, dict[str, Any]]:
+    """Each declared cluster's table, its Slurm accounts resolved to ``{account: (billed, budget)}``."""
+    if not isinstance(raw, dict) or not all(isinstance(table, dict) for table in raw.values()):
+        msg = f'{source}: [hpc.clusters] holds one [hpc.clusters.<name>] table per cluster'
+        raise ValueError(msg)
+    clusters = {}
+    for name, table in raw.items():
+        where = f'[hpc.clusters.{name}]'
+        _refuse_keys(table, _CLUSTER_KEYS, where, source)
+        accounts = table.get('slurm_accounts')
+        if not table.get('hosts') or not isinstance(accounts, dict) or not accounts:
+            msg = f'{source}: {where} declares its login hosts and at least one slurm_accounts.<account>'
+            raise ValueError(msg)
+        resolved = {acct: _account(facts, f'{where} slurm_accounts.{acct}', source) for acct, facts in accounts.items()}
+        clusters[name] = {**table, 'slurm_accounts': resolved}
+    return clusters
+
+
+def _grant(raw: dict[str, Any], clusters: Mapping[str, Mapping[str, Any]], source: str) -> Grant:
+    _refuse_keys(raw, _GRANT_KEYS, '[[hpc.grant]]', source)
+    user, name, account = raw.get('user', ''), raw.get('cluster', ''), raw.get('slurm_account', '')
+    if not raw.get('role'):
+        msg = f'{source}: [[hpc.grant]] {user!r} declares no role; a machine reaches an account only by its role'
+        raise ValueError(msg)
+    if name not in clusters:
+        msg = f'{source}: [[hpc.grant]] {user!r} names cluster {name!r}; declared: {sorted(clusters)}'
+        raise ValueError(msg)
+    cluster = clusters[name]
+    if account not in cluster['slurm_accounts']:
+        msg = (
+            f'{source}: [[hpc.grant]] {user!r} names slurm_account {account!r}, not one of '
+            f'[hpc.clusters.{name}] slurm_accounts {sorted(cluster["slurm_accounts"])}'
+        )
+        raise ValueError(msg)
+    billed, budget = cluster['slurm_accounts'][account]
+    return Grant(
+        user=user,
+        hosts=tuple(cluster['hosts']),
+        slurm_account=account,
+        priority=raw.get('priority', 0),
+        partitions=tuple(cluster.get('partitions', ())),
+        qos=dict(cluster.get('qos', {})),
+        setup=tuple(cluster.get('setup', ())),
+        billed=billed,
+        budget=budget,
+        architecture=cluster.get('architecture', ''),
+        role=raw['role'],
+        cluster_name=name,
+        root=cluster.get('root', '').replace('{user}', user),
+        owner=raw.get('owner', ''),
+    )
+
+
+def _roles_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(role, str) and role for role in value)
+
+
+def _session_roles(raw: Mapping[str, Any], source: str) -> frozenset[str]:
+    """The session roles the declared verifier proves THIS session holds; none without a verifier."""
+    spec = raw.get('session_verifier', '')
+    if not spec:
+        return frozenset()
+    module, _, name = str(spec).partition(':')
+    try:
+        held = getattr(importlib.import_module(module), name)()
+    except (ImportError, AttributeError) as missing:
+        msg = f'{source}: [hpc] session_verifier {spec!r} does not load ({missing}); a session role is never assumed'
+        raise ValueError(msg) from None
+    return frozenset(held)
+
+
+def _reach(raw: Mapping[str, Any], source: str) -> frozenset[str]:
+    """The roles this machine reaches: its own ``reach``, plus what a VERIFIED session role adds on top.
+
+    A session role never widens a machine that reaches nothing: with ``reach = []`` it adds nothing.
+    """
+    reach, by_session = raw.get('reach'), raw.get('session_reach', {})
+    if not _roles_list(reach):
+        msg = (
+            f'{source}: [hpc] reach must list the roles this machine may use (["research"], or [] for none) -- '
+            f'{ACCESS_RULE}: undeclared, it reaches nothing'
+        )
+        raise ValueError(msg)
+    if not isinstance(by_session, dict) or not all(_roles_list(roles) for roles in by_session.values()):
+        msg = f'{source}: [hpc] session_reach maps a session role to the account roles it adds, e.g. {{ x = ["y"] }}'
+        raise ValueError(msg)
+    if not reach:
+        return frozenset()
+    held = _session_roles(raw, source) & set(by_session)
+    return frozenset(reach).union(*(by_session[role] for role in held))
+
+
+def _hint(raw: Mapping[str, Any], role: str) -> str:
+    """How a session comes to reach *role*, when a session role adds it."""
+    adders = sorted(name for name, roles in raw.get('session_reach', {}).items() if role in roles)
+    return f' (a session reaches it by holding the {" or ".join(adders)} session role)' if adders else ''
+
+
+def _table(table: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    return f'{config_path()} [hpc]', section('hpc') if table is None else table
+
+
+def declared_grants(table: dict[str, Any] | None = None) -> tuple[tuple[Grant, ...], frozenset[str]]:
+    """EVERY grant the ``[hpc]`` table declares, reached or not, and the machine's reach; a defect refused."""
+    source, raw = _table(table)
     if not raw:
         msg = f'{source}: no [hpc] table -- write one (see lab_commons.hpc.grants) to give this machine a grant'
         raise ValueError(msg)
@@ -269,15 +483,13 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
         if key in raw:
             msg = f'{source}: [hpc] {key} is retired: {remedy}'
             raise ValueError(msg)
-    unknown = set(raw) - {'grant', 'paging', 'roles', 'ssh'}
-    if unknown:
-        msg = f'{source}: unknown keys {sorted(unknown)}; known: ["grant", "paging", "roles", "ssh"]'
-        raise ValueError(msg)
+    _refuse_keys(raw, _HPC_KEYS, '[hpc]', source)
     roles = raw.get('roles', {})
     if not isinstance(roles, dict) or not all(isinstance(row, dict) for row in roles.values()):
         msg = f'{source}: [hpc.roles] holds one [hpc.roles.<name>] table per role'
         raise ValueError(msg)
-    grants = tuple(_grant(g, source) for g in raw.get('grant', []))
+    clusters = _clusters(raw.get('clusters', {}), source)
+    grants = tuple(_grant(g, clusters, source) for g in raw.get('grant', []))
     if not grants:
         msg = f'{source}: no [[hpc.grant]] -- this machine reaches no account'
         raise ValueError(msg)
@@ -287,5 +499,46 @@ def load_grants(table: dict[str, Any] | None = None) -> Machine:
             msg = f'{source}: account {grant.account!r} is granted twice; one grant per account'
             raise ValueError(msg)
         seen.add(grant.account)
-    session = _session(source)
-    return Machine(session=session, grants=grants, paging=_paging(raw.get('paging'), source), roles=roles)
+    return grants, _reach(raw, source)
+
+
+def load_grants(table: dict[str, Any] | None = None) -> Machine:
+    """The machine's REACHED grants, read from the ``[hpc]`` table (default: this machine's).
+
+    Raises:
+        AccessRefused: the reach holds none of the declared grants.
+        ValueError: no table; a retired or unknown key; a grant naming an undeclared cluster or Slurm account, or
+            no role; a duplicate account; an undeclared reach.
+
+    """
+    source, raw = _table(table)
+    grants, reach = declared_grants(raw)
+    reached = tuple(grant for grant in grants if grant.role in reach)
+    if not reached:
+        msg = f'{source}: [hpc] reach {sorted(reach)} holds none of the declared accounts -- {ACCESS_RULE}'
+        raise AccessRefused(msg)
+    return Machine(
+        session=_session(source),
+        grants=reached,
+        paging=_paging(raw.get('paging'), source),
+        roles=raw.get('roles', {}),
+        refused=tuple(grant for grant in grants if grant.role not in reach),
+        reach=reach,
+        hints={grant.role: _hint(raw, grant.role) for grant in grants if grant.role not in reach},
+    )
+
+
+def check_target(target: str, table: dict[str, Any] | None = None) -> None:
+    """Refuse an ``ssh`` *target* (``user@host``) that is a DECLARED account this machine does not reach.
+
+    A door taking ``--at`` reaches its target directly; this keeps it inside the rule. A target no declaration
+    names, or a machine with no ``[hpc]`` table (the account's own login node), is not this rule's to judge.
+    """
+    source, raw = _table(table)
+    if not raw:
+        return
+    grants, reach = declared_grants(raw)
+    for grant in grants:
+        if target in grant.targets and grant.role not in reach:
+            msg = f'{source}: {_refusal(grant, reach)}{_hint(raw, grant.role)}'
+            raise AccessRefused(msg)

@@ -36,7 +36,7 @@ from collections.abc import Callable, Iterable
 from typing import Final
 
 from lab_commons.hpc.cluster import Runner, runner_for, ssh_runner
-from lab_commons.hpc.grants import Grant, Machine, load_grants
+from lab_commons.hpc.grants import AccessRefused, Grant, Machine, check_target, load_grants
 from lab_commons.log import emit
 
 __all__ = ['DELETE', 'MARK', 'NAME', 'PROBE', 'TIMEOUT_S', 'contained', 'main', 'running_under', 'valid_name']
@@ -111,11 +111,10 @@ def _grant(machine: Machine, user: str | None) -> Grant:
     if user is None:
         msg = f'this machine holds several grants; pass --grant <user> ({", ".join(g.user for g in machine.grants)})'
         raise _Refused(msg)
-    for grant in machine.grants:
-        if grant.user == user:
-            return grant
-    msg = f'no grant for user {user!r}'
-    raise _Refused(msg)
+    try:
+        return machine.grant(user)
+    except (AccessRefused, LookupError) as refused:
+        raise _Refused(str(refused)) from None
 
 
 def _validate(root: str, names: list[str]) -> None:
@@ -171,12 +170,13 @@ def main(
     try:
         _validate(args.root, args.names)
         if args.at:
+            check_target(args.at)
             run, where = at(args.at, args.timeout), args.at
         else:
             grant = _grant(machine or load_grants(), args.grant)
             run, where = reach(grant, args.timeout), grant.name
         targets = _resolve(run, args.root, args.names, where)
-    except _Refused as refused:
+    except (_Refused, AccessRefused) as refused:
         emit(f'clean refused: {refused}', err=True)
         return 2
     residual = 0

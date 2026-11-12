@@ -28,7 +28,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from lab_commons.hpc.cluster import Runner, local_runner, runner_for, ssh_runner
-from lab_commons.hpc.grants import SESSION_ENV, load_grants
+from lab_commons.hpc.grants import SESSION_ENV, AccessRefused, check_target, load_grants
 from lab_commons.hpc.home import (
     QUOTA,
     QUOTA_SCRIPT,
@@ -137,12 +137,16 @@ def home_pass(run: Runner, *, now: float, managed: Iterable[str] = ()) -> HomeRe
 
 def reach(at: str | None, grant: str | None) -> tuple[Runner, str]:
     """The runner and its name: ``--at user@host`` over ssh, else this login node, else a machine-file grant."""
-    if at:
-        return ssh_runner(at), at
-    if shutil.which('sbatch') is not None and grant is None:
-        return local_runner, socket.gethostname()
-    machine = load_grants()
-    chosen = [g for g in machine.grants if grant in {None, g.user}]
+    try:
+        if at:
+            check_target(at)
+            return ssh_runner(at), at
+        if shutil.which('sbatch') is not None and grant is None:
+            return local_runner, socket.gethostname()
+        machine = load_grants()
+        chosen = [machine.grant(grant)] if grant else list(machine.grants)
+    except (AccessRefused, LookupError) as refused:
+        raise LeaseRefused(str(refused)) from None
     if len(chosen) != 1:
         msg = f'pass --at user@host, or --grant <user> naming one of: {", ".join(g.user for g in machine.grants)}'
         raise LeaseRefused(msg)
