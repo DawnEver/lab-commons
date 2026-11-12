@@ -31,6 +31,7 @@ from typing import Any
 
 from lab_commons.hpc.affinity import place
 from lab_commons.hpc.artifact import enter_lines, require
+from lab_commons.hpc.budget import ask_of, charge
 from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, submit
 from lab_commons.hpc.config import Config, Cost
 from lab_commons.hpc.grants import Grant, Machine
@@ -262,44 +263,44 @@ def _spread(
 def tiered(
     config: Config, n_items: int, grants: tuple[Grant, ...], *, machine: Machine, reach: Reach
 ) -> tuple[Placement, ...]:
-    """Span over the free candidates in *grants*; over the costed ones only for work the free TIER cannot hold.
+    """Span over the free candidates in *grants*; over the billed ones only for work the free TIER cannot hold.
 
     The free tier is every free grant *machine* declares, candidate or not: a free grant ``_place`` dropped
-    for another reason still says whether the work needs money. Costed is used only when EVERY free grant
+    for another reason still says whether the work needs money. Billed is used only when EVERY free grant
     answered and none holds the work -- the span refuses for room (:class:`Unplaceable`) or the padded wall
-    exceeds every free ceiling. A silent free grant refuses rather than bills; costed and free never share a
+    exceeds every free ceiling. A silent free grant refuses rather than bills; billed and free never share a
     span; any other ``ValueError`` is the request's defect and propagates.
     """
 
     def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
         return place(candidates, machine.affinity, lambda c: _spread(config, n_items, c, machine))
 
-    costed = [g for g in grants if g.costed]
-    tier = [g for g in machine.grants if not g.costed]
+    billed = [g for g in grants if g.billed]
+    tier = [g for g in machine.grants if not g.billed]
     if not tier:
-        return over(_answering(tuple(costed), reach))
+        return over(_answering(tuple(billed), reach))
     answering = _answering(tuple(tier), reach)
     silent = [g.name for g in tier if all(g is not a for a, _ in answering)]
     holders, reason = _holding(config, n_items, answering, machine)
     if holders:
         mine = [(g, s) for g, s in holders if g in grants]
         if not mine:
-            msg = 'the free tier holds this work but none of its grants is a candidate; costed is not for that'
+            msg = 'the free tier holds this work but none of its grants is a candidate; billed is not for that'
             raise ValueError(msg)
         return over(mine)
-    if not costed:
+    if not billed:
         mine = [(g, s) for g, s in answering if g in grants]
         if not mine:
             raise Unplaceable(reason)
         return over(mine)
     if silent:
         msg = (
-            f'{reason}; free grant(s) {", ".join(silent)} silent -- a costed grant never pays for unreachable free room'
+            f'{reason}; free grant(s) {", ".join(silent)} silent -- a billed grant never pays for unreachable free room'
         )
         raise Unplaceable(msg)
-    paid = _answering(tuple(costed), reach)
+    paid = _answering(tuple(billed), reach)
     if not paid:
-        msg = f'{reason}; no costed grant answers'
+        msg = f'{reason}; no billed grant answers'
         raise Unplaceable(msg)
     return over(paid)
 
@@ -347,7 +348,9 @@ def _place(
     for n, placement in enumerate(placements):
         start, stop = placement.items
         tag = f'{stamp}-{n}'
-        sub = submit(reach(placement.grant), placement.plan, config, items[start:stop], stamp=tag)
+        run = reach(placement.grant)
+        charge(run, placement.grant, ask_of(placement.plan))
+        sub = submit(run, placement.plan, config, items[start:stop], stamp=tag)
         records.append(
             {
                 'grant': placement.grant.name,
@@ -493,6 +496,7 @@ def retry_job(
                 'lane_mems': tuple(raw['lane_mems']),
             }
         )
+        charge(run, grant_of(placement, machine), ask_of(plan, len(redo)))
         sub = submit(run, plan, config, [], stamp=placement['stamp'], only=redo)
         placement['job_ids'].append(sub.job_id)
         said.append(f'{placement["grant"]}: resubmitted {len(redo)} shards as job {sub.job_id}')

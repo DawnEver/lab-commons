@@ -329,7 +329,7 @@ COSTED = Grant(
     slurm_account='acct-free',
     partitions=('shortq', 'defq'),
     qos={'shortq': 'costed', 'defq': 'costed'},
-    costed=True,
+    billed=True,
 )
 #: Padded (x1.5) to 4320 min: past the free QOS's 2-day (2880-min) ceiling, inside the costed 7 days.
 LONG = Cost(cpus=1, mem_gb=2, seconds=3 * 24 * 3600 / 1.5)
@@ -344,7 +344,7 @@ def test_a_job_free_grants_hold_never_touches_a_costed_grant(tmp_path: Path) -> 
     machine, logins = _paid()
     placed = jobs.plan_job(_config(tmp_path), 2000, machine, _reach(logins))
     assert [p.grant for p in placed] == [NEAR]
-    # Planted control: the costed grant alone CAN take this work -- free was chosen, not forced.
+    # Planted control: the billed grant alone CAN take this work -- free was chosen, not forced.
     alone = Machine(session=None, grants=(COSTED,))
     assert [p.grant for p in jobs.plan_job(_config(tmp_path), 2000, alone, _reach(logins))] == [COSTED]
 
@@ -397,9 +397,9 @@ def test_a_refusal_that_is_not_about_room_never_spills_to_costed(tmp_path: Path)
 def test_a_wall_refusal_with_costed_down_names_the_free_tier_reason(tmp_path: Path) -> None:
     machine, logins = _paid()
     logins['pay'] = _Login('pay', up=False)
-    with pytest.raises(Unplaceable, match=r'ceiling.*no costed grant answers'):
+    with pytest.raises(Unplaceable, match=r'ceiling.*no billed grant answers'):
         jobs.plan_job(_config(tmp_path, LONG), 4, machine, _reach(logins))
-    with pytest.raises(Unplaceable, match=r'headroom.*no costed grant answers'):
+    with pytest.raises(Unplaceable, match=r'headroom.*no billed grant answers'):
         jobs.plan_job(_config(tmp_path, Cost(cpus=500, mem_gb=2, seconds=600)), 4, machine, _reach(logins))
 
 

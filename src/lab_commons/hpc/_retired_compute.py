@@ -70,6 +70,14 @@ COMPUTE: Final[dict[str, str]] = {
     ),
     '--own-weight': 'nothing: the box keeps its [reserve] margins for its own user; favour work with [priority]',
     '[[hpc.grant]] cpus': ('nothing: admission fits each job against what the account has free now -- delete the line'),
+    # A cluster's facts are declared once per cluster, never per account (HPC-ACCESS-BY-ROLE, 2026-11-12).
+    **{
+        f'[[hpc.grant]] {key}': f'declare it once on [hpc.clusters.<name>] and name the cluster in the grant ({key})'
+        for key in ('hosts', 'partitions', 'qos', 'setup', 'architecture')
+    },
+    '[[hpc.grant]] costed': (
+        'billed = true|false on [hpc.clusters.<name>.slurm_accounts.<account>], with its budget when billed'
+    ),
     # A box job's cpu was capped at the box's because its cpu was wall x cores; it is now measured (2026-10-13).
     'model.fitted': 'nothing: a demand is what the job measured (lab_commons.proccpu.TreeCpu)',
     # A carry is derived from each test's footprint, never declared per repo (2026-10-13).
