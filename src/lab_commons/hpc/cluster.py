@@ -38,6 +38,7 @@ from lab_commons.outcomes.record import OUTCOME, Event
 
 __all__ = [
     'BUILD_TIMEOUT',
+    'RUN_DIR',
     'SUBMIT_LIMIT',
     'TERMINAL_OK',
     'NotOnCluster',
@@ -45,6 +46,7 @@ __all__ = [
     'Submission',
     'SubmitLimit',
     'Unreachable',
+    'bind',
     'failover_runner',
     'files_of',
     'gather',
@@ -273,6 +275,22 @@ class Submission:
     shards: int
 
 
+#: The token an item's string values may hold for its submission's run directory (``"out": "{run_dir}/3"``):
+#: a re-submission writes under its own directory, so no ``out`` is edited by hand to keep an earlier run.
+RUN_DIR: Final = '{run_dir}'
+
+
+def bind(value: Any, run_dir: str) -> Any:  # noqa: ANN401 -- an item is any JSON value
+    """*value* with every :data:`RUN_DIR` in its strings replaced by *run_dir*, at any depth."""
+    if isinstance(value, str):
+        return value.replace(RUN_DIR, run_dir)
+    if isinstance(value, list):
+        return [bind(v, run_dir) for v in value]
+    if isinstance(value, dict):
+        return {k: bind(v, run_dir) for k, v in value.items()}
+    return value
+
+
 def _array_spec(indices: Sequence[int], throttle: int) -> str:
     """Sorted shard indices as Slurm ranges -- ``0-99,104%24`` -- so a large array stays one short argument."""
     runs: list[list[int]] = []
@@ -304,7 +322,7 @@ def submit(
     if only is None:
         manifest = {
             'entry': config.job.entry,
-            'items': items,
+            'items': bind(items, run_dir),
             'shards': [list(s) for s in plan.shards],
             'lanes': lanes_of(plan),
         }
@@ -336,7 +354,7 @@ def submit_bands(
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
     shards = [list(s) for plan in plans for s in plan.shards]
-    manifest = {'entry': config.job.entry, 'items': items, 'shards': shards, 'lanes': lanes_of(plans[0])}
+    manifest = {'entry': config.job.entry, 'items': bind(items, run_dir), 'shards': shards, 'lanes': lanes_of(plans[0])}
     run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
     run(f'cat > {quoted}/job.sh', render_script(plans[0], config, run_dir))
     job_ids, first = [], 0

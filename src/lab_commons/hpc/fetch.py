@@ -4,8 +4,9 @@
 result or diagnosis on disk there must never cost a re-run to read (issue: a 4 MB event log and the result rows
 were only listed as omitted). This door reads them, READ-ONLY and CONFINED:
 
-- the item is the job file's item ``N``; its ``out`` directory is the item's own ``out``; the grant is the one the
-  recorded submission placed that item on (``<job>.submission.json``) -- nothing is named by hand;
+- the item is the job file's item ``N``; its ``out`` directory is the item's own ``out`` (``{run_dir}`` bound as
+  submit bound it); the grant is the one the recorded submission placed that item on (``<job>.submission.json``,
+  through its ``--only`` selection) -- nothing is named by hand;
 - *glob* is relative to ``out`` (a ``find -path`` pattern, ``*`` crosses directories); ``..`` or a leading ``/`` is
   refused before any ssh, and the remote side refuses a file whose real path leaves ``out``;
 - every match is LISTED with its size; files are copied whole, smallest first, until ``--budget-mb`` is spent, and
@@ -25,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc.cluster import Runner, Unreachable, runner_for
+from lab_commons.hpc.cluster import RUN_DIR, Runner, Unreachable, bind, runner_for
 from lab_commons.hpc.config import load_config
 from lab_commons.hpc.grants import Grant, load_grants
 from lab_commons.hpc.jobs import grant_of
@@ -50,7 +51,13 @@ def _pattern(glob: str) -> str:
     return glob
 
 
-def _placed(record: dict[str, Any], index: int) -> dict[str, Any]:
+def _placed(record: dict[str, Any], item: int) -> dict[str, Any]:
+    """The placement that ran items-file index *item*: a ``--only`` submission ran it at its batch position."""
+    selected = record.get('selected')
+    if selected is not None and item not in selected:
+        msg = f'item {item} was not submitted (--only {",".join(map(str, selected))})'
+        raise _Refused(msg)
+    index = item if selected is None else selected.index(item)
     for placement in record['placements']:
         start, stop = placement['items']
         if start <= index < stop:
@@ -121,7 +128,9 @@ def main(argv: list[str], *, reach: Callable[[Grant], Runner] = runner_for) -> i
         config = load_config(args.config)
         out = _out_of(json.loads(config.items_path().read_text(encoding='utf-8')), args.item, config.items_path())
         record = json.loads(args.config.with_suffix('.submission.json').read_text(encoding='utf-8'))
-        grant: Grant = grant_of(_placed(record, args.item), load_grants())
+        placement = _placed(record, args.item)
+        grant: Grant = grant_of(placement, load_grants())
+        out = bind(out, placement['run_dir']) if RUN_DIR in out else out
         dest = args.output or args.config.with_suffix('.fetched') / str(args.item)
         lines = fetch(reach(grant), out, args.path, dest, int(args.budget_mb * _MB))
     except (_Refused, OSError, ValueError) as refused:

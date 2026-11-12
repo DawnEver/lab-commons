@@ -82,3 +82,31 @@ def test_the_cli_resolves_the_items_out_and_grant_from_the_job_and_its_submissio
     assert [g.user for g in reached] == ['u1']
     assert 'cd /o/1' in seen[0]
     assert door.main(['-c', str(job), '--item', '5', '--path', 'x'], reach=reach) == 2
+
+
+def test_an_only_submission_maps_the_item_to_its_batch_place_and_binds_its_run_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--only 4,2``: item 2 ran second, on the second placement, its ``out`` under that run directory."""
+    job = tmp_path / 'j.toml'
+    job.write_text('[job]\nentry = "m:f"\nitems = "items.json"\n', encoding='utf-8')
+    items = [{'out': '{run_dir}/' + str(i)} for i in range(5)]
+    (tmp_path / 'items.json').write_text(json.dumps(items), encoding='utf-8')
+    placements = [
+        {'items': [0, 1], 'account': ['u0', 'a'], 'targets': ['u0@h0'], 'run_dir': '/r/a'},
+        {'items': [1, 2], 'account': ['u1', 'a'], 'targets': ['u1@h1'], 'run_dir': '/r/b'},
+    ]
+    record = {'selected': [4, 2], 'placements': placements}
+    (tmp_path / 'j.submission.json').write_text(json.dumps(record), encoding='utf-8')
+    monkeypatch.setattr(door, 'load_grants', lambda: Machine(session=None, grants=()))
+    reached: list[str] = []
+    seen: list[str] = []
+
+    def reach(grant: Grant) -> door.Runner:
+        reached.append(grant.user)
+        return lambda command, _stdin=None: seen.append(command) or ''
+
+    assert door.main(['-c', str(job), '--item', '2', '--path', 'x'], reach=reach) == 0
+    assert reached == ['u1']
+    assert 'cd /r/b/2' in seen[0]
+    assert door.main(['-c', str(job), '--item', '3', '--path', 'x'], reach=reach) == 2, 'item 3 was not submitted'
