@@ -64,7 +64,7 @@ SUBMIT_ROOM_SPENT: Final = 'submit limit already reached'
 class Unplaceable(ValueError):
     """No room: no headroom, quota, partition wall or inodes for the work -- never a malformed request.
 
-    The one refusal a costed grant may answer (:func:`lab_commons.hpc.jobs.tiered`); any other ``ValueError``
+    The one refusal a billed grant may answer (:func:`lab_commons.hpc.jobs.tiered`); any other ``ValueError``
     is a defect in the request and propagates as itself.
     """
 

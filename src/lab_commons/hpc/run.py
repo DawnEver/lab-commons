@@ -68,6 +68,7 @@ from dataclasses import asdict, replace
 from typing import Any, Final
 
 from lab_commons.compute.measured import Measured, memory_band
+from lab_commons.hpc.budget import ask_of, charge
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
@@ -286,6 +287,7 @@ def submit_round(
         name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=(ENV,), entry=f'{ITEM_MODULE}:run'
     )
     config = Config(job=job, cost=cost, policy=policy)
+    charge(runners[chosen.account], chosen, sum(ask_of(plan) for plan in plans))
     run_dir, job_ids = submit_bands(runners[chosen.account], plans, config, items, stamp=tag)
     for band, job_id in zip(bands, job_ids, strict=True):
         band['job_id'] = job_id
