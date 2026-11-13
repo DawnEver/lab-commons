@@ -476,3 +476,21 @@ def test_a_measured_exit_supersedes_an_ask_even_lower_and_a_kill_only_raises() -
     assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] >= 300.0
     learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=40.0, cpu_s=1.0, wall_s=1.0), ended='exit')
     assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(60.0)
+
+
+def test_a_table_is_parsed_once_per_version_and_a_rewrite_is_never_served_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One forge read asked for the same table ~140 times; it is parsed once per version of the file.
+
+    PLANTED CONTROL: a write in between (a new file version) is read, never the parse held from before.
+    """
+    learned.learn_peaks(REPO, {'a.py': 1.0})
+    parses = []
+    real = learned.json.loads
+    monkeypatch.setattr(learned.json, 'loads', lambda text: parses.append(1) or real(text))
+    assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
+    assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
+    assert len(parses) == 1, 'an unchanged table was parsed twice'
+    learned.learn_peaks(REPO, {'a.py': 2.0})
+    assert learned.learned(REPO)['peaks_mb'] == {'a.py': 2.0}, 'a rewritten table was served stale'
