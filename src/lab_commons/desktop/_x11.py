@@ -1,11 +1,17 @@
-"""The X11 backend: ``xprop``/``xwininfo`` for windows, ``xwd`` for pixels, decoded here (stdlib only).
+"""The X11 backend: ``xprop``/``xwininfo`` for windows, ``xwd`` for pixels, AT-SPI for controls (stdlib only).
 
 Every command goes through one injected runner, so the parsing and the command lines are unit-tested
-on any OS against recorded output. Refused by name: no ``DISPLAY`` (a Wayland-only session is
-``desktop.no_x11``), a missing tool (``desktop.tool_missing``), and every control verb
-(``desktop.no_atspi``) -- AT-SPI is not built in this backend yet, and a verb that cannot act never
-pretends to. X11 says nothing about modal-blocked input or responsiveness, so ``enabled`` and
-``responding`` read ``None``.
+on any OS against recorded output. Controls and acts go through the AT-SPI bus (:mod:`._atspi`, over
+``gdbus``). Refused by name: no ``DISPLAY`` (a Wayland-only session is ``desktop.no_x11``), a missing X
+tool (``desktop.tool_missing``), and every control verb when the AT-SPI bus or ``gdbus`` is absent or the
+window's frame is not on it (``desktop.no_atspi``).
+
+``enabled`` reads ``None``: X11 says nothing about modal-blocked input. ``responding`` reads ``None`` too:
+the one X11 probe, ``_NET_WM_PING``, is a ClientMessage whose answer arrives as an EVENT on the root
+window, so reading it needs an X connection that selects ``SubstructureNotify`` there and stays open
+until the reply or the deadline. The command-line tools used here each open, act and close; none sends
+a ping and waits for its pong, and speaking the X protocol from Python would be a persistent connection
+(or a dependency) this backend does not take. A guessed ``True`` would be the lie the field forbids.
 """
 
 from __future__ import annotations
@@ -16,8 +22,8 @@ import shutil
 import struct
 import subprocess
 from collections.abc import Callable, Mapping
-from typing import NoReturn
 
+from lab_commons.desktop._atspi import Atspi
 from lab_commons.desktop._core import Control, UnsupportedError, Window, WindowBusyError, png_bytes
 
 __all__ = ['X11', 'decode_xwd']
@@ -47,6 +53,7 @@ class X11:
             raise UnsupportedError(msg, 'desktop.no_x11')
         self._run = run
         self._which = which
+        self._atspi = Atspi(run, which)
 
     def _tool(self, argv: list[str], timeout_s: float = 5.0) -> bytes:
         if self._which(argv[0]) is None:
@@ -78,24 +85,16 @@ class X11:
         return decode_xwd(dump)
 
     def controls(self, window: Window) -> list[Control]:
-        _refuse_without_atspi('controls', window)
+        return self._atspi.controls(window)
 
-    def press(self, window: Window, label: str) -> None:  # noqa: ARG002 -- the Backend protocol's signature
-        _refuse_without_atspi('press', window)
+    def press(self, window: Window, label: str) -> None:
+        self._atspi.press(window, label)
 
-    def set_value(self, window: Window, label: str, text: str) -> None:  # noqa: ARG002 -- the protocol's
-        _refuse_without_atspi('set_value', window)
+    def set_value(self, window: Window, label: str, text: str) -> None:
+        self._atspi.set_value(window, label, text)
 
     def close(self, window: Window) -> None:
-        _refuse_without_atspi('close', window)
-
-
-def _refuse_without_atspi(verb: str, window: Window) -> NoReturn:
-    msg = (
-        f'desktop {verb} on X11 window {window.handle:#x} needs AT-SPI, which this backend does not reach yet; '
-        'windows and capture work'
-    )
-    raise UnsupportedError(msg, 'desktop.no_atspi')
+        self._atspi.close(window)
 
 
 def window_from(handle: int, props: str, info: str) -> Window:
