@@ -23,6 +23,8 @@ REASONS = frozenset(
         'desktop.no_accessibility',
         'desktop.capture_format',
         'desktop.not_closable',
+        'desktop.not_closed',
+        'desktop.no_area',
         'desktop.window_busy',
         'desktop.not_owned',
         'desktop.label_not_found',
@@ -58,6 +60,18 @@ class WindowBusyError(DesktopError):
     """The window's UI thread did not answer within the deadline: busy or hung, so it was not touched."""
 
     reason = 'desktop.window_busy'
+
+
+class NoAreaError(DesktopError):
+    """The window has no area (zero width or height): nothing to capture, and only it is refused."""
+
+    reason = 'desktop.no_area'
+
+
+class NotClosedError(DesktopError):
+    """The close was asked and the window is still there past the deadline (e.g. disabled under a modal)."""
+
+    reason = 'desktop.not_closed'
 
 
 class NotOwnedError(DesktopError):
@@ -116,6 +130,12 @@ class Window:
     responding: bool | None
     class_name: str = ''
     owner: int | None = None
+
+    @property
+    def area(self) -> int:
+        """Pixels inside ``rect``; ``0`` for a window with no width or height (a hidden helper window)."""
+        left, top, right, bottom = self.rect
+        return max(right - left, 0) * max(bottom - top, 0)
 
 
 @dataclass(frozen=True)

@@ -22,6 +22,7 @@ from typing import Any, TypeVar
 
 from lab_commons.desktop._core import (
     Control,
+    NoAreaError,
     NotOwnedError,
     UnsupportedError,
     Window,
@@ -30,7 +31,7 @@ from lab_commons.desktop._core import (
     png_bytes,
 )
 
-__all__ = ['ROLES', 'Win32', 'bitmap_info']
+__all__ = ['ROLES', 'Win32', 'another_window', 'bitmap_info']
 
 #: ``PrintWindow``: render DirectComposition / GPU content too (Qt and WPF windows render black without it).
 _PW_RENDERFULLCONTENT = 0x2
@@ -100,9 +101,9 @@ _TREESCOPE_CHILDREN = 2
 _ELEMENT_FROM_HANDLE, _CREATE_TRUE_CONDITION = 6, 21
 # IUIAutomationElement
 _RUNTIME_ID, _FIND_ALL, _PATTERN_AS, _PROCESS_ID, _CONTROL_TYPE, _NAME, _IS_ENABLED = 4, 6, 14, 20, 21, 23, 28
-_AUTOMATION_ID, _CLASS_NAME, _HELP_TEXT, _IS_OFFSCREEN = 29, 30, 31, 38
-#: ``GetWindow``: the owner of a window; ``StretchBlt``'s smoothing mode; its plain copy.
-_GW_OWNER, _HALFTONE, _SRCCOPY = 4, 4, 0x00CC0020
+_AUTOMATION_ID, _CLASS_NAME, _HELP_TEXT, _NATIVE_WINDOW_HANDLE, _IS_OFFSCREEN = 29, 30, 31, 36, 38
+#: ``GetWindow``: a window's owner; ``GetAncestor``: its top-level root; ``StretchBlt``'s smoothing; its copy.
+_GW_OWNER, _GA_ROOT, _HALFTONE, _SRCCOPY = 4, 2, 4, 0x00CC0020
 # IUIAutomationElementArray
 _LENGTH, _ELEMENT = 3, 4
 # InvokePattern.Invoke, ValuePattern.SetValue / get_CurrentValue / get_CurrentIsReadOnly, WindowPattern.Close
@@ -269,7 +270,7 @@ class Win32:
         width, height = rect.right - rect.left, rect.bottom - rect.top
         if width <= 0 or height <= 0:
             msg = f'window {window.handle:#x} ({window.title!r}) has no area: {width}x{height}'
-            raise WindowBusyError(msg)
+            raise NoAreaError(msg)
         return width, height
 
     def _render(self, window: Window) -> bytes:
@@ -439,11 +440,26 @@ def _root[T](window: Window, use: Callable[[_Com, _Com], T]) -> T:
         automation.release()
 
 
-def _walk[T](window: Window, use: Callable[[list[tuple[Control, _Com]]], T]) -> T:
-    """Every descendant OF THE WINDOW'S OWN PID, depth first, each with its parent's id, then *use*.
+def another_window(native: int, window: int, root: Callable[[int], int]) -> bool:
+    """Whether a UIA element of HWND *native* is a top-level window OTHER than *window* (*root*: ``GA_ROOT``).
 
-    A child of a foreign pid is neither listed nor acted on, and neither is its subtree.
+    UIA lists a window's owned windows (its modals) among its children; each is its own window, its own tree.
     """
+    return bool(native) and native != window and root(native) == native
+
+
+def _walk[T](window: Window, use: Callable[[list[tuple[Control, _Com]]], T]) -> T:
+    """Every descendant OF THE WINDOW'S OWN TREE, depth first, each with its parent's id, then *use*.
+
+    A child of a foreign pid, or another top-level window (an owned modal UIA lists below its owner), is
+    neither listed nor acted on, and neither is its subtree.
+    """
+    user32 = ctypes.WinDLL('user32')
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+
+    def root_of(hwnd: int) -> int:
+        return int(user32.GetAncestor(hwnd, _GA_ROOT) or 0)
 
     def descend(automation: _Com, root: _Com) -> T:
         held: list[_Com] = []
@@ -460,6 +476,9 @@ def _walk[T](window: Window, use: Callable[[list[tuple[Control, _Com]]], T]) -> 
                     element = array.out(_ELEMENT, (ctypes.c_int, index))
                     held.append(element)
                     if element.read(_PROCESS_ID, ctypes.c_int) != window.pid:
+                        continue
+                    native = int(element.read(_NATIVE_WINDOW_HANDLE, ctypes.c_void_p) or 0)
+                    if another_window(native, window.handle, root_of):
                         continue
                     control = _control(element, parent_id)
                     found.append((control, element))

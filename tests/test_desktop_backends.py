@@ -50,6 +50,22 @@ class TestWin:
         size, width, height, planes, bits = struct.unpack('<IiiHH', _win.bitmap_info(640, 480)[:16])
         assert (size, width, height, planes, bits) == (40, 640, -480, 1, 32)
 
+    def test_an_owned_top_level_window_is_another_windows_tree(self) -> None:
+        """UIA lists an owned window (a modal) as a child of its owner: its subtree is ITS tree, not the owner's.
+
+        Measured 2026-11-14: ``controls`` listed JMAG's Startup subtree twice, under the Startup window and under
+        the main window owning it.
+        """
+        roots = {0x10: 0x10, 0x20: 0x20, 0x30: 0x10}  # 0x20: an owned top-level window; 0x30: a child of 0x10
+
+        def root(hwnd: int) -> int:
+            return roots[hwnd]
+
+        assert _win.another_window(0x20, 0x10, root) is True
+        assert _win.another_window(0x30, 0x10, root) is False, 'a child control of the window is its own'
+        assert _win.another_window(0, 0x10, root) is False, 'a windowless element (no HWND) is its own'
+        assert _win.another_window(0x10, 0x10, root) is False
+
 
 class _Recorder:
     def __init__(self, answers: dict[str, bytes]) -> None:
