@@ -53,19 +53,19 @@ class Atspi:
     def controls(self, window: Window) -> list[Control]:
         return [control for control, _ in self._walk(window)]
 
-    def press(self, window: Window, label: str) -> None:
-        node = pick(window, label, [(c, n) for c, n in self._walk(window) if 'press' in c.actions])
+    def press(self, window: Window, label: str | None, id: str | None) -> None:  # noqa: A002 -- Control.id
+        node = pick(window, 'press', self._walk(window), label=label, id=id)
         self._call(window, node.bus, node.path, f'{_A11Y}Action.DoAction', '0')
 
-    def set_value(self, window: Window, label: str, text: str) -> None:
-        node = pick(window, label, [(c, n) for c, n in self._walk(window) if 'set_value' in c.actions])
+    def set_value(self, window: Window, label: str | None, id: str | None, text: str) -> None:  # noqa: A002
+        node = pick(window, 'set_value', self._walk(window), label=label, id=id)
         if f'{_A11Y}EditableText' in node.interfaces:
             self._call(window, node.bus, node.path, f'{_A11Y}EditableText.SetTextContents', gvariant_string(text))
             return
         try:
             number = float(text)
         except ValueError:
-            msg = f'the control labelled {label!r} holds a number (AT-SPI Value); {text!r} is not a number'
+            msg = f'the control {label or id!r} holds a number (AT-SPI Value); {text!r} is not a number'
             raise ValueError(msg) from None
         self._call(
             window, node.bus, node.path, 'org.freedesktop.DBus.Properties.Set',
@@ -110,15 +110,17 @@ class Atspi:
     def _walk(self, window: Window) -> list[tuple[Control, _Node]]:
         frame = self._frame(window)
         found: list[tuple[Control, _Node]] = []
-        pending = list(self._children(window, frame.bus, frame.path))
+        pending = [(child, None) for child in self._children(window, frame.bus, frame.path)]
         while pending:
-            bus, path = pending.pop(0)
+            (bus, path), parent = pending.pop(0)
             node = _Node(bus, path, self._interfaces(window, bus, path))
-            found.append((self._control(window, node), node))
-            pending[:0] = self._children(window, bus, path)  # depth first, in the tree's own order
+            control = self._control(window, node, parent)
+            found.append((control, node))
+            # depth first, in the tree's own order
+            pending[:0] = [(child, control.id) for child in self._children(window, bus, path)]
         return found
 
-    def _control(self, window: Window, node: _Node) -> Control:
+    def _control(self, window: Window, node: _Node, parent: str | None) -> Control:
         call = lambda method, *args: self._call(window, node.bus, node.path, method, *args)[0]  # noqa: E731
         actions: list[str] = []
         value: str | None = None
@@ -137,7 +139,13 @@ class Atspi:
             value=value,
             enabled=bool(call(f'{_A11Y}Accessible.GetState')[0] & _STATE_ENABLED),
             actions=tuple(actions),
-        )
+            id=f'{node.bus}:{node.path}',
+            parent=parent,
+            automation_id=call(
+                'org.freedesktop.DBus.Properties.Get', gvariant_string(f'{_A11Y}Accessible'),
+                gvariant_string('AccessibleId'),
+            ) or None,
+        )  # fmt: skip
 
     def _children(self, window: Window, bus: str, path: str) -> list[tuple[str, str]]:
         return [tuple(c) for c in self._call(window, bus, path, f'{_A11Y}Accessible.GetChildren')[0]]

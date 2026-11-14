@@ -95,11 +95,14 @@ _IID_INVOKE = '{fb377fbe-8ea6-46d5-9c73-6499642d3059}'
 _IID_VALUE = '{a94cd8b1-0844-4cd6-9d2d-640537ab39e9}'
 _IID_WINDOW = '{0faef453-9208-43ef-bbb2-3b485177864f}'
 _PATTERN_INVOKE, _PATTERN_VALUE, _PATTERN_WINDOW = 10000, 10002, 10009
-_TREESCOPE_DESCENDANTS = 4
+_TREESCOPE_CHILDREN = 2
 # IUIAutomation
 _ELEMENT_FROM_HANDLE, _CREATE_TRUE_CONDITION = 6, 21
 # IUIAutomationElement
-_FIND_ALL, _PATTERN_AS, _PROCESS_ID, _CONTROL_TYPE, _NAME, _IS_ENABLED = 6, 14, 20, 21, 23, 28
+_RUNTIME_ID, _FIND_ALL, _PATTERN_AS, _PROCESS_ID, _CONTROL_TYPE, _NAME, _IS_ENABLED = 4, 6, 14, 20, 21, 23, 28
+_AUTOMATION_ID, _CLASS_NAME, _HELP_TEXT, _IS_OFFSCREEN = 29, 30, 31, 38
+#: ``GetWindow``: the owner of a window; ``StretchBlt``'s smoothing mode; its plain copy.
+_GW_OWNER, _HALFTONE, _SRCCOPY = 4, 4, 0x00CC0020
 # IUIAutomationElementArray
 _LENGTH, _ELEMENT = 3, 4
 # InvokePattern.Invoke, ValuePattern.SetValue / get_CurrentValue / get_CurrentIsReadOnly, WindowPattern.Close
@@ -177,6 +180,15 @@ class Win32:
         for name in ('IsWindowVisible', 'IsWindowEnabled', 'GetWindowTextLengthW', 'IsWindow'):
             getattr(user32, name).argtypes = (wt.HWND,)
         user32.GetWindowTextW.argtypes = (wt.HWND, wt.LPWSTR, ctypes.c_int)
+        user32.GetClassNameW.argtypes = (wt.HWND, wt.LPWSTR, ctypes.c_int)
+        user32.GetWindow.restype = wt.HWND
+        user32.GetWindow.argtypes = (wt.HWND, wt.UINT)
+        gdi32.StretchBlt.argtypes = (wt.HDC, *(ctypes.c_int,) * 4, wt.HDC, *(ctypes.c_int,) * 4, wt.DWORD)
+        gdi32.SetStretchBltMode.argtypes = (wt.HDC, ctypes.c_int)
+        self._window_dpi = getattr(user32, 'GetWindowDpiAwarenessContext', None)
+        if self._window_dpi is not None:
+            self._window_dpi.restype = ctypes.c_void_p
+            self._window_dpi.argtypes = (wt.HWND,)
         user32.GetWindowRect.argtypes = (wt.HWND, ctypes.POINTER(wt.RECT))
         user32.GetDC.restype = wt.HDC
         user32.GetDC.argtypes = (wt.HWND,)
@@ -221,7 +233,11 @@ class Win32:
         rect = wt.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         visible = bool(user32.IsWindowVisible(hwnd))
+        kind = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, kind, len(kind))
         return Window(
+            class_name=kind.value,
+            owner=int(user32.GetWindow(hwnd, _GW_OWNER) or 0),
             handle=hwnd,
             pid=int(pid.value),
             title=buffer.value,
@@ -247,33 +263,64 @@ class Win32:
         self._ready(window)
         return _deadline(window, timeout_s, lambda: self._render(window), com=False)
 
-    def _render(self, window: Window) -> bytes:
-        wt, user32, gdi32 = wintypes, self._user32, self._gdi32
-        self._dpi_aware()  # this thread is ours alone: never restored, it ends with the capture
-        rect = wt.RECT()
-        user32.GetWindowRect(window.handle, ctypes.byref(rect))
+    def _size(self, window: Window) -> tuple[int, int]:
+        rect = wintypes.RECT()
+        self._user32.GetWindowRect(window.handle, ctypes.byref(rect))
         width, height = rect.right - rect.left, rect.bottom - rect.top
         if width <= 0 or height <= 0:
             msg = f'window {window.handle:#x} ({window.title!r}) has no area: {width}x{height}'
             raise WindowBusyError(msg)
+        return width, height
+
+    def _render(self, window: Window) -> bytes:
+        """``PrintWindow`` in the WINDOW's own DPI awareness, scaled to its physical size.
+
+        ``PrintWindow`` draws a window at the size its own awareness sees: a DPI-unaware window on a 175 %
+        display draws its logical 57 % into the top-left of a physical-size bitmap and leaves the rest black
+        (measured 2026-11-14 on FEMM). So this thread adopts the window's awareness to read its size and
+        render it, then reads the physical size per-monitor-aware and stretches the render to it; the PNG is
+        always ``Window.rect``'s size. This thread is ours alone: its awareness is never restored.
+        """
+        user32, gdi32 = self._user32, self._gdi32
+        own = self._window_dpi(window.handle) if self._window_dpi is not None else None
+        if own and self._set_dpi is not None:
+            self._set_dpi(ctypes.c_void_p(own))
+        else:
+            self._dpi_aware()
+        width, height = self._size(window)
         screen = user32.GetDC(None)
-        memory = gdi32.CreateCompatibleDC(screen)
-        bitmap = gdi32.CreateCompatibleBitmap(screen, width, height)
-        previous = gdi32.SelectObject(memory, bitmap)
+        made: list[tuple[int, int, int]] = []  # (dc, bitmap, previous) to free
+
+        def surface(w: int, h: int) -> int:
+            dc = gdi32.CreateCompatibleDC(screen)
+            bitmap = gdi32.CreateCompatibleBitmap(screen, w, h)
+            made.append((dc, bitmap, gdi32.SelectObject(dc, bitmap)))
+            return dc
+
         try:
-            if not user32.PrintWindow(window.handle, memory, _PW_RENDERFULLCONTENT):
+            drawn = surface(width, height)
+            if not user32.PrintWindow(window.handle, drawn, _PW_RENDERFULLCONTENT):
                 msg = f'PrintWindow refused window {window.handle:#x} ({window.title!r})'
                 raise WindowBusyError(msg)
+            self._dpi_aware()
+            physical = self._size(window)
+            if physical != (width, height):
+                scaled = surface(*physical)
+                gdi32.SetStretchBltMode(scaled, _HALFTONE)
+                gdi32.StretchBlt(scaled, 0, 0, *physical, drawn, 0, 0, width, height, _SRCCOPY)
+            final_dc, final_bitmap, _ = made[-1]
+            width, height = physical
             header = ctypes.create_string_buffer(bitmap_info(width, height), 40 + 12)
             pixels = ctypes.create_string_buffer(width * height * 4)
-            if not gdi32.GetDIBits(memory, bitmap, 0, height, pixels, header, 0):
+            if not gdi32.GetDIBits(final_dc, final_bitmap, 0, height, pixels, header, 0):
                 msg = f'GetDIBits read nothing from window {window.handle:#x}'
                 raise WindowBusyError(msg)
             return png_bytes(width, height, pixels.raw)
         finally:
-            gdi32.SelectObject(memory, previous)
-            gdi32.DeleteObject(bitmap)
-            gdi32.DeleteDC(memory)
+            for dc, bitmap, previous in made:
+                gdi32.SelectObject(dc, previous)
+                gdi32.DeleteObject(bitmap)
+                gdi32.DeleteDC(dc)
             user32.ReleaseDC(None, screen)
 
     # ---- UI Automation -----------------------------------------------------------------------------------
@@ -282,20 +329,20 @@ class Win32:
         self._ready(window)
         return _deadline(window, _UIA_S, lambda: _walk(window, lambda found: [c for c, _ in found]), com=True)
 
-    def press(self, window: Window, label: str) -> None:
+    def press(self, window: Window, label: str | None, id: str | None) -> None:  # noqa: A002 -- Control.id
         self._ready(window)
 
         def act(found: list[tuple[Control, _Com]]) -> None:
-            element = pick(window, label, [(c, e) for c, e in found if 'press' in c.actions])
+            element = pick(window, 'press', found, label=label, id=id)
             _with_pattern(element, _PATTERN_INVOKE, _IID_INVOKE, lambda p: p.call(_INVOKE))
 
         _deadline(window, _UIA_S, lambda: _walk(window, act), com=True)
 
-    def set_value(self, window: Window, label: str, text: str) -> None:
+    def set_value(self, window: Window, label: str | None, id: str | None, text: str) -> None:  # noqa: A002
         self._ready(window)
 
         def act(found: list[tuple[Control, _Com]]) -> None:
-            element = pick(window, label, [(c, e) for c, e in found if 'set_value' in c.actions])
+            element = pick(window, 'set_value', found, label=label, id=id)
             value = ctypes.windll.oleaut32.SysAllocString
             value.restype = ctypes.c_void_p
             bstr = value(ctypes.c_wchar_p(text))
@@ -393,21 +440,32 @@ def _root[T](window: Window, use: Callable[[_Com, _Com], T]) -> T:
 
 
 def _walk[T](window: Window, use: Callable[[list[tuple[Control, _Com]]], T]) -> T:
-    """Every descendant OF THE WINDOW'S OWN PID (a foreign one is never listed nor acted on), then *use*."""
+    """Every descendant OF THE WINDOW'S OWN PID, depth first, each with its parent's id, then *use*.
+
+    A child of a foreign pid is neither listed nor acted on, and neither is its subtree.
+    """
 
     def descend(automation: _Com, root: _Com) -> T:
         held: list[_Com] = []
+        found: list[tuple[Control, _Com]] = []
         try:
             condition = automation.out(_CREATE_TRUE_CONDITION)
             held.append(condition)
-            array = root.out(_FIND_ALL, (ctypes.c_int, _TREESCOPE_DESCENDANTS), (ctypes.c_void_p, condition.pointer))
-            held.append(array)
-            found: list[tuple[Control, _Com]] = []
-            for index in range(array.read(_LENGTH, ctypes.c_int) if array else 0):
-                element = array.out(_ELEMENT, (ctypes.c_int, index))
-                held.append(element)
-                if element.read(_PROCESS_ID, ctypes.c_int) == window.pid:
-                    found.append((_control(element), element))
+
+            def visit(parent: _Com, parent_id: str | None) -> None:
+                scope = (ctypes.c_int, _TREESCOPE_CHILDREN)
+                array = parent.out(_FIND_ALL, scope, (ctypes.c_void_p, condition.pointer))
+                held.append(array)
+                for index in range(array.read(_LENGTH, ctypes.c_int) if array else 0):
+                    element = array.out(_ELEMENT, (ctypes.c_int, index))
+                    held.append(element)
+                    if element.read(_PROCESS_ID, ctypes.c_int) != window.pid:
+                        continue
+                    control = _control(element, parent_id)
+                    found.append((control, element))
+                    visit(element, control.id)
+
+            visit(root, None)
             return use(found)
         finally:
             for pointer in held:
@@ -416,7 +474,33 @@ def _walk[T](window: Window, use: Callable[[list[tuple[Control, _Com]]], T]) -> 
     return _root(window, descend)
 
 
-def _control(element: _Com) -> Control:
+def runtime_id(numbers: list[int]) -> str:
+    """A UIA RuntimeId as one ``Control.id``: its integers joined by dots."""
+    return '.'.join(str(n) for n in numbers)
+
+
+def _runtime_id(element: _Com) -> str:
+    """``IUIAutomationElement::GetRuntimeId``: a SAFEARRAY of int, read and destroyed here."""
+    oleaut32 = ctypes.windll.oleaut32
+    array = ctypes.c_void_p()
+    element.call(_RUNTIME_ID, (ctypes.POINTER(ctypes.c_void_p), ctypes.byref(array)))
+    if not array.value:
+        return ''
+    try:
+        low, high = ctypes.c_long(), ctypes.c_long()
+        oleaut32.SafeArrayGetLBound(array, 1, ctypes.byref(low))
+        oleaut32.SafeArrayGetUBound(array, 1, ctypes.byref(high))
+        numbers = []
+        for at in range(low.value, high.value + 1):
+            number, index = ctypes.c_int(), ctypes.c_long(at)
+            oleaut32.SafeArrayGetElement(array, ctypes.byref(index), ctypes.byref(number))
+            numbers.append(number.value)
+        return runtime_id(numbers)
+    finally:
+        oleaut32.SafeArrayDestroy(array)
+
+
+def _control(element: _Com, parent: str | None) -> Control:
     kind = element.read(_CONTROL_TYPE, ctypes.c_int)
     actions: list[str] = []
     value: str | None = None
@@ -442,6 +526,12 @@ def _control(element: _Com) -> Control:
         value=value,
         enabled=bool(element.read(_IS_ENABLED, wintypes.BOOL)),
         actions=tuple(actions),
+        id=_runtime_id(element),
+        parent=parent,
+        class_name=element.text(_CLASS_NAME),
+        automation_id=element.text(_AUTOMATION_ID) or None,
+        help_text=element.text(_HELP_TEXT),
+        offscreen=bool(element.read(_IS_OFFSCREEN, wintypes.BOOL)),
     )
 
 

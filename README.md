@@ -91,7 +91,8 @@ The base installation is the standard library alone. Select capabilities explici
   is worse than no ceiling because it is believed. Unreadable is always distinct from zero.
 - `lab_commons.desktop` (**tier 1**) — one door to a host's GUI windows, for every tool driven through
   one: list them (pid, title, rect, enabled, responding), capture one as PNG, read its accessibility
-  tree, and press / set / close an EXACTLY labelled control, refused unless the window's pid is one the
+  tree (each control with an id and its parent's), and press / set / close an EXACTLY labelled control
+  or one named by id, refused unless the window's pid is one the
   caller owns. Facts only (which window means a stall is the caller's), no coordinate clicks or keys;
   a host that cannot do a verb refuses it by name (`error.reason`). Win32 + UI Automation, X11, macOS;
   `python -m lab_commons.desktop --help`, and the module docstring for each backend's reach.

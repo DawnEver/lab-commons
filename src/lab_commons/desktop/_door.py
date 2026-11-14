@@ -6,7 +6,7 @@ import sys
 from collections.abc import Collection
 
 from lab_commons.desktop import _darwin, _win, _x11
-from lab_commons.desktop._core import Backend, Control, NotOwnedError, UnsupportedError, Window
+from lab_commons.desktop._core import Backend, Control, NotOwnedError, UnsupportedError, Window, one_target
 
 
 def backend() -> Backend:
@@ -50,18 +50,39 @@ def controls(window: Window, *, backend: Backend | None = None) -> list[Control]
     return _resolve(backend).controls(window)
 
 
-def press(window: Window, label: str, *, owned: Collection[int], backend: Backend | None = None) -> None:
-    """Press the ONE control labelled exactly *label*, once, never retried; *owned* are the pids it may touch."""
+def press(
+    window: Window,
+    label: str | None = None,
+    *,
+    id: str | None = None,  # noqa: A002 -- Control.id
+    owned: Collection[int],
+    backend: Backend | None = None,
+) -> None:
+    """Press the ONE control labelled exactly *label*, or with ``Control.id`` *id*, once, never retried.
+
+    Exactly one of *label* and *id*; *owned* are the pids it may touch. An id not in the window's tree now is
+    :class:`~lab_commons.desktop.ControlGoneError`.
+    """
+    one_target(label, id)
     chosen = _resolve(backend)
     _guard(window, owned, chosen)
-    chosen.press(window, label)
+    chosen.press(window, label, id)
 
 
-def set_value(window: Window, label: str, text: str, *, owned: Collection[int], backend: Backend | None = None) -> None:
-    """Set the value of the ONE control labelled exactly *label* to *text*; *owned* as :func:`press`."""
+def set_value(
+    window: Window,
+    label: str | None = None,
+    text: str = '',
+    *,
+    id: str | None = None,  # noqa: A002 -- Control.id
+    owned: Collection[int],
+    backend: Backend | None = None,
+) -> None:
+    """Set the ONE control named by *label* or *id* to *text*; *owned* and the id rule as :func:`press`."""
+    one_target(label, id)
     chosen = _resolve(backend)
     _guard(window, owned, chosen)
-    chosen.set_value(window, label, text)
+    chosen.set_value(window, label, id, text)
 
 
 def close(window: Window, *, owned: Collection[int], backend: Backend | None = None) -> None:

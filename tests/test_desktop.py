@@ -18,8 +18,10 @@ from lab_commons import desktop
 from lab_commons.desktop import (
     Control,
     ControlDisabledError,
+    ControlGoneError,
     LabelAmbiguousError,
     LabelNotFoundError,
+    NotActionableError,
     NotOwnedError,
     UnsupportedError,
     Window,
@@ -52,11 +54,11 @@ class FakeBackend:
     def controls(self, window: Window) -> list[Control]:
         return [Control(role='button', name='OK', value=None, enabled=True, actions=('press',))]
 
-    def press(self, window: Window, label: str) -> None:
-        self.acts.append(('press', window.handle, label))
+    def press(self, window: Window, label: str | None, id: str | None) -> None:  # noqa: A002 -- the door's name
+        self.acts.append(('press', window.handle, label or id))
 
-    def set_value(self, window: Window, label: str, text: str) -> None:
-        self.acts.append(('set_value', window.handle, label, text))
+    def set_value(self, window: Window, label: str | None, id: str | None, text: str) -> None:  # noqa: A002
+        self.acts.append(('set_value', window.handle, label or id, text))
 
     def close(self, window: Window) -> None:
         self.acts.append(('close', window.handle))
@@ -111,28 +113,67 @@ class TestOwnershipGuard:
         desktop.close(window, owned={7}, backend=fake)
         assert fake.acts == [('press', 0x10, 'OK'), ('set_value', 0x10, 'Name', 'v'), ('close', 0x10)]
 
+    def test_an_act_by_id_reaches_the_backend_with_the_id(self) -> None:
+        window = _window()
+        fake = FakeBackend([window])
+        desktop.press(window, id='42.7', owned={7}, backend=fake)
+        desktop.set_value(window, text='v', id='42.8', owned={7}, backend=fake)
+        assert fake.acts == [('press', 0x10, '42.7'), ('set_value', 0x10, '42.8', 'v')]
+
+    @pytest.mark.parametrize('chosen', [{}, {'label': 'OK', 'id': '42.7'}], ids=['neither', 'both'])
+    def test_exactly_one_of_label_and_id_is_named(self, chosen: dict[str, str]) -> None:
+        window = _window()
+        fake = FakeBackend([window])
+        with pytest.raises(TypeError, match='exactly one'):
+            desktop.press(window, owned={7}, backend=fake, **chosen)
+        assert fake.acts == []
+
 
 class TestPick:
-    def _c(self, name: str, *, enabled: bool = True) -> Control:
-        return Control(role='button', name=name, value=None, enabled=enabled, actions=('press',))
+    def _c(self, name: str, *, enabled: bool = True, id: str = '', actions: tuple[str, ...] = ('press',)) -> Control:  # noqa: A002
+        return Control(role='button', name=name, value=None, enabled=enabled, actions=actions, id=id)
 
     def test_exactly_one_label_is_picked(self) -> None:
-        assert pick(_window(), 'OK', [(self._c('OK'), 'ref-ok'), (self._c('Cancel'), 'ref-c')]) == 'ref-ok'
+        assert (
+            pick(_window(), 'press', [(self._c('OK'), 'ref-ok'), (self._c('Cancel'), 'ref-c')], label='OK') == 'ref-ok'
+        )
+
+    def test_a_label_counts_only_controls_that_support_the_act(self) -> None:
+        text = self._c('OK', actions=())
+        assert pick(_window(), 'press', [(text, 'text'), (self._c('OK'), 'button')], label='OK') == 'button'
 
     def test_the_label_is_exact_not_a_substring_or_case_blind(self) -> None:
         with pytest.raises(LabelNotFoundError) as missing:
-            pick(_window(), 'ok', [(self._c('OK'), 1), (self._c('OK all'), 2)])
+            pick(_window(), 'press', [(self._c('OK'), 1), (self._c('OK all'), 2)], label='ok')
         assert missing.value.reason == 'desktop.label_not_found'
 
     def test_two_controls_with_the_label_are_refused_not_guessed(self) -> None:
         with pytest.raises(LabelAmbiguousError) as twice:
-            pick(_window(), 'OK', [(self._c('OK'), 1), (self._c('OK'), 2)])
+            pick(_window(), 'press', [(self._c('OK'), 1), (self._c('OK'), 2)], label='OK')
         assert twice.value.reason == 'desktop.label_ambiguous'
 
     def test_a_disabled_control_is_refused(self) -> None:
         with pytest.raises(ControlDisabledError) as disabled:
-            pick(_window(), 'OK', [(self._c('OK', enabled=False), 1)])
+            pick(_window(), 'press', [(self._c('OK', enabled=False), 1)], label='OK')
         assert disabled.value.reason == 'desktop.control_disabled'
+
+    def test_an_id_picks_its_control_whatever_its_label(self) -> None:
+        found = [(self._c('OK', id='1.1'), 'a'), (self._c('OK', id='1.2'), 'b')]
+        assert pick(_window(), 'press', found, id='1.2') == 'b'
+
+    def test_planted_an_id_not_in_the_tree_now_is_gone(self) -> None:
+        with pytest.raises(ControlGoneError) as gone:
+            pick(_window(), 'press', [(self._c('OK', id='1.1'), 'a')], id='1.9')
+        assert gone.value.reason == 'desktop.control_gone'
+
+    def test_an_id_whose_control_lacks_the_act_is_refused(self) -> None:
+        with pytest.raises(NotActionableError) as lacking:
+            pick(_window(), 'set_value', [(self._c('OK', id='1.1'), 'a')], id='1.1')
+        assert lacking.value.reason == 'desktop.not_actionable'
+
+    def test_a_disabled_control_by_id_is_refused(self) -> None:
+        with pytest.raises(ControlDisabledError):
+            pick(_window(), 'press', [(self._c('OK', id='1.1', enabled=False), 'a')], id='1.1')
 
 
 class TestBackendChoice:
@@ -201,6 +242,17 @@ class TestCli:
         assert main(['press', '--pid', '7', '--label', 'OK', '--json']) == 0
         assert fake.acts == [('press', 0x10, 'OK')]
         assert json.loads(capsys.readouterr().out)[0]['done'] == 'press'
+
+    def test_press_by_id(self, monkeypatch) -> None:
+        fake = self._fake(monkeypatch, [_window()])
+        assert main(['press', '--pid', '7', '--id', '42.7']) == 0
+        assert fake.acts == [('press', 0x10, '42.7')]
+
+    def test_label_and_id_together_are_a_usage_error(self, monkeypatch) -> None:
+        fake = self._fake(monkeypatch, [_window()])
+        with pytest.raises(SystemExit):
+            main(['press', '--pid', '7', '--label', 'OK', '--id', '42.7'])
+        assert fake.acts == []
 
     def test_an_act_without_pid_is_a_usage_error(self, monkeypatch) -> None:
         fake = self._fake(monkeypatch, [_window()])

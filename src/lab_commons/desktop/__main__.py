@@ -32,8 +32,8 @@ def _parser() -> argparse.ArgumentParser:
         'windows': 'list top-level windows with pid, title, rect, enabled, responding, cpu_s',
         'capture': 'write each window as a PNG into --out',
         'controls': "read each window's accessibility tree (role, name, value, enabled, actions)",
-        'press': 'press the ONE control labelled exactly --label, once',
-        'set-value': 'set the ONE control labelled exactly --label to --value',
+        'press': 'press the ONE control labelled exactly --label (or with --id), once',
+        'set-value': 'set the ONE control labelled exactly --label (or with --id) to --value',
         'close': 'ask the window to close through its own close',
     }
     for verb, text in helps.items():
@@ -50,7 +50,9 @@ def _parser() -> argparse.ArgumentParser:
             sub.add_argument('--out', type=Path, required=True, help='the directory the PNGs go to')
             sub.add_argument('--timeout-s', type=float, default=5.0, help='seconds before a window is busy')
         if verb in {'press', 'set-value'}:
-            sub.add_argument('--label', required=True, help="the control's exact label")
+            target = sub.add_mutually_exclusive_group(required=True)
+            target.add_argument('--label', help="the control's exact label")
+            target.add_argument('--id', help="the control's id, as `controls` lists it")
         if verb == 'set-value':
             sub.add_argument('--value', required=True, help='the text to set')
     return parser
@@ -98,9 +100,9 @@ def _run(ns: argparse.Namespace) -> list[dict[str, object]]:
         raise _Usage(msg)
     (window,) = selected
     if ns.verb == 'press':
-        press(window, ns.label, owned=ns.pid)
+        press(window, ns.label, id=ns.id, owned=ns.pid)
     elif ns.verb == 'set-value':
-        set_value(window, ns.label, ns.value, owned=ns.pid)
+        set_value(window, ns.label, ns.value, id=ns.id, owned=ns.pid)
     else:
         close(window, owned=ns.pid)
     return [{'handle': window.handle, 'pid': window.pid, 'title': window.title, 'done': ns.verb}]

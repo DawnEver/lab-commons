@@ -13,7 +13,16 @@ import zlib
 
 import pytest
 
-from lab_commons.desktop import Control, LabelAmbiguousError, UnsupportedError, Window, _darwin, _win, _x11
+from lab_commons.desktop import (
+    Control,
+    ControlGoneError,
+    LabelAmbiguousError,
+    UnsupportedError,
+    Window,
+    _darwin,
+    _win,
+    _x11,
+)
 
 _WINDOW = Window(handle=0x1A00003, pid=4242, title='Solver "A"', rect=(0, 0, 2, 1), visible=True, enabled=None,
                  responding=None)  # fmt: skip
@@ -102,7 +111,7 @@ class TestX11:
 
     def test_control_verbs_refuse_by_name_never_no_op(self) -> None:
         x11 = self._x11(_Recorder({}))
-        for verb in (lambda: x11.controls(_WINDOW), lambda: x11.press(_WINDOW, 'OK'), lambda: x11.close(_WINDOW)):
+        for verb in (lambda: x11.controls(_WINDOW), lambda: x11.press(_WINDOW, 'OK', None), lambda: x11.close(_WINDOW)):
             with pytest.raises(UnsupportedError) as refused:
                 verb()
             assert refused.value.reason == 'desktop.no_atspi'
@@ -131,6 +140,12 @@ class TestX11:
         assert refused.value.reason == 'desktop.capture_format'
 
 
+def _ax(path: str, parent: str | None, role: str, name: str, *, actions: tuple[str, ...] | list[str] = (),
+        identifier: str | None = None) -> dict[str, object]:  # fmt: skip
+    return {'id': path, 'parent': parent, 'role': role, 'name': name, 'value': None, 'enabled': True,
+            'actions': list(actions), 'help': '', 'identifier': identifier}  # fmt: skip
+
+
 class TestDarwin:
     def _mac(self, recorder: _Recorder) -> _darwin.Darwin:
         return _darwin.Darwin(run=recorder, which=lambda name: f'/usr/bin/{name}')
@@ -149,22 +164,38 @@ class TestDarwin:
 
     def test_press_resolves_the_label_then_passes_every_value_as_argv(self) -> None:
         rows = [
-            {'role': 'AXStaticText', 'name': 'Licence expired', 'value': None, 'enabled': True, 'actions': []},
-            {'role': 'AXButton', 'name': 'OK', 'value': None, 'enabled': True, 'actions': ['AXPress']},
+            _ax('0', None, 'AXGroup', 'Licence expired'),
+            _ax('0.0', '0', 'AXButton', 'OK', actions=['AXPress'], identifier='ok-id'),
         ]
-        recorder = _Recorder({'entireContents().map': json.dumps(rows).encode(), "byName('AXPress')": b''})
+        recorder = _Recorder({'function walk': json.dumps(rows).encode(), "byName('AXPress')": b''})
         mac = self._mac(recorder)
-        assert mac.controls(_WINDOW)[0] == Control(role='statictext', name='Licence expired', value=None, enabled=True)
-        mac.press(_WINDOW, 'OK')
+        assert mac.controls(_WINDOW) == [
+            Control(role='group', name='Licence expired', value=None, enabled=True, id='0'),
+            Control(role='button', name='OK', value=None, enabled=True, actions=('press',), id='0.0', parent='0',
+                    automation_id='ok-id'),
+        ]  # fmt: skip
+        mac.press(_WINDOW, 'OK', None)
         press = recorder.argvs[-1]
-        assert press[5:] == ['4242', 'Solver "A"', '1', 'OK'], 'pid, title, index, label: argv, never script source'
+        assert press[5:] == ['4242', 'Solver "A"', '0.0', 'OK'], 'pid, title, path, name: argv, never script source'
         assert 'Solver' not in press[4], 'the title is never spliced into the script'
 
+    def test_press_by_id_passes_that_path_and_a_gone_id_is_refused(self) -> None:
+        rows = [
+            _ax('0', None, 'AXButton', 'OK', actions=['AXPress']),
+            _ax('1', None, 'AXButton', 'OK', actions=['AXPress']),
+        ]
+        recorder = _Recorder({'function walk': json.dumps(rows).encode(), "byName('AXPress')": b''})
+        mac = self._mac(recorder)
+        mac.press(_WINDOW, None, '1')
+        assert recorder.argvs[-1][7] == '1'
+        with pytest.raises(ControlGoneError):
+            mac.press(_WINDOW, None, '2')
+
     def test_set_value_needs_an_editable_control(self) -> None:
-        rows = [{'role': 'AXTextField', 'name': 'Name', 'value': 'a', 'enabled': True, 'actions': []}] * 2
-        recorder = _Recorder({'entireContents().map': json.dumps(rows).encode()})
+        rows = [_ax('0', None, 'AXTextField', 'Name'), _ax('1', None, 'AXTextField', 'Name')]
+        recorder = _Recorder({'function walk': json.dumps(rows).encode()})
         with pytest.raises(LabelAmbiguousError):
-            self._mac(recorder).set_value(_WINDOW, 'Name', 'b')
+            self._mac(recorder).set_value(_WINDOW, 'Name', None, 'b')
 
     def test_a_permission_refusal_is_named(self) -> None:
         def refuse(argv: list[str], _timeout: float) -> bytes:
