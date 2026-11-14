@@ -87,11 +87,11 @@ class X11:
     def controls(self, window: Window) -> list[Control]:
         return self._atspi.controls(window)
 
-    def press(self, window: Window, label: str) -> None:
-        self._atspi.press(window, label)
+    def press(self, window: Window, label: str | None, id: str | None) -> None:  # noqa: A002 -- Control.id
+        self._atspi.press(window, label, id)
 
-    def set_value(self, window: Window, label: str, text: str) -> None:
-        self._atspi.set_value(window, label, text)
+    def set_value(self, window: Window, label: str | None, id: str | None, text: str) -> None:  # noqa: A002
+        self._atspi.set_value(window, label, id, text)
 
     def close(self, window: Window) -> None:
         self._atspi.close(window)

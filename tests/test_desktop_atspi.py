@@ -13,6 +13,7 @@ import pytest
 from lab_commons.desktop import (
     Control,
     ControlDisabledError,
+    ControlGoneError,
     LabelAmbiguousError,
     UnsupportedError,
     Window,
@@ -30,13 +31,14 @@ _ENABLED = 1 << 8  # ATSPI_STATE_ENABLED in the first state word
 
 
 def _node(path: str, role: str, name: str, interfaces: list[str], *, enabled: bool = True,
-          children: tuple[str, ...] = ()) -> dict[tuple[str, str, tuple[str, ...]], str]:  # fmt: skip
+          children: tuple[str, ...] = (), ident: str = '') -> dict[tuple[str, str, tuple[str, ...]], str]:  # fmt: skip
     kids = ', '.join(f"(':1.7', objectpath '{c}')" for c in children)
     ifaces = ', '.join(f"'{_A11Y}{i}'" for i in ['Accessible', *interfaces])
     return {
         (path, f'{_A11Y}Accessible.GetChildren', ()): f'([{kids}],)' if kids else '(@a(so) [],)',
         (path, f'{_A11Y}Accessible.GetRoleName', ()): f"('{role}',)",
         (path, _PROP, (f"'{_A11Y}Accessible'", "'Name'")): f"(<'{name}'>,)",
+        (path, _PROP, (f"'{_A11Y}Accessible'", "'AccessibleId'")): f"(<'{ident}'>,)",
         (path, f'{_A11Y}Accessible.GetInterfaces', ()): f'([{ifaces}],)',
         (path, f'{_A11Y}Accessible.GetState', ()): f'([uint32 {_ENABLED if enabled else 0}, 0],)',
     }
@@ -62,16 +64,18 @@ class _Bus:
             **_node(_ROOT, 'application', 'solver', [], children=('/other', '/frame')),
             **_node('/other', 'frame', 'Other', []),
             **_node('/frame', 'frame', 'Solver "A"', ['Action'], children=frame_kids),
-            **_node('/ok', 'push button', 'OK', ['Action']),
+            **_node('/ok', 'push button', 'OK', ['Action'], ident='ok-button'),
             **_node('/ok2', 'push button', 'OK', ['Action']),
             **_node('/name', 'text', 'Run name:', ['Text', 'EditableText']),
             **_node('/gain', 'spin button', 'Gain', ['Value']),
-            **_node('/label', 'label', 'Proceed?', []),
+            **_node('/label', 'label', 'Proceed?', [], children=('/hint',)),
+            **_node('/hint', 'label', 'why', []),
             **_node('/off', 'push button', 'Apply', ['Action'], enabled=False),
             ('/frame', f'{_A11Y}Action.GetActions', ()): "([('activate', '', ''), ('close', 'Close', '')],)",
             ('/name', f'{_A11Y}Text.GetText', ('0', '-1')): "('first',)",
             ('/gain', _PROP, (f"'{_A11Y}Value'", "'CurrentValue'")): '(<1.5>,)',
             ('/ok', f'{_A11Y}Action.DoAction', ('0',)): '(true,)',
+            ('/ok2', f'{_A11Y}Action.DoAction', ('0',)): '(true,)',
             ('/frame', f'{_A11Y}Action.DoAction', ('1',)): '(true,)',
             ('/name', f'{_A11Y}EditableText.SetTextContents', ("'it\\'s \\\\ new'",)): '(true,)',
             ('/gain', 'org.freedesktop.DBus.Properties.Set', (f"'{_A11Y}Value'", "'CurrentValue'", '<2.5>')): '()',
@@ -144,47 +148,63 @@ class TestAtspi:
         bus = _Bus()
         found = _x(bus).controls(_WINDOW)
         assert found == [
-            Control(role='push button', name='OK', value=None, enabled=True, actions=('press',)),
-            Control(role='text', name='Run name:', value='first', enabled=True, actions=('set_value',)),
-            Control(role='spin button', name='Gain', value='1.5', enabled=True, actions=('set_value',)),
-            Control(role='label', name='Proceed?', value=None, enabled=True),
-            Control(role='push button', name='Apply', value=None, enabled=False, actions=('press',)),
-        ]
+            Control(role='push button', name='OK', value=None, enabled=True, actions=('press',), id=':1.7:/ok',
+                    automation_id='ok-button'),
+            Control(role='text', name='Run name:', value='first', enabled=True, actions=('set_value',),
+                    id=':1.7:/name'),
+            Control(role='spin button', name='Gain', value='1.5', enabled=True, actions=('set_value',),
+                    id=':1.7:/gain'),
+            Control(role='label', name='Proceed?', value=None, enabled=True, id=':1.7:/label'),
+            Control(role='label', name='why', value=None, enabled=True, id=':1.7:/hint', parent=':1.7:/label'),
+            Control(role='push button', name='Apply', value=None, enabled=False, actions=('press',),
+                    id=':1.7:/off'),
+        ]  # fmt: skip
         assert bus.argvs[0] == ['gdbus', 'call', '--session', '--dest', 'org.a11y.Bus', '--object-path',
                                 '/org/a11y/bus', '--method', 'org.a11y.Bus.GetAddress']  # fmt: skip
         assert ':1.9' not in [a[a.index('--dest') + 1] for a in bus.argvs], 'a foreign app is never walked'
 
     def test_press_does_action_zero_of_the_one_labelled_control(self) -> None:
         bus = _Bus()
-        _x(bus).press(_WINDOW, 'OK')
+        _x(bus).press(_WINDOW, 'OK', None)
         assert bus.methods()[-1] == ('/ok', f'{_A11Y}Action.DoAction')
         assert bus.argvs[-1][-1] == '0'
+
+    def test_press_by_id_acts_on_that_object(self) -> None:
+        bus = _Bus(ok_twice=True)
+        _x(bus).press(_WINDOW, None, ':1.7:/ok2')
+        assert bus.methods()[-1] == ('/ok2', f'{_A11Y}Action.DoAction')
+
+    def test_planted_an_id_no_longer_in_the_tree_is_gone(self) -> None:
+        bus = _Bus()
+        with pytest.raises(ControlGoneError):
+            _x(bus).press(_WINDOW, None, ':1.7:/ok2')
+        assert all(m != f'{_A11Y}Action.DoAction' for _, m in bus.methods())
 
     def test_two_controls_with_one_label_are_refused(self) -> None:
         bus = _Bus(ok_twice=True)
         with pytest.raises(LabelAmbiguousError):
-            _x(bus).press(_WINDOW, 'OK')
+            _x(bus).press(_WINDOW, 'OK', None)
         assert all(m != f'{_A11Y}Action.DoAction' for _, m in bus.methods())
 
     def test_a_disabled_control_is_refused(self) -> None:
         with pytest.raises(ControlDisabledError):
-            _x(_Bus()).press(_WINDOW, 'Apply')
+            _x(_Bus()).press(_WINDOW, 'Apply', None)
 
     def test_set_value_on_editable_text_passes_the_text_as_one_quoted_argument(self) -> None:
         bus = _Bus()
-        _x(bus).set_value(_WINDOW, 'Run name:', "it's \\ new")
+        _x(bus).set_value(_WINDOW, 'Run name:', None, "it's \\ new")
         assert bus.methods()[-1] == ('/name', f'{_A11Y}EditableText.SetTextContents')
         assert bus.argvs[-1][-1] == "'it\\'s \\\\ new'"
 
     def test_set_value_on_a_value_control_sets_its_number(self) -> None:
         bus = _Bus()
-        _x(bus).set_value(_WINDOW, 'Gain', '2.5')
+        _x(bus).set_value(_WINDOW, 'Gain', None, '2.5')
         assert bus.argvs[-1][-3:] == [f"'{_A11Y}Value'", "'CurrentValue'", '<2.5>']
 
     def test_a_value_control_refuses_text_that_is_not_a_number(self) -> None:
         bus = _Bus()
         with pytest.raises(ValueError, match='number'):
-            _x(bus).set_value(_WINDOW, 'Gain', 'high')
+            _x(bus).set_value(_WINDOW, 'Gain', None, 'high')
         assert all(m != 'org.freedesktop.DBus.Properties.Set' for _, m in bus.methods())
 
     def test_close_does_the_frames_own_close_action(self) -> None:
@@ -211,8 +231,8 @@ class TestAtspi:
         bus = _Bus()
         del bus.answers[('org.a11y.Bus', '/org/a11y/bus', 'org.a11y.Bus.GetAddress', ())]
         x11 = _x(bus)
-        for verb in (lambda: x11.controls(_WINDOW), lambda: x11.press(_WINDOW, 'OK'),
-                     lambda: x11.set_value(_WINDOW, 'Gain', '1'), lambda: x11.close(_WINDOW)):  # fmt: skip
+        for verb in (lambda: x11.controls(_WINDOW), lambda: x11.press(_WINDOW, 'OK', None),
+                     lambda: x11.set_value(_WINDOW, 'Gain', None, '1'), lambda: x11.close(_WINDOW)):  # fmt: skip
             with pytest.raises(UnsupportedError) as refused:
                 verb()
             assert refused.value.reason == 'desktop.no_atspi'

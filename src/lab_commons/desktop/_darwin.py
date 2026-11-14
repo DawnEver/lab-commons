@@ -41,15 +41,26 @@ function names(e) { try { return e.actions().map(a => a.name()); } catch (_) { r
 """
 CONTROLS = (
     _FIND
-    + """function run(argv) {
-  return JSON.stringify(win(argv).entireContents().map(e => ({role: get(e, 'role') || '', name: get(e, 'name') || '',
-    value: get(e, 'value'), enabled: get(e, 'enabled') !== false, actions: names(e)})));
-}"""
+    + """function walk(e, path, parent, out) {
+  let kids = [];
+  try { kids = e.uiElements(); } catch (_) {}
+  kids.forEach((k, i) => {
+    const id = path === '' ? String(i) : path + '.' + i;
+    let ident = null;
+    try { ident = k.attributes.byName('AXIdentifier').value(); } catch (_) {}
+    out.push({id: id, parent: parent, role: get(k, 'role') || '', name: get(k, 'name') || '', value: get(k, 'value'),
+      enabled: get(k, 'enabled') !== false, actions: names(k), help: get(k, 'help') || '', identifier: ident});
+    walk(k, id, id, out);
+  });
+  return out;
+}
+function run(argv) { return JSON.stringify(walk(win(argv), '', null, [])); }"""
 )
-# argv: pid, title, index, label[, text]. The element is re-read and must still carry <label>.
+# argv: pid, title, index path, name[, text]. The element is re-read at its path and must still carry <name>.
 _ELEMENT = """function element(argv) {
-  const e = win(argv).entireContents()[Number(argv[2])];
-  if (String(get(e, 'name') || '') !== argv[3]) throw new Error('desktop: the control labelled ' + argv[3] + ' moved');
+  let e = win(argv);
+  argv[2].split('.').forEach(i => { e = e.uiElements()[Number(i)]; });
+  if (String(get(e, 'name') || '') !== argv[3]) throw new Error('desktop: the control named ' + argv[3] + ' moved');
   return e;
 }
 """
@@ -97,6 +108,10 @@ def control_from(row: dict) -> Control:
         value=None if value is None else str(value),
         enabled=bool(row['enabled']),
         actions=actions,
+        id=str(row['id']),
+        parent=None if row['parent'] is None else str(row['parent']),
+        automation_id=None if row['identifier'] in (None, '') else str(row['identifier']),
+        help_text=str(row['help']),
     )
 
 
@@ -146,15 +161,16 @@ class Darwin:
     def controls(self, window: Window) -> list[Control]:
         return [control_from(row) for row in json.loads(self._jxa(CONTROLS, window.pid, window.title) or '[]')]
 
-    def _index(self, window: Window, label: str, verb: str) -> int:
-        found = enumerate(self.controls(window))
-        return pick(window, label, [(c, i) for i, c in found if verb in c.actions])
+    def _target(self, window: Window, act: str, label: str | None, id: str | None) -> Control:  # noqa: A002
+        return pick(window, act, [(c, c) for c in self.controls(window)], label=label, id=id)
 
-    def press(self, window: Window, label: str) -> None:
-        self._jxa(PRESS, window.pid, window.title, self._index(window, label, 'press'), label)
+    def press(self, window: Window, label: str | None, id: str | None) -> None:  # noqa: A002 -- Control.id
+        target = self._target(window, 'press', label, id)
+        self._jxa(PRESS, window.pid, window.title, target.id, target.name)
 
-    def set_value(self, window: Window, label: str, text: str) -> None:
-        self._jxa(SET_VALUE, window.pid, window.title, self._index(window, label, 'set_value'), label, text)
+    def set_value(self, window: Window, label: str | None, id: str | None, text: str) -> None:  # noqa: A002
+        target = self._target(window, 'set_value', label, id)
+        self._jxa(SET_VALUE, window.pid, window.title, target.id, target.name, text)
 
     def close(self, window: Window) -> None:
         self._jxa(CLOSE, window.pid, window.title)
