@@ -483,8 +483,28 @@ def _refuse_retired(parser: argparse.ArgumentParser, argv: list[str]) -> None:
             parser.error(refused)
 
 
+#: An unreachable cluster's exit status: the verb did not run; nothing on the cluster changed.
+UNREACHABLE_EXIT = 3
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Parse the verb and dispatch it against this machine's grants."""
+    """Parse the verb and dispatch it against this machine's grants.
+
+    An unreachable cluster is caught HERE, at the one boundary every verb passes: one line naming the cause and
+    the door (EVERY-WALL-TEACHES), never a traceback.
+    """
+    try:
+        return _dispatch(argv)
+    except Unreachable as unreachable:
+        sys.stderr.write(
+            f'hpc refused: {unreachable} -- no login host is reachable from this network; join the site network '
+            '(or its VPN), then re-run\n'
+        )
+        return UNREACHABLE_EXIT
+
+
+def _dispatch(argv: list[str] | None) -> int:
+    """Parse the verb and run it."""
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
     doors = {
