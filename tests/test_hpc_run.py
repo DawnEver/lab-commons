@@ -652,21 +652,26 @@ class FakeRunCluster:
             self.scripts.append(stdin or '')
         if 'sbatch' in command:
             return f'{4242 + len(self.manifests)}\n'
-        if 'sacct' in command and self.active:
-            self.active -= 1
-            return '\n'.join(f'1_{i}|RUNNING' for i in range(9)) + '\n'
-        if 'sacct' in command:
-            state = 'OUT_OF_MEMORY' if (self.oom and len(self.manifests) == 1) or self.hog else 'TIMEOUT'
-            hour = 1 + len(self.manifests)
-            rows = (
-                f'1_{i}|{state if i == 0 else "COMPLETED"}|2026-10-11T0{hour}:00:00|2026-10-11T0{hour}:01:00'
-                f'|2026-10-11T0{hour}:{2 + i:02d}:00|{60 + 60 * i}|1'
-                for i in range(9)
-            )
-            return '\n'.join(rows) + '\n'
+        if 'sacct' in command:  # rows of the job ids asked (``-j a,b``): sacct never answers for another job
+            jobs = command.split(' -j ', 1)[1].split(maxsplit=1)[0].split(',')
+            rows = self._sacct_rows()
+            return ''.join(f'{job}_{row}\n' for job in jobs for row in rows)
         if '*.jsonl' in command:
             return self._streams()
         return ''
+
+    def _sacct_rows(self) -> list[str]:
+        """One job's nine shard rows after its ``<job>_`` prefix: RUNNING while *active* polls remain."""
+        if self.active:
+            self.active -= 1
+            return [f'{i}|RUNNING' for i in range(9)]
+        state = 'OUT_OF_MEMORY' if (self.oom and len(self.manifests) == 1) or self.hog else 'TIMEOUT'
+        hour = 1 + len(self.manifests)
+        return [
+            f'{i}|{state if i == 0 else "COMPLETED"}|2026-10-11T0{hour}:00:00|2026-10-11T0{hour}:01:00'
+            f'|2026-10-11T0{hour}:{2 + i:02d}:00|{60 + 60 * i}|1'
+            for i in range(9)
+        ]
 
     def _streams(self) -> str:
         out = []
@@ -1608,9 +1613,19 @@ def _gather_cli(fake: FakeRunCluster, tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(cli, 'load_grants', lambda: MACHINE)
     monkeypatch.setattr(cli, 'submitter', lambda: lambda _g: fake)  # gather: this login node's shell
     slept: list[float] = []
-    monkeypatch.setattr(cli, '_sleep', slept.append)
+
+    def sleep(seconds: float) -> None:  # a wait that never settles FAILS here, never hangs the suite
+        slept.append(seconds)
+        if len(slept) > _POLLS_MAX:
+            pytest.fail(f'gather --wait polled {len(slept)} times and never settled')
+
+    monkeypatch.setattr(cli, '_sleep', sleep)
     _submit(fake)
     return cli, slept
+
+
+#: More polls than any gather --wait scenario here needs; past it the wait is a hang, failed by name.
+_POLLS_MAX: Final = 50
 
 
 def test_gather_wait_polls_until_the_run_has_its_record(

@@ -89,6 +89,12 @@ The base installation is the standard library alone. Select capabilities explici
   `process_tree(pid)` and `kill_process_tree(pid)`. stdlib `ctypes` only, never `psutil` — an
   optional dependency makes a ceiling that silently stops being enforced on some machines, which
   is worse than no ceiling because it is believed. Unreadable is always distinct from zero.
+- `lab_commons.desktop` (**tier 1**) — one door to a host's GUI windows, for every tool driven through
+  one: list them (pid, title, rect, enabled, responding), capture one as PNG, read its accessibility
+  tree, and press / set / close an EXACTLY labelled control, refused unless the window's pid is one the
+  caller owns. Facts only (which window means a stall is the caller's), no coordinate clicks or keys;
+  a host that cannot do a verb refuses it by name (`error.reason`). Win32 + UI Automation, X11, macOS;
+  `python -m lab_commons.desktop --help`, and the module docstring for each backend's reach.
 - `lab_commons.resources` — the ONE resource path: kinds (`KINDS`), `Claim`, the `Provider` plug and the
   engine whose `admits` is the only caller of the admission rule; providers live beside what they measure
   (`lab_commons.box.providers`, `lab_commons.hpc.provider`). `resources.dimensions` (**tier 1**) keeps the
