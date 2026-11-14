@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from lab_commons.desktop._core import Control, UnsupportedError, Window, WindowBusyError, pick
+from lab_commons.temp import TEMP_PREFIX
 
 __all__ = ['CLOSE', 'CONTROLS', 'LIST', 'PRESS', 'SET_VALUE', 'Darwin']
 
@@ -130,7 +131,7 @@ class Darwin:
         return [window_from(row) for row in json.loads(self._jxa(LIST) or '[]')]
 
     def capture(self, window: Window, timeout_s: float) -> bytes:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as tmp:
             path = Path(tmp) / 'window.png'
             try:
                 self._run(['screencapture', '-x', '-o', '-l', str(window.handle), '-t', 'png', str(path)], timeout_s)
