@@ -2,12 +2,12 @@
 
 A billed Slurm account (``[hpc.clusters.<name>.slurm_accounts.<account>] billed = true``) declares
 ``budget = { core_hours, since, until }`` (:class:`lab_commons.hpc.grants.Budget`). Before any submission on it,
-:func:`charge` reads the account's ledger ONCE from ``sacct`` and refuses (:class:`OverBudget`) unless
+:func:`charge` reads the grant's own login's ledger ONCE from ``sacct`` and refuses (:class:`OverBudget`) unless
 
     spent + committed + ask <= core_hours
 
-* ``spent``: ``CPUTimeRAW`` of every finished job of the account inside ``[since, until)`` (every user: the budget
-  is the account's, not one login's);
+* ``spent``: ``CPUTimeRAW`` of every finished job the grant's own login ran on the account inside
+  ``[since, until)`` -- never another user's: on a shared account their spend would refuse every submit of ours;
 * ``committed``: a job still pending or running may spend up to its requested CPUs times its time limit -- counted
   WHOLE, so a running job's elapsed part is counted twice. The bound errs toward refusing, never toward overspending;
 * ``ask``: this submission's tasks x CPUs x wall.
@@ -41,11 +41,12 @@ class OverBudget(ValueError):
 
 
 def ledger_command(grant: Grant, *, today: date) -> str:
-    """The ONE ``sacct`` read of *grant*'s Slurm account inside its window, up to *today*: parent rows, every user."""
+    """The ONE ``sacct`` read of *grant*'s login on its Slurm account inside its window, up to *today*: parent rows."""
     assert grant.budget is not None  # noqa: S101 -- charge() refuses a missing budget first
     account = shlex.quote(grant.slurm_account)
+    user = shlex.quote(grant.user)
     last = min(today, date.fromisoformat(grant.budget.until) - timedelta(days=1))
-    return f'sacct -n -P -X -a -A {account} -S {grant.budget.since}T00:00:00 -E {last}T23:59:59 -o {FIELDS}'
+    return f'sacct -n -P -X -u {user} -A {account} -S {grant.budget.since}T00:00:00 -E {last}T23:59:59 -o {FIELDS}'
 
 
 def _number(text: str) -> float:
