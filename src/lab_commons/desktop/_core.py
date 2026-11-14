@@ -7,10 +7,12 @@ backend cannot skip it and a test drives it through a fake.
 
 from __future__ import annotations
 
+import html
+import re
 import struct
 import zlib
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, TypeVar
 
 #: Every reason code a refusal of this package carries. A caller branches on ``error.reason``, never on text.
@@ -162,6 +164,53 @@ class Control:
     offscreen: bool | None = None
 
 
+#: A framework type path standing in for a label (``Avalonia.Controls.StackPanel``): three or more dotted,
+#: capitalised identifiers and no space -- a file name (``run.jsimba``) or a sentence is never one.
+_TYPE_PATH = re.compile(r'[A-Z]\w*(?:\.[A-Z]\w*){2,}')
+#: Markup a toolkit leaves in a Name (Qt rich text): a closing or self-closing tag.
+_MARKUP = re.compile(r'</[A-Za-z][\w-]*\s*>|<[A-Za-z][\w-]*[^<>]*/>')
+_TAG = re.compile(r'<[^<>]*>')
+
+
+def _is_type_name(control: Control) -> bool:
+    return bool(control.name) and (control.name == control.class_name or bool(_TYPE_PATH.fullmatch(control.name)))
+
+
+def _text(name: str) -> str:
+    """*name* with rich-text markup reduced to its text; any other name unchanged."""
+    if not _MARKUP.search(name):
+        return name
+    return ' '.join(html.unescape(_TAG.sub(' ', name)).split())
+
+
+def labelled(controls: Sequence[Control]) -> list[Control]:
+    """*controls* (depth first, each with its ``parent`` id) with the label a user SEES as each ``name``.
+
+    Rich-text markup is reduced to its text. A name that is the control's type (its ``class_name``, or a dotted
+    framework type path) falls back to its first descendant with a visible, non-type label; with none it stays.
+    Only ``name`` changes: the raw facts (``class_name``, ``value``, ...) are untouched.
+    """
+    cleaned = [replace(c, name=_text(c.name)) if _MARKUP.search(c.name) else c for c in controls]
+    children: dict[str | None, list[Control]] = {}
+    for c in cleaned:
+        children.setdefault(c.parent, []).append(c)
+
+    def visible(c: Control) -> str:
+        for child in children.get(c.id, []) if c.id else []:
+            if child.name and not _is_type_name(child):
+                return child.name
+            found = visible(child)
+            if found:
+                return found
+        return ''
+
+    out = []
+    for c in cleaned:
+        shown = visible(c) if _is_type_name(c) else ''
+        out.append(replace(c, name=shown) if shown else c)
+    return out
+
+
 class Backend(Protocol):
     """What one platform provides; every method reads or acts on the live desktop, and nothing else."""
 
@@ -196,6 +245,7 @@ def pick[T](
     :class:`NotActionableError`.
     """
     where = f'window {window.handle:#x} ({window.title!r}, pid {window.pid})'
+    candidates = list(zip(labelled([c for c, _ in candidates]), [ref for _, ref in candidates], strict=True))
     if id is not None:
         named = [(c, ref) for c, ref in candidates if c.id == id]
         if not named:

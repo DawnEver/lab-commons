@@ -28,7 +28,7 @@ from lab_commons.desktop import (
     png_bytes,
 )
 from lab_commons.desktop.__main__ import main
-from lab_commons.desktop._core import pick
+from lab_commons.desktop._core import labelled, pick
 
 
 def _window(
@@ -233,6 +233,63 @@ class TestPick:
     def test_a_disabled_control_by_id_is_refused(self) -> None:
         with pytest.raises(ControlDisabledError):
             pick(_window(), 'press', [(self._c('OK', id='1.1', enabled=False), 'a')], id='1.1')
+
+
+class TestLabels:
+    """A label is what a user SEES: a type-name Name falls back to its own text child; rich text reads as its text."""
+
+    def _c(self, role: str, name: str, id: str, parent: str | None = None, class_name: str = '') -> Control:  # noqa: A002
+        actions = ('press',) if role == 'button' else ()
+        return Control(role=role, name=name, value=None, enabled=True, actions=actions, id=id, parent=parent,
+                       class_name=class_name)  # fmt: skip
+
+    def _simba(self) -> list[Control]:
+        """Measured live 2026-11-14 (SIMBA 26.10): Avalonia buttons named by their content's type."""
+        return [
+            self._c('button', 'Avalonia.Controls.StackPanel', '1', class_name='Button'),
+            self._c('text', '', '1.0', '1', 'TextBlock'),
+            self._c('text', 'SETTINGS', '1.1', '1', 'TextBlock'),
+            self._c('button', 'Avalonia.Controls.StackPanel', '2', class_name='Button'),
+            self._c('text', 'Open...', '2.1', '2', 'TextBlock'),
+        ]
+
+    def test_a_type_name_label_falls_back_to_its_first_visible_text_child(self) -> None:
+        assert [c.name for c in labelled(self._simba())] == ['SETTINGS', '', 'SETTINGS', 'Open...', 'Open...']
+
+    def test_a_name_equal_to_its_class_name_is_a_type_name(self) -> None:
+        found = [self._c('button', 'Button', '1', class_name='Button'), self._c('text', 'Apply', '1.1', '1')]
+        assert labelled(found)[0].name == 'Apply'
+
+    def test_planted_a_real_label_and_a_dotted_file_name_are_untouched(self) -> None:
+        found = [
+            self._c('button', 'Save', '1', class_name='Button'),
+            self._c('text', 'inner', '1.1', '1'),
+            self._c('button', 'run.jsimba', '2', class_name='Button'),
+            self._c('text', 'inner', '2.1', '2'),
+        ]
+        assert [c.name for c in labelled(found)] == ['Save', 'inner', 'run.jsimba', 'inner']
+
+    def test_a_type_name_without_a_text_child_keeps_its_name(self) -> None:
+        found = [self._c('button', 'Avalonia.Controls.StackPanel', '1', class_name='Button')]
+        assert labelled(found)[0].name == 'Avalonia.Controls.StackPanel'
+
+    def test_qt_rich_text_reads_as_its_text(self) -> None:
+        found = [self._c('treeitem', '<span>Electrical</span>', '1'), self._c('text', '<b>R&amp;D</b> <br/>x', '2')]
+        assert [c.name for c in labelled(found)] == ['Electrical', 'R&D x']
+
+    def test_planted_a_name_with_angle_brackets_but_no_markup_is_untouched(self) -> None:
+        assert labelled([self._c('text', 'a < b > c', '1')])[0].name == 'a < b > c'
+
+    def test_pick_resolves_the_cleaned_label(self) -> None:
+        found = [(c, c.id) for c in self._simba()]
+        assert pick(_window(), 'press', found, label='Open...') == '2'
+        with pytest.raises(LabelNotFoundError):
+            pick(_window(), 'press', found, label='Avalonia.Controls.StackPanel')
+
+    def test_the_door_reports_cleaned_labels(self) -> None:
+        fake = FakeBackend([_window()])
+        fake.controls = lambda _w: self._simba()  # type: ignore[method-assign]
+        assert desktop.controls(_window(), backend=fake)[0].name == 'SETTINGS'
 
 
 class TestBackendChoice:

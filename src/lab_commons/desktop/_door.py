@@ -15,6 +15,7 @@ from lab_commons.desktop._core import (
     NotOwnedError,
     UnsupportedError,
     Window,
+    labelled,
     one_target,
 )
 
@@ -63,7 +64,7 @@ def capture(window: Window, *, timeout_s: float = 5.0, backend: Backend | None =
 
 def controls(window: Window, *, backend: Backend | None = None) -> list[Control]:
     """*window*'s accessibility tree, flattened: reads a dialog's text without OCR."""
-    return _resolve(backend).controls(window)
+    return labelled(_resolve(backend).controls(window))
 
 
 def press(
