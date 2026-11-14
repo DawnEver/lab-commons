@@ -165,7 +165,8 @@ def test_a_billed_submission_over_budget_is_refused_before_sbatch() -> None:
     assert asked == [budgetdoor.ledger_command(_PAID, today=_INSIDE)]
     assert '-A proj' in asked[0]
     assert '-S 2026-01-01' in asked[0]
-    assert ' -a ' in asked[0], "the budget is the account's: every user is counted"
+    assert ' -u pay ' in asked[0], "the budget counts the grant's own login only"
+    assert ' -a ' not in asked[0], "another user's jobs on a shared account never count"
     # Planted control: one core-hour less spent and it fits.
     _, run = _ledger('COMPLETED|4|60|331200\n')
     charge(run, _PAID, ask_of(_PLAN), today=_INSIDE)
