@@ -155,6 +155,30 @@ READ_RETRY_S: Final = 0.5
 """How long a reader waits out a table it cannot parse before reading it as nothing learned (seconds)."""
 
 
+_PARSED: dict[Path, tuple[bytes, dict[str, Any]]] = {}
+
+
+def _parsed(path: Path) -> dict[str, Any]:
+    """*path*'s table, parsed once per CONTENT of the file (keyed by its digest); none is ``{}``.
+
+    One forge read parsed the same multi-megabyte table ~140 times. Reading and hashing its bytes costs a
+    fraction of parsing them, and unlike a stat key (an in-place rewrite within the clock's tick keeps size
+    and mtime) a digest never serves a changed table stale. The table returned is SHARED: callers copy
+    before they change it, as every writer here does.
+    """
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    digest = hashlib.blake2b(raw, digest_size=16).digest()
+    held = _PARSED.get(path)
+    if held is not None and held[0] == digest:
+        return held[1]
+    table = json.loads(raw.decode('utf-8'))
+    _PARSED[path] = (digest, table)
+    return table
+
+
 def learned(repo: str) -> dict[str, Any]:
     """Everything learned for *repo* (the per-test keys of :class:`Measured`, and ``runs``); none yet is ``{}``.
 
@@ -166,7 +190,7 @@ def learned(repo: str) -> dict[str, Any]:
     deadline = time.monotonic() + READ_RETRY_S
     while True:
         try:
-            return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+            return _parsed(path)
         except (ValueError, OSError):
             if time.monotonic() >= deadline:
                 return read_table(path)

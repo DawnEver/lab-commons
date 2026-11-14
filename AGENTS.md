@@ -5,6 +5,7 @@ The family's shared runtime and execution layer. Python package `lab_commons`:
 - Runtime: `units`, `paths`, `file_io`, `log`, `structured`, `config`, `credentials`, `outcomes`, `viz`.
 - Execution: `box` (one machine ledger), `compute` (units, results, executors), `hpc` (cluster tier),
   `supervise` (process supervision), and their helpers (`proc`, `liveness`, `resources`, `envkey`, ...).
+- Desktop: `desktop` -- see and act on a host's GUI windows (`python -m lab_commons.desktop ... --json`).
 - The development system (forge, hooks, gate, verify, HPC hosting) is dev-lab, a `dev` dependency group,
   never a runtime dependency; nothing here imports it (`tests/test_arch_the_staying_side_never_imports_dev.py`).
 
