@@ -31,9 +31,17 @@ from lab_commons.desktop.__main__ import main
 from lab_commons.desktop._core import pick
 
 
-def _window(handle: int = 0x10, pid: int = 7, title: str = 'Solver - run', *, visible: bool = True) -> Window:
+def _window(
+    handle: int = 0x10,
+    pid: int = 7,
+    title: str = 'Solver - run',
+    *,
+    visible: bool = True,
+    rect: tuple[int, int, int, int] = (0, 0, 4, 2),
+    owner: int = 0,
+) -> Window:
     return Window(
-        handle=handle, pid=pid, title=title, rect=(0, 0, 4, 2), visible=visible, enabled=True, responding=True
+        handle=handle, pid=pid, title=title, rect=rect, visible=visible, enabled=True, responding=True, owner=owner
     )
 
 
@@ -44,6 +52,8 @@ class FakeBackend:
         """Show *shown* as the host's windows."""
         self.shown = shown
         self.acts: list[tuple[object, ...]] = []
+        #: The window a ``close`` asks to close stays open (a modal it owns blocks it), as JMAG's did live.
+        self.stays = False
 
     def windows(self) -> list[Window]:
         return list(self.shown)
@@ -62,6 +72,8 @@ class FakeBackend:
 
     def close(self, window: Window) -> None:
         self.acts.append(('close', window.handle))
+        if not self.stays:
+            self.shown = [w for w in self.shown if w.handle != window.handle]
 
 
 class TestWindows:
@@ -127,6 +139,53 @@ class TestOwnershipGuard:
         with pytest.raises(TypeError, match='exactly one'):
             desktop.press(window, owned={7}, backend=fake, **chosen)
         assert fake.acts == []
+
+
+class TestCloseIsVerified:
+    """A close is done only when the window is GONE.
+
+    Measured 2026-11-14: a JMAG main window disabled under its Startup modal stayed open while ``close`` said done.
+    """
+
+    def test_a_window_that_closes_is_done(self) -> None:
+        window = _window()
+        fake = FakeBackend([window])
+        desktop.close(window, owned={7}, backend=fake, timeout_s=0.5)
+        assert fake.shown == []
+
+    def test_planted_a_window_kept_open_by_its_owned_modal_is_not_closed(self) -> None:
+        window = _window(0x10)
+        modal = _window(0x20, title='JMAG-Designer: Startup', owner=0x10)
+        fake = FakeBackend([window, modal])
+        fake.stays = True
+        with pytest.raises(desktop.NotClosedError) as refused:
+            desktop.close(window, owned={7}, backend=fake, timeout_s=0.3)
+        assert refused.value.reason == 'desktop.not_closed'
+        assert 'JMAG-Designer: Startup' in str(refused.value)
+        assert '0x20' in str(refused.value)
+
+    def test_a_window_that_stays_with_no_owned_window_is_not_closed(self) -> None:
+        window = _window()
+        fake = FakeBackend([window])
+        fake.stays = True
+        with pytest.raises(desktop.NotClosedError, match='no owned window'):
+            desktop.close(window, owned={7}, backend=fake, timeout_s=0.2)
+
+
+class TestNoArea:
+    """A zero-area window (Workbench's 0x0 'Internet Explorer_Hidden', 2026-11-14) is refused by its own reason."""
+
+    def test_a_window_states_its_area(self) -> None:
+        assert _window(rect=(10, 10, 14, 12)).area == 8
+        assert _window(rect=(0, 0, 0, 0)).area == 0
+        assert _window(rect=(5, 5, 3, 9)).area == 0, 'an inverted rect has no area'
+
+    def test_capture_of_a_zero_area_window_is_no_area_not_busy(self) -> None:
+        fake = FakeBackend([])
+        with pytest.raises(desktop.NoAreaError) as refused:
+            desktop.capture(_window(rect=(0, 0, 0, 0)), backend=fake)
+        assert refused.value.reason == 'desktop.no_area'
+        assert not isinstance(refused.value, desktop.WindowBusyError)
 
 
 class TestPick:
@@ -231,6 +290,25 @@ class TestCli:
         assert main(['capture', '--pid', '7', '--out', str(tmp_path), '--json']) == 0
         (row,) = json.loads(capsys.readouterr().out)
         assert Path(row['png']).read_bytes().startswith(b'\x89PNG')
+
+    def test_capture_reports_each_window_and_continues_past_a_refusal(self, monkeypatch, capsys, tmp_path) -> None:
+        self._fake(monkeypatch, [_window(0x1E, 7, rect=(0, 0, 0, 0)), _window(0x1F, 7)])
+        assert main(['capture', '--pid', '7', '--out', str(tmp_path), '--json']) == 0
+        hidden, shown = json.loads(capsys.readouterr().out)
+        assert (hidden['handle'], hidden['refused']) == (0x1E, 'desktop.no_area')
+        assert 'png' not in hidden
+        assert Path(shown['png']).read_bytes().startswith(b'\x89PNG')
+
+    def test_capture_with_nothing_captured_exits_1(self, monkeypatch, capsys, tmp_path) -> None:
+        self._fake(monkeypatch, [_window(0x1E, 7, rect=(0, 0, 0, 0))])
+        assert main(['capture', '--pid', '7', '--out', str(tmp_path), '--json']) == 1
+        (row,) = json.loads(capsys.readouterr().out)
+        assert row['refused'] == 'desktop.no_area'
+
+    def test_windows_rows_carry_the_area(self, monkeypatch, capsys) -> None:
+        self._fake(monkeypatch, [_window(1, 7, rect=(0, 0, 0, 0))])
+        assert main(['windows', '--json']) == 0
+        assert json.loads(capsys.readouterr().out)[0]['area'] == 0
 
     def test_controls_json(self, monkeypatch, capsys) -> None:
         self._fake(monkeypatch, [_window()])

@@ -3,8 +3,10 @@
 Every verb selects windows by ``--pid`` (repeatable), ``--title`` (a case-blind substring) and ``--handle``.
 Reading verbs act on every selected window; ``press``, ``set-value`` and ``close`` need exactly ONE, and
 ``--pid`` is then also the set of pids they may touch (:func:`lab_commons.desktop.press`). ``--json``
-prints one JSON array; a refusal prints ``desktop: <reason> -- <why>`` on stderr and exits 1.
-``windows`` adds each window's process CPU seconds (:func:`lab_commons.proccpu.cpu_seconds`), so two
+prints one JSON array; a refusal prints ``desktop: <reason> -- <why>`` on stderr and exits 1;
+``capture`` refuses PER WINDOW instead (the row carries ``refused`` and ``why``), goes on, and exits 1 only when
+it captured nothing. ``windows`` adds each window's ``area`` and its process CPU seconds
+(:func:`lab_commons.proccpu.cpu_seconds`), so two
 listings a moment apart tell a busy window from a hung one.
 """
 
@@ -59,7 +61,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _row(window: Window) -> dict[str, object]:
-    return {**dataclasses.asdict(window), 'rect': list(window.rect), 'cpu_s': cpu_seconds(window.pid)}
+    return {
+        **dataclasses.asdict(window),
+        'rect': list(window.rect),
+        'area': window.area,
+        'cpu_s': cpu_seconds(window.pid),
+    }
 
 
 def _print(rows: list[dict[str, object]], *, as_json: bool) -> None:
@@ -82,9 +89,15 @@ def _run(ns: argparse.Namespace) -> list[dict[str, object]]:
         ns.out.mkdir(parents=True, exist_ok=True)
         rows = []
         for w in selected:
+            row: dict[str, object] = {'handle': w.handle, 'pid': w.pid, 'title': w.title}
+            try:
+                png = capture(w, timeout_s=ns.timeout_s)
+            except DesktopError as refused:
+                rows.append({**row, 'refused': refused.reason, 'why': str(refused)})
+                continue
             path = ns.out / f'window-{w.pid}-{w.handle:x}.png'
-            path.write_bytes(capture(w, timeout_s=ns.timeout_s))
-            rows.append({'handle': w.handle, 'pid': w.pid, 'title': w.title, 'png': str(path)})
+            path.write_bytes(png)
+            rows.append({**row, 'png': str(path)})
         return rows
     if ns.verb == 'controls':
         return [
@@ -124,7 +137,7 @@ def main(args: Sequence[str] | None = None) -> int:
         emit(f'desktop: {refused.reason} -- {refused}', err=True)
         return 1
     _print(rows, as_json=ns.json)
-    return 0
+    return 1 if ns.verb == 'capture' and rows and all('refused' in row for row in rows) else 0
 
 
 if __name__ == '__main__':

@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Collection
 
 from lab_commons.desktop import _darwin, _win, _x11
-from lab_commons.desktop._core import Backend, Control, NotOwnedError, UnsupportedError, Window, one_target
+from lab_commons.desktop._core import (
+    Backend,
+    Control,
+    NoAreaError,
+    NotClosedError,
+    NotOwnedError,
+    UnsupportedError,
+    Window,
+    one_target,
+)
 
 
 def backend() -> Backend:
@@ -41,7 +51,13 @@ def windows(
 
 
 def capture(window: Window, *, timeout_s: float = 5.0, backend: Backend | None = None) -> bytes:
-    """PNG bytes of *window*; a window whose UI thread misses the probe or the deadline is :class:`WindowBusyError`."""
+    """PNG bytes of *window*; a window whose UI thread misses the probe or the deadline is :class:`WindowBusyError`.
+
+    A window with no area (``Window.area`` 0) is :class:`NoAreaError` before the backend is asked.
+    """
+    if not window.area:
+        msg = f'window {window.handle:#x} ({window.title!r}) has no area: rect {window.rect}'
+        raise NoAreaError(msg)
     return _resolve(backend).capture(window, timeout_s)
 
 
@@ -85,11 +101,27 @@ def set_value(
     chosen.set_value(window, label, id, text)
 
 
-def close(window: Window, *, owned: Collection[int], backend: Backend | None = None) -> None:
-    """Ask *window* to close through the accessibility API (its own close, so it may still prompt)."""
+def close(window: Window, *, owned: Collection[int], timeout_s: float = 5.0, backend: Backend | None = None) -> None:
+    """Ask *window* to close through the accessibility API (its own close, so it may still prompt), then VERIFY.
+
+    Done only when its handle is gone within *timeout_s*; a window still there (disabled under a modal, or
+    showing a prompt) is :class:`NotClosedError`, naming the visible windows it owns -- the likely blockers.
+    """
     chosen = _resolve(backend)
     _guard(window, owned, chosen)
     chosen.close(window)
+    deadline = time.monotonic() + timeout_s
+    while True:
+        now = chosen.windows()
+        if all(w.handle != window.handle for w in now):
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    blockers = [f'{w.handle:#x} {w.title!r}' for w in now if w.owner == window.handle and w.visible]
+    held = f'owned window(s) {", ".join(blockers)} may block it' if blockers else 'no owned window is visible'
+    msg = f'window {window.handle:#x} ({window.title!r}) is still open {timeout_s:g} s after its close: {held}'
+    raise NotClosedError(msg)
 
 
 def _resolve(given: Backend | None) -> Backend:

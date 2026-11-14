@@ -123,3 +123,18 @@ def test_close_dismisses_the_dialog_as_its_own_close_would(app: App) -> None:
     desktop.close(app.dialog, owned={app.dialog.pid})
     assert _until(app.answer.exists), 'the dialog did not close'
     assert app.answer.read_text() == 'False'
+
+
+def test_planted_a_main_window_kept_open_by_its_modal_is_not_closed(app: App) -> None:
+    """Measured 2026-11-14 on JMAG: a main window disabled under its modal stayed while ``close`` said done."""
+    with pytest.raises(desktop.NotClosedError) as refused:
+        desktop.close(app.main, owned={app.main.pid}, timeout_s=2.0)
+    assert refused.value.reason == 'desktop.not_closed'
+    assert app.dialog.title in str(refused.value), 'the blocking owned window is named'
+    assert any(w.handle == app.main.handle for w in desktop.windows(title=app.main.title))
+
+
+def test_the_main_window_tree_does_not_hold_its_modal(app: App) -> None:
+    """Each window's controls are its own tree: the modal's text is the dialog's, never also the main window's."""
+    assert any(c.name == 'Proceed with the run?' for c in desktop.controls(app.dialog))
+    assert not any(c.name in {'Proceed with the run?', 'OK', 'Cancel'} for c in desktop.controls(app.main))
