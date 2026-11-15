@@ -160,7 +160,10 @@ class Atspi:
 
         actions: list[str] = []
         value: str | None = None
-        if f'{_A11Y}Action' in node.interfaces:
+        # GTK4 declares Action on EVERY widget (measured on ubuntu-latest, #186): pressable is having an action
+        if f'{_A11Y}Action' in node.interfaces and optional(
+            'org.freedesktop.DBus.Properties.Get', gvariant_string(f'{_A11Y}Action'), gvariant_string('NActions')
+        ):
             actions.append('press')
         if f'{_A11Y}Text' in node.interfaces:
             value = optional(f'{_A11Y}Text.GetText', '0', '-1')
