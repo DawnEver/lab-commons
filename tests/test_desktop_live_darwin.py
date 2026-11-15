@@ -76,10 +76,11 @@ def app() -> Iterator[App]:
             )
         if not appeared:
             said = proc.communicate(timeout=5)[1] if proc.poll() is not None else '(still running)'
-            others = sorted({(w.pid, w.title) for w in desktop.windows() if w.visible})
+            every = desktop.windows()
+            others = (len(every), sorted({(w.pid, w.title) for w in every if w.visible}))
             pytest.fail(
                 f'the dialog {title!r} never appeared; pid {proc.pid} owns {owned}; osascript exit '
-                f'{proc.returncode}: {said.strip()!r}; visible windows (pid, title): {others}'
+                f'{proc.returncode}: {said.strip()!r}; windows (all, visible (pid, title)): {others}'
             )
         yield App(proc, next(w for w in owned if w.title == title))
     finally:

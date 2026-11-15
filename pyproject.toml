@@ -88,10 +88,9 @@ install = "uv sync --frozen --all-extras"
 # The run record's root (dev_lab.dev.platformparts).
 [tool.dev_lab.parts]
 output = "output/logs"
-# tests/linux needs apt packages (Xvfb, a window manager, zenity, at-spi2-core; tests/test_desktop_live_x11.py
-# TOOLS) no hosted ubuntu runner has, and a hosted part's setup step is granted only with secrets
-# (dev_lab.dev.jobparts.hosted_parts): unproduced until dev-lab grants a setup without one.
-unproduced = ["linux"]
+# tests/linux needs apt packages no hosted ubuntu runner has: the PACKAGES of tests/test_desktop_live_x11.py, whose
+# fixture names any that is missing. Installed by the part's own setup step (dev_lab.dev.jobparts.hosted_parts).
+hosted = { linux = { setup = "sudo apt-get update -q && sudo apt-get install -y -q at-spi2-core dbus libglib2.0-bin openbox x11-apps x11-utils xvfb zenity" } }
 
 # One need vocabulary (lab_commons.hpc.needsets): a test marks the resources it needs, and its part is its
 # need-set -- tests/base, tests/linux, tests/macos and tests/windows. A host claims a part when its machine file's
