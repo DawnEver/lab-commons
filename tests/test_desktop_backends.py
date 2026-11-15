@@ -178,6 +178,17 @@ class TestDarwin:
         assert not found[1].visible, 'a layer-25 window is not an application window'
         assert recorder.argvs[0][:4] == ['osascript', '-l', 'JavaScript', '-e']
 
+    def test_an_empty_window_list_is_refused_by_name(self) -> None:
+        """An empty window list is a session the process cannot see, never "no windows".
+
+        A GUI session always has windows (the menu bar at least); macos-latest read ZERO rows while a dialog was up.
+        """
+        for empty in (b'[]', b''):
+            with pytest.raises(UnsupportedError) as refused:
+                self._mac(_Recorder({'CGWindowListCopyWindowInfo': empty})).windows()
+            assert refused.value.reason == 'desktop.no_accessibility'
+            assert 'window list' in str(refused.value)
+
     def test_press_resolves_the_label_then_passes_every_value_as_argv(self) -> None:
         rows = [
             _ax('0', None, 'AXGroup', 'Licence expired'),
