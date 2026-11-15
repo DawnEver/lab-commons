@@ -2,7 +2,9 @@
 
 The session is the test's own: ``Xvfb`` on a free display, a window manager (``_NET_CLIENT_LIST`` is the window
 manager's list, so a bare X server lists nothing), a private session D-Bus that activates the AT-SPI bus and its
-registry, and ``zenity --question`` as the dialog -- GTK, so it is on AT-SPI (tkinter is not). The answer is the
+registry -- in its OWN ``XDG_RUNTIME_DIR``: the AT-SPI launcher puts its socket at ``$XDG_RUNTIME_DIR/at-spi/bus``,
+and sharing the runner's (measured on ubuntu-latest) let the host session's launcher replace it mid-module -- and
+``zenity --question`` as the dialog -- GTK, so it is on AT-SPI (tkinter is not). The answer is the
 dialog's exit code, so a press is observed by its effect. A missing tool FAILS naming the tool and its package,
 never skips. Produced by a Linux host (the ``linux`` part).
 """
@@ -61,20 +63,26 @@ def _first_line(proc: subprocess.Popen, what: str) -> str:
 
 
 @pytest.fixture(scope='module')
-def session() -> Iterator[dict[str, str]]:
+def session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, str]]:
     """``DISPLAY`` and ``DBUS_SESSION_BUS_ADDRESS`` of a fresh X11 + D-Bus + window-manager session, set in env."""
     missing = sorted(tool for tool in TOOLS if shutil.which(tool) is None)
     if missing:
         pytest.fail(f'the X11 session needs {missing}: apt-get install {" ".join(PACKAGES)}', pytrace=False)
     started: list[subprocess.Popen] = []
-    saved = {name: os.environ.get(name) for name in ('DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'NO_AT_BRIDGE')}
+    saved = {
+        name: os.environ.get(name)
+        for name in ('DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'NO_AT_BRIDGE', 'XDG_RUNTIME_DIR')
+    }
     try:
         xvfb = subprocess.Popen(
             [_path('Xvfb'), '-displayfd', '1', '-screen', '0', '1280x1024x24', '-nolisten', 'tcp'],
             stdout=subprocess.PIPE, text=True,
         )  # fmt: skip
         started.append(xvfb)
-        env = {'DISPLAY': f':{_first_line(xvfb, "Xvfb -displayfd")}'}
+        runtime = tmp_path_factory.mktemp('xdg-runtime')
+        runtime.chmod(0o700)
+        env = {'DISPLAY': f':{_first_line(xvfb, "Xvfb -displayfd")}', 'XDG_RUNTIME_DIR': str(runtime)}
+        os.environ['XDG_RUNTIME_DIR'] = env['XDG_RUNTIME_DIR']  # the bus below and everything it activates
         bus = subprocess.Popen(
             [_path('dbus-daemon'), '--session', '--nofork', '--nopidfile', '--print-address=1'],
             stdout=subprocess.PIPE, text=True,
