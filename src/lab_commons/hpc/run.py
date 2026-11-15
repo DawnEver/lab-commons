@@ -67,7 +67,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, Final
 
-from lab_commons.compute.measured import Measured, memory_band
+from lab_commons.compute.measured import HEAVY_SHARE, Measured, memory_band
 from lab_commons.hpc.budget import ask_of, charge
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
@@ -404,8 +404,11 @@ def submit_run(
         return memory_band(measured.item_gb(ids, cost, policy))
 
     same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
-    heavy = measured.heavy(files, cost, policy, ceiling_gb=grantable_gb(same_cluster))
+    ceiling_gb = grantable_gb(same_cluster)
+    heavy = measured.heavy(files, cost, policy, ceiling_gb=ceiling_gb)
     state['heavy'] = sorted(heavy)  # packed alone, and left out of the peak that prices the part (job_measured)
+    # the bar, so a file that crosses it DURING the run is left out of that peak too (job_measured)
+    state['heavy_bar_gb'] = None if ceiling_gb is None else ceiling_gb * HEAVY_SHARE
     pending = measured.pack(files, cost, item_seconds(policy), band, alone=heavy)
     if not pending:  # every id was carried or handed: the record needs no job
         state['record'] = record_of(state, grant.slurm_account)

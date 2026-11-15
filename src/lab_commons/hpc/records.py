@@ -479,17 +479,21 @@ def job_measured(
     cpus: int,
     files: float = 0.0,
     heavy: Iterable[str] = (),
+    heavy_bar_gb: float | None = None,
 ) -> Run:
     """What a whole Slurm run measured, as one :class:`~lab_commons.compute.learned.Run`.
 
     Its peak is one TASK's (the worst file it ran, as :meth:`Measured.worker_gb` prices it, unpadded), but a
-    *heavy* file's (:meth:`Measured.heavy`, packed alone): the part's demand is priced without it;
+    *heavy* file's (:meth:`Measured.heavy`, packed alone): the part's demand is priced without it. The planned
+    list is read BEFORE the run, so a file whose measured peak crossed *heavy_bar_gb* (the plan's bar,
+    :data:`HEAVY_SHARE` of the grant) DURING it is heavy too -- one such file priced every later base at the
+    grant's ceiling, where no account could admit it;
     its cpu-seconds are every shard's elapsed times the *cpus* each held; its wall is the rounds' makespans;
     its *files* what :func:`files_made` counted.
     """
     walls = [r.get('walls_s') or [0.0] for r in rounds]
     return Run(
-        peak_mem_gb=measured.peak_gb(nodes, without=frozenset(heavy)),
+        peak_mem_gb=measured.peak_gb(nodes, without=frozenset(heavy) | measured.past_gb(heavy_bar_gb)),
         cpu_s=sum(sum(w) for w in walls) * cpus,
         wall_s=max(1.0, sum(max(w) for w in walls)),
         files=files,
