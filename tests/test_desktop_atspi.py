@@ -294,7 +294,7 @@ class TestAtspiOnALiveBus:
         bus.answers[frame] = bus.answers[frame].replace("'/off')", "'/off'), (':1.7', objectpath '/btn')")
         nodes = {
             **_node('/btn', 'button', 'Go', ['Action'], children=('/btn-label',)),
-            **_node('/btn-label', 'label', 'Go', ['Action'], n_actions=0),
+            **_node('/btn-label', 'label', 'Go', ['Action'], n_actions=1),  # GTK4 labels carry an action (#187)
         }
         for (path, method, args), answer in nodes.items():
             bus.answers[(':1.7', path, method, args)] = answer
