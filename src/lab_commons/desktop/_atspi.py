@@ -20,7 +20,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from lab_commons.desktop._core import Control, UnsupportedError, Window, WindowBusyError, pick
@@ -40,6 +40,8 @@ _CALL_S = 5.0
 FRAME_WAIT_S = 10.0
 #: The pause between two looks for the frame, seconds.
 _FRAME_POLL_S = 0.2
+#: What gdbus says when the bus address no longer answers (the bus moved).
+_UNREACHABLE = b'Error connecting'
 
 
 @dataclass(frozen=True)
@@ -145,7 +147,7 @@ class Atspi:
             found.append((control, node))
             # depth first, in the tree's own order
             pending[:0] = [(child, control.id) for child in self._children(window, bus, path)]
-        return found
+        return _labelled(found)
 
     def _control(self, window: Window, node: _Node, parent: str | None) -> Control:
         call = lambda method, *args: self._call(window, node.bus, node.path, method, *args)[0]  # noqa: E731
@@ -211,10 +213,15 @@ class Atspi:
         return self._address
 
     def _call(self, window: Window, dest: str, path: str, method: str, *args: str) -> Any:  # noqa: ANN401 -- GVariant
-        argv = ['gdbus', 'call', '--address', self._bus_address(), '--dest', dest, '--object-path', path,
-                '--method', method, *args]  # fmt: skip
         try:
-            answer = self._run(argv, _CALL_S)
+            try:
+                answer = self._ask(dest, path, method, *args)
+            except subprocess.CalledProcessError as refused:
+                if _UNREACHABLE not in (refused.stderr or b''):
+                    raise
+                # the bus MOVED (its launcher restarted it; measured on ubuntu-latest): ask its address again, once
+                self._address = None
+                answer = self._ask(dest, path, method, *args)
         except subprocess.TimeoutExpired as late:
             msg = f'AT-SPI {method} on {dest}{path} for window {window.handle:#x} missed {_CALL_S:g} s: busy'
             raise WindowBusyError(msg) from late
@@ -223,6 +230,34 @@ class Atspi:
             msg = f'AT-SPI {method} on {dest}{path} for window {window.handle:#x} was refused: {said}'
             raise UnsupportedError(msg, 'desktop.no_atspi') from refused
         return parse_gvariant(answer.decode('utf-8', 'replace'))
+
+    def _ask(self, dest: str, path: str, method: str, *args: str) -> bytes:
+        argv = ['gdbus', 'call', '--address', self._bus_address(), '--dest', dest, '--object-path', path,
+                '--method', method, *args]  # fmt: skip
+        return self._run(argv, _CALL_S)
+
+
+def _labelled(found: list[tuple[Control, _Node]]) -> list[tuple[Control, _Node]]:
+    """A nameless pressable control takes the ONE name its descendants carry (GTK4 names a button's child label).
+
+    Measured on ubuntu-latest: zenity's Cancel button read ('', 'push button') beside a ('Cancel', 'label') child, so a
+    press by the label it shows found no pressable control. Two different names below it stay nameless (ambiguous).
+    """
+    names_below: dict[str, set[str]] = {}
+    parents = {control.id: control.parent for control, _ in found}
+    for control, _ in found:
+        if not control.name:
+            continue
+        up = control.parent
+        while up is not None:
+            names_below.setdefault(up, set()).add(control.name)
+            up = parents.get(up)
+    return [
+        (replace(control, name=next(iter(names_below[control.id]))), node)
+        if not control.name and 'press' in control.actions and len(names_below.get(control.id, ())) == 1
+        else (control, node)
+        for control, node in found
+    ]
 
 
 def gvariant_string(text: str) -> str:

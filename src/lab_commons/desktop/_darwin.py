@@ -23,7 +23,7 @@ __all__ = ['CLOSE', 'CONTROLS', 'LIST', 'PRESS', 'SET_VALUE', 'Darwin']
 #: ``argv, timeout -> stdout bytes``; raises ``subprocess.CalledProcessError`` / ``TimeoutExpired``.
 Runner = Callable[[list[str], float], bytes]
 
-#: Every window of every layer; ``layer == 0`` (an application window) and on-screen is what reads visible.
+#: Every window of every layer; on-screen at an application level (:data:`APP_LAYERS`) is what reads visible.
 LIST = """ObjC.import('CoreGraphics');
 function run(argv) {
   const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(0, 0)));
@@ -31,6 +31,10 @@ function run(argv) {
     title: w.kCGWindowName || '', layer: w.kCGWindowLayer, onscreen: !!w.kCGWindowIsOnscreen,
     x: w.kCGWindowBounds.X, y: w.kCGWindowBounds.Y, w: w.kCGWindowBounds.Width, h: w.kCGWindowBounds.Height})));
 }"""
+#: The window levels an application's own windows sit at: normal (0), floating (3) and MODAL PANEL (8) -- a dialog,
+#: the very window a stall is about. Measured 2026-11-15 on macos-latest: with ``layer == 0`` alone an osascript
+#: dialog never read visible. The dock (20), menu bar (24) and status items (25) are the system's, not an app's.
+APP_LAYERS = frozenset({0, 3, 8})
 # argv: pid, title. The window of process <pid> named exactly <title>, its UI tree flattened in a stable order.
 _FIND = """const se = Application('System Events');
 function win(argv) { return se.processes.whose({unixId: Number(argv[0])})[0].windows.whose({name: argv[1]})[0]; }
@@ -89,7 +93,7 @@ def window_from(row: dict) -> Window:
         pid=int(row['pid']),
         title=str(row['title']),
         rect=(left, top, left + int(row['w']), top + int(row['h'])),
-        visible=bool(row['onscreen']) and int(row['layer']) == 0,
+        visible=bool(row['onscreen']) and int(row['layer']) in APP_LAYERS,
         enabled=None,
         responding=None,
     )
@@ -146,8 +150,7 @@ class Darwin:
         rows = json.loads(self._jxa(LIST) or '[]')
         if not rows:
             # A GUI session always has windows (the menu bar at least): an empty list is a session this process
-            # cannot see (no window-server login, as on a hosted runner), never "no windows" -- measured
-            # 2026-11-15 on macos-latest, zero rows of any layer while an osascript dialog was up.
+            # cannot see (no window-server login), never "no windows".
             msg = 'the window server returned an empty window list: this process sees no macOS GUI session'
             raise UnsupportedError(msg, 'desktop.no_accessibility')
         return [window_from(row) for row in rows]
