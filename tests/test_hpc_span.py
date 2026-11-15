@@ -332,7 +332,7 @@ def test_sha_only_watch_and_several_job_files_are_refused_where_they_do_not_belo
         ('status', '-c', str(job), '--sha', 'b' * 40): '--sha and --only belong to submit',
         ('gather', '-c', str(job), '--only', '1'): '--sha and --only belong to submit',
         ('gather', '-c', str(job), '--watch'): '--watch belongs to status',
-        ('gather', '-c', str(job), '-c', str(job)): 'only status takes several',
+        ('gather', '-c', str(job), '-c', str(job)): 'only status and cancel take several',
     }
     for argv, why in refusals.items():
         with pytest.raises(SystemExit):
