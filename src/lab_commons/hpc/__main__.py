@@ -44,7 +44,7 @@ it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 under that root through the grant, refusing everything if a running job works under one
 (:mod:`lab_commons.hpc.clean`).
 
-``cancel (--at <user@host>|--grant <user>) (--job <id>... | --pending-over-mem <GB>) [--dry-run]`` lists and
+``cancel-queue (--at <user@host>|--grant <user>) (--job <id>... | --pending-over-mem <GB>) [--dry-run]`` lists and
 cancels that user's own selected Slurm jobs (:mod:`lab_commons.hpc.cancel`).
 
 ``tree acquire|release|list|reap`` is the ONE door for an ad-hoc commit tree on a cluster (a lease under
@@ -544,7 +544,7 @@ def _dispatch(argv: list[str] | None) -> int:
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
     doors = {
-        'cancel': cancel.main,
+        'cancel-queue': cancel.main,
         'clean': clean.main,
         'fetch': fetch.main,
         'log': logread.main,

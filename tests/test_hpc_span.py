@@ -611,6 +611,9 @@ def _cancel_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, queue: _Queue) 
 def test_cancel_pending_only_spares_the_started_shard_and_records_the_rest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(
+        cli.cancel, 'main', lambda _argv: pytest.fail('submission cancel must not enter the queue door')
+    )
     queue = _Queue()
     out, record = _cancel_cli(tmp_path, monkeypatch, queue)
     assert cli.main(['cancel', '-c', 'j.toml', '--pending-only']) == 0
