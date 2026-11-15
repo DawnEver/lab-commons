@@ -143,7 +143,14 @@ class Darwin:
         return out.decode(errors='replace').strip()
 
     def windows(self) -> list[Window]:
-        return [window_from(row) for row in json.loads(self._jxa(LIST) or '[]')]
+        rows = json.loads(self._jxa(LIST) or '[]')
+        if not rows:
+            # A GUI session always has windows (the menu bar at least): an empty list is a session this process
+            # cannot see (no window-server login, as on a hosted runner), never "no windows" -- measured
+            # 2026-11-15 on macos-latest, zero rows of any layer while an osascript dialog was up.
+            msg = 'the window server returned an empty window list: this process sees no macOS GUI session'
+            raise UnsupportedError(msg, 'desktop.no_accessibility')
+        return [window_from(row) for row in rows]
 
     def capture(self, window: Window, timeout_s: float) -> bytes:
         with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as tmp:

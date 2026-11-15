@@ -220,13 +220,6 @@ class TestAtspi:
             _x(bus).close(_WINDOW)
         assert refused.value.reason == 'desktop.not_closable'
 
-    def test_no_frame_with_the_windows_title_is_refused_by_name(self) -> None:
-        window = Window(**{**_WINDOW.__dict__, 'title': 'Gone'})
-        with pytest.raises(UnsupportedError) as refused:
-            _x(_Bus()).controls(window)
-        assert refused.value.reason == 'desktop.no_atspi'
-        assert 'Gone' in str(refused.value)
-
     def test_an_absent_bus_is_refused_by_name(self) -> None:
         bus = _Bus()
         del bus.answers[('org.a11y.Bus', '/org/a11y/bus', 'org.a11y.Bus.GetAddress', ())]
@@ -254,3 +247,61 @@ class TestAtspi:
 
         with pytest.raises(WindowBusyError):
             _x11.X11(run=slow, env={'DISPLAY': ':0'}, which=lambda n: n).controls(_WINDOW)
+
+
+class TestAtspiOnALiveBus:
+    """Measured on ubuntu-latest (lab-commons #183): a live bus refuses calls the fake never did."""
+
+    def test_a_refused_optional_read_leaves_the_control_listed_without_it(self) -> None:
+        """Zenity's GTK nodes declare Text yet refuse GetText: the control stays, its value reads None."""
+        bus = _Bus()
+        del bus.answers[(':1.7', '/name', f'{_A11Y}Text.GetText', ('0', '-1'))]
+        del bus.answers[(':1.7', '/ok', _PROP, (f"'{_A11Y}Accessible'", "'AccessibleId'"))]
+        controls = {c.name: c for c in _x(bus).controls(_WINDOW)}
+        assert controls['Run name:'].value is None
+        assert controls['OK'].automation_id is None
+        assert controls['OK'].actions == ('press',)
+
+    def test_a_refused_required_call_is_refused_by_name_with_what_gdbus_said(self) -> None:
+        bus = _Bus()
+        del bus.answers[(':1.7', '/ok', f'{_A11Y}Accessible.GetRoleName', ())]
+        with pytest.raises(UnsupportedError) as refused:
+            _x(bus).controls(_WINDOW)
+        assert refused.value.reason == 'desktop.no_atspi'
+        assert 'GetRoleName' in str(refused.value)
+        assert 'UnknownObject' in str(refused.value)
+
+    def test_an_application_gone_from_the_bus_is_skipped(self) -> None:
+        bus = _Bus()
+        del bus.answers[('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                         'org.freedesktop.DBus.GetConnectionUnixProcessID', ("':1.9'",))]  # fmt: skip
+        assert 'OK' in {c.name for c in _x(bus).controls(_WINDOW)}
+
+    def test_the_frame_is_waited_for_while_the_registry_comes_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The registry refuses GetChildren just after the session starts (measured live)."""
+        bus = _Bus()
+        key = ('org.a11y.atspi.Registry', _ROOT, f'{_A11Y}Accessible.GetChildren', ())
+        late = bus.answers.pop(key)
+        asked = {'registry': 0}
+
+        def warming(argv: list[str], timeout_s: float) -> bytes:
+            if 'org.a11y.atspi.Registry' in argv:
+                asked['registry'] += 1
+                if asked['registry'] == 3:
+                    bus.answers[key] = late
+            return bus(argv, timeout_s)
+
+        monkeypatch.setattr(_atspi.time, 'sleep', lambda _s: None)
+        x11 = _x11.X11(run=warming, env={'DISPLAY': ':0'}, which=lambda name: f'/usr/bin/{name}')
+        assert 'OK' in {c.name for c in x11.controls(_WINDOW)}
+        assert asked['registry'] >= 3
+
+    def test_planted_a_frame_that_never_comes_is_still_refused_by_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        clock = iter(range(10_000))
+        monkeypatch.setattr(_atspi.time, 'sleep', lambda _s: None)
+        monkeypatch.setattr(_atspi.time, 'monotonic', lambda: float(next(clock)))
+        window = Window(**{**_WINDOW.__dict__, 'title': 'Gone'})
+        with pytest.raises(UnsupportedError) as refused:
+            _x(_Bus()).controls(window)
+        assert refused.value.reason == 'desktop.no_atspi'
+        assert 'Gone' in str(refused.value)
