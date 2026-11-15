@@ -57,7 +57,9 @@ class App:
 @pytest.fixture
 def app() -> Iterator[App]:
     title = f'lab-commons desktop {uuid.uuid4().hex[:8]}'
-    proc = subprocess.Popen(['/usr/bin/osascript', '-e', _DIALOG, title], stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        ['/usr/bin/osascript', '-e', _DIALOG, title], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
     try:
         owned: list[desktop.Window] = []
 
@@ -72,7 +74,13 @@ def app() -> Iterator[App]:
                 f'desktop.no_accessibility: pid {proc.pid} owns windows whose titles read empty '
                 '(window titles need Screen Recording)'
             )
-        assert appeared, f'the dialog {title!r} never appeared; pid {proc.pid} owns {owned}'
+        if not appeared:
+            said = proc.communicate(timeout=5)[1] if proc.poll() is not None else '(still running)'
+            others = sorted({(w.pid, w.title) for w in desktop.windows() if w.visible})
+            pytest.fail(
+                f'the dialog {title!r} never appeared; pid {proc.pid} owns {owned}; osascript exit '
+                f'{proc.returncode}: {said.strip()!r}; visible windows (pid, title): {others}'
+            )
         yield App(proc, next(w for w in owned if w.title == title))
     finally:
         if proc.poll() is None:
