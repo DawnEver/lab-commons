@@ -88,13 +88,17 @@ install = "uv sync --frozen --all-extras"
 # The run record's root (dev_lab.dev.platformparts).
 [tool.dev_lab.parts]
 output = "output/logs"
+# tests/linux needs apt packages (Xvfb, a window manager, zenity, at-spi2-core; tests/test_desktop_live_x11.py
+# TOOLS) no hosted ubuntu runner has, and a hosted part's setup step is granted only with secrets
+# (dev_lab.dev.jobparts.hosted_parts): unproduced until dev-lab grants a setup without one.
+unproduced = ["linux"]
 
 # One need vocabulary (lab_commons.hpc.needsets): a test marks the resources it needs, and its part is its
-# need-set -- tests/base and tests/windows. A host claims a part when its machine file's
+# need-set -- tests/base, tests/linux, tests/macos and tests/windows. A host claims a part when its machine file's
 # [capabilities.<name>] give it every one; the cluster's per-sha tree has none. `produce` is the ONE local producer of every part ({part} filled); a cluster part runs
 # from [tool.lab_commons.hpc].
 [tool.lab_commons.tests]
-resources = ["windows"]
+resources = ["linux", "macos", "windows"]
 produce = ["-m", "dev_lab.dev.verify", "--part", "{part}"]
 
 # The tool FLOORS this repo's parts need (D21): `<tool> = {floor = "<version>", reason = "<why>"}`. A
@@ -159,6 +163,8 @@ OUTPUT-REDIRECT-IS-DATED = "<command> > output/logs/<yy>/<mm>/<dd>/<kind>/<name>
 testpaths = ["tests"]
 markers = [
     "windows: runs only on a Windows host (Win32 API, console windows); its part is produced by a Windows host, never skipped on Linux",
+    "linux: runs only on a Linux host (an X11 session it starts, AT-SPI); its part is produced by a Linux host",
+    "macos: runs only on a macOS host (AppKit, Accessibility, Screen Recording); its part is produced by a macOS host",
     "not_applicable: a skip of this test is NOT_APPLICABLE (lab_commons.hpc.pytest_item.judged); any other skip is refused",
 ]
 
