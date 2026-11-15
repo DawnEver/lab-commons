@@ -151,9 +151,10 @@ def test_the_dialog_is_captured_as_a_png_of_its_size(app: App) -> None:
 
 def test_the_dialog_is_read_without_ocr(app: App) -> None:
     found = desktop.controls(app.dialog)
-    assert any(c.name == 'Proceed with the run?' or c.value == 'Proceed with the run?' for c in found), found
+    tree = '; '.join(f'{c.id[-8:]}<{(c.parent or "")[-8:]} {c.role}:{c.name!r}:{",".join(c.actions)}' for c in found)
+    assert any(c.name == 'Proceed with the run?' or c.value == 'Proceed with the run?' for c in found), tree
     buttons = sorted((c.name, c.role, 'press' in c.actions) for c in found if c.name in {'OK', 'Cancel'})
-    assert buttons == [('Cancel', 'button', True), ('OK', 'button', True)], found
+    assert buttons == [('Cancel', 'button', True), ('OK', 'button', True)], tree
 
 
 def test_ok_is_pressed_once_and_the_answer_is_observed(app: App) -> None:

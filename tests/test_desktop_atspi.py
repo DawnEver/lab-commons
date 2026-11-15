@@ -262,6 +262,42 @@ class TestAtspiOnALiveBus:
         assert controls['OK'].automation_id is None
         assert controls['OK'].actions == ('press',)
 
+    def test_a_nameless_button_is_labelled_by_its_one_named_descendant(self) -> None:
+        """GTK4 names a button's child label, not the button: zenity's Cancel read ('Cancel', 'label') live."""
+        bus = _Bus()
+        frame = (':1.7', '/frame', f'{_A11Y}Accessible.GetChildren', ())
+        bus.answers[frame] = bus.answers[frame].replace("'/off')", "'/off'), (':1.7', objectpath '/cancel')")
+        nodes = {
+            **_node('/cancel', 'push button', '', ['Action'], children=('/cancel-label',)),
+            **_node('/cancel-label', 'label', 'Cancel', []),
+        }
+        for (path, method, args), answer in nodes.items():
+            bus.answers[(':1.7', path, method, args)] = answer
+        bus.answers[(':1.7', '/cancel', f'{_A11Y}Action.DoAction', ('0',))] = '(true,)'
+        x11 = _x(bus)
+        buttons = [(c.name, c.role) for c in x11.controls(_WINDOW) if 'press' in c.actions and c.name == 'Cancel']
+        assert buttons == [('Cancel', 'push button')]
+        x11.press(_WINDOW, 'Cancel', None)
+        assert bus.methods()[-1] == ('/cancel', f'{_A11Y}Action.DoAction')
+
+    def test_a_vanished_bus_address_is_asked_again_once(self) -> None:
+        """The a11y bus moved mid-run on ubuntu-latest: 'Error connecting: Could not connect: No such file'."""
+        bus = _Bus()
+        stale = {'left': 1}
+
+        def moving(argv: list[str], timeout_s: float) -> bytes:
+            if '--address' in argv and stale['left']:
+                stale['left'] -= 1
+                raise subprocess.CalledProcessError(
+                    1, argv, stderr=b'Error connecting: Could not connect: No such file or directory'
+                )
+            return bus(argv, timeout_s)
+
+        x11 = _x11.X11(run=moving, env={'DISPLAY': ':0'}, which=lambda name: f'/usr/bin/{name}')
+        assert 'OK' in {c.name for c in x11.controls(_WINDOW)}
+        address_asks = [a for a in bus.argvs if 'org.a11y.Bus.GetAddress' in a]
+        assert len(address_asks) == 2, 'the address is asked again after the bus moved'
+
     def test_a_refused_required_call_is_refused_by_name_with_what_gdbus_said(self) -> None:
         bus = _Bus()
         del bus.answers[(':1.7', '/ok', f'{_A11Y}Accessible.GetRoleName', ())]
