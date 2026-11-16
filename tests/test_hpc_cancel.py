@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc cancel``: the one door that cancels named or oversized pending Slurm jobs."""
+"""``python -m lab_commons.hpc cancel-queue`` cancels named or oversized pending Slurm jobs."""
 
 from __future__ import annotations
 
@@ -105,4 +105,15 @@ def test_the_queue_is_read_for_that_user_only() -> None:
 
 
 def test_the_verb_is_a_door_of_the_hpc_entry_point() -> None:
-    assert entry._dispatch(['cancel']) == 2  # reached the door: refused for want of a selector, nothing run
+    assert entry.main(['cancel-queue']) == 2  # reached the door: refused for want of a selector, nothing run
+
+
+def test_the_public_queue_verb_preserves_its_selectors_without_taking_the_submission_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cancel, 'main', lambda argv: seen.append(argv) or 0)
+    monkeypatch.setattr(entry, 'load_grants', lambda: pytest.fail('submission grants must not be read'))
+    argv = ['--at', AT, '--pending-over-mem', '100', '--dry-run']
+    assert entry.main(['cancel-queue', *argv]) == 0
+    assert seen == [argv]
