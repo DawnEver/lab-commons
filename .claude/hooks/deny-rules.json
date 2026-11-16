@@ -7,6 +7,13 @@
     "when": "live-run"
   },
   {
+    "name": "BACKGROUND-SHELL-IS-BOUNDED",
+    "pattern": "^(?![ \\t]*(?:[A-Za-z_]\\w*=\\S*[ \\t]+)*timeout[ \\t]+(?:-\\S+[ \\t]+)*\\d)",
+    "matches": "line",
+    "reason": "BACKGROUND-SHELL-IS-BOUNDED: a background shell outlives its purpose and its session; the reaper stops one at 50m unless the user granted more.\nStart the line with timeout 50m <command> (compound: timeout 50m bash -c '<line>'). Longer: ask the user for the code; once they approve, {python} -m dev_lab.ops.consent grant <request.json> --code <code> (a longer bound names the request).\ndetails: docs-src/dev/refusals.md#background-shell-is-bounded (lab-commons)",
+    "when": "background"
+  },
+  {
     "name": "SUBAGENT-NO-PUSH",
     "pattern": "(?:git(?:\\.exe)?(?:\\s+-C\\s+\\S+)*\\s+push\\b|(?:sh\\s+)?\\S*with-retry\\.sh\\s+push\\b|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab.dev\\.netverb\\b[^\\n]*\\spush\\b|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.family\\s+(?:join)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.sshhold\\s+(?:open|run|credential|close|status)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.forge\\s+(?:pr\\s+create|pr\\s+ready|pr\\s+draft|pr\\s+close|pr\\s+continue|review\\s+carry|pr\\s+close\\-landed|pr\\s+close\\-superseded|pr\\s+breakglass|breakglass\\s+open|review\\s+takeover|review\\s+again|security\\s+release|cancel\\-stuck)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.ops\\.consent\\s+(?:grant)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.integrate\\s+(?:promote)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.branchprune\\s+(?:delete|delete\\-tag)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.hpcaccount\\s+(?:deploy\\-fleet|forget|retention|credential)(?![\\w-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.opsserver(?![\\w.-])|gh(?:\\.exe)?\\s+workflow\\s+enable(?![\\w-])|gh(?:\\.exe)?\\s+workflow\\s+disable(?![\\w-])|git(?:\\.exe)?\\b[^\\n]*\\s--no-verify\\b|SKIP=|\\$env:SKIP\\s*=)",
     "matches": "command",
