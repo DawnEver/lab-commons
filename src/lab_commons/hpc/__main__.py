@@ -553,10 +553,10 @@ def _dispatch(argv: list[str] | None) -> int:
     args = parser.parse_args(argv)
     if args.verb == 'run':
         return _run(parser, args)
+    _refuse_misplaced(parser, args)  # a pure argv check: refused before any machine file is read
     machine = load_grants()
     if args.verb in {'plan', 'submit', 'retry'}:
         machine = affinity.resolve(allocation.resolve(machine))
-    _refuse_misplaced(parser, args)
     configs = _job_configs(parser, args)
     if args.verb == 'status':
         return _status(configs, machine, runner_for, watch_minutes=args.watch_minutes if args.watch else None)
