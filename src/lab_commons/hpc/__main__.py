@@ -44,6 +44,9 @@ it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 under that root through the grant, refusing everything if a running job works under one
 (:mod:`lab_commons.hpc.clean`).
 
+``cancel (--at <user@host>|--grant <user>) (--job <id>... | --pending-over-mem <GB>) [--dry-run]`` lists and
+cancels that user's own selected Slurm jobs (:mod:`lab_commons.hpc.cancel`).
+
 ``tree acquire|release|list|reap`` is the ONE door for an ad-hoc commit tree on a cluster (a lease under
 ``~/ci/leases``, reaped once it expires), and ``home`` prints the quota, the reaps and the stray directories the
 forge tick reports (:mod:`lab_commons.hpc.homedoor`). Both, and ``run submit``, pass the home quota guard.
@@ -61,7 +64,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.durable import durable_text
-from lab_commons.hpc import affinity, allocation, clean, fetch, homedoor, logread
+from lab_commons.hpc import affinity, allocation, cancel, clean, fetch, homedoor, logread
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -541,6 +544,7 @@ def _dispatch(argv: list[str] | None) -> int:
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
     doors = {
+        'cancel': cancel.main,
         'clean': clean.main,
         'fetch': fetch.main,
         'log': logread.main,

@@ -160,7 +160,10 @@ class Atspi:
 
         actions: list[str] = []
         value: str | None = None
-        if f'{_A11Y}Action' in node.interfaces:
+        # GTK4 declares Action on EVERY widget (measured on ubuntu-latest, #186): pressable is having an action
+        if f'{_A11Y}Action' in node.interfaces and optional(
+            'org.freedesktop.DBus.Properties.Get', gvariant_string(f'{_A11Y}Action'), gvariant_string('NActions')
+        ):
             actions.append('press')
         if f'{_A11Y}Text' in node.interfaces:
             value = optional(f'{_A11Y}Text.GetText', '0', '-1')
@@ -252,11 +255,23 @@ def _labelled(found: list[tuple[Control, _Node]]) -> list[tuple[Control, _Node]]
         while up is not None:
             names_below.setdefault(up, set()).add(control.name)
             up = parents.get(up)
-    return [
+    named = [
         (replace(control, name=next(iter(names_below[control.id]))), node)
         if not control.name and 'press' in control.actions and len(names_below.get(control.id, ())) == 1
         else (control, node)
         for control, node in found
+    ]
+    # A pressable child repeating its pressable parent's name is that control's CONTENT, not a second control: GTK4
+    # labels carry an action too (#187), so the 'OK' label inside the 'OK' button made a press by 'OK' ambiguous.
+    by_id = {control.id: control for control, _ in named}
+    return [
+        (replace(control, actions=tuple(a for a in control.actions if a != 'press')), node)
+        if 'press' in control.actions
+        and (parent := by_id.get(control.parent or '')) is not None
+        and 'press' in parent.actions
+        and parent.name == control.name
+        else (control, node)
+        for control, node in named
     ]
 
 

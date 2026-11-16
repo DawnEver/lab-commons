@@ -31,10 +31,13 @@ _ENABLED = 1 << 8  # ATSPI_STATE_ENABLED in the first state word
 
 
 def _node(path: str, role: str, name: str, interfaces: list[str], *, enabled: bool = True,
-          children: tuple[str, ...] = (), ident: str = '') -> dict[tuple[str, str, tuple[str, ...]], str]:  # fmt: skip
+          children: tuple[str, ...] = (), ident: str = '', n_actions: int = 1,
+          ) -> dict[tuple[str, str, tuple[str, ...]], str]:  # fmt: skip
     kids = ', '.join(f"(':1.7', objectpath '{c}')" for c in children)
     ifaces = ', '.join(f"'{_A11Y}{i}'" for i in ['Accessible', *interfaces])
+    actions = {(path, _PROP, (f"'{_A11Y}Action'", "'NActions'")): f'(<{n_actions}>,)'} if 'Action' in interfaces else {}
     return {
+        **actions,
         (path, f'{_A11Y}Accessible.GetChildren', ()): f'([{kids}],)' if kids else '(@a(so) [],)',
         (path, f'{_A11Y}Accessible.GetRoleName', ()): f"('{role}',)",
         (path, _PROP, (f"'{_A11Y}Accessible'", "'Name'")): f"(<'{name}'>,)",
@@ -269,7 +272,7 @@ class TestAtspiOnALiveBus:
         bus.answers[frame] = bus.answers[frame].replace("'/off')", "'/off'), (':1.7', objectpath '/cancel')")
         nodes = {
             **_node('/cancel', 'push button', '', ['Action'], children=('/cancel-label',)),
-            **_node('/cancel-label', 'label', 'Cancel', []),
+            **_node('/cancel-label', 'label', 'Cancel', ['Action'], n_actions=0),
         }
         for (path, method, args), answer in nodes.items():
             bus.answers[(':1.7', path, method, args)] = answer
@@ -279,6 +282,30 @@ class TestAtspiOnALiveBus:
         assert buttons == [('Cancel', 'push button')]
         x11.press(_WINDOW, 'Cancel', None)
         assert bus.methods()[-1] == ('/cancel', f'{_A11Y}Action.DoAction')
+
+    def test_a_node_declaring_action_with_no_actions_is_not_pressable(self) -> None:
+        """Pressable is NActions > 0, not the Action interface.
+
+        GTK4 puts Action on EVERY widget (measured, #186): a label inside the OK button read pressable, so a press
+        by 'OK' found two controls.
+        """
+        bus = _Bus()
+        frame = (':1.7', '/frame', f'{_A11Y}Accessible.GetChildren', ())
+        bus.answers[frame] = bus.answers[frame].replace("'/off')", "'/off'), (':1.7', objectpath '/btn')")
+        nodes = {
+            **_node('/btn', 'button', 'Go', ['Action'], children=('/btn-label',)),
+            **_node('/btn-label', 'label', 'Go', ['Action'], n_actions=1),  # GTK4 labels carry an action (#187)
+        }
+        for (path, method, args), answer in nodes.items():
+            bus.answers[(':1.7', path, method, args)] = answer
+        bus.answers[(':1.7', '/btn', f'{_A11Y}Action.DoAction', ('0',))] = '(true,)'
+        x11 = _x(bus)
+        assert [(c.role, 'press' in c.actions) for c in x11.controls(_WINDOW) if c.name == 'Go'] == [
+            ('button', True),
+            ('label', False),
+        ]
+        x11.press(_WINDOW, 'Go', None)
+        assert bus.methods()[-1] == ('/btn', f'{_A11Y}Action.DoAction')
 
     def test_a_vanished_bus_address_is_asked_again_once(self) -> None:
         """The a11y bus moved mid-run on ubuntu-latest: 'Error connecting: Could not connect: No such file'."""
