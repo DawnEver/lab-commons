@@ -20,6 +20,7 @@ from deny_rules import ADOPTION  # noqa: E402
 #: THE FLOOR, BY NAME: the rules lab-commons ships (adopted with dev-lab c9eaa7f).
 _SHIPPED: Final = frozenset(
     {
+        'BACKGROUND-SHELL-IS-BOUNDED',
         'BARE-INTERPRETER',
         'BARE-PYTHON',
         'BARE-TEST-INVOCATION',
