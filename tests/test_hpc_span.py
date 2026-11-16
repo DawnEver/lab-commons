@@ -332,7 +332,7 @@ def test_sha_only_watch_and_several_job_files_are_refused_where_they_do_not_belo
         ('status', '-c', str(job), '--sha', 'b' * 40): '--sha and --only belong to submit',
         ('gather', '-c', str(job), '--only', '1'): '--sha and --only belong to submit',
         ('gather', '-c', str(job), '--watch'): '--watch belongs to status',
-        ('gather', '-c', str(job), '-c', str(job)): 'only status takes several',
+        ('gather', '-c', str(job), '-c', str(job)): 'only status and cancel take several',
     }
     for argv, why in refusals.items():
         with pytest.raises(SystemExit):
@@ -572,3 +572,87 @@ def test_gather_without_output_writes_beside_the_job_file_and_names_it(
     assert cli.main(['gather', '-c', str(job), '-o', str(chosen)]) == 0
     assert chosen.exists()
     assert out[-1] == f'written {chosen}'
+
+
+# -- cancel: scancel through the status runner; --pending-only spares started shards; the record says CANCELLED --
+
+
+class _Queue:
+    """One login node's ``sacct`` (job ``7``: shard 0 RUNNING, shards 1-3 PENDING) and every ``scancel`` it took."""
+
+    def __init__(self, *, up: bool = True) -> None:
+        self.up, self.scancels = up, []
+
+    def __call__(self, command: str, _stdin: str | None = None) -> str:
+        if not self.up:
+            msg = 'ssh could not reach the login host'
+            raise Unreachable(msg)
+        if command.startswith('sacct'):
+            return '7_0|RUNNING|||||\n7_[1-3%4]|PENDING|||||\n'
+        if command.startswith('scancel'):
+            self.scancels.append(command)
+            return ''
+        msg = f'unexpected command {command}'
+        raise AssertionError(msg)
+
+
+def _cancel_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, queue: _Queue) -> tuple[list[str], Path]:
+    job = tmp_path / 'j.toml'
+    record = job.with_suffix('.submission.json')
+    record.write_text(json.dumps({'placements': [_placement(NEAR, '7', shards=4)]}), encoding='utf-8')
+    out: list[str] = []
+    monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=None, grants=(NEAR,)))
+    monkeypatch.setattr(cli, 'runner_for', lambda _g, *_a: queue)
+    monkeypatch.setattr(cli, '_job_configs', lambda _p, _a: [Config(source=job)])
+    monkeypatch.setattr(cli, '_out', out.append)
+    return out, record
+
+
+def test_cancel_pending_only_spares_the_started_shard_and_records_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli.cancel, 'main', lambda _argv: pytest.fail('submission cancel must not enter the queue door')
+    )
+    queue = _Queue()
+    out, record = _cancel_cli(tmp_path, monkeypatch, queue)
+    assert cli.main(['cancel', '-c', 'j.toml', '--pending-only']) == 0
+    assert queue.scancels == ['scancel 7_1 7_2 7_3'], 'one scancel, through the runner status reads by'
+    assert out == [f'{NEAR.name}: cancelled 3 shards (1, 2, 3); 1 started keep running']
+    assert json.loads(record.read_text(encoding='utf-8'))['placements'][0]['cancelled'] == [1, 2, 3]
+
+
+def test_cancel_without_the_flag_stops_every_active_shard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    queue = _Queue()
+    out, _record = _cancel_cli(tmp_path, monkeypatch, queue)
+    assert cli.main(['cancel', '-c', 'j.toml']) == 0
+    assert queue.scancels == ['scancel 7_0 7_1 7_2 7_3']
+    assert out == [f'{NEAR.name}: cancelled 4 shards (0, 1, 2, 3)']
+
+
+def test_a_silent_grant_cancels_nothing_and_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out, record = _cancel_cli(tmp_path, monkeypatch, _Queue(up=False))
+    assert cli.main(['cancel', '-c', 'j.toml', '--pending-only']) == 0
+    assert 'nothing cancelled' in out[0]
+    assert 'cancelled' not in json.loads(record.read_text(encoding='utf-8'))['placements'][0]
+
+
+def test_pending_only_belongs_to_cancel(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(['status', '-c', 'j.toml', '--pending-only'])
+    assert '--pending-only belongs to cancel' in capsys.readouterr().err
+
+
+def test_a_recorded_cancellation_settles_status_while_sacct_still_lists_the_shard_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``scancel`` returned but accounting lags: ``gather --wait`` must not wait on a cancelled shard forever."""
+    monkeypatch.setattr(jobs, 'job_states', lambda _run, ids: {i: {0: 'COMPLETED', 1: 'PENDING'} for i in ids})
+    machine = Machine(session=None, grants=(NEAR,))
+    cancelled = {'placements': [{**_placement(NEAR, '7', shards=2), 'cancelled': [1]}]}
+    found = jobs.shard_counts(cancelled, machine, lambda _g: None)
+    assert jobs.status_lines(found) == [f'{NEAR.name}: CANCELLED=1, COMPLETED=1']
+    assert jobs.settled(found)
+    # Planted control: without the record the same answer is still active.
+    plain = {'placements': [_placement(NEAR, '7', 2)]}
+    assert not jobs.settled(jobs.shard_counts(plain, machine, lambda _g: None))

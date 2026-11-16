@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc <verb>`` -- plan, submit, status, gather, retry, run {submit|gather|build}.
+"""``python -m lab_commons.hpc <verb>`` -- plan, submit, status, gather, retry, cancel, run {submit|gather|build}.
 
 ``fetch -c <job> --item N --path <glob>`` copies files an item WROTE to its ``out`` directory
 (:mod:`lab_commons.hpc.fetch`): what ``gather`` cannot return never costs a re-run.
@@ -15,6 +15,9 @@ reads several jobs with ONE ``sacct`` per grant; ``--watch`` polls until any lin
 exits 0 -- at once when every shard is already settled, and exit :data:`PENDING` after ``--watch-minutes``.
 ``gather -c <job> -o <out> --wait`` polls as ``status`` does every ``[policy] poll_seconds``, prints each
 change once (``pending: <why>`` while no login host answers), and gathers once no shard is queued or running.
+``cancel -c a [-c b] [--pending-only]`` scancels each job's queued or running shards (only the queued ones with
+``--pending-only``: started ones keep running) through the login host ``status`` reads by, and records them in
+the submission record, so ``status`` and ``gather --wait`` count them CANCELLED rather than waiting on them.
 
 ``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
 returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
@@ -41,7 +44,7 @@ it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 under that root through the grant, refusing everything if a running job works under one
 (:mod:`lab_commons.hpc.clean`).
 
-``cancel (--at <user@host>|--grant <user>) (--job <id>... | --pending-over-mem <GB>) [--dry-run]`` lists and
+``cancel-queue (--at <user@host>|--grant <user>) (--job <id>... | --pending-over-mem <GB>) [--dry-run]`` lists and
 cancels that user's own selected Slurm jobs (:mod:`lab_commons.hpc.cancel`).
 
 ``tree acquire|release|list|reap`` is the ONE door for an ad-hoc commit tree on a cluster (a lease under
@@ -71,6 +74,7 @@ from lab_commons.hpc.jobs import (
     Ensure,
     Reach,
     built_config,
+    cancel_job,
     gather_job,
     plan_job,
     retry_job,
@@ -184,6 +188,18 @@ def _gather_when_settled(
         if settled(found):
             return _gather(record, machine, reach, output, config.policy.file_budget)
         _sleep(config.policy.poll_seconds)
+
+
+def _cancel(configs: list[Config], machine: Machine, reach: Reach, *, pending_only: bool) -> int:
+    """``cancel``: scancel every job's active (or only pending) shards; its record keeps what was cancelled."""
+    named = len(configs) > 1
+    for config in configs:
+        record = _record(config)
+        lines = cancel_job(record, machine, reach, pending_only=pending_only)
+        _save_record(config, record)
+        for line in lines:
+            _out(f'{config.source.stem if config.source else "job"}: {line}' if named else line)
+    return 0
 
 
 def _at_sha(config: Config, sha: str) -> Config:
@@ -376,7 +392,7 @@ _RUN_NEEDS: Final = {
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc', description=__doc__.splitlines()[0])
-    parser.add_argument('verb', choices=['plan', 'submit', 'status', 'gather', 'retry', 'run'])
+    parser.add_argument('verb', choices=['plan', 'submit', 'status', 'gather', 'retry', 'cancel', 'run'])
     parser.add_argument('step', nargs='?', choices=list(_RUN_NEEDS), help='run only: submit, then gather')
     parser.add_argument(
         '-c',
@@ -407,6 +423,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '--watch-minutes', type=float, default=60.0, help='status --watch: give up (exit 3) after this long'
+    )
+    parser.add_argument(
+        '--pending-only', action='store_true', help='cancel: only shards still PENDING; started ones keep running'
     )
     group = parser.add_argument_group('run')
     group.add_argument('--scope', choices=[FULL, INCREMENTAL], help='run submit: every id, or only --only')
@@ -467,8 +486,8 @@ def _job_configs(parser: argparse.ArgumentParser, args: argparse.Namespace) -> l
             f'{args.verb} reads a job file and the submission recorded beside it; pass -c <job file> '
             '(the one submit used). A commit test is `run submit`/`run gather --sha`, which need none.'
         )
-    if len(args.config) > 1 and args.verb != 'status':
-        parser.error(f'{args.verb} reads one job file (-c); only status takes several')
+    if len(args.config) > 1 and args.verb not in {'status', 'cancel'}:
+        parser.error(f'{args.verb} reads one job file (-c); only status and cancel take several')
     for path in args.config:
         if not path.is_file():
             parser.error(f'no job file at {path}; pass -c <job file> naming an existing one')
@@ -506,12 +525,26 @@ def main(argv: list[str] | None = None) -> int:
         return UNREACHABLE_EXIT
 
 
+def _refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """A step or flag given to a job-file verb it does not belong to is refused by name."""
+    if args.step is not None:
+        parser.error(f'{args.verb} takes no step')
+    if args.wait and args.verb != 'gather':
+        parser.error('--wait belongs to gather (-c) and run gather')
+    if args.pending_only and args.verb != 'cancel':
+        parser.error('--pending-only belongs to cancel')
+    if args.watch and args.verb != 'status':
+        parser.error('--watch belongs to status')
+    if (args.sha or args.only is not None) and args.verb != 'submit':
+        parser.error('--sha and --only belong to submit (-c) and run')
+
+
 def _dispatch(argv: list[str] | None) -> int:
     """Parse the verb and run it."""
     parser = _parser()
     argv = sys.argv[1:] if argv is None else argv
     doors = {
-        'cancel': cancel.main,
+        'cancel-queue': cancel.main,
         'clean': clean.main,
         'fetch': fetch.main,
         'log': logread.main,
@@ -524,20 +557,15 @@ def _dispatch(argv: list[str] | None) -> int:
     args = parser.parse_args(argv)
     if args.verb == 'run':
         return _run(parser, args)
+    _refuse_misplaced(parser, args)
     machine = load_grants()
     if args.verb in {'plan', 'submit', 'retry'}:
         machine = affinity.resolve(allocation.resolve(machine))
-    if args.step is not None:
-        parser.error(f'{args.verb} takes no step')
-    if args.wait and args.verb != 'gather':
-        parser.error('--wait belongs to gather (-c) and run gather')
-    if args.watch and args.verb != 'status':
-        parser.error('--watch belongs to status')
-    if (args.sha or args.only is not None) and args.verb != 'submit':
-        parser.error('--sha and --only belong to submit (-c) and run')
     configs = _job_configs(parser, args)
     if args.verb == 'status':
         return _status(configs, machine, runner_for, watch_minutes=args.watch_minutes if args.watch else None)
+    if args.verb == 'cancel':
+        return _cancel(configs, machine, runner_for, pending_only=args.pending_only)
     only = args.only
     try:
         _selection(only)

@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc cancel (--at <user@host>|--grant <u>) (--job <id>...|--pending-over-mem <GB>)``.
+"""``python -m lab_commons.hpc cancel-queue (--at <user@host>|--grant <u>) (--job <id>...|--pending-over-mem <GB>)``.
 
 THE ONE NARROW DOOR for cancelling Slurm jobs: a bare ``ssh`` to a login host is refused
 (HPC-THROUGH-THE-DOOR), so a job that must go -- a large pending ask blocking a shared account, say -- needs
@@ -90,7 +90,7 @@ class _Refused(Exception):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc cancel', description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc cancel-queue', description=__doc__.splitlines()[0])
     parser.add_argument('--at', help='ssh target user@host; reaches it directly, no machine file needed')
     parser.add_argument('--grant', help='the grant user to act as; needed only when the machine holds several')
     parser.add_argument('--job', action='append', default=[], help='a job id to cancel (repeatable)')
@@ -164,7 +164,7 @@ def main(
     for job in chosen:
         emit(f'{verb} {job.id} {job.state} {job.mem} {job.name}')
     ids = [j.id for j in chosen]
-    log(f'hpc cancel by {user} at {where}: {"dry-run " if args.dry_run else ""}{" ".join(ids) or "nothing"}')
+    log(f'hpc cancel-queue by {user} at {where}: {"dry-run " if args.dry_run else ""}{" ".join(ids) or "nothing"}')
     if ids and not args.dry_run:
         run(f'scancel -u {shlex.quote(user)} {" ".join(map(shlex.quote, ids))}', None)
     return 1 if missing else 0
