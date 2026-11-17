@@ -24,11 +24,15 @@ _SPELLING_TABLES: Final = frozenset({'hpc/retired.py', 'hpc/_retired_compute.py'
 
 #: A reach of the dev system in any spelling: ``import lab_commons.dev``, ``from lab_commons.dev[.x] import``,
 #: ``from lab_commons import dev``, a relative ``from ..dev`` / ``from .dev``, an import of ``dev_lab``, and a
-#: ``'-m', 'dev_lab...'`` or ``'-m', 'lab_commons.dev...'`` launch.
+#: ``'-m', 'dev_lab...'`` or ``'-m', 'lab_commons.dev...'`` launch, an import BY STRING (``importlib.import_module``,
+#: ``__import__``, ``find_spec``), and a one-string ``'python -m dev_lab...'`` command. A remedy that QUOTES a
+#: command for a human (```python -m dev_lab...```, mid-sentence) is text, not a reach.
 _DEV_IMPORT: Final = re.compile(
     r'\bimport\s+lab_commons\.dev\b|\bfrom\s+lab_commons\.dev\b|\bfrom\s+lab_commons\s+import\s+[^\n]*\bdev\b'
     r'|\bfrom\s+\.+dev\b|\bimport\s+dev_lab\b|\bfrom\s+dev_lab\b'
     r"|'-m',\s*'(?:dev_lab|lab_commons\.dev)\b"
+    r"|\b(?:import_module|__import__|find_spec)\(\s*'(?:dev_lab|lab_commons\.dev)\b"
+    r"|'(?:[\w./\\:-]*python[\w.]*\s+)?-m\s+(?:dev_lab|lab_commons\.dev)\b"
 )
 
 #: Measured 2026-10-24: 96 staying modules once supervise left. A floor, so an empty scan is not a pass.
@@ -62,8 +66,13 @@ def test_a_planted_dev_reach_is_seen_in_every_spelling() -> None:
         "    argv = [sys.executable, '-m', 'dev_lab.dev.forge', 'serve']\n"
         "    argv = [sys.executable, '-m', 'lab_commons.dev.forgealarm', 'run']\n"
         'the forge (:mod:`dev_lab.dev.forge`) records it\n'
+        "    importlib.import_module('dev_lab.dev.forge')\n"
+        "    __import__('dev_lab')\n"
+        "    importlib.util.find_spec('dev_lab.dev')\n"
+        "    shell('python -m dev_lab.dev.forge queue')\n"
+        "    msg = 'read it: `python -m dev_lab.dev.forge queue`'\n"
     )
-    assert dev_imports(planted) == [1, 2, 3, 4, 5, 8, 9, 10]
+    assert dev_imports(planted) == [1, 2, 3, 4, 5, 8, 9, 10, 12, 13, 14, 15]
 
 
 def test_no_staying_module_reaches_dev() -> None:
