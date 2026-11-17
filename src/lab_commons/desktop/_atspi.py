@@ -32,8 +32,10 @@ Runner = Callable[[list[str], float], bytes]
 
 _A11Y = 'org.a11y.atspi.'
 _ROOT = '/org/a11y/atspi/accessible/root'
-#: ``ATSPI_STATE_ENABLED``: bit 8 of the first state word.
-_STATE_ENABLED = 1 << 8
+#: ``ATSPI_STATE_ENABLED`` (bit 8) and ``ATSPI_STATE_SENSITIVE`` (bit 24) of the first state word: a control is enabled
+#: when EITHER is set. GTK3 sets both; GTK4 sets only SENSITIVE (``gtkatspicontext.c``; measured on ubuntu-latest,
+#: where zenity's OK button read disabled), so reading ENABLED alone refused every GTK4 press.
+_STATE_ENABLED = (1 << 8) | (1 << 24)
 #: The deadline on one ``gdbus call``, seconds.
 _CALL_S = 5.0
 #: How long the window's frame is waited for while the registry or the application comes up, seconds.
