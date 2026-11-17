@@ -159,3 +159,5 @@ P5 (#413 P1-P4, forge try) -> P6 (derived registries, forge regroup, rule census
 **User ruling 2026-10-26: amendments A1-A10 ACCEPTED as proposed** (A1 drain under the watchdog; A2 guard files
 committed, other rendered files not; A5 branch namespace stays a local pre-push check; A6 no reservation,
 `box claim` instead).
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"
