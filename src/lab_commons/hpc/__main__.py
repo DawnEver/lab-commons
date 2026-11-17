@@ -2,6 +2,8 @@
 
 ``fetch -c <job> --item N --path <glob>`` copies files an item WROTE to its ``out`` directory
 (:mod:`lab_commons.hpc.fetch`): what ``gather`` cannot return never costs a re-run.
+``migrate <file>...`` brings a run state or record of an older shape to the current one, once
+(:mod:`lab_commons.hpc.migrate`); the readers refuse an unmigrated one naming this verb.
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
@@ -64,7 +66,7 @@ from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.durable import durable_text
-from lab_commons.hpc import affinity, allocation, cancel, clean, fetch, homedoor, logread
+from lab_commons.hpc import affinity, allocation, cancel, clean, fetch, homedoor, logread, migrate
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -548,6 +550,7 @@ def _dispatch(argv: list[str] | None) -> int:
         'clean': clean.main,
         'fetch': fetch.main,
         'log': logread.main,
+        'migrate': migrate.main,
         'tree': homedoor.tree_main,
         'home': homedoor.home_main,
     }

@@ -79,7 +79,9 @@ def test_a_row_that_does_not_say_how_its_run_ended_is_read_as_unmeasured() -> No
 
 def test_per_test_facts_and_per_job_runs_share_one_file_without_erasing_each_other() -> None:
     learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0), ended='exit')
-    learned.learn_round(REPO, {}, {'durations': {'a.py::x': 3.0}, 'peaks_mb': {'a.py': 512.0}})
+    learned.learn_round(
+        REPO, Measured().record(), Measured(durations={'a.py::x': 3.0}, peaks_mb={'a.py': 512.0}).record()
+    )
     assert learned.run_of(REPO, 'linux', ()) is not None, 'learning test facts kept the job runs'
     learned.learn_peaks(REPO, {'b.py': 2048.0})
     table = learned.learned(REPO)
@@ -93,7 +95,7 @@ def test_one_worker_rule_prices_a_box_worker_and_a_slurm_task_alike() -> None:
     assert learned.worker_gb(REPO, ['tests/a.py'], prior_gb=0.5, safety=1.5) == 1.5
     assert learned.worker_gb(REPO, ['tests/a.py::t', 'tests/b.py::u'], prior_gb=0.5, safety=1.5) == 4.5
     assert learned.worker_gb(REPO, ['tests/new.py'], prior_gb=0.5, safety=1.5) == 3.0, 'its siblings median, 2 GB'
-    measured = Measured.of(learned.learned(REPO))
+    measured = Measured.carried(learned.learned(REPO))
     assert measured.worker_gb(['tests/b.py'], prior_gb=1.0, safety=1.5) == 4.5
 
 
@@ -384,9 +386,9 @@ def test_a_round_teaches_only_what_it_changed_so_a_concurrent_run_keeps_its_kill
     view back, so a run started before another's OOM kill erased that kill's floor and the next plan asked
     below the limit already died at.
     """
-    learned.learn_round(REPO, {}, {'peaks_mb': {'a.py': 600.0}})
+    learned.learn_round(REPO, Measured().record(), Measured(peaks_mb={'a.py': 600.0}).record())
     seeded = learned.learned(REPO)
-    stale = {'peaks_mb': dict(seeded['peaks_mb']), 'id_peaks_mb': {}, 'durations': {}}
+    stale = Measured(peaks_mb=dict(seeded['peaks_mb'])).record()
     learned.learn_round(REPO, stale, {**stale, 'id_peaks_mb': {'a.py::b': 3746.0}})
     learned.learn_round(REPO, stale, {**stale, 'durations': {'a.py::c': 2.0}})
     table = learned.learned(REPO)

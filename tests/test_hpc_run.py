@@ -134,7 +134,7 @@ def test_a_retired_stream_line_of_a_round_in_flight_is_upgraded_on_read() -> Non
         '{"done": 0, "wall": 3.0, "peak_mb": null}\n'
     }
     cells: dict[str, dict[str, object]] = {}
-    fold(items, streams, cells, Measured.of({}), shards=[(0, 1)], walls=[60.0])
+    fold(items, streams, cells, Measured(), shards=[(0, 1)], walls=[60.0])
     assert _words(cells) == {'t.py::a': 'ok', 't.py::b': 'rejected'}
     assert _whys(cells) == {'t.py::b': 'AssertionError'}
 
@@ -430,7 +430,7 @@ def test_a_clean_exit_mid_item_fails_the_in_flight_id_and_requeues_only_the_ids_
         '{"start": "t.py::b"}\n{"done": 1, "wall": 2.0, "peak_mb": null}\n'
     }
     cells: dict[str, dict[str, object]] = {}
-    pending, killed, _ = fold(items, streams, cells, Measured.of({}), shards=[(0, 1)], walls=[60.0])
+    pending, killed, _ = fold(items, streams, cells, Measured(), shards=[(0, 1)], walls=[60.0])
     assert _words(cells) == {'t.py::a': 'ok', 't.py::b': 'error'}, (
         'nothing is unreported when the in-flight id is known'
     )
@@ -470,7 +470,7 @@ def test_shards_are_cut_by_measured_time_and_the_wall_is_the_slowest() -> None:
 
 
 def test_measured_estimates_fall_back_only_for_files_never_measured() -> None:
-    measured = Measured.of({'durations': {'a.py::x': 2.0, 'a.py::y': 4.0}, 'overheads': {'a.py': 10.0}})
+    measured = Measured(durations={'a.py::x': 2.0, 'a.py::y': 4.0}, overheads={'a.py': 10.0})
     seconds, unmeasured = measured.estimate([['a.py::x', 'a.py::y', 'a.py::z'], ['b.py::t']], Cost(seconds=120))
     assert seconds == [10.0 + 2.0 + 4.0 + 3.0, 120.0]
     assert unmeasured == ['b.py']

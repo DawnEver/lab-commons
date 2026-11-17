@@ -78,7 +78,7 @@ def test_fold_keeps_each_reason_in_its_cell() -> None:
         '{"id": "t.py::b", "status": "ok", "s": 0}\n{"done": 1, "wall": 1, "peak_mb": null}'
     }
     cells: dict[str, dict[str, object]] = {}
-    assert fold(items, streams, cells, Measured.of({}), shards=[(0, 1)], walls=[60.0])[:2] == ([], False)
+    assert fold(items, streams, cells, Measured(), shards=[(0, 1)], walls=[60.0])[:2] == ([], False)
     assert TestCell.from_plain(cells['t.py::a']).why == 'boom'
 
 
@@ -86,7 +86,7 @@ def test_an_item_killed_by_a_signal_retries_its_unreported_ids() -> None:
     items = [{'ids': ['t.py::a', 't.py::b', 't.py::c']}]
     streams = {0: '{"id": "t.py::a", "status": "ok", "s": 0}\n{"done": -9, "wall": 14.7, "peak_mb": 1112.9}\n'}
     cells: dict[str, dict[str, object]] = {}
-    pending, killed, _ = fold(items, streams, cells, Measured.of({}), shards=[(0, 1)], walls=[60.0])
+    pending, killed, _ = fold(items, streams, cells, Measured(), shards=[(0, 1)], walls=[60.0])
     assert killed
     assert _words(cells) == {'t.py::a': 'ok'}, 'an OOM-killed item stamped its unreported ids PENDING'
     assert sorted(node for part in pending for node in part) == ['t.py::b', 't.py::c']
@@ -96,7 +96,7 @@ def test_an_item_that_closed_cleanly_still_stamps_unreported_ids_pending() -> No
     items = [{'ids': ['t.py::a', 't.py::b']}]
     streams = {0: '{"id": "t.py::a", "status": "ok", "s": 0}\n{"done": 0, "wall": 1.0}\n'}
     cells: dict[str, dict[str, object]] = {}
-    assert fold(items, streams, cells, Measured.of({}), shards=[(0, 1)], walls=[60.0])[:2] == ([], False)
+    assert fold(items, streams, cells, Measured(), shards=[(0, 1)], walls=[60.0])[:2] == ([], False)
     assert _words(cells) == {'t.py::a': 'ok', 't.py::b': 'pending'}
     assert TestCell.from_plain(cells['t.py::b']).why == 'the item exited 0 without reporting it'
 
