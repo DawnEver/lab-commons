@@ -1,4 +1,4 @@
-"""A RECORD FILE published atomically and removed insistently, against a reader holding it open.
+"""A RECORD FILE published atomically, insisting against a reader holding it open.
 
 Once the record of the per-box broker's seats (folded into the one box ledger, :mod:`lab_commons.box`,
 D2 2026-10-16); the two writes stayed because their subject is the BYTES a peer reads, not the broker:
@@ -18,10 +18,10 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
 
-__all__ = ['publish', 'stage', 'unpublish']
+__all__ = ['publish', 'stage']
 
 #: How hard a record operation INSISTS against a reader's open handle, and how long it pauses
-#: between tries. ONE POLICY, BOTH DIRECTIONS -- applied through :func:`_insist`.
+#: between tries, applied through :func:`_insist` (a release once shared it; its caller is gone).
 #:
 #: WHY A RECORD OPERATION CAN FAIL AT ALL, and why it is Windows that made it matter. A reader opens
 #: a record to parse it; on Windows an open handle refuses both the unlink underneath it AND a
@@ -60,7 +60,7 @@ def stage(path: Path, payload: Mapping[str, object]) -> Path:
     return Path(staged)
 
 
-def _insist(operation: Callable[[], object], *, missing: bool) -> bool:
+def _insist(operation: Callable[[], object]) -> bool:
     """Run *operation*, retrying briefly against the refusal a reader's open handle produces.
 
     ONE SPELLING FOR ONE POLICY, and that is the reason this exists rather than two loops. The
@@ -73,15 +73,14 @@ def _insist(operation: Callable[[], object], *, missing: bool) -> bool:
     from a clock. It does not sleep before the first try, so an UNCONTESTED operation -- every
     operation on an idle box -- costs exactly what it did before.
 
-    *missing* is what ``FileNotFoundError`` MEANS for the caller, and it is terminal rather than
-    retried: for an unlink the record is gone, which is success; for a rename the staged file this
-    function was handed has vanished, which is not.
+    ``FileNotFoundError`` is terminal rather than retried: the staged file this function was handed
+    has vanished, which is a failure.
     """
     for attempt in range(_INSIST_ATTEMPTS):
         try:
             operation()
         except FileNotFoundError:
-            return missing
+            return False
         except OSError:
             if attempt + 1 == _INSIST_ATTEMPTS:
                 return False
@@ -120,24 +119,8 @@ def publish(path: Path, payload: Mapping[str, object]) -> bool:
     refusal naming a cause that is not true sends its reader somewhere there is nothing to find.
     """
     staged = stage(path, payload)
-    if _insist(lambda: staged.replace(path), missing=False):
+    if _insist(lambda: staged.replace(path)):
         return True
     with contextlib.suppress(OSError):
         staged.unlink()
     return False
-
-
-def unpublish(path: Path) -> bool:
-    """Remove the record at *path*, INSISTING briefly against a reader's open handle.
-
-    Returns ``True`` when the record is gone -- including when it was already gone, which is the
-    ordinary outcome for a claim a peer reclaimed. ``False`` means a live record was left behind,
-    and the caller is the only party that can say whether that matters; nothing is raised, because
-    a release runs in a ``finally`` and an exception there would replace one leak with two.
-
-    A SEAT IS NOT AN ORDINARY FILE, which is why this is not `contextlib.suppress(OSError)`. A
-    leaked seat names a LIVE pid, so every later reader must treat it as a holder -- the failure is
-    invisible, permanent for that process's lifetime, and points the wrong way from every other
-    "cannot tell" in this package.
-    """
-    return _insist(path.unlink, missing=True)

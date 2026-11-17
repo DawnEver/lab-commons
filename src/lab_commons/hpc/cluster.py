@@ -40,7 +40,6 @@ __all__ = [
     'BUILD_TIMEOUT',
     'RUN_DIR',
     'SUBMIT_LIMIT',
-    'TERMINAL_OK',
     'NotOnCluster',
     'Runner',
     'Submission',
@@ -72,9 +71,6 @@ class SubmitLimit(RuntimeError):
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
 type Runner = Callable[[str, str | None], str]
-
-#: The only array-task state that means the shard's results file should exist.
-TERMINAL_OK: Final = 'COMPLETED'
 
 _TIMEOUT: Final = 300.0
 

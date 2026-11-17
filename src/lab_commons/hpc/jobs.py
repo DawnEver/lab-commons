@@ -61,7 +61,6 @@ __all__ = [
     'settled',
     'shard_counts',
     'shard_counts_of',
-    'status_job',
     'status_lines',
     'submit_job',
 ]
@@ -515,11 +514,6 @@ def cancel_job(record: dict[str, Any], machine: Machine, reach: Reach, *, pendin
             + (f'; {kept} started keep running' if pending_only and kept else '')
         )
     return said
-
-
-def status_job(record: dict[str, Any], machine: Machine, reach: Reach) -> list[str]:
-    """One line per placement: its shards by Slurm state, or that its grant did not answer."""
-    return status_lines(shard_counts(record, machine, reach))
 
 
 @dataclass(frozen=True)
