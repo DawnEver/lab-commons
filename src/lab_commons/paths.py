@@ -6,7 +6,7 @@ platformdirs namespace from ``app_name`` instead of hardcoding ``'consumer-a'`` 
 ``CONSUMER_A_HOME``, so this extraction is a pure relocation, not a redesign.
 
 Home-resolution precedence (per app):
-  1. ``<APP>_HOME`` env (or an explicit ``env_var``); an explicit override.
+  1. ``<APP>_HOME`` env; an explicit override.
   2. Auto-detected source checkout -> ``<repo>``. Makes dev/worktree runs default
      in-repo with no env needed.
   3. Platform-standard dirs (only when installed as a third-party pip package).
@@ -51,30 +51,28 @@ def _detect_repo_root(start: Path | None = None) -> Path | None:
     return None
 
 
-def resolve_home(app_name: str, *, env_var: str | None = None) -> Path | None:
+def resolve_home(app_name: str) -> Path | None:
     """Return the explicit or auto-detected home root for ``app_name``, else None.
 
-    ``env_var`` defaults to ``<APP_NAME>_HOME`` (upper-cased); pass it explicitly to
-    honor a differently-named or deprecated variable. Returns None when installed as a
+    The env var is ``<APP_NAME>_HOME`` (upper-cased). Returns None when installed as a
     third-party package with no home env set (the platformdirs fallback lives in
     :func:`output_root` / :func:`config_root`).
     """
-    env_var = env_var or f'{app_name.upper()}_HOME'
-    home = os.environ.get(env_var)
+    home = os.environ.get(f'{app_name.upper()}_HOME')
     if home:
         return Path(home).expanduser().resolve()
     return _detect_repo_root()
 
 
-def output_root(app_name: str, *, env_var: str | None = None) -> Path:
+def output_root(app_name: str) -> Path:
     """The user-writable output root: ``<home>/output`` or platformdirs cache dir."""
-    home = resolve_home(app_name, env_var=env_var)
+    home = resolve_home(app_name)
     return (home / 'output') if home is not None else user_cache_path(app_name)
 
 
-def config_root(app_name: str, *, env_var: str | None = None) -> Path:
+def config_root(app_name: str) -> Path:
     """The user-writable config root: ``<home>/config`` or platformdirs config dir."""
-    home = resolve_home(app_name, env_var=env_var)
+    home = resolve_home(app_name)
     return (home / 'config') if home is not None else user_config_path(app_name)
 
 
@@ -145,8 +143,7 @@ def run_output_dir(app_name: str, name: str | None = None, *, root: Path | None 
     no two processes ever share one.
 
     ``root`` overrides the resolved :func:`output_root` (a consumer with its own,
-    already-resolved output root — e.g. consumer-a honoring a deprecated env var — passes it
-    in); when None the root is resolved from ``app_name``.
+    already-resolved output root passes it in); when None the root is resolved from ``app_name``.
     """
     base = root if root is not None else output_root(app_name)
     safe = (name or '').replace('\\', '/').replace('/', '_').strip() or 'run'
