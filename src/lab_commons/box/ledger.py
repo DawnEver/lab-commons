@@ -63,8 +63,8 @@ seat). Every row this code writes starts now and ends within :data:`~lab_commons
 a row starting in the future or ending past that is reaped on sight, live pid or not. And a ledger file
 another user could write is refused at open (:func:`untrusted`): its rows carry liveness probes the reaper
 RUNS, so a writable ledger would be code execution, not only a pinned seat. Elsewhere
-``$XDG_STATE_HOME/lab-commons/box.sqlite`` (``~/.local/state`` by default): per-user, since a
-POSIX machine-wide state dir needs root to create; on a single-user box the two coincide.
+the machine home's ``state/box.sqlite`` (:func:`lab_commons.home.part`): per-user, since a POSIX
+machine-wide state dir needs root to create; on a single-user box the two coincide.
 """
 
 from __future__ import annotations
