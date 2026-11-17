@@ -16,7 +16,7 @@ from lab_commons.hpc import jobs
 from lab_commons.hpc.cluster import Unreachable
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine, Session
-from lab_commons.hpc.jobs import Gathered, built_config, gather_job, retry_job, status_job, submit_job
+from lab_commons.hpc.jobs import Gathered, built_config, gather_job, retry_job, shard_counts, status_lines, submit_job
 from lab_commons.hpc.plan import FILES_PER_RUN, Unplaceable, plan_on
 from lab_commons.hpc.slurm import parse_inodes, parse_snapshot
 from lab_commons.hpc.span import span, split
@@ -196,7 +196,7 @@ def test_gather_merges_the_slices_back_into_batch_order_and_names_a_silent_grant
     logins['far'].up = False
     got = gather_job(record, machine, reach, budget=10)
     assert (len(got.results), got.silent) == (1, [FAR.name])
-    assert status_job(record, machine, reach)[1] == f'{FAR.name}: did not answer'
+    assert status_lines(shard_counts(record, machine, reach))[1] == f'{FAR.name}: did not answer'
 
 
 def test_a_dead_grants_slice_is_re_placed_on_the_grants_still_answering(tmp_path: Path) -> None:
