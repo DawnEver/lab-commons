@@ -161,8 +161,11 @@ def test_the_dialog_is_read_without_ocr(app: App) -> None:
     found = desktop.controls(app.dialog)
     tree = '; '.join(f'{c.id[-8:]}<{(c.parent or "")[-8:]} {c.role}:{c.name!r}:{",".join(c.actions)}' for c in found)
     assert any(c.name == 'Proceed with the run?' or c.value == 'Proceed with the run?' for c in found), tree
-    buttons = sorted((c.name, c.role, 'press' in c.actions) for c in found if c.name in {'OK', 'Cancel'})
-    assert buttons == [('Cancel', 'button', True), ('OK', 'button', True)], tree
+    # GTK4 lists each button's label as a child of the same name; it is the button's content, not pressable
+    pressable = sorted(
+        (c.name, c.role, c.enabled) for c in found if c.name in {'OK', 'Cancel'} and 'press' in c.actions
+    )
+    assert pressable == [('Cancel', 'button', True), ('OK', 'button', True)], tree
 
 
 def test_ok_is_pressed_once_and_the_answer_is_observed(app: App) -> None:

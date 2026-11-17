@@ -28,13 +28,15 @@ _ROOT = '/org/a11y/atspi/accessible/root'
 _A11Y = 'org.a11y.atspi.'
 _PROP = 'org.freedesktop.DBus.Properties.Get'
 _ENABLED = 1 << 8  # ATSPI_STATE_ENABLED in the first state word
+_SENSITIVE = 1 << 24  # ATSPI_STATE_SENSITIVE: GTK4 sets only this one
 
 
-def _node(path: str, role: str, name: str, interfaces: list[str], *, enabled: bool = True,
+def _node(path: str, role: str, name: str, interfaces: list[str], *, enabled: bool = True, state: int | None = None,
           children: tuple[str, ...] = (), ident: str = '', n_actions: int = 1,
           ) -> dict[tuple[str, str, tuple[str, ...]], str]:  # fmt: skip
     kids = ', '.join(f"(':1.7', objectpath '{c}')" for c in children)
     ifaces = ', '.join(f"'{_A11Y}{i}'" for i in ['Accessible', *interfaces])
+    bits = (_ENABLED if enabled else 0) if state is None else state
     actions = {(path, _PROP, (f"'{_A11Y}Action'", "'NActions'")): f'(<{n_actions}>,)'} if 'Action' in interfaces else {}
     return {
         **actions,
@@ -43,7 +45,7 @@ def _node(path: str, role: str, name: str, interfaces: list[str], *, enabled: bo
         (path, _PROP, (f"'{_A11Y}Accessible'", "'Name'")): f"(<'{name}'>,)",
         (path, _PROP, (f"'{_A11Y}Accessible'", "'AccessibleId'")): f"(<'{ident}'>,)",
         (path, f'{_A11Y}Accessible.GetInterfaces', ()): f'([{ifaces}],)',
-        (path, f'{_A11Y}Accessible.GetState', ()): f'([uint32 {_ENABLED if enabled else 0}, 0],)',
+        (path, f'{_A11Y}Accessible.GetState', ()): f'([uint32 {bits}, 0],)',
     }
 
 
@@ -192,6 +194,14 @@ class TestAtspi:
     def test_a_disabled_control_is_refused(self) -> None:
         with pytest.raises(ControlDisabledError):
             _x(_Bus()).press(_WINDOW, 'Apply', None)
+
+    def test_a_gtk4_control_marked_only_sensitive_is_enabled(self) -> None:
+        """GTK4 never sets ENABLED, only SENSITIVE (measured: zenity's OK read disabled on ubuntu-latest)."""
+        bus = _Bus()
+        for (path, method, args), answer in _node('/ok', 'button', 'OK', ['Action'], state=_SENSITIVE).items():
+            bus.answers[(':1.7', path, method, args)] = answer
+        _x(bus).press(_WINDOW, 'OK', None)
+        assert bus.methods()[-1] == ('/ok', f'{_A11Y}Action.DoAction')
 
     def test_set_value_on_editable_text_passes_the_text_as_one_quoted_argument(self) -> None:
         bus = _Bus()
