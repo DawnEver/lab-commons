@@ -53,18 +53,16 @@ and a claim for a process OUTSIDE the tree (``outside=True``, a vendor) always b
 
 The file is SQLite in WAL mode, every decision inside ``BEGIN IMMEDIATE``: one writer at a time
 across every process on the box, so two racing admissions cannot both see the same free room.
-Location (:func:`box_path`): ``$LAB_COMMONS_BOX`` if set, else on Windows
-``%ProgramData%/lab-commons/box.sqlite`` -- machine-wide, because the box is shared by every
-session of its user (agents, services, terminals) and one manager per MACHINE is the point;
-ProgramData admits a user-created subdirectory without elevation.
+Location (:func:`box_path`): ``$LAB_COMMONS_BOX`` if set, else the machine home's ``state/box.sqlite``
+(:func:`lab_commons.home.part`) on every platform -- one state root. One ledger per user's machine home
+is one manager per MACHINE for the sessions of that user (agents, services, terminals); a machine-wide
+directory would need root on POSIX, and on a single-user box the two coincide.
 
 AN UNTRUSTED ROW PINS NOTHING (a consumer SR-20261016-031: a planted claim with a future time pinned every
 seat). Every row this code writes starts now and ends within :data:`~lab_commons.box.demand.WALL_CEILING_S`;
 a row starting in the future or ending past that is reaped on sight, live pid or not. And a ledger file
 another user could write is refused at open (:func:`untrusted`): its rows carry liveness probes the reaper
-RUNS, so a writable ledger would be code execution, not only a pinned seat. Elsewhere
-the machine home's ``state/box.sqlite`` (:func:`lab_commons.home.part`): per-user, since a POSIX
-machine-wide state dir needs root to create; on a single-user box the two coincide.
+RUNS, so a writable ledger would be code execution, not only a pinned seat.
 """
 
 from __future__ import annotations
