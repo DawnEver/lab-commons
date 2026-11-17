@@ -102,6 +102,12 @@ _RESOURCES: set[str] = set()
 #: and a skip or xfail without its reason is an unexplained hole (measured 2026-10-10: 1127 empty skip reasons).
 _WHY_CHARS = 300
 
+#: THE marker of a failure SUBJECT line (``failure-subject: <subject>``): a ratchet test names each concrete
+#: subject of its red on one, and a failed phase's record keeps every such line, untruncated, after its crash
+#: line -- so a merge can tell a NEW subject inside a test already red on the base. Declared here, the layer
+#: that writes the record; ``dev_lab.dev.failprint`` imports it.
+SUBJECT_PREFIX: Final = 'failure-subject: '
+
 #: The crash text pytest-timeout writes; the strict-xpass prefix pytest writes.
 _TIMEOUT: Final = 'Timeout >'
 _STRICT_XPASS: Final = '[XPASS(strict)]'
@@ -137,11 +143,16 @@ def declared_resources(pyproject: Path) -> frozenset[str]:
     return frozenset(table.get('tests', {}).get('resources', []))
 
 
-def _cell(status: str, kind: str = '', text: str = '', expected: str = '', why: str = '') -> dict[str, Any]:
-    """A plain test cell (:class:`lab_commons.hpc.testcells.TestCell`'s plain form), spelled by token."""
+def _cell(
+    status: str, kind: str = '', text: str = '', expected: str = '', why: str = '', *, subjects: Collection[str] = ()
+) -> dict[str, Any]:
+    """A plain test cell (:class:`lab_commons.hpc.testcells.TestCell`'s plain form), spelled by token.
+
+    The reason text is cut to :data:`_WHY_CHARS`; each of *subjects* follows it on its own line, never cut.
+    """
     plain: dict[str, Any] = {'status': status}
     if kind:
-        plain['reason'] = {'kind': kind, 'text': text[:_WHY_CHARS]}
+        plain['reason'] = {'kind': kind, 'text': '\n'.join([text[:_WHY_CHARS], *subjects])}
     if expected:
         plain['expectation'] = {'status': expected, 'why': (why or 'xfail')[:_WHY_CHARS]}
     return plain
@@ -186,13 +197,25 @@ def _skipped(report: _Report, resources: Collection[str]) -> dict[str, Any]:
 def _failed(report: _Report) -> dict[str, Any]:
     """A failed phase: a timeout, a strict xpass, a failed call, or a setup/teardown error (:func:`judged`)."""
     text = str(report.longrepr or '')
+    named = subject_lines_of(text)
     if _TIMEOUT in text:
-        return _cell('timeout', 'timeout', _why(report.longrepr))
+        return _cell('timeout', 'timeout', _why(report.longrepr), subjects=named)
     if text.startswith(_STRICT_XPASS):
         return _cell('ok', expected='rejected', why=text.removeprefix(_STRICT_XPASS).strip())
     if report.when == 'call':
-        return _cell('rejected', 'assertion', _why(report.longrepr))
-    return _cell('error', report.when, _why(report.longrepr))
+        return _cell('rejected', 'assertion', _why(report.longrepr), subjects=named)
+    return _cell('error', report.when, _why(report.longrepr), subjects=named)
+
+
+def subject_lines_of(text: str) -> list[str]:
+    """Every distinct :data:`SUBJECT_PREFIX` line of *text*, in order, pytest's ``E`` gutter stripped."""
+    found: dict[str, None] = {}
+    marker = SUBJECT_PREFIX.strip()
+    for line in text.splitlines():
+        bare = line.strip().removeprefix('E ').strip()
+        if bare.startswith(marker) and (subject := bare.removeprefix(marker).strip()):
+            found[f'{SUBJECT_PREFIX}{subject}'] = None
+    return list(found)
 
 
 def badness(plain: Mapping[str, Any]) -> int:
