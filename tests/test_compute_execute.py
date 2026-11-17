@@ -49,8 +49,8 @@ CALLS: list[str] = []
 class Partitioned(Shared):
     """A host that cannot read the shared tier when it looks, and posts once it can: a race, a partition."""
 
-    def fetch(self, unit_hash: str, dest: Path) -> Path | None:
-        del unit_hash, dest
+    def fetch(self, unit_hash: str, generation: int, dest: Path) -> Path | None:
+        del unit_hash, generation, dest
         return None
 
 
@@ -182,7 +182,6 @@ def test_a_crash_mid_run_resumes_from_the_journal(tmp_path: Path) -> None:
 
 
 def test_a_differing_duplicate_alarms(tmp_path: Path) -> None:
-    (tmp_path / 'forge').mkdir()
     graph = Graph({'n': unit('counter')})
     assert executor(tmp_path / 'one', shared=Shared(tmp_path / 'forge')).run(graph)['n'].state == RAN
     seen = executor(tmp_path / 'seen', shared=Shared(tmp_path / 'forge')).run(graph)['n']
@@ -197,7 +196,6 @@ def test_a_differing_duplicate_alarms(tmp_path: Path) -> None:
 
 def test_a_dirty_tree_is_never_shared_nor_offered(tmp_path: Path) -> None:
     shared = Shared(tmp_path / 'forge')
-    (tmp_path / 'forge').mkdir()
     assert executor(tmp_path / 'a', shared=shared).run(Graph({'w': unit('write', env=DIRTY, n=1)}))['w'].state == RAN
     assert shared.posts == 0
     assert executor(tmp_path / 'b', shared=shared).run(Graph({'w': unit('write', n=1)}))['w'].state == RAN

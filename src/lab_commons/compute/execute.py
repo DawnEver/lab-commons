@@ -235,7 +235,7 @@ class LocalExecutor:
         files = {key: _resolve(value, done) for key, value in unit.inputs.items() if isinstance(value, Path | Output)}
         unit_hash = unit.unit_hash(files)
         held = self.store.get(unit_hash)
-        return Settled(CACHED, unit_hash, held) if held is not None else (unit_hash, files)
+        return Settled(CACHED, unit_hash, held) if isinstance(held, Result) else (unit_hash, files)
 
     def _worker(
         self,

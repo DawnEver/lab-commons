@@ -11,6 +11,20 @@ wastes time but cannot corrupt: an identical later result is dropped, and a DIFF
 
 A LOCAL-ONLY RESULT (a unit of a dirty tree) NEVER LEAVES THE BOX: it is never posted, and the hash it is keyed
 by -- which carries the diff hash -- is one no other host can ask for.
+
+FILES ARE THE PAYLOAD. :meth:`ResultStore.put_files` stages named files (bytes, or a path copied) and puts them
+like any result, its ``result_hash`` derived from their sha256s, so first-wins and :class:`Nondeterministic`
+compare content; :attr:`Result.files` names them in the local tier. A result FETCHED from the shared tier is
+re-hashed before it installs: outputs that do not hash to their record raise :class:`ArrivalMismatch` and
+nothing installs. A tier declares ``max_bytes`` (its upload limit; ``None``: none); a shareable result over it
+installs locally and raises :class:`TooLarge` -- it is never truncated.
+
+A TOMBSTONE INVALIDATES; NOTHING IS DELETED. :meth:`ResultStore.invalidate` moves the live result, with a
+:class:`Tombstone` naming the reason, to ``<root>/<hh>/<unit hash>.graves/<generation>/``; a later get answers
+the tombstone (a miss with its reason) until a new result is put. Each tombstone opens the next GENERATION and
+first-wins holds per generation, so the re-put after it is a new result, not a non-determinism. The shared tier
+carries the tombstones (``bury`` / ``graves``) and posts per generation, and every get, put and invalidate first
+applies the tier's graves this host has not seen -- an invalidation on one host is seen on all.
 """
 
 from __future__ import annotations
@@ -20,7 +34,9 @@ import json
 import shutil
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, Protocol
 
@@ -30,16 +46,22 @@ from lab_commons.compute.unit import canonical, content_hash
 __all__ = [
     'INSTALL_BACKOFF_S',
     'RECORD',
+    'TOMBSTONE',
+    'ArrivalMismatch',
     'Nondeterministic',
     'Record',
     'Result',
     'ResultStore',
     'SharedTier',
+    'Tombstone',
+    'TooLarge',
     'result_hash',
 ]
 
 #: The record's file name inside a result directory; never an output name.
 RECORD: Final = 'record.json'
+#: A grave's tombstone file name, beside the buried result's ``result/`` directory.
+TOMBSTONE: Final = 'tombstone.json'
 
 #: The waits, in seconds, before each retry of an install rename that a foreign handle refused: Windows denies a
 #: directory rename (WinError 5 / 32) while an indexer, a scanner or a just-exited child holds a handle inside it,
@@ -49,6 +71,22 @@ INSTALL_BACKOFF_S: Final = (0.25, 0.5, 1.0, 1.0, 2.0, 3.0)
 
 class Nondeterministic(RuntimeError):
     """One unit hash, two different results: the first stands; the message names both."""
+
+
+class ArrivalMismatch(ValueError):
+    """A result fetched from the shared tier whose outputs do not hash to its record: refused, nothing installed."""
+
+
+class TooLarge(ValueError):
+    """A shareable result over the shared tier's upload limit: installed locally, never posted, never truncated."""
+
+    def __init__(self, result: Result, size: int, limit: int) -> None:
+        """*result* weighs *size* bytes against the tier's *limit*."""
+        self.result, self.size, self.limit = result, size, limit
+        super().__init__(
+            f'unit {result.record.unit_hash[:16]}: result is {size} bytes, over the shared tier limit of {limit} '
+            f'bytes; it is kept locally at {result.path} and not shared'
+        )
 
 
 @dataclass(frozen=True)
@@ -86,6 +124,32 @@ class Result:
         """The output file *name*."""
         return self.path / name
 
+    @property
+    def files(self) -> dict[str, Path]:
+        """Every output, by name, in this tier."""
+        return {one.name: one for one in sorted(self.path.iterdir()) if one.name != RECORD}
+
+
+@dataclass(frozen=True)
+class Tombstone:
+    """Generation *generation* of *unit_hash* is invalidated: its result (*result_hash*; ``''``: none) and why."""
+
+    unit_hash: str
+    generation: int
+    result_hash: str
+    reason: str
+    host: str
+    when: str
+
+    def to_bytes(self) -> bytes:
+        """The tombstone as canonical JSON."""
+        return canonical(asdict(self))
+
+    @classmethod
+    def read(cls, path: Path) -> Tombstone:
+        """The tombstone written at *path*."""
+        return cls(**json.loads(path.read_text(encoding='utf-8')))
+
 
 def result_hash(directory: Path, outputs: tuple[str, ...]) -> str:
     """The hash of the *outputs* in *directory*, by content."""
@@ -93,13 +157,22 @@ def result_hash(directory: Path, outputs: tuple[str, ...]) -> str:
 
 
 class SharedTier(Protocol):
-    """The tier every host reads: fetch a posted result, post one."""
+    """The tier every host reads: results per generation, and the tombstones that close generations."""
 
-    def fetch(self, unit_hash: str, dest: Path) -> Path | None:
-        """Download the first result posted for *unit_hash* into *dest* (outputs + record); ``None`` when none."""
+    #: The largest result, in bytes, the tier uploads; ``None``: no limit.
+    max_bytes: int | None
 
-    def post(self, result: Result) -> None:
-        """Post *result*; an identical one already there is a no-op, a differing one raises Nondeterministic."""
+    def fetch(self, unit_hash: str, generation: int, dest: Path) -> Path | None:
+        """Download *generation*'s first result for *unit_hash* into *dest* (outputs + record); ``None``: none."""
+
+    def post(self, result: Result, generation: int) -> None:
+        """Post *result* as *generation*'s: an identical one there is a no-op, a differing one Nondeterministic."""
+
+    def bury(self, tombstone: Tombstone) -> None:
+        """Post *tombstone*; one already there for its generation is a no-op."""
+
+    def graves(self, unit_hash: str) -> tuple[Tombstone, ...]:
+        """Every tombstone posted for *unit_hash*, by generation."""
 
 
 class ResultStore:
@@ -123,26 +196,138 @@ class ResultStore:
         record = self.path(unit_hash) / RECORD
         return Result(record.parent, Record.read(record)) if record.is_file() else None
 
-    def get(self, unit_hash: str) -> Result | None:
-        """The result for *unit_hash*: this host's, else the shared tier's (installed here), else ``None``."""
+    def _graves(self, unit_hash: str) -> Path:
+        return self.root / unit_hash[:2] / f'{unit_hash}.graves'
+
+    def history(self, unit_hash: str) -> tuple[tuple[Tombstone, Result | None], ...]:
+        """Every tombstone here for *unit_hash*, by generation, with the result it buried (``None``: none)."""
+        graves = self._graves(unit_hash)
+        found = sorted((int(g.name), g) for g in graves.iterdir() if g.name.isdigit()) if graves.is_dir() else []
+        return tuple(
+            (
+                Tombstone.read(grave / TOMBSTONE),
+                Result(grave / 'result', Record.read(grave / 'result' / RECORD))
+                if (grave / 'result' / RECORD).is_file()
+                else None,
+            )
+            for _, grave in found
+        )
+
+    def generation(self, unit_hash: str) -> int:
+        """The generation a result for *unit_hash* is put in here: the number of tombstones before it."""
+        return len(self.history(unit_hash))
+
+    def _bury(self, tombstone: Tombstone) -> None:
+        """Move the live result, with *tombstone*, into its grave; one rename installs the whole grave."""
+        grave = self.staging()
+        durable_write(grave / TOMBSTONE, tombstone.to_bytes())
+        live = self.path(tombstone.unit_hash)
+        if (live / RECORD).is_file():
+            live.rename(grave / 'result')
+        target = self._graves(tombstone.unit_hash) / str(tombstone.generation)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        grave.rename(target)
+
+    def _sync(self, unit_hash: str) -> None:
+        """Apply the shared tier's tombstones for *unit_hash* that this host has not seen."""
+        if self.shared is None:
+            return
+        for tombstone in self.shared.graves(unit_hash):
+            if tombstone.generation == self.generation(unit_hash):
+                self._bury(tombstone)
+
+    def get(self, unit_hash: str) -> Result | Tombstone | None:
+        """The live result for *unit_hash*: this host's, else the shared tier's (verified, installed here).
+
+        A miss is the latest :class:`Tombstone` when the unit was invalidated, else ``None``.
+
+        Raises:
+            ArrivalMismatch: the shared tier's outputs do not hash to their record.
+
+        """
+        self._sync(unit_hash)
         found = self._local(unit_hash)
-        if found is not None or self.shared is None:
+        if found is not None:
             return found
-        staged = self.shared.fetch(unit_hash, self.staging())
-        return None if staged is None else self._install(staged, Record.read(staged / RECORD))
+        generation = self.generation(unit_hash)
+        if self.shared is not None:
+            dest = self.staging()
+            staged = self.shared.fetch(unit_hash, generation, dest)
+            if staged is not None:
+                return self._install(staged, self._arrived(unit_hash, staged))
+            shutil.rmtree(dest, ignore_errors=True)
+        return self.history(unit_hash)[-1][0] if generation else None
+
+    @staticmethod
+    def _arrived(unit_hash: str, staged: Path) -> Record:
+        """The record of a fetched result whose outputs hash to it; else drop *staged* and refuse."""
+        record = Record.read(staged / RECORD)
+        got = result_hash(staged, tuple(sorted(one.name for one in staged.iterdir() if one.name != RECORD)))
+        if record.unit_hash != unit_hash or got != record.result_hash:
+            shutil.rmtree(staged, ignore_errors=True)
+            msg = (
+                f'unit {unit_hash[:16]}: the shared result arrived hashing {got[:16]} (record: unit '
+                f'{record.unit_hash[:16]}, result {record.result_hash[:16]}); refused, nothing installed'
+            )
+            raise ArrivalMismatch(msg)
+        return record
 
     def put(self, staged: Path, record: Record) -> Result:
         """Install the outputs in *staged* as *record*'s result, then share it unless it is local-only.
 
         Raises:
-            Nondeterministic: a result with other outputs is already stored for the unit hash.
+            Nondeterministic: a result with other outputs is already stored for the unit hash in this generation.
+            TooLarge: shareable but over the shared tier's ``max_bytes``; installed here, not posted.
 
         """
+        self._sync(record.unit_hash)
         durable_write(staged / RECORD, record.to_bytes())
         result = self._install(staged, record)
         if self.shared is not None and not record.local_only:
-            self.shared.post(result)
+            limit = self.shared.max_bytes
+            size = sum(one.stat().st_size for one in result.path.rglob('*') if one.is_file())
+            if limit is not None and size > limit:
+                raise TooLarge(result, size, limit)
+            self.shared.post(result, self.generation(record.unit_hash))
         return result
+
+    def put_files(self, files: Mapping[str, bytes | Path], record: Record) -> Result:
+        """Put *files* (name -> bytes, or a file to copy) as *record*'s result; its ``result_hash`` is theirs.
+
+        Raises:
+            ValueError: a file name that is not one plain name, or is the record's.
+            Nondeterministic: other files are already stored for the unit hash in this generation.
+            TooLarge: as :meth:`put`.
+
+        """
+        for name in files:
+            if name in {'', '.', '..', RECORD} or any(sep in name for sep in '/\\'):
+                msg = f'file name {name!r}: a payload file is one plain name, never {RECORD!r} or a path'
+                raise ValueError(msg)
+        staged = self.staging()
+        for name, content in files.items():
+            if isinstance(content, Path):
+                shutil.copyfile(content, staged / name)
+            else:
+                (staged / name).write_bytes(content)
+        return self.put(staged, replace(record, result_hash=result_hash(staged, tuple(sorted(files)))))
+
+    def invalidate(self, unit_hash: str, reason: str, *, host: str) -> Tombstone:
+        """Tombstone *unit_hash*'s live result for *reason*, here and (unless local-only) on the shared tier."""
+        self._sync(unit_hash)
+        live = self._local(unit_hash)
+        tombstone = Tombstone(
+            unit_hash,
+            self.generation(unit_hash),
+            '' if live is None else live.record.result_hash,
+            reason,
+            host,
+            datetime.now(UTC).isoformat(timespec='seconds'),
+        )
+        self._bury(tombstone)
+        if self.shared is not None and (live is None or not live.record.local_only):
+            self.shared.bury(tombstone)
+        return tombstone
 
     def _install(self, staged: Path, record: Record) -> Result:
         """Rename *staged* into place; a foreign handle's refusal is retried per INSTALL_BACKOFF_S."""
