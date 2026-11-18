@@ -27,7 +27,7 @@ import lab_commons.launch as _door
 from lab_commons.box._store import connect
 from lab_commons.box._store import read as read_ledger
 from lab_commons.box.demand import GB, Capacity, Holding
-from lab_commons.box.machine import provided
+from lab_commons.box.machine import NON_VENDOR_CHECKS, provided, seat_size
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.model import Resources, Supply
 from lab_commons.compute.presence import Evidence, Presence
@@ -64,7 +64,7 @@ def seat_sizes() -> tuple[dict[str, int], dict[str, str]]:
         count = _counted(probe)
         if probe and count is None:
             blind[name] = f'its supply probe {probe[0]!r} failed, timed out or printed no count'
-        sizes[name] = count if count is not None else int(facts.get('seats', 1))
+        sizes[name] = count if count is not None else int(facts.get('seats', 1))  # provided() refused a vendor's
     return sizes, blind
 
 
@@ -143,7 +143,7 @@ def measured(
 def size(capacity: Capacity, seats: Collection[str] = ()) -> Supply:
     """The box's whole SIZE for admitted runs, nothing running: a demand it does not admit never fits here."""
     whole = Resources(
-        {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: capacity.seats.get(n, 1) for n in seats}}
+        {'cpu': capacity.cpu, 'mem_gb': capacity.mem_bytes / GB, **{n: seat_size(capacity.seats, n) for n in seats}}
     )
     return Supply('box', whole, whole.names | {'cpu'})
 
@@ -196,7 +196,7 @@ class ToolSeats:
 
     *capacity* carries the sizes (:func:`seat_sizes`), the blind probes and the observed seats; *read* observes
     them; *presence*, when given, keeps only the tools it finds (a checked tool it misses lends nothing). Its names
-    are every sized or checked tool.
+    are every sized tool and every checked non-vendor tool: an undeclared vendor is never supplied a lent 1.
     """
 
     capacity: Capacity
@@ -206,7 +206,7 @@ class ToolSeats:
     @property
     def names(self) -> frozenset[str]:
         """Every tool this scope may count."""
-        return frozenset(self.capacity.seats) | frozenset(CHECKS)
+        return frozenset(self.capacity.seats) | (frozenset(CHECKS) & NON_VENDOR_CHECKS)
 
     def measure(self, scope: str) -> Supply:
         """Each present tool's size less what is observed in use beyond the claims (a blind one lends none)."""

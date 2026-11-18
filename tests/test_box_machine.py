@@ -86,7 +86,9 @@ def test_a_seat_count_is_measured_by_its_supply_probe_over_the_declaration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _capabilities(
-        tmp_path, monkeypatch, f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(2)")}\n[capabilities.femm]\n'
+        tmp_path,
+        monkeypatch,
+        f'[capabilities.jmag]\nseats = 5\nsupply = {_argv("print(2)")}\n[capabilities.femm]\nseats = 1\n',
     )
     assert seat_sizes() == ({'jmag': 2, 'femm': 1}, {}), 'measured beats declared; no probe is the declaration'
     assert Capacity.read().seats == {'jmag': 2, 'femm': 1}
@@ -108,6 +110,6 @@ def test_a_supply_probe_that_cannot_say_lends_nothing_and_says_why(
 
 
 def test_a_malformed_supply_is_refused_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _capabilities(tmp_path, monkeypatch, '[capabilities.jmag]\nsupply = "lmstat"\n')
+    _capabilities(tmp_path, monkeypatch, '[capabilities.jmag]\nseats = 1\nsupply = "lmstat"\n')
     with pytest.raises(ValueError, match=r'capabilities\.jmag.*supply'):
         seat_sizes()

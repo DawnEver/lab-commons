@@ -35,7 +35,7 @@ from lab_commons.box import (
 )
 from lab_commons.box.demand import checked, cores, mem_bytes, seats
 from lab_commons.box.ledger import _decide
-from lab_commons.box.machine import own_reserve, reserve_table
+from lab_commons.box.machine import UndeclaredSeat, own_reserve, reserve_table
 from lab_commons.box.supply import Reading
 from lab_commons.compute.model import Demand
 
@@ -128,13 +128,15 @@ def test_an_oversize_demand_is_refused_at_once() -> None:
 
 
 @pytest.mark.usefixtures('box')
-def test_an_undeclared_seat_counts_one() -> None:
-    """A seat nobody declared counts 1, as a present undeclared tool does: one holder, and the next waits."""
+def test_an_undeclared_exclusion_seat_counts_one_and_an_undeclared_vendor_is_refused() -> None:
+    """An exclusion seat nobody declared counts 1: one holder, and the next waits. A VENDOR tool is never lent 1."""
     with (
-        hold(*_demand(seats={'matlab': 1}), 'm', queue_s=1, **_ON),
-        pytest.raises(Refused, match=r'lacking matlab .* m \(pid'),
-        hold(*_demand(seats={'matlab': 1}), 'n', queue_s=0.2, **_ON),
+        hold(*_demand(seats={'env-m': 1}), 'm', queue_s=1, **_ON),
+        pytest.raises(Refused, match=r'lacking env-m .* m \(pid'),
+        hold(*_demand(seats={'env-m': 1}), 'n', queue_s=0.2, **_ON),
     ):
+        pass
+    with pytest.raises(UndeclaredSeat, match='matlab'), hold(*_demand(seats={'matlab': 1}), 'm', queue_s=1, **_ON):
         pass
 
 
@@ -431,9 +433,9 @@ def test_an_external_seat_is_held_until_released(box: Path) -> None:
 def test_a_queue_wait_that_runs_out_is_not_admitted_and_an_oversize_demand_is_not() -> None:
     """PLANTED CONTROL: waiting out the queue is CAPACITY (retry later); never fitting is a real refusal."""
     with (
-        hold(*_demand(seats={'matlab': 1}), 'm', queue_s=1, **_ON),
+        hold(*_demand(seats={'env-m': 1}), 'm', queue_s=1, **_ON),
         pytest.raises(NotAdmitted) as waited,
-        hold(*_demand(seats={'matlab': 1}), 'n', queue_s=0.2, **_ON),
+        hold(*_demand(seats={'env-m': 1}), 'n', queue_s=0.2, **_ON),
     ):
         pass
     assert not_admitted(f'dep --bootstrap exited 1: REFUSED: {waited.value}')
