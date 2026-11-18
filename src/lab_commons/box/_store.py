@@ -126,6 +126,7 @@ def _set_up(con: sqlite3.Connection) -> None:
             columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
             for name, spelled in added:
                 if name not in columns:  # a ledger file written before the column existed: the schema moves forward
+                    # OLD-SHAPE-READER
                     con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
 
 

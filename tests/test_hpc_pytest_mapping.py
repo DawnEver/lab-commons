@@ -119,7 +119,7 @@ def test_two_processes_deciding_one_id_both_ways_make_it_flaky_and_never_overwri
 
 
 def test_a_regenerable_run_record_of_the_retired_words_is_refused_by_name(tmp_path: Path) -> None:
-    """No upgrade-on-read for a run record: the forge re-produces the sha."""
+    """FORMATS-MIGRATE-ONCE: a run record is never read in an old shape: the forge re-produces the sha."""
     path = write_record({'sha': 'a' * 40, 'platform': 'base', 'req': 'r', 'outcomes': {'t.py::a': 'passed'}}, tmp_path)
     with pytest.raises(RetiredRecord, match='retired word shape'):
         read_record(path)

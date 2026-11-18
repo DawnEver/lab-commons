@@ -25,7 +25,7 @@ ONE FILE PER ROUND, NOT TWO PER ITEM (``runs/*/streams`` measured 600-1000 files
 counts files against a quota). Every item of a round appends to ``.lab-ci/<tag>.jsonl``, each line tagged
 ``"item": <index>`` and written by ONE ``O_APPEND`` write -- whole lines from many nodes interleave, they do
 not tear. An attempt opens with ``{"item": i, "begin": ...}``, so a restarted item reads its last attempt
-only (:func:`split_streams`); its id list goes to node-local scratch. FORMATS-UPGRADE-ON-READ: a round
+only (:func:`split_streams`); its id list goes to node-local scratch. OLD-SHAPE-READER: a round
 submitted before the change (``.lab-ci/<tag>/<i>.jsonl``, one file per item) is upgraded one way -- its
 manifest by :func:`run` (the new runner appends to the round file), what it already wrote by
 :func:`tagged` (``@@@ <i>.jsonl`` sections) -- and nothing writes that shape any more.
@@ -383,7 +383,7 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
     """Fold one item's stream into ``{cells, seconds, done, started}``.
 
     ``cells`` holds only the ids the stream reports, each its worst phase's line (:func:`badness`; the first
-    of equals): a plain test cell, or -- FORMATS-UPGRADE-ON-READ, a round in flight across the change -- a
+    of equals): a plain test cell, or -- OLD-SHAPE-READER, a round in flight across the change -- a
     retired ``{"outcome", "why"}`` line. ``seconds`` sums their phases; ``done`` is the closing record, or
     ``None`` when the item never closed -- then every id it did not report is still owed a run. ``started`` is
     the last id the plugin STARTED -- the one in flight if the process exited before its cell.

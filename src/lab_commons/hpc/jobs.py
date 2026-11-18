@@ -17,7 +17,8 @@ order. A grant whose login hosts all fail to answer is NAMED, never read as empt
 
 A JOB HAS A FILE BUDGET (``[policy] file_budget``): ``gather`` counts each placement's run directory on the
 shared home and names every one over it -- the job fails. A run an earlier worker wrote (one results file
-per shard) is upgraded on read and named as such; its file count was that worker's, so it is not judged.
+per shard) is read in its old shape (OLD-SHAPE-READER) and named as such; its file count was that
+worker's, so it is not judged.
 
 A DEAD GRANT'S SLICE IS RE-PLACED BY THE RETRY RULE. ``retry`` re-submits what has no results file and is
 not active -- on a grant that answers, its own shards, as before. On a grant that does not answer nothing is
