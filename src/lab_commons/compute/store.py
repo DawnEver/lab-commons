@@ -16,8 +16,13 @@ FILES ARE THE PAYLOAD. :meth:`ResultStore.put_files` stages named files (bytes, 
 like any result, its ``result_hash`` derived from their sha256s, so first-wins and :class:`Nondeterministic`
 compare content; :attr:`Result.files` names them in the local tier. A result FETCHED from the shared tier is
 re-hashed before it installs: outputs that do not hash to their record raise :class:`ArrivalMismatch` and
-nothing installs. A tier declares ``max_bytes`` (its upload limit; ``None``: none); a shareable result over it
-installs locally and raises :class:`TooLarge` -- it is never truncated.
+nothing installs. A tier declares ``max_bytes`` (its upload limit; ``None``: none). A shareable result over it
+is posted with its largest files moved, one by one until it fits, to the :class:`LargeObjects` store the caller
+handed in: each travels as ``<name>`` + :data:`REF_SUFFIX`, a :class:`Ref` (backend, key, size, sha256), and an
+arrival resolves every Ref and re-checks its sha256 before the result hash is checked -- a mismatch, or a Ref
+with no large-object store to resolve it, is :class:`ArrivalMismatch`, a miss and never a value. With no
+large-object store (or still over the limit with every file moved) it installs locally and raises
+:class:`TooLarge` -- it is never truncated.
 
 A TOMBSTONE INVALIDATES; NOTHING IS DELETED. :meth:`ResultStore.invalidate` moves the live result, with a
 :class:`Tombstone` naming the reason, to ``<root>/<hh>/<unit hash>.graves/<generation>/``; a later get answers
@@ -54,10 +59,13 @@ from lab_commons.compute.unit import canonical, content_hash
 __all__ = [
     'INSTALL_BACKOFF_S',
     'RECORD',
+    'REF_SUFFIX',
     'TOMBSTONE',
     'ArrivalMismatch',
+    'LargeObjects',
     'Nondeterministic',
     'Record',
+    'Ref',
     'Result',
     'ResultStore',
     'SharedTier',
@@ -70,6 +78,8 @@ __all__ = [
 RECORD: Final = 'record.json'
 #: A grave's tombstone file name, beside the buried result's ``result/`` directory.
 TOMBSTONE: Final = 'tombstone.json'
+#: The suffix a file shared by :class:`Ref` travels under (``<name>.ref.json``); never a payload name's ending.
+REF_SUFFIX: Final = '.ref.json'
 
 #: The waits, in seconds, before each retry of an install rename that a foreign handle refused: Windows denies a
 #: directory rename (WinError 5 / 32) while an indexer, a scanner or a just-exited child holds a handle inside it,
@@ -183,15 +193,61 @@ class SharedTier(Protocol):
         """Every tombstone posted for *unit_hash*, by generation."""
 
 
+@dataclass(frozen=True)
+class Ref:
+    """One file kept in a large-object store: which store, its key there, its size and its sha256."""
+
+    backend: str
+    ref: str
+    bytes: int
+    sha256: str
+
+    def to_bytes(self) -> bytes:
+        """The ref as canonical JSON."""
+        return canonical(asdict(self))
+
+    @classmethod
+    def read(cls, path: Path) -> Ref:
+        """The ref written at *path*."""
+        return cls(**json.loads(path.read_text(encoding='utf-8')))
+
+
+class LargeObjects(Protocol):
+    """Where files too large for the shared tier live; the caller hands one in (its backend is its config)."""
+
+    def put(self, path: Path) -> Ref:
+        """Upload *path*; the same bytes again is the object already there."""
+
+    def get(self, ref: Ref, dest: Path) -> Path:
+        """Download *ref*'s bytes to *dest*; the store checks them, the caller checks them again."""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for block in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 class ResultStore:
     """The local tier at *root*, backed by *shared* (none: this host's results only)."""
 
-    def __init__(self, root: Path, shared: SharedTier | None = None, *, cap_bytes: int | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        shared: SharedTier | None = None,
+        *,
+        cap_bytes: int | None = None,
+        objects: LargeObjects | None = None,
+    ) -> None:
         """Results under *root*; *shared* is asked for a miss and handed every shareable put.
 
         *cap_bytes* bounds the live local results (``None``: unbounded); over it, the least recently hit go.
+        *objects* holds the files of a shareable result over the shared tier's limit (``None``: such a result is
+        :class:`TooLarge`).
         """
-        self.root, self.shared, self.cap_bytes = root, shared, cap_bytes
+        self.root, self.shared, self.cap_bytes, self.objects = root, shared, cap_bytes, objects
         self._clock = 0
 
     def path(self, unit_hash: str) -> Path:
@@ -271,9 +327,27 @@ class ResultStore:
             shutil.rmtree(dest, ignore_errors=True)
         return self.history(unit_hash)[-1][0] if generation else None
 
-    @staticmethod
-    def _arrived(unit_hash: str, staged: Path) -> Record:
-        """The record of a fetched result whose outputs hash to it; else drop *staged* and refuse."""
+    def _resolve(self, unit_hash: str, staged: Path) -> None:
+        """Replace each Ref in *staged* by its bytes from the large-object store, sha256-checked; else refuse."""
+        for held in sorted(staged.glob(f'*{REF_SUFFIX}')):
+            name = held.name.removesuffix(REF_SUFFIX)
+            why = ''
+            if self.objects is None:
+                why = 'it carries a Ref and no large-object store was given to this store'
+            else:
+                ref = Ref.read(held)
+                got = _sha256(self.objects.get(ref, staged / name))
+                if got != ref.sha256:
+                    why = f'its bytes arrived hashing {got[:16]}, the Ref says {ref.sha256[:16]}'
+            if why:
+                shutil.rmtree(staged, ignore_errors=True)
+                msg = f'unit {unit_hash[:16]}: shared file {name!r}: {why}; refused, nothing installed'
+                raise ArrivalMismatch(msg)
+            held.unlink()
+
+    def _arrived(self, unit_hash: str, staged: Path) -> Record:
+        """The record of a fetched result whose outputs (Refs resolved) hash to it; else drop *staged* and refuse."""
+        self._resolve(unit_hash, staged)
         record = Record.read(staged / RECORD)
         got = result_hash(staged, tuple(sorted(one.name for one in staged.iterdir() if one.name != RECORD)))
         if record.unit_hash != unit_hash or got != record.result_hash:
@@ -290,7 +364,8 @@ class ResultStore:
 
         Raises:
             Nondeterministic: a result with other outputs is already stored for the unit hash in this generation.
-            TooLarge: shareable but over the shared tier's ``max_bytes``; installed here, not posted.
+            TooLarge: shareable but over the shared tier's ``max_bytes`` even with its largest files moved to the
+                large-object store (or with none given); installed here, not posted.
 
         """
         self._sync(record.unit_hash)
@@ -299,10 +374,32 @@ class ResultStore:
         if self.shared is not None and not record.local_only:
             limit = self.shared.max_bytes
             size = sum(one.stat().st_size for one in result.path.rglob('*') if one.is_file())
-            if limit is not None and size > limit:
+            if limit is None or size <= limit:
+                self.shared.post(result, self.generation(record.unit_hash))
+            elif self.objects is None:
                 raise TooLarge(result, size, limit)
-            self.shared.post(result, self.generation(record.unit_hash))
+            else:
+                self._post_by_ref(self.shared, self.objects, result, (size, limit))
         return result
+
+    def _post_by_ref(self, shared: SharedTier, objects: LargeObjects, result: Result, sizes: tuple[int, int]) -> None:
+        """Post *result* to *shared* with its largest files as Refs in *objects* until it fits (size, limit)."""
+        size, limit = sizes
+        view = self.staging()
+        shutil.copyfile(result.path / RECORD, view / RECORD)
+        for name, path in sorted(result.files.items(), key=lambda kv: -kv[1].stat().st_size):
+            if size > limit:
+                ref = objects.put(path).to_bytes()
+                (view / f'{name}{REF_SUFFIX}').write_bytes(ref)
+                size -= path.stat().st_size - len(ref)
+            else:
+                shutil.copyfile(path, view / name)
+        try:
+            if size > limit:
+                raise TooLarge(result, size, limit)
+            shared.post(Result(view, result.record), self.generation(result.record.unit_hash))
+        finally:
+            shutil.rmtree(view, ignore_errors=True)
 
     def put_files(self, files: Mapping[str, bytes | Path], record: Record) -> Result:
         """Put *files* (name -> bytes, or a file to copy) as *record*'s result; its ``result_hash`` is theirs.
@@ -314,8 +411,11 @@ class ResultStore:
 
         """
         for name in files:
-            if name in {'', '.', '..', RECORD} or any(sep in name for sep in '/\\'):
-                msg = f'file name {name!r}: a payload file is one plain name, never {RECORD!r} or a path'
+            if name in {'', '.', '..', RECORD} or any(sep in name for sep in '/\\') or name.endswith(REF_SUFFIX):
+                msg = (
+                    f'file name {name!r}: a payload file is one plain name, never {RECORD!r}, a path or a name '
+                    f'ending {REF_SUFFIX!r} (the suffix a shared Ref travels under)'
+                )
                 raise ValueError(msg)
         staged = self.staging()
         for name, content in files.items():
