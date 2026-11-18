@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.compute.durable import durable_write
 from lab_commons.outcomes.cell import Cell
 from lab_commons.outcomes.expectation import Expectation
 from lab_commons.outcomes.identity import Identity
@@ -73,9 +74,7 @@ def migrate(path: Path) -> int:
         + '\n'
         for row in rows
     )
-    temp = path.with_name(f'{path.name}.{os.getpid()}.migrating')
-    temp.write_text(text, encoding='utf-8')
-    temp.replace(path)
+    durable_write(path, text.encode('utf-8'))
     return moved
 
 
