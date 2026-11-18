@@ -13,7 +13,15 @@ from types import SimpleNamespace
 import pytest
 
 from lab_commons.hpc import pytest_item
-from lab_commons.hpc.records import RetiredRecord, read_record, upgraded_state, write_record
+from lab_commons.hpc.records import (
+    STATE_KEYS,
+    RetiredRecord,
+    RetiredState,
+    current_state,
+    migrated_state,
+    read_record,
+    write_record,
+)
 from lab_commons.hpc.retired import TEST_WORDS
 from lab_commons.hpc.testcells import TestCell, conclude, merged, upgraded
 from lab_commons.outcomes import Cell, Conclusion, Expectation, Reason, Status
@@ -119,8 +127,8 @@ def test_a_regenerable_run_record_of_the_retired_words_is_refused_by_name(tmp_pa
     assert read_record(fresh)['cells'] == {}, 'PLANTED CONTROL: the current shape reads'
 
 
-def test_a_live_run_state_of_the_retired_words_is_upgraded_on_read() -> None:
-    """A run's state.json is LIVE (a run in flight crosses the change): FORMATS-UPGRADE-ON-READ."""
+def test_the_one_shot_migration_reads_a_state_of_the_retired_words_as_cells() -> None:
+    """FORMATS-MIGRATE-ONCE: the retired ``outcomes`` words migrate once, by :func:`migrated_state`."""
     state = {
         'sha': 's',
         'handed': {'w.py::t': 'win'},
@@ -128,7 +136,7 @@ def test_a_live_run_state_of_the_retired_words_is_upgraded_on_read() -> None:
         'reasons': {'b.py::t': 'boom'},
         'record': {'handed': {}, 'outcomes': {'d.py::t': 'xfailed'}, 'reasons': {}},
     }
-    read = upgraded_state(state)
+    read = migrated_state(state)
     assert {n: TestCell.from_plain(p).word() for n, p in read['cells'].items()} == {
         'a.py::t': 'ok',
         'b.py::t': 'rejected',
@@ -144,8 +152,8 @@ def test_a_live_run_state_of_the_retired_words_is_upgraded_on_read() -> None:
     assert upgraded(HANDED) is None, 'a handed id is no cell'
 
 
-def test_a_live_run_states_file_keyed_growth_is_read_onto_the_ids_in_flight() -> None:
-    """Before 2026-10-30 a run's ``grown`` was keyed by FILE; a run in flight across the change keys it by id.
+def test_the_one_shot_migration_lands_a_file_keyed_growth_on_the_ids_in_flight() -> None:
+    """Before 2026-10-30 a run's ``grown`` was keyed by FILE; the migration keys it by id.
 
     PLANTED CONTROL: an id key is kept as it is, and a file with nothing in flight lands nowhere.
     """
@@ -153,7 +161,56 @@ def test_a_live_run_states_file_keyed_growth_is_read_onto_the_ids_in_flight() ->
         'current': {'items': [{'ids': ['a.py::x', 'a.py::y', 'b.py::z']}]},
         'grown': {'a.py': 2.0, 'c.py': 4.0, 'b.py::z': 8.0},
     }
-    assert upgraded_state(state)['grown'] == {'a.py::x': 2.0, 'a.py::y': 2.0, 'b.py::z': 8.0}
+    assert migrated_state(state)['grown'] == {'a.py::x': 2.0, 'a.py::y': 2.0, 'b.py::z': 8.0}
+
+
+_CURRENT: dict[str, object] = {
+    'sha': 'a' * 40,
+    'cells': {},
+    'rounds': [],
+    'measured': {},
+    'priced': {},
+    'item_wall': {},
+    'grown': {},
+    'held': {},
+}
+
+
+@pytest.mark.parametrize('key', sorted(STATE_KEYS))
+def test_a_state_lacking_a_key_every_writer_writes_is_refused_naming_its_migration(key: str) -> None:
+    """FORMATS-MIGRATE-ONCE: the reader fills no default; the refusal names the key and the migration.
+
+    PLANTED CONTROL: the same state WITH the key reads as it is, so the refusal is the key's, not the state's.
+    """
+    assert current_state(dict(_CURRENT)) == _CURRENT
+    lacking = {k: v for k, v in _CURRENT.items() if k != key}
+    with pytest.raises(RetiredState, match=rf"missing '{key}'.*migrated_state"):
+        current_state(lacking)
+    assert current_state(migrated_state(lacking)).keys() >= STATE_KEYS, 'the migration lands the current shape'
+
+
+@pytest.mark.parametrize(
+    ('retired', 'named'),
+    [
+        ({'outcomes': {}}, "retired 'outcomes'"),
+        ({'oom': 2}, "retired 'oom'"),
+        ({'rounds': [{'job_id': '1'}]}, "retired 'job_id'"),
+        ({'grown': {'a.py': 2.0}}, "retired file-keyed 'grown'"),
+        ({'record': {'outcomes': {}}}, "retired record 'outcomes'"),
+    ],
+)
+def test_a_state_in_a_retired_shape_is_refused_and_migrates_once(retired: dict[str, object], named: str) -> None:
+    state = {**_CURRENT, **retired}
+    with pytest.raises(RetiredState, match=named):
+        current_state(state)
+    current_state(migrated_state(state))
+
+
+def test_a_state_without_record_or_current_is_not_yet_settled_or_in_flight_and_reads() -> None:
+    """``record`` and ``current`` legitimately come and go; their absence means "not yet", never old."""
+    assert 'record' not in _CURRENT
+    assert 'current' not in _CURRENT
+    current_state(dict(_CURRENT))
 
 
 def test_the_item_runner_restates_exactly_the_family_temp_prefix() -> None:
