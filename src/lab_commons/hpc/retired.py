@@ -231,6 +231,8 @@ RETIRED: Final[dict[str, str]] = {
     'NOT_COVERED': "nothing: a handed id is no cell; the run record's `handed` names its part",
     'UNCARRIED': 'nothing: lab_commons.hpc.records.held_cells offers DECIDED cells only',
     'held_outcomes': 'lab_commons.hpc.records.held_cells',
+    # A run state migrates ONCE (FORMATS-MIGRATE-ONCE, D51 2026-11-11); its reader refuses a retired shape.
+    'upgraded_state': 'lab_commons.hpc.records.current_state (reads), migrated_state (the one-shot migration)',
     'lab_commons.dev.outcomes': 'dev_lab.dev.test_outcomes (a Record of test cells per process)',
     'read_reasons': 'dev_lab.dev.test_outcomes.read_cells (a reason travels in its cell)',
     'OutcomeRecorder': 'dev_lab.dev.test_outcomes.CellRecorder',
