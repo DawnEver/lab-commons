@@ -25,12 +25,20 @@ the tombstone (a miss with its reason) until a new result is put. Each tombstone
 first-wins holds per generation, so the re-put after it is a new result, not a non-determinism. The shared tier
 carries the tombstones (``bury`` / ``graves``) and posts per generation, and every get, put and invalidate first
 applies the tier's graves this host has not seen -- an invalidation on one host is seen on all.
+
+THE LOCAL TIER IS A CACHE WITH A CAP THE CALLER PASSES IN (``cap_bytes``; ``None``: unbounded). Every hit -- a
+local get, an arrival from the shared tier, a put -- stamps the result's recency; after each install the live
+results over the cap are evicted least recently hit first, never the one just installed. Eviction removes a live
+copy only (renamed out of place first, so a crash never leaves half a result): an evicted unit is a miss here and
+a shareable one comes back from the shared tier; graves are never evicted. The cap is the caller's (its config),
+never a value in this module.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import time
 import uuid
@@ -178,9 +186,13 @@ class SharedTier(Protocol):
 class ResultStore:
     """The local tier at *root*, backed by *shared* (none: this host's results only)."""
 
-    def __init__(self, root: Path, shared: SharedTier | None = None) -> None:
-        """Results under *root*; *shared* is asked for a miss and handed every shareable put."""
-        self.root, self.shared = root, shared
+    def __init__(self, root: Path, shared: SharedTier | None = None, *, cap_bytes: int | None = None) -> None:
+        """Results under *root*; *shared* is asked for a miss and handed every shareable put.
+
+        *cap_bytes* bounds the live local results (``None``: unbounded); over it, the least recently hit go.
+        """
+        self.root, self.shared, self.cap_bytes = root, shared, cap_bytes
+        self._clock = 0
 
     def path(self, unit_hash: str) -> Path:
         """Where *unit_hash*'s result lives here."""
@@ -248,6 +260,7 @@ class ResultStore:
         self._sync(unit_hash)
         found = self._local(unit_hash)
         if found is not None:
+            self._hit(found)
             return found
         generation = self.generation(unit_hash)
         if self.shared is not None:
@@ -336,11 +349,11 @@ class ResultStore:
         for wait in (*INSTALL_BACKOFF_S, None):
             try:
                 staged.rename(target)
-                return Result(target, record)
+                return self._kept(Result(target, record))
             except OSError as refused:
                 held = self._local(record.unit_hash)
                 if held is not None:
-                    return self._first_stands(staged, record, held)
+                    return self._kept(self._first_stands(staged, record, held))
                 if not isinstance(refused, PermissionError):
                     raise
                 if wait is None:
@@ -351,6 +364,40 @@ class ResultStore:
                     raise PermissionError(refused.errno, msg) from refused
                 time.sleep(wait)
         raise AssertionError  # unreachable: the last pass returns or raises
+
+    def _hit(self, result: Result) -> None:
+        """Stamp *result* most recently hit: its record's mtime, strictly after every stamp this store made."""
+        self._clock = max(time.time_ns(), self._clock + 1)
+        os.utime(result.path / RECORD, ns=(self._clock, self._clock))
+
+    def _live(self) -> list[tuple[int, Path, int]]:
+        """Every live result here: (last hit, directory, bytes); never a grave or a staging directory."""
+        found = []
+        for record in self.root.glob(f'*/*/{RECORD}'):
+            held = record.parent
+            if held.parent.name != held.name[:2] or held.name.endswith('.graves'):
+                continue
+            size = sum(one.stat().st_size for one in held.rglob('*') if one.is_file())
+            found.append((record.stat().st_mtime_ns, held, size))
+        return found
+
+    def _kept(self, result: Result) -> Result:
+        """Stamp *result* hit, then evict the least recently hit others while the live tier is over the cap."""
+        self._hit(result)
+        if self.cap_bytes is None:
+            return result
+        live = self._live()
+        total = sum(size for _, _, size in live)
+        for _, held, size in sorted(live):
+            if total <= self.cap_bytes:
+                break
+            if held == result.path:
+                continue
+            gone = self.staging()
+            held.rename(gone / 'evicted')
+            shutil.rmtree(gone)
+            total -= size
+        return result
 
     @staticmethod
     def _first_stands(staged: Path, record: Record, held: Result) -> Result:
