@@ -1,17 +1,18 @@
-"""FORMATS-UPGRADE-ON-READ: a persisted format this kit writes READS every older schema by upgrading it.
+"""FORMATS-MIGRATE-ONCE: a stored format change migrates its stored records ONCE and deletes the old reader.
 
-THE INCIDENT, 2026-10-17 (Ada): a redeploy moved the forge run journal from schema 1 to 2 under 17 live
-schema-1 runs. The reader refused any schema but its own, so every serve tick of four accounts stopped on
-the first file -- the refusal was "safe" and stalled the cluster. A tool is redeployed under its own
-data as a matter of course (dependencies float, user ruling 2026-10-17), so refusing an older file is
-refusing the ordinary case. Refusal is for a schema the reader does not KNOW: newer, or unheard of.
+THE RULING, 2026-11-11 (D51/D52, no-backward-compatibility; it retired FORMATS-UPGRADE-ON-READ, registered in
+:data:`lab_commons.hpc.retired.RETIRED`): a reader that
+upgrades every older schema on read is a dual path kept forever -- each schema change adds a step nobody
+deletes, and the old shape stays a supported input. A format change instead ships a one-time migration of
+the records that exist, the old reader is deleted in the same change, and a record still at an older
+schema is REFUSED by name with the instruction that migrates it (or discards it, for a store that drains).
 
 WHAT IS CHECKED, STATICALLY, AS DATA. A module declaring a format version -- a module-level ``SCHEMA`` or
-``SCHEMA_VERSION`` (or ``<X>_SCHEMA_VERSION``) bound to an int literal ``N`` -- must also declare
-``_UPGRADES``: a dict literal whose keys are EXACTLY ``1 .. N-1``, each value a function defined in that
-module (the step that takes that schema one on), and the module must READ ``_UPGRADES`` somewhere other
-than its binding, so the table is consulted rather than decorative. What cannot be checked statically --
-that the reader upgrades BEFORE it refuses -- is each format's own test.
+``SCHEMA_VERSION`` (or ``<X>_SCHEMA_VERSION``) bound to an int literal -- may not bind ``_UPGRADES``, the
+per-schema step table that was the old reader's shape. That the refusal names its remedy is each format's
+own test. An old-shape reader no table reveals (a retired key, a retired text) carries the marker
+:data:`MARKER` in a comment, and every marked module is OWED a migration in :data:`_OWED` -- on record by
+name, never silent; the ratchet's other side reds a row whose module no longer carries the marker.
 """
 
 from __future__ import annotations
@@ -27,16 +28,27 @@ SRC: Final = ROOT / 'src' / 'lab_commons'
 #: A schema constant's name.
 _VERSION_NAMES: Final = ('SCHEMA', 'SCHEMA_VERSION')
 
-#: The upgrade table's name -- the convention every versioned format here follows.
+#: The upgrade-step table's name: the dual path this rule forbids.
 _TABLE: Final = '_UPGRADES'
 
-#: The versioned formats this tree holds today. A floor, not a count pin: finding fewer means the scan
-#: stopped reading them, which is not a clean tree. Re-measured 2026-10-25 at 1 after supervise left for dev-lab.
-_FLOOR: Final = 1
+#: The comment token that marks an old-shape reader awaiting its one-time migration.
+MARKER: Final = 'OLD-SHAPE-READER'
 
-#: A format whose upgrade path is OWED by a named lane -- on record, never skipped. A row whose module
-#: complies is a red too (the ratchet's other side): delete it in the merge that brings the upgrade.
-_OWED: Final[dict[str, str]] = {}
+#: Each marked module -> why its migration is still owed. Delete a row in the change that migrates and
+#: deletes the reader; never add one to dodge the table check (a table is red whatever this says).
+_OWED: Final[dict[str, str]] = {
+    'lab_commons/box/_store.py': 'box ledger files written before a column existed gain it on open (ALTER TABLE)',
+    'lab_commons/compute/presence.py': 'presence entries written before floors carry no `required`',
+    'lab_commons/hpc/cluster.py': 'per-shard results/<n>.json and pre-Cell `item` lines of an earlier worker',
+    'lab_commons/hpc/jobs.py': 'run directories an earlier worker wrote one results file per shard',
+    'lab_commons/hpc/pytest_item.py': 'rounds submitted with one stream file per item and retired outcome words',
+    'lab_commons/hpc/records.py': 'retired round directories and kept streams/<tag>.txt files',
+    'lab_commons/hpc/retired.py': 'TEST_WORDS: retired per-test words in live state.json and round streams',
+}
+
+#: The versioned formats this tree holds today: outcomes.record. A floor, not a count
+#: pin: finding fewer means the scan stopped reading them, which is not a clean tree.
+_FLOOR: Final = 1
 
 
 def _is_version_name(name: str) -> bool:
@@ -53,9 +65,8 @@ def _bound(node: ast.stmt) -> tuple[str, ast.expr] | None:
 
 
 def violations(source: str) -> tuple[int | None, list[str]]:
-    """``(declared schema or None, why it does not upgrade on read)`` for one module's *source*."""
-    tree = ast.parse(source)
-    bindings = dict(filter(None, (_bound(node) for node in tree.body)))
+    """``(declared schema or None, why it keeps an old-schema reader)`` for one module's *source*."""
+    bindings = dict(filter(None, (_bound(node) for node in ast.parse(source).body)))
     versions = [
         value.value
         for name, value in bindings.items()
@@ -63,25 +74,9 @@ def violations(source: str) -> tuple[int | None, list[str]]:
     ]
     if not versions:
         return None, []
-    schema = versions[0]
-    table = bindings.get(_TABLE)
-    if not isinstance(table, ast.Dict):
-        return schema, [f'schema {schema} declares no {_TABLE} dict literal (older schema -> its upgrade step)']
-    problems = []
-    keys = {key.value for key in table.keys if isinstance(key, ast.Constant) and type(key.value) is int}
-    if len(keys) != len(table.keys):
-        problems.append(f'{_TABLE} keys must be int literals')
-    if missing := sorted(set(range(1, schema)) - keys):
-        problems.append(f'no upgrade from schema {missing} to {schema}')
-    if extra := sorted(keys - set(range(1, schema))):
-        problems.append(f'{_TABLE} names schema {extra}, not older than {schema}')
-    functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
-    if strays := [ast.unparse(v) for v in table.values if not (isinstance(v, ast.Name) and v.id in functions)]:
-        problems.append(f'{_TABLE} steps {strays} are not functions of this module')
-    reads = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == _TABLE and isinstance(n.ctx, ast.Load)]
-    if not reads:
-        problems.append(f'{_TABLE} is declared and never read: the reader cannot be upgrading through it')
-    return schema, problems
+    if _TABLE in bindings:
+        return versions[0], [f'binds {_TABLE}: an old schema is migrated once and refused after, never read']
+    return versions[0], []
 
 
 def _scan() -> dict[str, tuple[int, list[str]]]:
@@ -93,41 +88,39 @@ def _scan() -> dict[str, tuple[int, list[str]]]:
     return found
 
 
-def test_every_versioned_format_this_kit_writes_upgrades_every_older_schema_on_read() -> None:
+def test_no_versioned_format_this_kit_writes_keeps_an_old_schema_reader() -> None:
     found = _scan()
     assert len(found) >= _FLOOR, f'the scan found {sorted(found)}: fewer than {_FLOOR} versioned formats is unread'
-    red = {path: problems for path, (_, problems) in found.items() if problems and path not in _OWED}
-    assert not red, f'FORMATS-UPGRADE-ON-READ: {red}'
-    paid = sorted(path for path in _OWED if path in found and not found[path][1])
-    assert not paid, f'{paid} now upgrade on read: delete their _OWED rows'
-    assert set(_OWED) <= set(found), f'an _OWED row names no versioned format: {sorted(set(_OWED) - set(found))}'
+    red = {path: problems for path, (_, problems) in found.items() if problems}
+    assert not red, f'FORMATS-MIGRATE-ONCE: {red}'
 
 
-def test_planted_formats_are_judged_on_each_clause() -> None:
-    """PLANTED CONTROL: one compliant module, and one per clause it can break."""
+def _marked() -> set[str]:
+    return {
+        path.relative_to(SRC.parent).as_posix()
+        for path in SRC.rglob('*.py')
+        if MARKER in path.read_text(encoding='utf-8')
+    }
+
+
+def test_every_old_shape_reader_is_owed_a_migration_by_name() -> None:
+    marked = _marked()
+    assert not marked - set(_OWED), f'{sorted(marked - set(_OWED))} read an old shape and owe nothing on record'
+    assert not set(_OWED) - marked, f'{sorted(set(_OWED) - marked)} no longer read an old shape: delete their rows'
+
+
+def test_planted_formats_are_judged() -> None:
+    """PLANTED CONTROL: an upgrade table is red; the same module without it is green."""
     good = """
         SCHEMA = 3
-        def _from_1(raw): return {**raw, 'schema': 2}
-        def _from_2(raw): return {**raw, 'schema': 3}
-        _UPGRADES = {1: _from_1, 2: _from_2}
         def read(raw):
-            while raw['schema'] in _UPGRADES:
-                raw = _UPGRADES[raw['schema']](raw)
+            if raw['schema'] != SCHEMA:
+                raise ValueError('run the migration')
             return raw
     """
     assert violations(textwrap.dedent(good)) == (3, [])
-    assert violations('VERSION_OF_NOTHING = 2\n') == (None, []), 'an unversioned module is not a format'
-    assert violations('SCHEMA_VERSION = 1\n_UPGRADES = {}\nx = _UPGRADES\n') == (1, []), 'a first schema owes none'
-    cases = {
-        'no upgrade from schema [2]': good.replace('2: _from_2', ''),
-        'declares no _UPGRADES': good.replace('_UPGRADES = {1: _from_1, 2: _from_2}', ''),
-        'not older than 3': good.replace('2: _from_2}', '2: _from_2, 3: _from_2}'),
-        'not functions of this module': good.replace('2: _from_2', '2: other.step'),
-        'never read': good.replace("while raw['schema'] in _UPGRADES:", 'while False:').replace(
-            "raw = _UPGRADES[raw['schema']](raw)", 'pass'
-        ),
-    }
-    for why, source in cases.items():
-        schema, problems = violations(textwrap.dedent(source))
-        assert schema == 3
-        assert any(why in problem for problem in problems), (why, problems)
+    assert violations('VERSION_OF_NOTHING = 2\n_UPGRADES = {}\n') == (None, []), 'an unversioned module is no format'
+    bad = textwrap.dedent(good) + "def _from_2(raw): return {**raw, 'schema': 3}\n_UPGRADES = {2: _from_2}\n"
+    schema, problems = violations(bad)
+    assert schema == 3
+    assert any('binds _UPGRADES' in problem for problem in problems), problems

@@ -368,7 +368,7 @@ def kept_text(live: Path) -> str:
 def read_streams(run: Runner, live: str, kept: str) -> dict[int, str]:
     """Every item stream of a round in one command: its tree's file while the tree exists, else the kept file.
 
-    FORMATS-UPGRADE-ON-READ: a round in flight across the change also has its retired directory read, and a
+    OLD-SHAPE-READER: a round in flight across the change also has its retired directory read, and a
     run kept before it its retired ``streams/<tag>.txt``; both are upgraded by :func:`tagged`.
     """
     tag = PurePosixPath(live).stem

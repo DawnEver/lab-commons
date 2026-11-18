@@ -127,7 +127,7 @@ def test_an_unclosed_stream_is_unfinished_and_keeps_what_it_finished() -> None:
 
 
 def test_a_retired_stream_line_of_a_round_in_flight_is_upgraded_on_read() -> None:
-    """FORMATS-UPGRADE-ON-READ: a round submitted before the change streams the retired words; fold reads them."""
+    """OLD-SHAPE-READER: a round submitted before the change streams the retired words; fold reads them."""
     items = [{'ids': ['t.py::a', 't.py::b']}]
     streams = {
         0: '{"id": "t.py::a", "outcome": "passed", "s": 1}\n'
