@@ -33,6 +33,7 @@ from lab_commons.box import (
     persist,
     release,
 )
+from lab_commons.box._store import LedgerVersionRefused, migrate
 from lab_commons.box.demand import checked, cores, mem_bytes, seats
 from lab_commons.box.ledger import _decide
 from lab_commons.box.machine import own_reserve, reserve_table
@@ -344,7 +345,7 @@ def test_an_exported_inside_key_naming_no_live_claim_still_books(monkeypatch: py
         assert [row.what for row in holdings()] == ['run'], 'the variable alone is not evidence of an enclosing claim'
 
 
-def test_a_ledger_file_from_before_the_kept_column_moves_forward(tmp_path: Path, monkeypatch) -> None:
+def test_a_ledger_file_from_before_the_kept_column_is_refused_until_migrated(tmp_path: Path, monkeypatch) -> None:
     old = tmp_path / 'old.sqlite'
     with sqlite3.connect(old) as con:
         con.execute(
@@ -353,6 +354,9 @@ def test_a_ledger_file_from_before_the_kept_column_moves_forward(tmp_path: Path,
             'started REAL NOT NULL, what TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT)'
         )
     monkeypatch.setenv(BOX_ENV, str(old))
+    with pytest.raises(LedgerVersionRefused, match=r'python -m lab_commons.box migrate'):
+        holdings()
+    migrate()
     with hold(*_demand(), 'new', queue_s=1, **_ON):
         assert [row.what for row in holdings()] == ['new']
 
