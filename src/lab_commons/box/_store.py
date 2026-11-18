@@ -20,7 +20,17 @@ from typing import Final
 from lab_commons.box.demand import Holding, Refused
 from lab_commons.home import part
 
-__all__ = ['BOX_ENV', 'box_path', 'connect', 'immediate', 'read', 'untrusted']
+__all__ = [
+    'BOX_ENV',
+    'SCHEMA_VERSION',
+    'LedgerVersionRefused',
+    'box_path',
+    'connect',
+    'immediate',
+    'migrate',
+    'read',
+    'untrusted',
+]
 
 #: Environment override of the ledger file (tests; a second box on one machine).
 BOX_ENV: Final = 'LAB_COMMONS_BOX'
@@ -83,7 +93,7 @@ def _refuse_untrusted(path: Path) -> None:
 
 
 def connect() -> sqlite3.Connection:
-    """Open the ledger, refusing an untrusted file, with the schema moved forward to this version."""
+    """Open the ledger, refusing an untrusted file and one at another :data:`SCHEMA_VERSION`."""
     path = box_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     for one in (path.parent, path):
@@ -103,12 +113,12 @@ _FIRST_OPEN: Final = threading.Lock()
 
 
 def _set_up(con: sqlite3.Connection) -> None:
-    """Switch *con*'s file to WAL and move its schema forward, waiting out a concurrent opener.
+    """Switch *con*'s file to WAL, write the schema into a fresh file, and refuse one at another version.
 
     ``PRAGMA journal_mode=WAL`` on a fresh file needs an exclusive lock and SQLite does not run the busy
     handler for it, so a second opener sees ``database is locked`` at once: it is retried here, bounded by
-    the same :data:`_LOCK_S` a transaction waits. The DDL runs in one ``BEGIN IMMEDIATE`` so two processes
-    cannot both see a column missing and both add it.
+    the same :data:`_LOCK_S` a transaction waits. The check runs in one ``BEGIN IMMEDIATE`` so two processes
+    cannot both see a fresh file and both write its schema.
     """
     gives_up = time.monotonic() + _LOCK_S
     while True:
@@ -120,14 +130,73 @@ def _set_up(con: sqlite3.Connection) -> None:
                 raise
             time.sleep(0.01)
     with immediate(con):
-        for statement in filter(str.strip, _SCHEMA.split(';')):
-            con.execute(statement)
-        for table, added in _ADDED.items():
-            columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
-            for name, spelled in added:
-                if name not in columns:  # a ledger file written before the column existed: the schema moves forward
-                    # OLD-SHAPE-READER
-                    con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
+        found = con.execute('PRAGMA user_version').fetchone()[0]
+        if found == 0 and not con.execute("SELECT 1 FROM sqlite_master WHERE type='table'").fetchone():
+            _write_current(con)
+            return
+        if found != SCHEMA_VERSION:
+            raise LedgerVersionRefused(box_path(), found)
+
+
+#: The ledger file's schema version, held in SQLite's ``PRAGMA user_version`` -- the file's own header, so the
+#: version cannot disagree with the file it describes. 0 is every file written before the version existed.
+#: Bump it with every :data:`_ADDED` row; :func:`migrate` moves a file forward, :func:`connect` never does.
+SCHEMA_VERSION: Final = 1
+
+
+class LedgerVersionRefused(Refused):
+    """The ledger file is at a schema version this code does not write: older is migrated once, newer is refused.
+
+    A NEWER file is refused, not read, though its columns only grow: this code would write rows that omit what
+    the newer version requires of them. An install that predates :data:`SCHEMA_VERSION` checks nothing and reads
+    a migrated file as before -- its own open finds every column present and adds none.
+    """
+
+    def __init__(self, path: Path, found: int) -> None:
+        self.path, self.found = path, found
+        if found < SCHEMA_VERSION:
+            door = 'migrate it once: python -m lab_commons.box migrate'
+        else:
+            door = 'it was written by a newer lab-commons: run that version, or upgrade this install'
+        super().__init__(
+            f'box ledger {path} is at schema version {found}, this lab-commons writes {SCHEMA_VERSION}: refused '
+            f'-- {door}'
+        )
+
+
+def _write_current(con: sqlite3.Connection) -> None:
+    """Write the current schema into *con* (inside its transaction) and stamp :data:`SCHEMA_VERSION`."""
+    for statement in filter(str.strip, _SCHEMA.split(';')):
+        con.execute(statement)
+    con.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+
+
+def migrate(path: Path | None = None) -> int:
+    """Move the ledger at *path* (default :func:`box_path`) to :data:`SCHEMA_VERSION` ONCE; the version it was at.
+
+    Adds every :data:`_ADDED` column the file lacks and stamps the version, in one ``BEGIN IMMEDIATE``. A file
+    already current is left unchanged; one NEWER than this code is refused by :class:`LedgerVersionRefused`.
+    """
+    path = box_path() if path is None else path
+    for one in (path.parent, path):
+        _refuse_untrusted(one)
+    con = sqlite3.connect(path, timeout=_LOCK_S, isolation_level=None)
+    try:
+        with immediate(con):
+            found = con.execute('PRAGMA user_version').fetchone()[0]
+            if found > SCHEMA_VERSION:
+                raise LedgerVersionRefused(path, found)
+            for statement in filter(str.strip, _SCHEMA.split(';')):
+                con.execute(statement)
+            for table, added in _ADDED.items():
+                columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
+                for name, spelled in added:
+                    if name not in columns:
+                        con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
+            con.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+    finally:
+        con.close()
+    return found
 
 
 #: Columns added after the file format was first written, per table: (name, its fixed definition).
@@ -136,7 +205,8 @@ def _set_up(con: sqlite3.Connection) -> None:
 #: column that is nullable or has a default. Never a rename, a drop or a type change -- an older reader on the same
 #: box would fail on its next open (2026-10-26: a ``seats`` -> ``amounts`` rename stopped every older process on
 #: the box). ``test_box_store_is_additive`` refuses any other DDL. So a column keeps its first name: ``seats`` holds
-#: EVERY amount but cores and memory, by name -- tool seats, lent slots, OS, consumables.
+#: EVERY amount but cores and memory, by name -- tool seats, lent slots, OS, consumables. Only :func:`migrate`
+#: adds them to an existing file; a new row here bumps :data:`SCHEMA_VERSION` with it.
 #: A ticket's demand is NULL on a ticket written before it was declared: such a ticket contends for everything.
 #: A claim written before :mod:`lab_commons.resources` named scopes and kinds is the box's, OCCUPANCY, windowless.
 _ADDED: Final = {
