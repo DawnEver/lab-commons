@@ -147,7 +147,7 @@
           "id": "matrix",
           "name": "The parts and their runners",
           "if": "${{ steps.pending.outputs.pending != 'false' }}",
-          "run": "echo \"matrix=$(uv run --no-sync python -m dev_lab.dev.jobparts matrix --runners hosted --event \"$PARTS_EVENT\")\" >> \"$GITHUB_OUTPUT\""
+          "run": "matrix=\"$(uv run --no-sync python -m dev_lab.dev.jobparts matrix --runners hosted --event \"$PARTS_EVENT\")\"; echo \"matrix=$matrix\" >> \"$GITHUB_OUTPUT\""
         }
       ],
       "outputs": {
@@ -366,55 +366,6 @@
         "actions": "write"
       }
     },
-    "merge-rejudge": {
-      "env": {
-        "GITHUB_TOKEN": "${{ github.token }}"
-      },
-      "needs": [
-        "review"
-      ],
-      "if": "${{ (!(github.event.pull_request.draft || startsWith(github.event.pull_request.title, 'WIP:') || startsWith(github.event.pull_request.title, '[WIP]'))) && (always() && needs.review.result != 'skipped' && needs.review.result != 'cancelled') }}",
-      "runs-on": "ubuntu-latest",
-      "steps": [
-        {
-          "uses": "actions/checkout@v4",
-          "with": {
-            "ref": "${{ env.HEAD_SHA }}",
-            "fetch-depth": 0
-          }
-        },
-        {
-          "name": "Install uv",
-          "uses": "astral-sh/setup-uv@v5",
-          "with": {
-            "enable-cache": true
-          }
-        },
-        {
-          "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
-        },
-        {
-          "id": "ready",
-          "name": "tests/merge-ready",
-          "run": "said=\"$(uv run --no-sync python -m dev_lab.dev.forge merge ready --pr \"$PR_NUMBER\")\"; echo \"$said\"; case \"$said\" in *\"; merged\") echo \"merged=true\" >> \"$GITHUB_OUTPUT\" ;; esac; case \"$said\" in *\"; review due\"*) echo \"due=true\" >> \"$GITHUB_OUTPUT\" ;; esac"
-        },
-        {
-          "name": "Run CI on the merged integration",
-          "if": "${{ steps.ready.outputs.merged == 'true' }}",
-          "run": "gh workflow run ci.yml --repo \"$GITHUB_REPOSITORY\" --ref integrate/main -f smoke=true",
-          "env": {
-            "GH_TOKEN": "${{ github.token }}"
-          }
-        }
-      ],
-      "permissions": {
-        "contents": "write",
-        "statuses": "write",
-        "pull-requests": "write",
-        "actions": "write"
-      }
-    },
     "promote": {
       "env": {
         "GITHUB_TOKEN": "${{ github.token }}"
@@ -446,7 +397,7 @@
         },
         {
           "name": "Promote main",
-          "run": "uv run --no-sync python -m dev_lab.dev.integrate promote --newest \"$HEAD_SHA\" && git push origin main"
+          "run": "uv run --no-sync python -m dev_lab.dev.integrate promote --newest \"$HEAD_SHA\""
         },
         {
           "name": "Delete the branches integration now contains",
