@@ -108,8 +108,12 @@ def test_claude_homes_and_agent_repos_are_outside_the_policy(tmp_path: Path, mon
     _declare(f'[agent_repos]\ncc-config = "{(tmp_path / "cc").as_posix()}"\n')
     assert home.exempt(tmp_path / 'user' / '.claude' / 'settings.json')
     assert home.exempt(tmp_path / 'user' / '.claude-evans' / 'x')
+    assert home.exempt(tmp_path / 'user' / '.codex' / 'config.toml')
+    assert home.exempt(tmp_path / 'user' / '.gemini' / 'config' / 'hooks.json')
+    assert home.exempt(tmp_path / 'user' / '.gemini' / 'antigravity-cli' / 'worktrees' / 'w' / 'a.py')
     assert home.exempt(tmp_path / 'cc' / 'hooks' / 'a.js')
     assert not home.exempt(tmp_path / 'user' / '.claudette' / 'x')  # planted: a near-miss name
+    assert not home.exempt(tmp_path / 'user' / '.geminix' / 'x')  # planted: a near-miss name
     assert not home.exempt(tmp_path / 'user' / 'Documents' / 'x')  # planted: an ordinary path
 
 
