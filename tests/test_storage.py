@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from lab_commons import paths, storage
+from lab_commons.headroom import Floor
 from lab_commons.storage import KINDS, StorageError, declared, root
 
 TREE = Path('/checkout/repo-a')
@@ -84,13 +85,13 @@ def test_output_root_derives_from_the_storage_binding(tmp_path: Path, monkeypatc
 def test_the_free_floor_defaults_to_fifty_gb_when_a_machine_declares_none() -> None:
     """PLANTED CONTROL for the declared floor below: an undeclared floor is the family default, not unbounded."""
     assert declared({}, {}).free_floor_gb == storage.FREE_FLOOR_GB_DEFAULT == 50
-    assert storage.free_floor_bytes(declared({}, {})) == 50 * 1024**3
+    assert storage.free_floor(declared({}, {})) == Floor(50 * 1024**3)
 
 
 def test_a_machine_declares_its_own_free_floor() -> None:
     small = declared({'storage': {'free_floor_gb': 8}}, {})
     assert small.free_floor_gb == 8
-    assert storage.free_floor_bytes(small) == 8 * 1024**3
+    assert storage.free_floor(small) == Floor(8 * 1024**3)
 
 
 @pytest.mark.parametrize('bad', [0, -5, 'fifty', True])

@@ -31,14 +31,14 @@ first-wins holds per generation, so the re-put after it is a new result, not a n
 carries the tombstones (``bury`` / ``graves``) and posts per generation, and every get, put and invalidate first
 applies the tier's graves this host has not seen -- an invalidation on one host is seen on all.
 
-THE LOCAL TIER IS A CACHE BOUNDED BY ITS VOLUME'S FREE-SPACE FLOOR (``free_floor_bytes``; ``None``: unbounded;
+THE LOCAL TIER IS A CACHE BOUNDED BY ITS VOLUME'S FREE-SPACE FLOOR (``free_floor``; ``None``: unbounded;
 D54). Every hit -- a local get, an arrival from the shared tier, a put -- stamps the result's recency; after each
 install :func:`lab_commons.compute.floor.keep` evicts the least recently hit results, never the one just installed,
 until the volume keeps the floor free -- and if it cannot, the install is undone and refused
 (:class:`~lab_commons.compute.floor.BelowFloor`). Eviction removes a live copy only (renamed out of place first, so
 a crash never leaves half a result): an evicted unit is a miss here and a shareable one comes back from the shared
 tier; graves are never evicted. The floor is the caller's -- the machine's ``[storage] free_floor_gb``
-(:func:`lab_commons.storage.free_floor_bytes`) -- never a value in this module. The fixed ``cap_bytes`` is retired.
+(:func:`lab_commons.storage.free_floor`, quota included) -- never a value in this module. ``cap_bytes`` is retired.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ from typing import Final, Protocol
 from lab_commons.compute import floor
 from lab_commons.compute.durable import durable_write
 from lab_commons.compute.unit import canonical, content_hash
+from lab_commons.headroom import Floor
 
 __all__ = [
     'INSTALL_BACKOFF_S',
@@ -241,13 +242,13 @@ class ResultStore:
         root: Path,
         shared: SharedTier | None = None,
         *,
-        free_floor_bytes: int | None = None,
+        free_floor: Floor | None = None,
         objects: LargeObjects | None = None,
         **retired: object,
     ) -> None:
         """Results under *root*; *shared* is asked for a miss and handed every shareable put.
 
-        *free_floor_bytes* is the free space the store's volume keeps (``None``: unbounded); under it, the least
+        *free_floor* is what the store's volume (and quota) keeps free (``None``: unbounded); under it, the least
         recently hit results go. *objects* holds the files of a shareable result over the shared tier's limit
         (``None``: such a result is :class:`TooLarge`).
         """
@@ -257,10 +258,10 @@ class ResultStore:
             if name == 'cap_bytes':
                 msg = (
                     "cap_bytes is retired (D54): a cache is bounded by its volume's free-space floor -- pass "
-                    'free_floor_bytes (lab_commons.storage.free_floor_bytes())'
+                    'free_floor (lab_commons.storage.free_floor())'
                 )
             raise TypeError(msg)
-        self.root, self.shared, self.free_floor_bytes, self.objects = root, shared, free_floor_bytes, objects
+        self.root, self.shared, self.free_floor, self.objects = root, shared, free_floor, objects
         self._clock = 0
 
     def path(self, unit_hash: str) -> Path:
@@ -502,10 +503,10 @@ class ResultStore:
 
         """
         self._hit(result)
-        if self.free_floor_bytes is None:
+        if self.free_floor is None:
             return result
         try:
-            floor.keep(self.root, self._live(), self.free_floor_bytes, evict=self._evict, keep=result.path)
+            floor.keep(self.root, self._live(), self.free_floor, evict=self._evict, keep=result.path)
         except floor.BelowFloor:
             self._evict(result.path)
             raise

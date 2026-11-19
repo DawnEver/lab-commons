@@ -12,6 +12,8 @@ The machine file (:mod:`lab_commons.config`) may declare::
     reach = ["results"]                 # the family remotes this machine reaches
     secrets = "~/.config/lab-commons/storage-secrets"   # where each reached remote's secret is placed
     free_floor_gb = 50                  # the free space every regenerable cache leaves on its volume
+    quota = { probe = ["mmlsquota", "--block-size", "1"], format = "mmlsquota" }  # only where a quota binds
+    free_floor_files = 20000            # only with a file-limited quota (default: 1% of its file limit)
 
 and the FAMILY file declares the remotes every machine shares, once and without a secret::
 
@@ -20,9 +22,11 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     endpoint = "https://objects.example"
 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
-name: ``roots``, ``reach``, ``secrets`` and ``free_floor_gb`` belong to one machine, ``remotes`` to the
+name: ``roots``, ``reach``, ``secrets`` and the floor keys belong to one machine, ``remotes`` to the
 family. A cache is bounded by ``free_floor_gb`` (default :data:`FREE_FLOOR_GB_DEFAULT`; the door is
-:mod:`lab_commons.compute.floor`), never a fixed size: a retired cap key is refused by name. A kind
+:mod:`lab_commons.compute.floor`), never a fixed size: a retired cap key is refused by name. Where an account
+QUOTA binds below the volume (a shared filesystem), ``quota`` names its probe and format
+(:mod:`lab_commons.headroom`) and the floor holds against the smaller of the two. A kind
 outside :data:`KINDS`, a remote the family does not declare, and a reach with no ``secrets`` path are
 refused by name. A remote's options are handed to the transport (rclone) verbatim; this module names
 no provider and no host.
@@ -38,6 +42,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons.headroom import FORMATS, Floor, Quota
+
 __all__ = [
     'FREE_FLOOR_GB_DEFAULT',
     'KINDS',
@@ -46,7 +52,7 @@ __all__ = [
     'Storage',
     'StorageError',
     'declared',
-    'free_floor_bytes',
+    'free_floor',
     'root',
 ]
 
@@ -69,7 +75,7 @@ KINDS: Final[Mapping[str, str | None]] = {
     'uv_cache': None,
 }
 
-_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'secrets', 'free_floor_gb'})
+_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'secrets', 'free_floor_gb', 'free_floor_files', 'quota'})
 _FAMILY_KEYS: Final = frozenset({'remotes'})
 #: Fixed cache caps, retired by D54 for the free-space floor; refused by name, never read.
 _RETIRED_KEYS: Final = frozenset({'vendor_cache_cap_gb', 'cache_cap_gb', 'cap_gb'})
@@ -95,11 +101,14 @@ class Storage:
     reach: tuple[Remote, ...] = ()
     secrets: Path | None = None
     free_floor_gb: float = FREE_FLOOR_GB_DEFAULT
+    free_floor_files: int | None = None
+    quota: Quota | None = None
 
 
-def free_floor_bytes(storage: Storage | None = None) -> int:
-    """The free space, in bytes, every regenerable cache on this machine leaves on its volume (D54)."""
-    return int((storage if storage is not None else declared()).free_floor_gb * GIB)
+def free_floor(storage: Storage | None = None) -> Floor:
+    """What every regenerable cache on this machine leaves free -- bytes, files, and the quota they hold in (D54)."""
+    held = storage if storage is not None else declared()
+    return Floor(int(held.free_floor_gb * GIB), held.free_floor_files, held.quota)
 
 
 def _table(layer: Mapping[str, Any], where: str) -> dict[str, Any]:
@@ -129,7 +138,37 @@ def declared(machine: Mapping[str, Any] | None = None, family: Mapping[str, Any]
             'declare [storage] secrets, then place each secret there (ops secret place)'
         )
         raise StorageError(msg)
-    return Storage(roots, reach, Path(secrets).expanduser() if secrets is not None else None, _floor(local))
+    secrets_path = Path(secrets).expanduser() if secrets is not None else None
+    return Storage(roots, reach, secrets_path, _floor(local), _files(local), _quota(local.get('quota')))
+
+
+def _files(local: Mapping[str, Any]) -> int | None:
+    """The machine's ``free_floor_files``: a positive count, or ``None`` (1% of a quota's file limit)."""
+    value = local.get('free_floor_files')
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        msg = f'the machine file: [{TABLE}] free_floor_files = {value!r} must be a positive count of files'
+        raise StorageError(msg)
+    return value
+
+
+def _quota(value: object) -> Quota | None:
+    """The machine's ``quota``: a probe argv and one of :data:`lab_commons.headroom.FORMATS`."""
+    if value is None:
+        return None
+    probe = value.get('probe') if isinstance(value, dict) else None
+    fmt = value.get('format') if isinstance(value, dict) else None
+    if not (isinstance(probe, list) and probe and all(isinstance(one, str) and one for one in probe)):
+        msg = f'the machine file: [{TABLE}] quota.probe must be a non-empty argv list of strings, got {probe!r}'
+        raise StorageError(msg)
+    if fmt not in FORMATS:
+        msg = f'the machine file: [{TABLE}] quota.format = {fmt!r} must be one of {sorted(FORMATS)}'
+        raise StorageError(msg)
+    if unknown := sorted(set(value) - {'probe', 'format'}):
+        msg = f'the machine file: [{TABLE}] quota.{unknown[0]} is not a quota key; keys: probe, format'
+        raise StorageError(msg)
+    return Quota(tuple(probe), fmt)
 
 
 def _floor(local: Mapping[str, Any]) -> float:

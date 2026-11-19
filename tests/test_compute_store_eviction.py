@@ -9,6 +9,7 @@ from test_compute_store import Shared
 
 from lab_commons.compute import floor
 from lab_commons.compute.store import Record, Result, ResultStore, Tombstone
+from lab_commons.headroom import Floor
 
 PAYLOAD = 1000  # bytes per result's one file; the record adds a little
 
@@ -61,14 +62,14 @@ def test_without_a_floor_nothing_is_evicted(tmp_path: Path) -> None:
 
 def test_free_above_the_floor_evicts_nothing(volume: Volume) -> None:
     """PLANTED: the floor is met with room to spare, so every result stays."""
-    store = ResultStore(volume.sized(100 * PAYLOAD), free_floor_bytes=10 * PAYLOAD)
+    store = ResultStore(volume.sized(100 * PAYLOAD), free_floor=Floor(10 * PAYLOAD))
     for n in range(4):
         put(store, n)
     assert live(store) == {0, 1, 2, 3}
 
 
 def test_below_the_floor_the_least_recently_hit_result_goes_first(volume: Volume) -> None:
-    store = ResultStore(volume.sized(int(PAYLOAD * 5.5)), free_floor_bytes=int(PAYLOAD * 2.5))
+    store = ResultStore(volume.sized(int(PAYLOAD * 5.5)), free_floor=Floor(int(PAYLOAD * 2.5)))
     for n in range(3):
         put(store, n)
     assert live(store) == {1, 2}
@@ -76,7 +77,7 @@ def test_below_the_floor_the_least_recently_hit_result_goes_first(volume: Volume
 
 def test_a_hit_refreshes_recency(volume: Volume) -> None:
     """PLANTED: without the refresh, 0 (the oldest put) would be the one evicted."""
-    store = ResultStore(volume.sized(int(PAYLOAD * 5.5)), free_floor_bytes=int(PAYLOAD * 2.5))
+    store = ResultStore(volume.sized(int(PAYLOAD * 5.5)), free_floor=Floor(int(PAYLOAD * 2.5)))
     put(store, 0)
     put(store, 1)
     assert isinstance(store.get(unit(0)), Result)
@@ -85,7 +86,7 @@ def test_a_hit_refreshes_recency(volume: Volume) -> None:
 
 
 def test_a_write_that_cannot_keep_the_floor_is_refused_by_name(volume: Volume) -> None:
-    store = ResultStore(volume.sized(100 * PAYLOAD), free_floor_bytes=3 * PAYLOAD)
+    store = ResultStore(volume.sized(100 * PAYLOAD), free_floor=Floor(3 * PAYLOAD))
     put(store, 0)
     volume.sized(int(PAYLOAD * 3.5))  # the disk fills from elsewhere: one result alone now breaks the floor
     with pytest.raises(floor.BelowFloor, match=r'floor 3000 bytes.*free -?\d+ bytes'):
@@ -95,7 +96,7 @@ def test_a_write_that_cannot_keep_the_floor_is_refused_by_name(volume: Volume) -
 
 
 def test_an_evicted_result_is_a_miss_never_a_tombstone_and_graves_are_kept(volume: Volume) -> None:
-    store = ResultStore(volume.sized(10 * PAYLOAD), free_floor_bytes=int(PAYLOAD * 6.5))
+    store = ResultStore(volume.sized(10 * PAYLOAD), free_floor=Floor(int(PAYLOAD * 6.5)))
     put(store, 0)
     grave = store.invalidate(unit(0), 'wrong deck', host='h1')
     put(store, 0)
@@ -108,7 +109,7 @@ def test_an_evicted_result_is_a_miss_never_a_tombstone_and_graves_are_kept(volum
 
 def test_an_evicted_shareable_result_comes_back_from_the_shared_tier(tmp_path: Path, volume: Volume) -> None:
     shared = Shared(tmp_path / 'shared')
-    store = ResultStore(volume.sized(int(PAYLOAD * 5.5)), shared, free_floor_bytes=int(PAYLOAD * 3.5))
+    store = ResultStore(volume.sized(int(PAYLOAD * 5.5)), shared, free_floor=Floor(int(PAYLOAD * 3.5)))
     put(store, 0)
     put(store, 1)
     assert live(store) == {1}
@@ -120,7 +121,7 @@ def test_an_evicted_shareable_result_comes_back_from_the_shared_tier(tmp_path: P
 
 
 def test_the_retired_cap_is_refused_by_name(tmp_path: Path) -> None:
-    with pytest.raises(TypeError, match=r'cap_bytes is retired.*free_floor_bytes'):
+    with pytest.raises(TypeError, match=r'cap_bytes is retired.*free_floor'):
         ResultStore(tmp_path / 'store', cap_bytes=10)
 
 
@@ -137,7 +138,7 @@ def test_the_door_evicts_oldest_first_through_the_callers_evict(
         del entries[path]
 
     held = [(1, tmp_path / 'a', 40), (3, tmp_path / 'c', 20), (2, tmp_path / 'b', 30)]
-    floor.keep(tmp_path, held, 50, evict=evict, keep=tmp_path / 'c')
+    floor.keep(tmp_path, held, Floor(50), evict=evict, keep=tmp_path / 'c')
     assert gone == ['a']  # 10 free -> a (oldest) goes -> 50 free: the floor holds and b stays
 
 
@@ -148,5 +149,5 @@ def test_the_door_never_evicts_the_kept_entry_and_refuses_when_out_of_candidates
     monkeypatch.setattr(floor, 'free_bytes', lambda _v: 5)
     gone: list[Path] = []
     with pytest.raises(floor.BelowFloor, match='floor 50 bytes'):
-        floor.keep(tmp_path, [(1, tmp_path / 'only', 10)], 50, evict=gone.append, keep=tmp_path / 'only')
+        floor.keep(tmp_path, [(1, tmp_path / 'only', 10)], Floor(50), evict=gone.append, keep=tmp_path / 'only')
     assert gone == []
