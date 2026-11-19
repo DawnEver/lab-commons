@@ -133,7 +133,8 @@ def test_only_files_whose_content_changed_are_collected_again(repo: Path, tmp_pa
             'tests/test_a.py': 'def test_one():\n    pass\n',
             'tests/test_b.py': 'def test_two():\n    pass\n',
             'tests/test_broken.py': 'import nowhere_at_all\n',
-            'pyproject.toml': '[project]\nname = "x"\n',
+            # its own [tool.pytest.ini_options] anchors the inner rootdir: the test's tmp may lie inside a checkout
+            'pyproject.toml': '[project]\nname = "x"\n[tool.pytest.ini_options]\n',
         },
     )
     cache = tmp_path / 'cache'
