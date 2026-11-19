@@ -31,6 +31,7 @@ from lab_commons.hpc.config import Config, JobSpec
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
+from lab_commons.hpc.sshgate import Gate
 from lab_commons.hpc.worker import ITEM, RESULTS, SHARD
 from lab_commons.log import log
 from lab_commons.outcomes import Status
@@ -38,13 +39,14 @@ from lab_commons.outcomes.record import OUTCOME, Event
 
 __all__ = [
     'BUILD_TIMEOUT',
+    'RUN_DIR',
     'SUBMIT_LIMIT',
-    'TERMINAL_OK',
     'NotOnCluster',
     'Runner',
     'Submission',
     'SubmitLimit',
     'Unreachable',
+    'bind',
     'failover_runner',
     'files_of',
     'gather',
@@ -70,9 +72,6 @@ class SubmitLimit(RuntimeError):
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
 type Runner = Callable[[str, str | None], str]
-
-#: The only array-task state that means the shard's results file should exist.
-TERMINAL_OK: Final = 'COMPLETED'
 
 _TIMEOUT: Final = 300.0
 
@@ -142,11 +141,13 @@ def submitter(timeout: float = BUILD_TIMEOUT) -> Callable[[Grant], Runner]:
     return lambda _grant: run
 
 
-def ssh_runner(host: str, timeout: float = _TIMEOUT) -> Runner:
+def ssh_runner(host: str, timeout: float = _TIMEOUT, *, gate: Gate | None = None) -> Runner:
     """A runner that executes on *host* over key-based, non-interactive ``ssh``.
 
-    *timeout* is per command; a login-node build (a per-tree install) needs far more than a probe.
+    *timeout* is per command; a login-node build (a per-tree install) needs far more than a probe. Every
+    command passes the host's :class:`~lab_commons.hpc.sshgate.Gate`: one shared connection, a machine-wide rate.
     """
+    held = gate or Gate(host)
 
     def run(command: str, stdin: str | None = None) -> str:
         argv = [
@@ -155,10 +156,12 @@ def ssh_runner(host: str, timeout: float = _TIMEOUT) -> Runner:
             'BatchMode=yes',
             '-o',
             f'ConnectTimeout={CONNECT_TIMEOUT}',
+            *held.options(),
             host,
             f'bash -lc {shlex.quote(command)}',
         ]
-        return _completed(argv, stdin, timeout)
+        with held.call():
+            return _completed(argv, stdin, timeout)
 
     return run
 
@@ -208,6 +211,11 @@ def _sh_path(path: str) -> str:
     return shlex.quote(path)
 
 
+def lanes_of(plan: Plan) -> list[dict[str, str]]:
+    """The manifest's ``lanes``: each lane's CPU ids and NUMA nodes (cpulists); ``[]`` for one unbound item."""
+    return [{'cpus': c, 'mems': m} for c, m in zip(plan.lane_cpus, plan.lane_mems, strict=True)]
+
+
 def render_script(plan: Plan, config: Config, run_dir: str) -> str:
     """The array task script. The array range itself is an ``sbatch`` argument, so a resubmit reuses this."""
     directives = [
@@ -216,6 +224,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         f'--account={plan.account}' if plan.account else '',
         f'--qos={plan.qos}' if plan.qos else '',
         '--nodes=1',
+        '--exclusive' if plan.exclusive else '',
         '--ntasks=1',
         f'--cpus-per-task={plan.cpus}',
         f'--mem={plan.mem_mb}M',
@@ -226,13 +235,12 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         '--output=/dev/null',
     ]
     worker = f'{config.job.python} -m lab_commons.hpc.worker'
+    lane = plan.cpus // plan.lanes
     lines = ['#!/bin/bash', *(f'#SBATCH {d}' for d in directives if d), 'set -eo pipefail']
     lines += [*plan.setup, f'cd {_sh_path(config.job.workdir)}', *config.job.setup]
     lines += [
-        (
-            'export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK" OPENBLAS_NUM_THREADS="$SLURM_CPUS_PER_TASK" '
-            'MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"'
-        ),
+        # Each of the task's lanes runs one item on its own lane's CPUs.
+        f'export OMP_NUM_THREADS={lane} OPENBLAS_NUM_THREADS={lane} MKL_NUM_THREADS={lane}',
         f'M={_sh_path(run_dir)}/manifest.json',
         'LOG="${TMPDIR:-/tmp}/lab-hpc-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}.log"',
         'code=0',
@@ -264,6 +272,22 @@ class Submission:
     shards: int
 
 
+#: The token an item's string values may hold for its submission's run directory (``"out": "{run_dir}/3"``):
+#: a re-submission writes under its own directory, so no ``out`` is edited by hand to keep an earlier run.
+RUN_DIR: Final = '{run_dir}'
+
+
+def bind(value: Any, run_dir: str) -> Any:  # noqa: ANN401 -- an item is any JSON value
+    """*value* with every :data:`RUN_DIR` in its strings replaced by *run_dir*, at any depth."""
+    if isinstance(value, str):
+        return value.replace(RUN_DIR, run_dir)
+    if isinstance(value, list):
+        return [bind(v, run_dir) for v in value]
+    if isinstance(value, dict):
+        return {k: bind(v, run_dir) for k, v in value.items()}
+    return value
+
+
 def _array_spec(indices: Sequence[int], throttle: int) -> str:
     """Sorted shard indices as Slurm ranges -- ``0-99,104%24`` -- so a large array stays one short argument."""
     runs: list[list[int]] = []
@@ -293,7 +317,12 @@ def submit(
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
     if only is None:
-        manifest = {'entry': config.job.entry, 'items': items, 'shards': [list(s) for s in plan.shards]}
+        manifest = {
+            'entry': config.job.entry,
+            'items': bind(items, run_dir),
+            'shards': [list(s) for s in plan.shards],
+            'lanes': lanes_of(plan),
+        }
         run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
         run(f'cat > {quoted}/job.sh', render_script(plan, config, run_dir))
     indices = list(range(len(plan.shards))) if only is None else sorted(only)
@@ -322,7 +351,7 @@ def submit_bands(
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
     shards = [list(s) for plan in plans for s in plan.shards]
-    manifest = {'entry': config.job.entry, 'items': items, 'shards': shards}
+    manifest = {'entry': config.job.entry, 'items': bind(items, run_dir), 'shards': shards, 'lanes': lanes_of(plans[0])}
     run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
     run(f'cat > {quoted}/job.sh', render_script(plans[0], config, run_dir))
     job_ids, first = [], 0
@@ -394,7 +423,7 @@ def gather(run: Runner, run_dir: str) -> dict[int, list[dict[str, Any]]]:
     """Every RETURNED shard's item results, keyed by shard index -- read from the run's one results file.
 
     A run an earlier worker wrote holds one ``results/<shard>.json`` per shard instead; it is read the same
-    way (FORMATS-UPGRADE-ON-READ: jobs still running across the change must gather), never written.
+    way (OLD-SHAPE-READER: jobs still running across the change must gather), never written.
     """
     quoted = _sh_path(run_dir)
     out = run(
@@ -423,7 +452,7 @@ def _returned(text: str) -> dict[int, list[dict[str, Any]]]:
             ok = event.cell.status is Status.OK
             why = '' if event.cell.reason is None else event.cell.reason.text
             items[int(event.key)] = {**event.data, 'ok': ok, 'status': event.cell.status.value, 'error': why}
-        elif event.kind == ITEM:  # a pre-Cell worker's line (FORMATS-UPGRADE-ON-READ)
+        elif event.kind == ITEM:  # a pre-Cell worker's line (OLD-SHAPE-READER)
             items[int(event.key)] = {**event.data, 'status': 'ok' if event.data['ok'] else 'error'}
         elif event.kind == SHARD:
             codes[int(event.key)] = int(event.data['code'])

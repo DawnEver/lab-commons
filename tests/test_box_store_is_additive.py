@@ -18,8 +18,11 @@ import re
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from lab_commons.box import BOX_ENV
 from lab_commons.box._store import _ADDED, _SCHEMA, box_path
+from lab_commons.home import HOME_ENV
 
 SRC: Final = Path(__file__).resolve().parents[1] / 'src' / 'lab_commons'
 
@@ -79,3 +82,10 @@ def test_a_rename_a_drop_and_a_required_column_are_refused_planted_control() -> 
 def test_a_test_never_opens_the_machine_ledger() -> None:
     assert os.environ[BOX_ENV] == str(box_path())
     assert 'lab-commons-box' in str(box_path()), 'each test has its own ledger (conftest)'
+
+
+def test_a_posix_ledger_lives_in_the_machine_homes_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv(BOX_ENV)
+    monkeypatch.setenv(HOME_ENV, str(tmp_path))
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'xdg'))  # planted: a second root the ledger must not follow
+    assert box_path(platform='posix') == tmp_path / 'state' / 'box.sqlite'

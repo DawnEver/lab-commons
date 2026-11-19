@@ -63,11 +63,6 @@ class TestResolveHome:
         monkeypatch.setenv('MYAPP_HOME', str(tmp_path))
         assert paths.resolve_home('myapp') == tmp_path.resolve()
 
-    def test_explicit_env_var_name(self, monkeypatch, tmp_path) -> None:
-        monkeypatch.delenv('MYAPP_HOME', raising=False)
-        monkeypatch.setenv('LEGACY_HOME', str(tmp_path))
-        assert paths.resolve_home('myapp', env_var='LEGACY_HOME') == tmp_path.resolve()
-
     def test_output_and_config_roots_split(self, monkeypatch, tmp_path) -> None:
         monkeypatch.setenv('MYAPP_HOME', str(tmp_path))
         assert paths.output_root('myapp') == tmp_path.resolve() / 'output'

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from lab_commons.hpc import declared
 from lab_commons.hpc.builds import read_builds
 from lab_commons.hpc.declared import (
     KNOWN_TABLES,
@@ -16,6 +19,7 @@ from lab_commons.hpc.declared import (
     OutdatedKit,
     RetiredTable,
     kit_tables,
+    pyproject_at,
 )
 from lab_commons.hpc.needsets import read_vocabulary
 from lab_commons.hpc.retired import MOVED_TABLES
@@ -99,3 +103,31 @@ def test_the_known_tables_are_exactly_the_ones_this_kit_spells() -> None:
 
 def test_this_repos_own_declaration_is_known() -> None:
     kit_tables((SRC.parents[1] / 'pyproject.toml').read_text(encoding='utf-8'))
+
+
+def test_a_commits_pyproject_is_read_once_and_a_moving_ref_every_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full object id is immutable content, kept for the process; a ref moves, so it is never kept.
+
+    PLANTED CONTROL: after a new commit, ``HEAD`` reads the new text while the old sha still reads the old one.
+    """
+
+    def git(*args: str) -> str:
+        argv = [shutil.which('git') or 'git', '-C', str(tmp_path), '-c', 'user.name=t', '-c', 'user.email=t@t', *args]
+        return subprocess.run(argv, capture_output=True, text=True, check=True).stdout.strip()
+
+    git('init', '-q')
+    (tmp_path / 'pyproject.toml').write_text('a = 1\n', encoding='utf-8')
+    git('add', 'pyproject.toml')
+    git('commit', '-qm', 'one')
+    first = git('rev-parse', 'HEAD')
+    assert pyproject_at(tmp_path, first) == 'a = 1\n'
+    (tmp_path / 'pyproject.toml').write_text('a = 2\n', encoding='utf-8')
+    git('commit', '-qam', 'two')
+    assert pyproject_at(tmp_path, 'HEAD') == 'a = 2\n', 'a moving ref was served stale'
+    calls = []
+    real = declared._door.run
+    monkeypatch.setattr(declared._door, 'run', lambda *a, **k: calls.append(a) or real(*a, **k))
+    assert pyproject_at(tmp_path, first) == 'a = 1\n'
+    assert calls == [], 'an immutable sha was read from git again'

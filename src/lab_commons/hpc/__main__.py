@@ -1,12 +1,23 @@
-"""``python -m lab_commons.hpc <verb>`` -- plan, submit, status, gather, retry, run {submit|gather|build}.
+"""``python -m lab_commons.hpc <verb>`` -- plan, submit, status, gather, retry, cancel, run {submit|gather|build}.
+
+``fetch -c <job> --item N --path <glob>`` copies files an item WROTE to its ``out`` directory
+(:mod:`lab_commons.hpc.fetch`): what ``gather`` cannot return never costs a re-run.
 
 WHERE comes from this machine's grants (:mod:`lab_commons.hpc.grants`, the ``[hpc]`` table of
 :mod:`lab_commons.config`); WHAT from the job file ``-c`` (:mod:`lab_commons.hpc.config`). The last
 submission of a job file is recorded next to it as ``<job>.submission.json`` -- one placement per grant
 the batch spans (:mod:`lab_commons.hpc.jobs`: its ssh targets, items, run directory, job ids, shards), so
 ``status``/``gather``/``retry`` need nothing more -- through whichever of those login hosts answers.
+``submit -c <job> [--sha <sha>] [--only 3,7]`` runs the job file at another commit (its ``repo_url`` stays) and
+only the chosen item indices; an item string holding ``{run_dir}`` is bound to the submission's own run directory
+(``~/ci/jobs/<sha>/<name>-<stamp>-<n>``), so a re-submission never writes over an earlier one. ``status -c a -c b``
+reads several jobs with ONE ``sacct`` per grant; ``--watch`` polls until any line changes, prints the change and
+exits 0 -- at once when every shard is already settled, and exit :data:`PENDING` after ``--watch-minutes``.
 ``gather -c <job> -o <out> --wait`` polls as ``status`` does every ``[policy] poll_seconds``, prints each
 change once (``pending: <why>`` while no login host answers), and gathers once no shard is queued or running.
+``cancel -c a [-c b] [--pending-only]`` scancels each job's queued or running shards (only the queued ones with
+``--pending-only``: started ones keep running) through the login host ``status`` reads by, and records them in
+the submission record, so ``status`` and ``gather --wait`` count them CANCELLED rather than waiting on them.
 
 ``run submit --scope full|incremental`` tests one commit on the cluster (:mod:`lab_commons.hpc.run`) and
 returns once the first round is queued; ``incremental`` names its re-run ids with ``--only``, ``full``
@@ -32,6 +43,13 @@ it, else derives it from Slurm (:func:`lab_commons.hpc.allocation.resolve`).
 ``clean --root <remote abs dir> [--dry-run] [--grant <user>] <name>...`` deletes named directories directly
 under that root through the grant, refusing everything if a running job works under one
 (:mod:`lab_commons.hpc.clean`).
+
+``cancel-queue (--at <user@host>|--grant <user>) (--job <id>... | --pending-over-mem <GB>) [--dry-run]`` lists and
+cancels that user's own selected Slurm jobs (:mod:`lab_commons.hpc.cancel`).
+
+``tree acquire|release|list|reap`` is the ONE door for an ad-hoc commit tree on a cluster (a lease under
+``~/ci/leases``, reaped once it expires), and ``home`` prints the quota, the reaps and the stray directories the
+forge tick reports (:mod:`lab_commons.hpc.homedoor`). Both, and ``run submit``, pass the home quota guard.
 """
 
 from __future__ import annotations
@@ -40,12 +58,13 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.compute import learned
 from lab_commons.compute.durable import durable_text
-from lab_commons.hpc import affinity, allocation, clean
+from lab_commons.hpc import affinity, allocation, cancel, clean, fetch, homedoor, logread
 from lab_commons.hpc.artifact import FORMATS, TARBALL, ArtifactRefused, build_artifact
 from lab_commons.hpc.builds import builds_at
 from lab_commons.hpc.cluster import BUILD_TIMEOUT, NotOnCluster, Unreachable, runner_for, submitter
@@ -55,12 +74,14 @@ from lab_commons.hpc.jobs import (
     Ensure,
     Reach,
     built_config,
+    cancel_job,
     gather_job,
     plan_job,
     retry_job,
+    selected_items,
     settled,
     shard_counts,
-    status_job,
+    shard_counts_of,
     status_lines,
     submit_job,
 )
@@ -69,7 +90,7 @@ from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
 from lab_commons.hpc.tree import NotSubmitted
-from lab_commons.hpc.watch import settle
+from lab_commons.hpc.watch import PENDING, settle
 from lab_commons.log import emit
 
 __all__ = ['main']
@@ -96,6 +117,11 @@ def _items(config: Config) -> list[Any]:
 
 def _out(text: str) -> None:
     emit(text)
+
+
+def _gathered_path(config: Config) -> Path:
+    """Where ``gather`` writes when ``-o`` is not given: beside the job file, as its submission record is."""
+    return _state_path(config).with_name(_state_path(config).name.replace('.submission.json', '.gathered.json'))
 
 
 def _record(config: Config) -> dict[str, Any]:
@@ -164,10 +190,90 @@ def _gather_when_settled(
         _sleep(config.policy.poll_seconds)
 
 
+def _cancel(configs: list[Config], machine: Machine, reach: Reach, *, pending_only: bool) -> int:
+    """``cancel``: scancel every job's active (or only pending) shards; its record keeps what was cancelled."""
+    named = len(configs) > 1
+    for config in configs:
+        record = _record(config)
+        lines = cancel_job(record, machine, reach, pending_only=pending_only)
+        _save_record(config, record)
+        for line in lines:
+            _out(f'{config.source.stem if config.source else "job"}: {line}' if named else line)
+    return 0
+
+
+def _at_sha(config: Config, sha: str) -> Config:
+    """*config* run at *sha*: the job file's ``repo_url`` is where that commit is fetched from."""
+    return replace(config, job=replace(config.job, sha=sha)) if sha else config
+
+
+def _selection(only: str | None) -> list[int] | None:
+    """``--only 3,7``: the item indices a submission runs, in that order; ``None`` runs every item."""
+    if only is None:
+        return None
+    try:
+        picked = [int(word) for word in only.split(',') if word.strip()]
+    except ValueError:
+        msg = f'--only takes item indices of the items file, comma separated (3,7); got {only!r}'
+        raise ValueError(msg) from None
+    if not picked or len(set(picked)) != len(picked):
+        msg = f'--only names each item index once, at least one; got {only!r}'
+        raise ValueError(msg)
+    return picked
+
+
+def _status_view(
+    configs: list[Config], records: list[dict[str, Any]], machine: Machine, reach: Reach
+) -> tuple[list[str], bool]:
+    """One line per placement of every job (prefixed by its job file when several), and whether all are settled."""
+    found = shard_counts_of(records, machine, reach)
+    named = len(configs) > 1
+    lines = [
+        f'{config.source.stem if config.source else "job"}: {line}' if named else line
+        for config, rows in zip(configs, found, strict=True)
+        for line in status_lines(rows)
+    ]
+    return lines, all(settled(rows) for rows in found)
+
+
+def _status(configs: list[Config], machine: Machine, reach: Reach, *, watch_minutes: float | None) -> int:
+    """``status``: every job's shards now; with *watch_minutes*, block until any line changes -- bounded."""
+    records = [_record(config) for config in configs]
+    lines, done = _status_view(configs, records, machine, reach)
+    for line in lines:
+        _out(line)
+    if watch_minutes is None or done:
+        return 0
+    poll = min(config.policy.poll_seconds for config in configs)
+    for _ in range(max(1, int(watch_minutes * 60 // poll))):
+        _sleep(poll)
+        now, _done = _status_view(configs, records, machine, reach)
+        changed = [line for line in now if line not in lines]
+        if changed:
+            for line in changed:
+                _out(f'changed {line}')
+            return 0
+    _out(f'no change in {watch_minutes:g} min')
+    return PENDING
+
+
 def _jobs(
-    verb: str, config: Config, machine: Machine, reach: Reach, *, repo: Path, output: Path | None, wait: bool = False
+    verb: str,
+    config: Config,
+    machine: Machine,
+    reach: Reach,
+    *,
+    repo: Path,
+    output: Path | None,
+    wait: bool = False,
+    sha: str = '',
+    only: str | None = None,
 ) -> int:
-    """The job-file verbs: plan, submit, status, gather, retry -- every grant the batch spans."""
+    """The job-file verbs: plan, submit, gather, retry -- every grant the batch spans."""
+    if verb == 'submit':
+        config = _at_sha(config, sha)
+    elif verb == 'retry':
+        config = _at_sha(config, _record(config).get('sha', ''))  # a retry re-runs the commit it submitted
     config = built_config(config)
     if verb == 'plan':
         for placement in plan_job(config, len(_items(config)), machine, reach):
@@ -176,7 +282,13 @@ def _jobs(
         return 0
     if verb == 'submit':
         record = submit_job(
-            config, _items(config), machine, reach, stamp=time.strftime('%Y%m%d-%H%M%S'), ensure=_ensure(config, repo)
+            config,
+            _items(config),
+            machine,
+            reach,
+            stamp=time.strftime('%Y%m%d-%H%M%S'),
+            ensure=_ensure(config, repo),
+            selected=_selection(only),
         )
         _save_record(config, record)
         for p in record['placements']:
@@ -184,15 +296,13 @@ def _jobs(
             _out(f'submitted job {p["job_ids"][0]} to {p["grant"]} (items {start}-{stop}); {p["run_dir"]}')
         return 0
     record = _record(config)
-    if verb == 'status':
-        for line in status_job(record, machine, reach):
-            _out(line)
-        return 0
     if verb == 'gather':
+        output = output or _gathered_path(config)  # a gather always writes, and names where (never a silent loss)
         if wait:
             return _gather_when_settled(config, record, machine, reach, output)
         return _gather(record, machine, reach, output, config.policy.file_budget)
-    for line in retry_job(config, _items(config), record, machine, reach, ensure=_ensure(config, repo)):
+    batch = selected_items(_items(config), record.get('selected'))
+    for line in retry_job(config, batch, record, machine, reach, ensure=_ensure(config, repo)):
         _out(line)
     _save_record(config, record)
     return 0
@@ -221,7 +331,7 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
         python=args.python,
         pack_from=args.repo,
         builds=builds,
-        only=_only(args.only),
+        only=_only(None if args.only is None else Path(args.only)),
     )
     try:
         state = submit_run(
@@ -282,11 +392,23 @@ _RUN_NEEDS: Final = {
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc', description=__doc__.splitlines()[0])
-    parser.add_argument('verb', choices=['plan', 'submit', 'status', 'gather', 'retry', 'run'])
+    parser.add_argument('verb', choices=['plan', 'submit', 'status', 'gather', 'retry', 'cancel', 'run'])
     parser.add_argument('step', nargs='?', choices=list(_RUN_NEEDS), help='run only: submit, then gather')
-    parser.add_argument('-c', '--config', type=Path, help='the job file; run needs none ([cost]/[policy])')
     parser.add_argument(
-        '-o', '--output', type=Path, help='gather: merged item results (JSON); run gather: the record directory'
+        '-c',
+        '--config',
+        type=Path,
+        action='append',
+        help='the job file; status takes several (-c a -c b); run needs none ([cost]/[policy])',
+    )
+    parser.add_argument(
+        '-o',
+        '--output',
+        type=Path,
+        help=(
+            'gather: merged item results (JSON; default <job>.gathered.json beside the job file); '
+            'run gather: the record directory'
+        ),
     )
     parser.add_argument(
         '--wait',
@@ -294,9 +416,20 @@ def _parser() -> argparse.ArgumentParser:
         help='gather -c: poll status, print each change, gather once no shard is queued or running; '
         'run gather: block until the run has its record',
     )
+    parser.add_argument(
+        '--watch',
+        action='store_true',
+        help='status: poll until any job line changes, print the change, exit (bounded by --watch-minutes)',
+    )
+    parser.add_argument(
+        '--watch-minutes', type=float, default=60.0, help='status --watch: give up (exit 3) after this long'
+    )
+    parser.add_argument(
+        '--pending-only', action='store_true', help='cancel: only shards still PENDING; started ones keep running'
+    )
     group = parser.add_argument_group('run')
     group.add_argument('--scope', choices=[FULL, INCREMENTAL], help='run submit: every id, or only --only')
-    group.add_argument('--sha', help='the full commit id to test')
+    group.add_argument('--sha', help='the full commit id to test; submit -c: run the job file at this commit')
     group.add_argument('--repo-url', help='read-only HTTPS remote the cluster fetches from')
     group.add_argument('--collect', default='', help='pytest arguments selecting the tests (paths, -m ...)')
     group.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
@@ -310,7 +443,9 @@ def _parser() -> argparse.ArgumentParser:
         default=Path.cwd(),
         help='local repository, READ only: its declaration at --sha; a pack if the remote lacks it',
     )
-    group.add_argument('--only', type=Path, help='a file of node ids, one per line: run just these (incremental)')
+    group.add_argument(
+        '--only', help='run submit: a file of node ids, one per line (incremental); submit -c: item indices, 3,7'
+    )
     group.add_argument('--artifact', choices=sorted(FORMATS), default=TARBALL, help='run build: the artifact format')
     return parser
 
@@ -332,7 +467,9 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         parser.error(f'run {args.step} needs {", ".join(missing)}')
     if args.step == 'submit' and (args.scope == INCREMENTAL) != (args.only is not None):
         parser.error('--scope incremental names its re-run ids with --only; --scope full takes no --only')
-    config = load_config(args.config) if args.config else Config()
+    if args.config and len(args.config) > 1:
+        parser.error('run reads one job file (-c)')
+    config = load_config(args.config[0]) if args.config else Config()
     steps = {'submit': _run_submit, 'gather': _run_gather, 'build': _run_build}
     try:
         machine = load_grants()
@@ -342,16 +479,19 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return 2
 
 
-def _job_config(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Config:
-    """The job file ``-c`` names. Never a guessed file in the cwd."""
-    if args.config is None:
+def _job_configs(parser: argparse.ArgumentParser, args: argparse.Namespace) -> list[Config]:
+    """The job files ``-c`` names -- several only for ``status``. Never a guessed file in the cwd."""
+    if not args.config:
         parser.error(
             f'{args.verb} reads a job file and the submission recorded beside it; pass -c <job file> '
             '(the one submit used). A commit test is `run submit`/`run gather --sha`, which need none.'
         )
-    if not args.config.is_file():
-        parser.error(f'no job file at {args.config}; pass -c <job file> naming an existing one')
-    return load_config(args.config)
+    if len(args.config) > 1 and args.verb not in {'status', 'cancel'}:
+        parser.error(f'{args.verb} reads one job file (-c); only status and cancel take several')
+    for path in args.config:
+        if not path.is_file():
+            parser.error(f'no job file at {path}; pass -c <job file> naming an existing one')
+    return [load_config(path) for path in args.config]
 
 
 def _refuse_retired(parser: argparse.ArgumentParser, argv: list[str]) -> None:
@@ -365,25 +505,83 @@ def _refuse_retired(parser: argparse.ArgumentParser, argv: list[str]) -> None:
             parser.error(refused)
 
 
+#: An unreachable cluster's exit status: the verb did not run; nothing on the cluster changed.
+UNREACHABLE_EXIT = 3
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Parse the verb and dispatch it against this machine's grants."""
-    parser = _parser()
-    argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ['clean']:
-        return clean.main(argv[1:])
-    _refuse_retired(parser, argv)
-    args = parser.parse_args(argv)
-    if args.verb == 'run':
-        return _run(parser, args)
-    machine = load_grants()
-    if args.verb in {'plan', 'submit', 'retry'}:
-        machine = affinity.resolve(allocation.resolve(machine))
+    """Parse the verb and dispatch it against this machine's grants.
+
+    An unreachable cluster is caught HERE, at the one boundary every verb passes: one line naming the cause and
+    the door (EVERY-WALL-TEACHES), never a traceback.
+    """
+    try:
+        return _dispatch(argv)
+    except Unreachable as unreachable:
+        sys.stderr.write(
+            f'hpc refused: {unreachable} -- no login host is reachable from this network; join the site network '
+            '(or its VPN), then re-run\n'
+        )
+        return UNREACHABLE_EXIT
+
+
+def _refuse_misplaced(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """A step or flag given to a job-file verb it does not belong to is refused by name."""
     if args.step is not None:
         parser.error(f'{args.verb} takes no step')
     if args.wait and args.verb != 'gather':
         parser.error('--wait belongs to gather (-c) and run gather')
-    config = _job_config(parser, args)
-    return _jobs(args.verb, config, machine, runner_for, repo=args.repo, output=args.output, wait=args.wait)
+    if args.pending_only and args.verb != 'cancel':
+        parser.error('--pending-only belongs to cancel')
+    if args.watch and args.verb != 'status':
+        parser.error('--watch belongs to status')
+    if (args.sha or args.only is not None) and args.verb != 'submit':
+        parser.error('--sha and --only belong to submit (-c) and run')
+
+
+def _dispatch(argv: list[str] | None) -> int:
+    """Parse the verb and run it."""
+    parser = _parser()
+    argv = sys.argv[1:] if argv is None else argv
+    doors = {
+        'cancel-queue': cancel.main,
+        'clean': clean.main,
+        'fetch': fetch.main,
+        'log': logread.main,
+        'tree': homedoor.tree_main,
+        'home': homedoor.home_main,
+    }
+    if argv[:1] and argv[0] in doors:
+        return doors[argv[0]](argv[1:])
+    _refuse_retired(parser, argv)
+    args = parser.parse_args(argv)
+    if args.verb == 'run':
+        return _run(parser, args)
+    _refuse_misplaced(parser, args)
+    machine = load_grants()
+    if args.verb in {'plan', 'submit', 'retry'}:
+        machine = affinity.resolve(allocation.resolve(machine))
+    configs = _job_configs(parser, args)
+    if args.verb == 'status':
+        return _status(configs, machine, runner_for, watch_minutes=args.watch_minutes if args.watch else None)
+    if args.verb == 'cancel':
+        return _cancel(configs, machine, runner_for, pending_only=args.pending_only)
+    only = args.only
+    try:
+        _selection(only)
+    except ValueError as refused:
+        parser.error(str(refused))
+    return _jobs(
+        args.verb,
+        configs[0],
+        machine,
+        runner_for,
+        repo=args.repo,
+        output=args.output,
+        wait=args.wait,
+        sha=args.sha or '',
+        only=only,
+    )
 
 
 if __name__ == '__main__':

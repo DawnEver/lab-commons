@@ -166,7 +166,7 @@ def test_a_plain_hpc_submitter_applies_the_recorded_share(monkeypatch: pytest.Mo
     seen: list[Machine] = []
     monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=Session('a'), grants=(GRANT,)))
     monkeypatch.setattr(allocation, 'recorded', RECORD_A.encode)
-    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: cli.Config())
+    monkeypatch.setattr(cli, '_job_configs', lambda _p, _a: [cli.Config()])
     monkeypatch.setattr(cli, '_jobs', lambda _verb, _config, machine, *_a, **_k: seen.append(machine) or 0)
     monkeypatch.setattr(cli, '_run_submit', lambda _args, machine, _config: seen.append(machine) or 0)
     assert cli.main(argv) == 0
@@ -177,8 +177,8 @@ def test_a_reading_verb_never_reads_the_record(monkeypatch: pytest.MonkeyPatch) 
     """Planted control: ``status`` and ``gather`` plan nothing, so they reach no forge."""
     monkeypatch.setattr(cli, 'load_grants', lambda: Machine(session=Session('a'), grants=(GRANT,)))
     monkeypatch.setattr(allocation, 'recorded', lambda: pytest.fail('status read the record'))
-    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: cli.Config())
-    monkeypatch.setattr(cli, '_jobs', lambda *_a, **_k: 0)
+    monkeypatch.setattr(cli, '_job_configs', lambda _p, _a: [cli.Config()])
+    monkeypatch.setattr(cli, '_status', lambda *_a, **_k: 0)
     assert cli.main(['status', '-c', 'job.toml']) == 0
 
 

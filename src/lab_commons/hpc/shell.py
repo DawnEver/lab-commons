@@ -31,6 +31,7 @@ __all__ = [
     'PREP_LOG',
     'ROOT',
     'TIME',
+    'UV_CACHE',
     'UV_PRUNE',
     'RunSpec',
     'build_script',
@@ -81,7 +82,7 @@ PREP_LOG: Final = '.lab-ci/prep.log'
 TIME: Final = '@@@ time'
 
 #: uv's cache, shared by every key (concurrency-safe by its own lock).
-_UV_CACHE: Final = f'{ROOT}/uv-cache'
+UV_CACHE: Final = f'{ROOT}/uv-cache'
 
 #: Ends every env build: the cache keeps only what was built from source, never a resident copy of the
 #: downloads (a file is an HPC resource; the uv cache measured 43-48 k files per account, 2026-10-17).
@@ -324,12 +325,16 @@ def build_script(spec: RunSpec) -> str:
     after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
     shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
 
-    Every env build shares ``UV_CACHE_DIR`` (:data:`_UV_CACHE`) and HARDLINKS from it (``UV_LINK_MODE``, declared
+    Every env build shares ``UV_CACHE_DIR`` (:data:`UV_CACHE`) and HARDLINKS from it (``UV_LINK_MODE``, declared
     rather than left to uv's platform default): one inode per installed file across every env key, which is what
     the account's FILE quota counts (:mod:`dev_lab.dev.retentionplan`). A native
     build's ``CARGO_TARGET_DIR`` is its native key's own (:func:`lab_commons.hpc.builds.cargo_target`, under
     its own ``flock``): a target shared across different native inputs reuses stale artifacts.
     Each step's wall time is a :data:`TIME` line (:data:`PREP_LOG`).
+
+    THE TREE IS MARKED IN FLIGHT FIRST (``touch .lab-ci``): retention keeps a tree touched within its
+    ``min_age_hours`` (:mod:`dev_lab.dev.retentionplan`), and a re-run reusing an old tree touched nothing --
+    measured 2026-11-11, it was removed under ``uv sync``, whose log ended ``Current directory does not exist``.
     """
     cache, tree, builds = cache_dir(spec.repo_url), f'{ROOT}/trees/{spec.sha}', spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
@@ -344,8 +349,8 @@ def build_script(spec: RunSpec) -> str:
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
         *submodules_script(spec.repo_url),
-        'mkdir -p .lab-ci',
-        f'export E={env} UV_CACHE_DIR={_UV_CACHE} UV_LINK_MODE=hardlink',
+        'mkdir -p .lab-ci && touch .lab-ci',  # a REUSED tree reads as being built: retention keeps an active tree
+        f'export E={env} UV_CACHE_DIR={UV_CACHE} UV_LINK_MODE=hardlink',
         *_timed(
             'env',
             keyed_build(

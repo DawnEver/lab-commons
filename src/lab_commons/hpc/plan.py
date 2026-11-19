@@ -64,7 +64,7 @@ SUBMIT_ROOM_SPENT: Final = 'submit limit already reached'
 class Unplaceable(ValueError):
     """No room: no headroom, quota, partition wall or inodes for the work -- never a malformed request.
 
-    The one refusal a costed grant may answer (:func:`lab_commons.hpc.jobs.tiered`); any other ``ValueError``
+    The one refusal a billed grant may answer (:func:`lab_commons.hpc.jobs.tiered`); any other ``ValueError``
     is a defect in the request and propagates as itself.
     """
 
@@ -112,14 +112,27 @@ class Plan:
     #: The longest wall (minutes) any open candidate granted when planned; ``None`` when one is unbounded or unread.
     #: A shard cut at it cannot be given more (:func:`lab_commons.hpc.records.fold`).
     top_minutes: float | None = None
+    #: The task holds its node alone (``--exclusive``); :func:`lab_commons.hpc.jobs.tiered` stamps it.
+    exclusive: bool = False
+    #: Each lane's CPU ids and NUMA nodes, as cpulists (``[task] lane_domains``, :mod:`lab_commons.hpc.topology`);
+    #: ``()``: one unbound item a task. ``cpus``/``mem_mb``/``gpus`` are all lanes together.
+    lane_cpus: tuple[str, ...] = ()
+    lane_mems: tuple[str, ...] = ()
+
+    @property
+    def lanes(self) -> int:
+        """Items one task runs at once."""
+        return len(self.lane_cpus) or 1
 
     def describe(self) -> str:
         """One paragraph: what will be asked for and how long it should take."""
         gpu = f', {self.gpus} GPU' if self.gpus else ''
+        whole = ', whole node' if self.exclusive else ''
+        lanes = f', {self.lanes} items at once' if self.lanes > 1 else ''
         return (
             f'{len(self.shards)} array tasks on {",".join(self.partitions)} '
             f'(qos {self.qos or "default"}, account {self.account}); '
-            f'each {self.cpus} CPU, {self.mem_mb / 1024:.1f} GB{gpu}, {self.minutes} min wall; '
+            f'each {self.cpus} CPU, {self.mem_mb / 1024:.1f} GB{gpu}{whole}{lanes}, {self.minutes} min wall; '
             f'up to {self.throttle} at once ({self.free_slots} slots free now); '
             f'estimated makespan {self.makespan_minutes:.0f} min.'
         )

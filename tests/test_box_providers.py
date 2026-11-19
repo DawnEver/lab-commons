@@ -104,7 +104,7 @@ def _snapshot(*, cpus: float | None, mem_mb: float | None, submit: int | None, f
         account='acct', cpus=cpus, mem_mb=mem_mb, gpus=None, default_qos='normal',
         qos_max_submit={'normal': submit}, queued={'normal': 1},
     )  # fmt: skip
-    node = Node('n1', ('defq',), 64, free_mem_mb, 0, schedulable=True)
+    node = Node('n1', ('defq',), 64, free_mem_mb, 0, schedulable=True, total_cpus=64)
     return Snapshot(nodes=(node,), partitions={}, quota=quota)
 
 

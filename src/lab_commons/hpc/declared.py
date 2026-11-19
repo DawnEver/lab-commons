@@ -119,15 +119,29 @@ def _spelled(name: str) -> str:
     return f'[tool.lab_commons.{name}]'
 
 
+_OBJECT_ID: Final = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+_AT_SHA: dict[tuple[str, str], str] = {}
+
+
 def pyproject_at(repo: Path, sha: str) -> str:
-    """The pyproject text commit *sha* of *repo* carries -- the declaration it is judged by; ``''`` when it has none."""
+    """The pyproject text commit *sha* of *repo* carries -- the declaration it is judged by; ``''`` when it has none.
+
+    A full object id names immutable content, so its answer is kept for the process (one forge read asked it
+    ~200 times); a ref (``HEAD``, a branch) moves and is read from git every time.
+    """
+    key = (str(Path(repo).resolve()), sha)
+    if key in _AT_SHA:
+        return _AT_SHA[key]
 
     def git(*args: str) -> str:
         done = _door.run([_GIT, '-C', str(repo), *args], capture_output=True, text=True, encoding='utf-8', check=True)
         return done.stdout
 
-    return (
+    text = (
         git('show', f'{sha}:pyproject.toml')
         if git('ls-tree', '--name-only', sha, '--', 'pyproject.toml').strip()
         else ''
     )
+    if _OBJECT_ID.fullmatch(sha):
+        _AT_SHA[key] = text
+    return text

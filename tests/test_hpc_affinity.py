@@ -132,7 +132,7 @@ def test_a_job_file_submitter_reads_the_affinity_and_a_forge_run_does_not(
     monkeypatch.setattr(cli, 'load_grants', lambda: _machine(None))
     monkeypatch.setattr(cli.allocation, 'resolve', lambda machine: machine)
     monkeypatch.setattr(affinity, 'declared', lambda: held)
-    monkeypatch.setattr(cli, '_job_config', lambda _p, _a: cli.Config())
+    monkeypatch.setattr(cli, '_job_configs', lambda _p, _a: [cli.Config()])
     monkeypatch.setattr(cli, '_jobs', lambda _verb, _config, machine, *_a, **_k: seen.append(machine) or 0)
     monkeypatch.setattr(cli, '_run_submit', lambda _args, machine, _config: seen.append(machine) or 0)
     cli.main([verb, '-c', 'job.toml'])

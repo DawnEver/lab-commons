@@ -1,4 +1,4 @@
-"""``python -m lab_commons.hpc clean --root <abs> [--dry-run] [--grant <user>] <name>...`` -- delete named dirs.
+"""``python -m lab_commons.hpc clean --root <abs> [--dry-run] [--timeout s] [--at <user@host>|--grant <u>] <name>...``.
 
 THE ONE NARROW DOOR for removing finished output on a cluster: an ad-hoc ``rm -rf`` on a shared path is
 refused by an agent's permission classifier unless the exact target is named, and a categorical authority
@@ -14,6 +14,13 @@ refused by an agent's permission classifier unless the exact target is named, an
 - After ``rm -rf`` each target is verified absent; what remains is reported with its owner (a ``.lab-hpc``
   record dir written by another account cannot be removed by this one -- report only, no escalation).
 
+``--at user@host`` reaches the login host directly over ``ssh`` and needs no machine file; without it the grant
+comes from the ``[hpc]`` table (:mod:`lab_commons.hpc.grants`).
+
+A deletion has no short ceiling: ``--timeout`` (default :data:`TIMEOUT_S`) bounds each remote command, because
+``rm -rf`` of 14 GB on GPFS outran a fixed 300 s (2026-11-11). A command that still outruns it is reported, not
+raised: the delete is idempotent, so re-running the same invocation finishes it.
+
 Exit 2: usage, validation or a refusal (nothing deleted). Exit 1: any target left behind. Runs over ``ssh``
 through the grant like ``status``/``gather``; it never touches the workstation.
 """
@@ -24,17 +31,21 @@ import argparse
 import posixpath
 import re
 import shlex
+import subprocess
 from collections.abc import Callable, Iterable
 from typing import Final
 
-from lab_commons.hpc.cluster import Runner, runner_for
-from lab_commons.hpc.grants import Grant, Machine, load_grants
+from lab_commons.hpc.cluster import Runner, runner_for, ssh_runner
+from lab_commons.hpc.grants import AccessRefused, Grant, Machine, check_target, load_grants
 from lab_commons.log import emit
 
-__all__ = ['DELETE', 'MARK', 'NAME', 'PROBE', 'contained', 'main', 'running_under', 'valid_name']
+__all__ = ['DELETE', 'MARK', 'NAME', 'PROBE', 'TIMEOUT_S', 'contained', 'main', 'running_under', 'valid_name']
 
 #: One plain path component: no ``/``, no ``..``, no glob, no whitespace, no leading dot or dash.
 NAME: Final = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
+
+#: Seconds each remote command may take unless ``--timeout`` says otherwise: a large GPFS delete takes minutes.
+TIMEOUT_S: Final = 3600
 
 #: Remote command heads, ``<head><MARK><quoted target>``, so a fake runner reads which step was asked.
 MARK: Final = ' #target '
@@ -53,7 +64,7 @@ _DELETE_TAIL: Final = (
 
 _SQUEUE: Final = "squeue -t R -h -o '%Z'"
 
-type Reach = Callable[[Grant], Runner]
+type Reach = Callable[[Grant, float], Runner]
 
 
 def valid_name(name: str) -> bool:
@@ -81,6 +92,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc clean', description=__doc__.splitlines()[0])
     parser.add_argument('--root', required=True, help='REMOTE absolute directory the names sit directly under')
     parser.add_argument('--dry-run', action='store_true', help='print each target and its size; delete nothing')
+    parser.add_argument(
+        '--timeout', type=float, default=TIMEOUT_S, help=f'seconds per remote command (default {TIMEOUT_S})'
+    )
+    parser.add_argument('--at', help='ssh target user@host; reaches it directly, no machine file needed')
     parser.add_argument('--grant', help='the grant user to act as; needed only when the machine holds several')
     parser.add_argument('names', nargs='+', help='plain directory names directly under --root')
     return parser
@@ -96,11 +111,10 @@ def _grant(machine: Machine, user: str | None) -> Grant:
     if user is None:
         msg = f'this machine holds several grants; pass --grant <user> ({", ".join(g.user for g in machine.grants)})'
         raise _Refused(msg)
-    for grant in machine.grants:
-        if grant.user == user:
-            return grant
-    msg = f'no grant for user {user!r}'
-    raise _Refused(msg)
+    try:
+        return machine.grant(user)
+    except (AccessRefused, LookupError) as refused:
+        raise _Refused(str(refused)) from None
 
 
 def _validate(root: str, names: list[str]) -> None:
@@ -141,7 +155,13 @@ def _delete(run: Runner, root: str, target: str) -> int:
     return 1
 
 
-def main(argv: list[str], *, machine: Machine | None = None, reach: Reach = runner_for) -> int:
+def main(
+    argv: list[str],
+    *,
+    machine: Machine | None = None,
+    reach: Reach = runner_for,
+    at: Callable[[str, float], Runner] = ssh_runner,
+) -> int:
     """Validate, guard, then delete and verify each named directory; see the module docstring for exits."""
     try:
         args = _parser().parse_args(argv)
@@ -149,10 +169,14 @@ def main(argv: list[str], *, machine: Machine | None = None, reach: Reach = runn
         return 2 if usage.code else 0
     try:
         _validate(args.root, args.names)
-        grant = _grant(machine or load_grants(), args.grant)
-        run = reach(grant)
-        targets = _resolve(run, args.root, args.names, grant.name)
-    except _Refused as refused:
+        if args.at:
+            check_target(args.at)
+            run, where = at(args.at, args.timeout), args.at
+        else:
+            grant = _grant(machine or load_grants(), args.grant)
+            run, where = reach(grant, args.timeout), grant.name
+        targets = _resolve(run, args.root, args.names, where)
+    except (_Refused, AccessRefused) as refused:
         emit(f'clean refused: {refused}', err=True)
         return 2
     residual = 0
@@ -163,5 +187,13 @@ def main(argv: list[str], *, machine: Machine | None = None, reach: Reach = runn
             emit(f'would delete {target} ({size or "unknown"})')
         else:
             emit(f'delete {target} ({size or "unknown"})')
-            residual |= _delete(run, args.root, target)
+            try:
+                residual |= _delete(run, args.root, target)
+            except subprocess.TimeoutExpired:
+                emit(
+                    f'TIMED OUT after {args.timeout:g}s deleting {target}; the delete is idempotent: re-run the same '
+                    'command to finish it (raise --timeout for a large tree)',
+                    err=True,
+                )
+                residual = 1
     return residual

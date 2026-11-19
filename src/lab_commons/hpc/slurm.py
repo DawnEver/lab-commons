@@ -226,6 +226,8 @@ class Node:
     mem_mb: float
     gpus: int
     schedulable: bool
+    #: Every CPU the node has (``CPUEfctv``, else ``CPUTot``) -- what an exclusive task on it is charged.
+    total_cpus: int
 
 
 @dataclass(frozen=True)
@@ -313,6 +315,7 @@ def _node(record: dict[str, str]) -> Node:
         mem_mb=max(0.0, mem),
         gpus=max(0, gpu_total - int(alloc.get('gpu', 0))),
         schedulable=schedulable,
+        total_cpus=total_cpus,
     )
 
 

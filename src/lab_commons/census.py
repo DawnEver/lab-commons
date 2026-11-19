@@ -12,7 +12,8 @@ WHAT EACH FIELD IS, READ, never guessed:
   ``python.exe`` launcher stays alive for its child's whole life, so its image names the venv); on Linux
   ``argv[0]`` made absolute against ``/proc/<pid>/cwd``, falling back to ``/proc/<pid>/exe`` -- a venv's
   ``python`` is a SYMLINK and the kernel's ``exe`` resolves through it to the base interpreter, losing the
-  venv; on macOS the same ``argv[0]`` rule against the ``lsof`` cwd. ``''`` when it cannot be read (another
+  venv; on macOS the same ``argv[0]`` rule against the ``lsof`` cwd, except that a framework ``Python.app`` image
+  takes the venv interpreter its ``__PYVENV_LAUNCHER__`` names (``ps -E``). ``''`` when it cannot be read (another
   user's process, a protected one, a bare name on macOS). An unreadable
   executable is NOT evidence of anything, so a reader must not treat it as a match.
 * ``command_line`` -- ``NtQueryInformationProcess(ProcessCommandLineInformation)`` on Windows (8.1 and
@@ -27,8 +28,9 @@ from __future__ import annotations
 import ctypes
 import os
 import posixpath
+import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
@@ -205,7 +207,25 @@ def _darwin() -> tuple[Process, ...]:
         if pid.isdigit() and ppid.isdigit():
             cwd = cwds.get(int(pid), '')
             out.append(Process(int(pid), int(ppid), _invoked_posix(cwd, args), args, _etime(elapsed), cwd))
+    if any(_FRAMEWORK_IMAGE in one.executable for one in out):
+        venvs = _launchers(_proc_darwin._tool('ps', '-E', '-ww', '-A', '-o', 'pid=,command=') or '')  # noqa: SLF001
+        out = [replace(one, executable=venvs.get(one.pid, one.executable)) for one in out]
     return tuple(out)
+
+
+#: A framework build's ``bin/python`` re-runs itself as this image, naming the venv only in ``__PYVENV_LAUNCHER__``.
+_FRAMEWORK_IMAGE: Final = '/Python.app/Contents/MacOS/'
+_LAUNCHER: Final = re.compile(r' __PYVENV_LAUNCHER__=(.+?)(?= [A-Za-z_][A-Za-z0-9_]*=|$)')
+
+
+def _launchers(text: str) -> dict[int, str]:
+    """``ps -E`` lines (pid, command line, then the environment) -> ``{pid: __PYVENV_LAUNCHER__}`` where set."""
+    found: dict[int, str] = {}
+    for line in text.splitlines():
+        pid, _, rest = line.strip().partition(' ')
+        if pid.isdigit() and (hit := _LAUNCHER.search(rest)):
+            found[int(pid)] = posixpath.normpath(hit[1])
+    return found
 
 
 def _lsof_cwds(text: str) -> dict[int, str]:

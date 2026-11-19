@@ -1,0 +1,2 @@
+mmlsquota:user:HEADER:version:reserved:reserved:filesystemName:quotaType:id:name:blockUsage:blockQuota:blockLimit:blockInDoubt:blockGrace:filesUsage:filesQuota:filesLimit:filesInDoubt:filesGrace:remarks:fid:filesetname:
+mmlsquota:user:0:1:::dss2fs01:USR:80178097:-:115084416:1048576000:1101004800:759992:none:3032158:4000000:4040000:380:none::6:HOME:

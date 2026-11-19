@@ -58,14 +58,16 @@ def test_a_task_is_sized_in_pages() -> None:
 
 
 def test_paging_is_declared_in_the_hpc_table() -> None:
-    grant = {'user': 'me', 'hosts': ['ada'], 'slurm_account': 'a'}
-    machine = load_grants(
-        {'grant': [grant], 'paging': {'page_cpus': 8, 'page_mem_gb': 20, 'large_pages': 4, 'movable_minutes': 30}}
-    )
-    assert machine.paging == PAGING
-    assert load_grants({'grant': [grant]}).paging is None, 'undeclared: no region, placement as before'
+    declared = {
+        'reach': ['r'],
+        'clusters': {'c': {'hosts': ['h'], 'slurm_accounts': {'a': {'billed': False}}}},
+        'grant': [{'user': 'me', 'cluster': 'c', 'slurm_account': 'a', 'role': 'r'}],
+    }
+    paging = {'page_cpus': 8, 'page_mem_gb': 20, 'large_pages': 4, 'movable_minutes': 30}
+    assert load_grants({**declared, 'paging': paging}).paging == PAGING
+    assert load_grants(declared).paging is None, 'undeclared: no region, placement as before'
     with pytest.raises(ValueError, match='paging'):
-        load_grants({'grant': [grant], 'paging': {'page_cpus': 8}})
+        load_grants({**declared, 'paging': {'page_cpus': 8}})
 
 
 def test_the_region_is_the_emptiest_account_and_it_rotates() -> None:

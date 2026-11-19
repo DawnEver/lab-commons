@@ -66,3 +66,28 @@ def test_macos_reads_pid_parent_age_command_line_executable_and_cwd_from_ps_and_
 def test_macos_without_ps_has_no_census(monkeypatch) -> None:
     monkeypatch.setattr(_proc_darwin, '_tool', lambda *_argv: None)
     assert census._darwin() == ()
+
+
+_FRAMEWORK = (
+    '/opt/homebrew/Cellar/python@3.15/3.15.2/Frameworks/Python.framework/Versions/3.15'
+    '/Resources/Python.app/Contents/MacOS/Python'
+)
+
+
+def test_macos_a_framework_python_executes_from_the_venv_its_launcher_names(monkeypatch) -> None:
+    """A framework venv's ``bin/python`` re-runs as ``Python.app``; only ``__PYVENV_LAUNCHER__`` keeps the venv."""
+    ps = f'  500     1      00:09 {_FRAMEWORK} -c pass\n  501     1      00:09 {_FRAMEWORK} -c pass\n'
+    env = (
+        f'  500 {_FRAMEWORK} -c pass HOME=/Users/me '
+        '__PYVENV_LAUNCHER__=/Users/me/my repo/.venvs/old/bin/python TERM=x\n'
+        f'  501 {_FRAMEWORK} -c pass HOME=/Users/me\n'
+    )
+
+    def tool(*argv: str) -> str | None:
+        return env if '-E' in argv else {'ps': ps, 'lsof': ''}.get(argv[0])
+
+    monkeypatch.setattr(_proc_darwin, '_tool', tool)
+    rows = {row.pid: row for row in census._darwin()}
+    assert rows[500].executable == '/Users/me/my repo/.venvs/old/bin/python'
+    assert rows[500].command_line == f'{_FRAMEWORK} -c pass'
+    assert rows[501].executable == _FRAMEWORK, 'planted control: no launcher variable, the image stands'

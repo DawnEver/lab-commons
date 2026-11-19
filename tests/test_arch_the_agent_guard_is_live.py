@@ -20,9 +20,11 @@ from deny_rules import ADOPTION  # noqa: E402
 #: THE FLOOR, BY NAME: the rules lab-commons ships (adopted with dev-lab c9eaa7f).
 _SHIPPED: Final = frozenset(
     {
+        'BACKGROUND-SHELL-IS-BOUNDED',
         'BARE-INTERPRETER',
         'BARE-PYTHON',
         'BARE-TEST-INVOCATION',
+        'CI-CRON-NEEDS-CONSENT',  # gained 2026-11-17 with dev-lab b9875921
         'FORGE-WRITE-VIA-CLI',
         'FORGE-WRITE-VIA-GH-API',
         'FORGE-WRITE-VIA-HTTP',
@@ -30,6 +32,7 @@ _SHIPPED: Final = frozenset(
         'GIT-RESET',
         'GIT-STAGE-EVERYTHING',
         'GIT-STASH',
+        'HEAVY-IS-THE-MAIN-SESSIONS',  # gained 2026-11-17 with dev-lab b9875921
         'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
         'PUSH-FORCE',
         'PUSH-NO-VERIFY',
@@ -37,10 +40,12 @@ _SHIPPED: Final = frozenset(
         'RECURSIVE-DELETE',
         'RECURSIVE-GREP',
         'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-07 with dev-lab #313 (agentpolicy)
+        'COMMIT-HOOKS-RUN',  # gained 2026-11-13 with dev-lab 61560e40
         'CONSENT-CODE-FROM-THE-USER',  # renamed 2026-11-08 by dev-lab #325 (user ruling)
         'REPORTS-LIVE-IN-MEMORY',
         'STATUS-VIA-DOORS',
         'SUBAGENT-NO-PUSH',
+        'TRACKED-CITES-NO-EPHEMERAL',  # gained 2026-11-17 with dev-lab b9875921
         'TREE-HAS-A-LIVE-RUN',
         'WORKTREE-BASE-IS-EXPLICIT',
         'WORKTREES-STAY-INSIDE',
