@@ -24,7 +24,7 @@ from pathlib import Path
 
 from lab_commons.headroom import Floor, read
 
-__all__ = ['BelowFloor', 'free_bytes', 'keep']
+__all__ = ['BelowFloor', 'free_bytes', 'keep', 'measure']
 
 
 class BelowFloor(OSError):
@@ -47,7 +47,7 @@ def free_bytes(volume: Path) -> int:
     return shutil.disk_usage(volume).free
 
 
-def _measure(volume: Path, floor: Floor) -> tuple[int, tuple[int, int] | None]:
+def measure(volume: Path, floor: Floor) -> tuple[int, tuple[int, int] | None]:
     """The free bytes (volume, capped by the quota) and ``(files floor, files left)`` where a quota limits files."""
     free = free_bytes(volume)
     if floor.quota is None:
@@ -83,7 +83,7 @@ def keep(
 
     """
     gone: list[Path] = []
-    free, files = _measure(volume, floor)
+    free, files = measure(volume, floor)
     for _, path, _ in sorted(live, key=lambda entry: entry[0]):
         if _holds(floor, free, files):
             return gone
@@ -91,7 +91,7 @@ def keep(
             continue
         evict(path)
         gone.append(path)
-        free, files = _measure(volume, floor)
+        free, files = measure(volume, floor)
     if not _holds(floor, free, files):
         raise BelowFloor(volume, floor.bytes, free, files)
     return gone
