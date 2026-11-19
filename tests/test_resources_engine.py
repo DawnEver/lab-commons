@@ -108,7 +108,7 @@ def test_engine_rows_of_another_scope_are_not_the_boxs() -> None:
 
 
 def test_a_claims_row_written_before_kinds_existed_reads_as_box_occupancy() -> None:
-    """FORMATS-UPGRADE-ON-READ: a pre-existing ``claims`` table gains scope/kind/window; its rows are box OCCUPANCY."""
+    """OLD-SHAPE-READER: a pre-existing ``claims`` table gains scope/kind/window; its rows are box OCCUPANCY."""
     path = box_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as old:

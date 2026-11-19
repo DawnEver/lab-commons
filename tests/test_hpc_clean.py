@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from typing import Final
 
 import pytest
@@ -70,7 +71,7 @@ def _machine() -> Machine:
 
 
 def _clean(argv: list[str], cluster: FakeCluster) -> int:
-    return clean.main(argv, machine=_machine(), reach=lambda _grant: cluster)
+    return clean.main(argv, machine=_machine(), reach=lambda _grant, _timeout: cluster)
 
 
 def test_a_named_directory_is_deleted_and_verified_gone(capsys: pytest.CaptureFixture[str]) -> None:
@@ -152,8 +153,8 @@ def test_several_grants_need_one_named() -> None:
         ),
     )
     cluster = FakeCluster({f'{ROOT}/e69': 'me'})
-    assert clean.main(['--root', ROOT, 'e69'], machine=two, reach=lambda _g: cluster) == 2
-    assert clean.main(['--root', ROOT, '--grant', 'v', 'e69'], machine=two, reach=lambda _g: cluster) == 0
+    assert clean.main(['--root', ROOT, 'e69'], machine=two, reach=lambda _g, _t: cluster) == 2
+    assert clean.main(['--root', ROOT, '--grant', 'v', 'e69'], machine=two, reach=lambda _g, _t: cluster) == 0
 
 
 def test_at_reaches_the_host_directly_and_reads_no_machine_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,7 +167,36 @@ def test_at_reaches_the_host_directly_and_reads_no_machine_file(monkeypatch: pyt
     monkeypatch.setattr(clean, 'load_grants', no_table)
     cluster = FakeCluster({f'{ROOT}/e69': 'me'})
     targets: list[str] = []
-    rc = clean.main(['--root', ROOT, '--at', 'me@login', 'e69'], at=lambda t: targets.append(t) or cluster)
+    rc = clean.main(['--root', ROOT, '--at', 'me@login', 'e69'], at=lambda t, _s: targets.append(t) or cluster)
     assert rc == 0
     assert targets == ['me@login']
     assert not cluster.tree
+
+
+def test_the_timeout_is_a_flag_with_an_hour_by_default() -> None:
+    """A GPFS delete of 14 GB outran a fixed 300 s ceiling (2026-11-11): the ceiling is the caller's."""
+    cluster = FakeCluster({f'{ROOT}/e69': 'me'})
+    seen: list[float] = []
+    reach = lambda _g, timeout: seen.append(timeout) or cluster  # noqa: E731
+    assert clean.main(['--root', ROOT, 'e69'], machine=_machine(), reach=reach) == 0
+    cluster.tree = {f'{ROOT}/e69': 'me'}
+    assert clean.main(['--root', ROOT, '--timeout', '7200', 'e69'], machine=_machine(), reach=reach) == 0
+    assert seen == [clean.TIMEOUT_S, 7200]
+    assert clean.TIMEOUT_S == 3600
+
+
+def test_a_delete_that_outruns_the_timeout_says_rerun_not_a_traceback(capsys: pytest.CaptureFixture[str]) -> None:
+    cluster = FakeCluster({f'{ROOT}/e69': 'me'})
+
+    def slow(command: str, stdin: str | None = None) -> str:
+        if clean.DELETE in command:
+            raise subprocess.TimeoutExpired(['ssh'], 60)
+        return cluster(command, stdin)
+
+    rc = clean.main(['--root', ROOT, '--timeout', '60', 'e69'], machine=_machine(), reach=lambda _g, _t: slow)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert 'idempotent' in err
+    assert 're-run' in err
+    assert '--timeout' in err
+    assert 'Traceback' not in err

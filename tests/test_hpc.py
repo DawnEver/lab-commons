@@ -17,7 +17,7 @@ import pytest
 from lab_commons.hpc.cluster import _completed, render_script, submit, throttle
 from lab_commons.hpc.config import Cluster, Config, Cost, JobSpec, Limits, Policy, load_config
 from lab_commons.hpc.plan import free_slots, make_plan, quota_slots
-from lab_commons.hpc.sacct import shard_states
+from lab_commons.hpc.sacct import job_states, shard_states
 from lab_commons.hpc.slurm import parse_minutes, parse_records, parse_snapshot, parse_tres
 from lab_commons.width import fits
 
@@ -223,8 +223,30 @@ def test_the_script_keeps_home_expandable(tmp_path: Path) -> None:
 
 
 def test_states_expand_pending_ranges_and_a_resubmit_supersedes() -> None:
-    fake = FakeCluster({'-j 1 ': '1_0|COMPLETED\n1_1|FAILED\n1_[2-3%4]|PENDING\n', '-j 2 ': '2_1|RUNNING\n'})
+    """The resubmit (job 2) is listed FIRST by sacct, yet still supersedes: order is the job ids', not the output's."""
+    fake = FakeCluster({'-j 1,2 ': '2_1|RUNNING\n1_0|COMPLETED\n1_1|FAILED\n1_[2-3%4]|PENDING\n'})
     assert shard_states(fake, ['1', '2']) == {0: 'COMPLETED', 1: 'RUNNING', 2: 'PENDING', 3: 'PENDING'}
+    assert len(fake.calls) == 1, 'one sacct over every job id'
+
+
+def test_job_states_answers_every_job_from_one_sacct_and_ignores_a_job_not_asked_for() -> None:
+    fake = FakeCluster({'-j 11,12 ': '11_0|RUNNING\n12_[0-1]|PENDING\n99_0|FAILED\n'})
+    assert job_states(fake, ['11', '12']) == {'11': {0: 'RUNNING'}, '12': {0: 'PENDING', 1: 'PENDING'}}
+    assert len(fake.calls) == 1
+    assert job_states(fake, []) == {}
+    assert len(fake.calls) == 1, 'no job id, no ssh'
+
+
+def test_submit_binds_run_dir_in_every_item_string_and_leaves_the_rest(tmp_path: Path) -> None:
+    plan = make_plan(
+        2, Cost(seconds=60), parse_snapshot(IDLE_CALLER), cluster=CLUSTER, policy=Policy(), limits=Limits()
+    )
+    fake = FakeCluster({'sbatch': '5\n'})
+    items = [{'out': '{run_dir}/0', 'args': ['{run_dir}', 3]}, {'out': '/fixed/1'}]
+    sub = submit(fake, plan, _config(tmp_path), items, stamp='t1')
+    manifest = json.loads(fake.calls[0][1] or '')
+    assert manifest['items'] == [{'out': f'{sub.run_dir}/0', 'args': [sub.run_dir, 3]}, {'out': '/fixed/1'}]
+    assert items[0]['out'] == '{run_dir}/0', 'the caller items are not mutated'
 
 
 def test_config_round_trip_and_typos_are_refused(tmp_path: Path) -> None:

@@ -45,7 +45,10 @@ from lab_commons.resources.dimensions import CPU, GPU, MEMORY
 #: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.resources.dimensions.MEMORY` counts bytes.
 GIB: Final = 1024**3
 
-__all__ = ['GIB', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'Task', 'load_config']
+#: The shortest ``status``/``gather --wait`` poll: each poll is an ssh to a login host (user ruling 2026-11-11).
+POLL_FLOOR_S: Final = 60.0
+
+__all__ = ['GIB', 'POLL_FLOOR_S', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limits', 'Policy', 'Task', 'load_config']
 
 
 @dataclass(frozen=True)
@@ -112,7 +115,7 @@ class Policy:
             or self.safety < 1
             or self.max_array < 1
             or self.stall_minutes <= 0
-            or self.poll_seconds <= 0
+            or self.poll_seconds < POLL_FLOOR_S
             or self.file_budget < 1
         ):
             msg = f'an unusable policy: {self}'

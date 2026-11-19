@@ -4,16 +4,21 @@ ONE SUBMISSION, ONE RECORD. ``submit`` spans the items (:func:`lab_commons.hpc.s
 chosen grant has the job's artifact (*ensure*; ``[job] sha`` builds that commit's one file,
 :mod:`lab_commons.hpc.artifact`), submits one array per grant and writes ``<job>.submission.json``::
 
-    {"stamp": ..., "placements": [{"grant", "stamp", "account", "targets", "items": [start, stop], "run_dir",
+    {"stamp": ..., "sha": <[job] sha or "">, "selected": <batch indices into the items file, or null>,
+     "placements": [{"grant", "stamp", "account", "targets", "items": [start, stop], "run_dir",
                                    "job_ids", "shards", "plan"}, ...],
      "moved": [<a placement whose grant stopped answering>, ...]}
+
+``submit --sha`` runs the same job file at another commit and ``--only`` submits chosen items; the record
+keeps both, so ``retry`` re-runs that commit and ``gather`` reports each item at its index in the items file.
 
 ``status``/``gather`` walk the placements and merge them into one result, item indices back in the batch's
 order. A grant whose login hosts all fail to answer is NAMED, never read as empty.
 
 A JOB HAS A FILE BUDGET (``[policy] file_budget``): ``gather`` counts each placement's run directory on the
 shared home and names every one over it -- the job fails. A run an earlier worker wrote (one results file
-per shard) is upgraded on read and named as such; its file count was that worker's, so it is not judged.
+per shard) is read in its old shape (OLD-SHAPE-READER) and named as such; its file count was that
+worker's, so it is not judged.
 
 A DEAD GRANT'S SLICE IS RE-PLACED BY THE RETRY RULE. ``retry`` re-submits what has no results file and is
 not active -- on a grant that answers, its own shards, as before. On a grant that does not answer nothing is
@@ -25,18 +30,20 @@ re-placed slice is an ordinary new submission.
 from __future__ import annotations
 
 import json
+import shlex
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from lab_commons.hpc.affinity import place
 from lab_commons.hpc.artifact import enter_lines, require
+from lab_commons.hpc.budget import ask_of, charge
 from lab_commons.hpc.cluster import Runner, Unreachable, files_of, gather, probe, submit
 from lab_commons.hpc.config import Config, Cost
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.plan import Plan, Unplaceable, plan_on
 from lab_commons.hpc.run import ACTIVE
-from lab_commons.hpc.sacct import shard_states
+from lab_commons.hpc.sacct import job_states, shard_states
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.span import Placement, span
 from lab_commons.hpc.topology import Lane, architecture
@@ -46,12 +53,15 @@ __all__ = [
     'Gathered',
     'Reach',
     'built_config',
+    'cancel_job',
     'gather_job',
+    'grant_of',
     'plan_job',
     'retry_job',
+    'selected_items',
     'settled',
     'shard_counts',
-    'status_job',
+    'shard_counts_of',
     'status_lines',
     'submit_job',
 ]
@@ -261,44 +271,44 @@ def _spread(
 def tiered(
     config: Config, n_items: int, grants: tuple[Grant, ...], *, machine: Machine, reach: Reach
 ) -> tuple[Placement, ...]:
-    """Span over the free candidates in *grants*; over the costed ones only for work the free TIER cannot hold.
+    """Span over the free candidates in *grants*; over the billed ones only for work the free TIER cannot hold.
 
     The free tier is every free grant *machine* declares, candidate or not: a free grant ``_place`` dropped
-    for another reason still says whether the work needs money. Costed is used only when EVERY free grant
+    for another reason still says whether the work needs money. Billed is used only when EVERY free grant
     answered and none holds the work -- the span refuses for room (:class:`Unplaceable`) or the padded wall
-    exceeds every free ceiling. A silent free grant refuses rather than bills; costed and free never share a
+    exceeds every free ceiling. A silent free grant refuses rather than bills; billed and free never share a
     span; any other ``ValueError`` is the request's defect and propagates.
     """
 
     def over(candidates: list[tuple[Grant, Any]]) -> tuple[Placement, ...]:
         return place(candidates, machine.affinity, lambda c: _spread(config, n_items, c, machine))
 
-    costed = [g for g in grants if g.costed]
-    tier = [g for g in machine.grants if not g.costed]
+    billed = [g for g in grants if g.billed]
+    tier = [g for g in machine.grants if not g.billed]
     if not tier:
-        return over(_answering(tuple(costed), reach))
+        return over(_answering(tuple(billed), reach))
     answering = _answering(tuple(tier), reach)
     silent = [g.name for g in tier if all(g is not a for a, _ in answering)]
     holders, reason = _holding(config, n_items, answering, machine)
     if holders:
         mine = [(g, s) for g, s in holders if g in grants]
         if not mine:
-            msg = 'the free tier holds this work but none of its grants is a candidate; costed is not for that'
+            msg = 'the free tier holds this work but none of its grants is a candidate; billed is not for that'
             raise ValueError(msg)
         return over(mine)
-    if not costed:
+    if not billed:
         mine = [(g, s) for g, s in answering if g in grants]
         if not mine:
             raise Unplaceable(reason)
         return over(mine)
     if silent:
         msg = (
-            f'{reason}; free grant(s) {", ".join(silent)} silent -- a costed grant never pays for unreachable free room'
+            f'{reason}; free grant(s) {", ".join(silent)} silent -- a billed grant never pays for unreachable free room'
         )
         raise Unplaceable(msg)
-    paid = _answering(tuple(costed), reach)
+    paid = _answering(tuple(billed), reach)
     if not paid:
-        msg = f'{reason}; no costed grant answers'
+        msg = f'{reason}; no billed grant answers'
         raise Unplaceable(msg)
     return over(paid)
 
@@ -346,7 +356,9 @@ def _place(
     for n, placement in enumerate(placements):
         start, stop = placement.items
         tag = f'{stamp}-{n}'
-        sub = submit(reach(placement.grant), placement.plan, config, items[start:stop], stamp=tag)
+        run = reach(placement.grant)
+        charge(run, placement.grant, ask_of(placement.plan))
+        sub = submit(run, placement.plan, config, items[start:stop], stamp=tag)
         records.append(
             {
                 'grant': placement.grant.name,
@@ -363,15 +375,34 @@ def _place(
     return records
 
 
+def selected_items(items: list[Any], selected: list[int] | None) -> list[Any]:
+    """The batch a record ran: *items* themselves, or the *selected* indices of them in that order."""
+    if selected is None:
+        return items
+    missing = [i for i in selected if not 0 <= i < len(items)]
+    if missing:
+        msg = f'item indices {missing} are not in the items file (0-{len(items) - 1})'
+        raise ValueError(msg)
+    return [items[i] for i in selected]
+
+
 def submit_job(
-    config: Config, items: list[Any], machine: Machine, reach: Reach, *, stamp: str, ensure: Ensure | None = None
+    config: Config,
+    items: list[Any],
+    machine: Machine,
+    reach: Reach,
+    *,
+    stamp: str,
+    ensure: Ensure | None = None,
+    selected: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Span, ensure, submit -- the submission record."""
-    placed = _place(config, items, 0, machine.grants, machine=machine, reach=reach, ensure=ensure, stamp=stamp)
-    return {'stamp': stamp, 'placements': placed, 'moved': []}
+    """Span, ensure, submit *items* (or only the *selected* indices of them) -- the submission record."""
+    batch = selected_items(items, selected)
+    placed = _place(config, batch, 0, machine.grants, machine=machine, reach=reach, ensure=ensure, stamp=stamp)
+    return {'stamp': stamp, 'sha': config.job.sha, 'selected': selected, 'placements': placed, 'moved': []}
 
 
-def _grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
+def grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
     """The machine's grant for a recorded placement; its recorded targets when the machine no longer holds it."""
     account = tuple(placement['account'])
     known = next((g for g in machine.grants if g.account == account), None)
@@ -381,23 +412,57 @@ def _grant_of(placement: dict[str, Any], machine: Machine) -> Grant:
     return Grant(user=account[0], hosts=hosts, slurm_account=account[1])
 
 
-def shard_counts(
-    record: dict[str, Any], machine: Machine, reach: Reach
-) -> list[tuple[str, dict[str, int] | Unreachable]]:
-    """Each placement's grant with its shards counted by Slurm state, or why its grant did not answer."""
-    found: list[tuple[str, dict[str, int] | Unreachable]] = []
-    for placement in record['placements']:
+type Found = list[tuple[str, dict[str, int] | Unreachable]]
+
+
+def shard_counts_of(records: list[dict[str, Any]], machine: Machine, reach: Reach) -> list[Found]:
+    """Per record, each placement's grant with its shards counted by Slurm state, or why its grant did not answer.
+
+    ONE ``sacct`` per grant answers every placement of every record on it, so watching several jobs costs
+    one ssh per grant per poll, not one per job.
+    """
+    by_grant: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for record in records:
+        for placement in record['placements']:
+            by_grant.setdefault(tuple(placement['account']), []).append(placement)
+    answers: dict[tuple[str, ...], dict[str, dict[int, str]] | Unreachable] = {}
+    for account, placements in by_grant.items():
+        ids = list(dict.fromkeys(j for p in placements for j in p['job_ids']))
         try:
-            states = shard_states(reach(_grant_of(placement, machine)), placement['job_ids'])
+            answers[account] = job_states(reach(grant_of(placements[0], machine)), ids)
         except Unreachable as silent:
-            found.append((placement['grant'], silent))
-            continue
-        counts: dict[str, int] = {}
-        for shard in range(placement['shards']):
-            state = states.get(shard, 'UNKNOWN')
-            counts[state] = counts.get(state, 0) + 1
-        found.append((placement['grant'], counts))
+            answers[account] = silent
+    found: list[Found] = []
+    for record in records:
+        rows: Found = []
+        for placement in record['placements']:
+            answer = answers[tuple(placement['account'])]
+            if isinstance(answer, Unreachable):
+                rows.append((placement['grant'], answer))
+                continue
+            rows.append((placement['grant'], _counted(placement, answer)))
+        found.append(rows)
     return found
+
+
+def _counted(placement: dict[str, Any], answer: dict[str, dict[int, str]]) -> dict[str, int]:
+    """*placement*'s shards counted by state; a recorded cancellation still queued or unlisted counts CANCELLED."""
+    states: dict[int, str] = {}
+    for job_id in placement['job_ids']:  # a resubmit supersedes, shard by shard
+        states.update(answer.get(job_id, {}))
+    cancelled = set(placement.get('cancelled', ()))
+    counts: dict[str, int] = {}
+    for shard in range(placement['shards']):
+        state = states.get(shard, 'UNKNOWN')
+        if shard in cancelled and (state in ACTIVE or state == 'UNKNOWN'):
+            state = CANCELLED  # scancel'd while accounting lags: never waited on
+        counts[state] = counts.get(state, 0) + 1
+    return counts
+
+
+def shard_counts(record: dict[str, Any], machine: Machine, reach: Reach) -> Found:
+    """Each placement's grant with its shards counted by Slurm state, or why its grant did not answer."""
+    return shard_counts_of([record], machine, reach)[0]
 
 
 def status_lines(found: list[tuple[str, dict[str, int] | Unreachable]]) -> list[str]:
@@ -415,9 +480,41 @@ def settled(found: list[tuple[str, dict[str, int] | Unreachable]]) -> bool:
     return all(not isinstance(c, Unreachable) and not ACTIVE.intersection(c) for _g, c in found)
 
 
-def status_job(record: dict[str, Any], machine: Machine, reach: Reach) -> list[str]:
-    """One line per placement: its shards by Slurm state, or that its grant did not answer."""
-    return status_lines(shard_counts(record, machine, reach))
+#: What a recorded cancellation reports while ``sacct`` still lists the shard as queued, running or absent.
+CANCELLED = 'CANCELLED'
+
+
+def cancel_job(record: dict[str, Any], machine: Machine, reach: Reach, *, pending_only: bool) -> list[str]:
+    """``scancel`` each placement's ACTIVE shards -- only the PENDING ones with *pending_only* -- and record them.
+
+    Through the runner ``status`` reads by: one ``sacct`` and at most one ``scancel`` per placement, each shard
+    named ``<job id>_<shard>`` of the submission holding it now (a resubmit supersedes). A started shard keeps
+    running under *pending_only*. Mutates *record*: ``placement['cancelled']`` lists the shards, so ``status``
+    and ``gather --wait`` count them CANCELLED and never wait on them. Returns one line per placement.
+    """
+    wanted = frozenset({'PENDING'}) if pending_only else ACTIVE
+    said = []
+    for placement in record['placements']:
+        run = reach(grant_of(placement, machine))
+        try:
+            per_job = job_states(run, placement['job_ids'])
+            holder: dict[int, tuple[str, str]] = {}
+            for job_id in placement['job_ids']:  # in submission order: a later one wins
+                holder.update({shard: (job_id, state) for shard, state in per_job.get(job_id, {}).items()})
+            hit = sorted(s for s, (_j, state) in holder.items() if state in wanted and s < placement['shards'])
+            if hit:
+                run('scancel ' + ' '.join(shlex.quote(f'{holder[s][0]}_{s}') for s in hit), None)
+        except Unreachable as silent:
+            said.append(f'{placement["grant"]}: did not answer ({silent}); nothing cancelled there')
+            continue
+        placement['cancelled'] = sorted(set(placement.get('cancelled', [])) | set(hit))
+        kept = sum(state in ACTIVE for _j, state in holder.values()) - len(hit)
+        said.append(
+            f'{placement["grant"]}: cancelled {len(hit)} shards'
+            + (f' ({", ".join(map(str, hit))})' if hit else '')
+            + (f'; {kept} started keep running' if pending_only and kept else '')
+        )
+    return said
 
 
 @dataclass(frozen=True)
@@ -436,10 +533,13 @@ class Gathered:
 
 
 def gather_job(record: dict[str, Any], machine: Machine, reach: Reach, *, budget: int) -> Gathered:
-    """Every placement's returned results, merged, with its run directory's files counted against *budget*."""
+    """Every placement's returned results, merged at their items-file index; each run directory's files counted.
+
+    A run directory holding more files than *budget* is named in :attr:`Gathered.over`.
+    """
     merged, returned, silent, over, earlier = [], 0, [], [], []
     for placement in record['placements']:
-        run, where = reach(_grant_of(placement, machine)), placement['run_dir']
+        run, where = reach(grant_of(placement, machine)), placement['run_dir']
         try:
             results = gather(run, where)
             files, upgraded = files_of(run, where)
@@ -451,8 +551,12 @@ def gather_job(record: dict[str, Any], machine: Machine, reach: Reach, *, budget
         elif files > budget:
             over.append(f'{placement["grant"]}: {where} holds {files} files, over file_budget = {budget}')
         returned += len(results)
-        offset = placement['items'][0]
-        merged += [{**r, 'index': offset + r['index']} for shard in results.values() for r in shard]
+        offset, selected = placement['items'][0], record.get('selected')
+        merged += [
+            {**r, 'index': offset + r['index'] if selected is None else selected[offset + r['index']]}
+            for shard in results.values()
+            for r in shard
+        ]
     return Gathered(sorted(merged, key=lambda r: r['index']), returned, silent, over, earlier)
 
 
@@ -471,7 +575,7 @@ def retry_job(
     """
     said, dead = [], []
     for placement in record['placements']:
-        run = reach(_grant_of(placement, machine))
+        run = reach(grant_of(placement, machine))
         try:
             states = shard_states(run, placement['job_ids'])
             returned = gather(run, placement['run_dir'])
@@ -492,8 +596,11 @@ def retry_job(
                 'lane_mems': tuple(raw['lane_mems']),
             }
         )
+        charge(run, grant_of(placement, machine), ask_of(plan, len(redo)))
         sub = submit(run, plan, config, [], stamp=placement['stamp'], only=redo)
         placement['job_ids'].append(sub.job_id)
+        if 'cancelled' in placement:  # a re-submitted shard runs again: no longer cancelled
+            placement['cancelled'] = [c for c in placement['cancelled'] if c not in redo]
         said.append(f'{placement["grant"]}: resubmitted {len(redo)} shards as job {sub.job_id}')
     alive = tuple(g for g in machine.grants if g.account not in {tuple(p['account']) for p in dead})
     for n, placement in enumerate(dead):

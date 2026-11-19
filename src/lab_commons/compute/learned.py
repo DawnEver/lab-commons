@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sys
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -162,6 +163,47 @@ READ_RETRY_S: Final = 0.5
 """How long a reader waits out a table it cannot parse before reading it as nothing learned (seconds)."""
 
 
+SETTLED_S: Final = 2.0
+"""A file older than this (seconds) is settled: no rewrite can still share its clock tick, so its stat names it."""
+
+_PARSED: dict[Path, tuple[bytes, tuple[int, int, int, int], dict[str, Any]]] = {}
+
+
+def _identity(stat: os.stat_result) -> tuple[int, int, int, int]:
+    """The file's identity: every writer here replaces the WHOLE file by rename, which gives it a new id."""
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _parsed(path: Path) -> dict[str, Any]:
+    """*path*'s table, read once per file version and parsed once per CONTENT (its digest); none is ``{}``.
+
+    One forge read asked for the same 24 MB table ~119 times; reading and hashing it each time cost ~10 s.
+    A SETTLED file (older than :data:`SETTLED_S`) whose identity -- device, id, size, mtime -- is unchanged is
+    the held version and is not read again. A younger file may still be rewritten within one clock tick
+    keeping size and mtime, so it is read and its digest compared: a changed table is never served stale.
+    The table returned is SHARED: callers copy before they change it, as every writer here does.
+    """
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return {}
+    identity = _identity(stat)
+    held = _PARSED.get(path)
+    if held is not None and held[1] == identity and time.time() - stat.st_mtime > SETTLED_S:
+        return held[2]
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {}
+    digest = hashlib.blake2b(raw, digest_size=16).digest()
+    if held is not None and held[0] == digest:
+        _PARSED[path] = (digest, identity, held[2])
+        return held[2]
+    table = json.loads(raw.decode('utf-8'))
+    _PARSED[path] = (digest, identity, table)
+    return table
+
+
 def learned(repo: str) -> dict[str, Any]:
     """Everything learned for *repo* (the per-test keys of :class:`Measured`, and ``runs``); none yet is ``{}``.
 
@@ -173,7 +215,7 @@ def learned(repo: str) -> dict[str, Any]:
     deadline = time.monotonic() + READ_RETRY_S
     while True:
         try:
-            return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+            return _parsed(path)
         except (ValueError, OSError):
             if time.monotonic() >= deadline:
                 return read_table(path)

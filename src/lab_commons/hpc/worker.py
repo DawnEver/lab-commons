@@ -20,13 +20,14 @@ ONE RESULT FILE PER JOB (a file is an HPC resource). Every array task of a run a
 task's script once the worker has exited, whatever its exit -- one ``shard`` line carrying the worker's
 exit code and the tail of its output. The task's own stdout/stderr go to node-local ``$TMPDIR``, never to
 the shared filesystem; only that tail is kept. Lines are :class:`lab_commons.outcomes.record.Event`
-lines (the outcomes JSONL format, its schema and upgrade-on-read included).
+lines (the outcomes JSONL format, its schema and its one-shot migration included).
 :class:`~lab_commons.outcomes.record.Record` keeps ONE writer per file and a run has one writer per array
 task, so each append here takes an exclusive lock on the file, cuts a killed writer's torn tail, and
 appends one line, fsynced.
 
 AN ITEM'S FAILURE IS DATA, A SHARD'S IS SLURM'S. Each item's line is an ``outcome`` event carrying a
-:class:`~lab_commons.outcomes.Cell` (its returned value rides in the event's data): returned -> ``OK``;
+:class:`~lab_commons.outcomes.Cell` (its returned value rides in the event's data): returned -> ``OK``, unless the
+value reports a command's non-zero ``exit`` -> ``ERROR`` with reason ``exit``;
 raised the declared :class:`Rejected` -> ``REJECTED`` with the reason it carries; raised the declared
 :class:`Failed` -> ``ERROR`` with its reason AND the value it completed before failing (a campaign item's rows
 so far ride back beside why it stopped); any other exception -> ``ERROR`` with its traceback and no value.
@@ -157,6 +158,18 @@ def lane_env() -> dict[str, str]:
     return dict(getattr(_LANE, 'env', {}))
 
 
+def _returned_cell(value: object) -> Cell:
+    """A returned value's cell: OK, unless it reports a command that exited non-zero (``{'exit': N}``, N != 0).
+
+    An item that ran a process and RETURNS its exit code has not succeeded when that code is non-zero; reading it
+    as ``OK`` is a declaration that lies (a crashed run gathered as a result). Its value still rides back.
+    """
+    code = value.get('exit') if isinstance(value, dict) else None
+    if isinstance(code, int) and not isinstance(code, bool) and code != 0:
+        return Cell(Status.ERROR, reason=Reason('exit', f'the command exited {code}'))
+    return Cell(Status.OK)
+
+
 def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callable[[Any], Any] | None = None) -> int:
     """Run shard *shard* of *manifest*, appending each item's outcome to *results*; the item count."""
     start, stop = manifest['shards'][shard]
@@ -188,7 +201,7 @@ def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callab
         data: dict[str, Any] = {'shard': shard}
         try:
             data['value'] = function(manifest['items'][index])
-            cell = Cell(Status.OK)
+            cell = _returned_cell(data['value'])
         except Rejected as rejected:
             cell = Cell(Status.REJECTED, reason=rejected.reason)
         except Failed as failed:

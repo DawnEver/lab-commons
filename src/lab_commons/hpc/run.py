@@ -68,6 +68,7 @@ from dataclasses import asdict, replace
 from typing import Any, Final
 
 from lab_commons.compute.measured import Measured, memory_band
+from lab_commons.hpc.budget import ask_of, charge
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
@@ -76,8 +77,8 @@ from lab_commons.hpc.homedoor import QuotaRefused, guard
 from lab_commons.hpc.needsets import need_sets
 from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
+    current_state,
     record_of,
-    upgraded_state,
 )
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
@@ -180,16 +181,16 @@ def _no_room() -> Iterator[None]:
 
 def planned(state: Mapping[str, Any]) -> Measured:
     """What a PLAN prices with: the run's learned facts raised to its commit's declared floors (``priced``)."""
-    return Measured.of(state.get('measured', {})).floored(state.get('priced', {}))
+    return Measured.of(state['measured']).floored(state['priced'])
 
 
 def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
     """Each id's wall in seconds: the run's declared :class:`ItemWall` over what the id was MEASURED to take.
 
     The measurement is the larger of its recorded duration and its floor (a kill's lower bound); an id with
-    neither is unmeasured. A state written before the wall existed gets the declared defaults.
+    neither is unmeasured. *state* is current (:func:`lab_commons.hpc.records.current_state`).
     """
-    wall = ItemWall(**state.get('item_wall', {}))
+    wall = ItemWall(**state['item_wall'])
     measured = planned(state)
     seen = {**measured.floors, **{n: max(s, measured.floors.get(n, 0.0)) for n, s in measured.durations.items()}}
     return {node: wall.bound(seen.get(node)) for node in ids}
@@ -286,6 +287,7 @@ def submit_round(
         name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=(ENV,), entry=f'{ITEM_MODULE}:run'
     )
     config = Config(job=job, cost=cost, policy=policy)
+    charge(runners[chosen.account], chosen, sum(ask_of(plan) for plan in plans))
     run_dir, job_ids = submit_bands(runners[chosen.account], plans, config, items, stamp=tag)
     for band, job_id in zip(bands, job_ids, strict=True):
         band['job_id'] = job_id
@@ -352,7 +354,7 @@ def submit_run(
     try:
         guard(run, f'run submit {spec.sha[:12]} on {grant.name}', now=time.time())
     except QuotaRefused as full:
-        raise NotSubmitted(str(full)) from full
+        raise NoRoom(str(full)) from full  # the ACCOUNT is full: retryable, never a verdict on the sha
     told = build_run(spec, run, f'{grant.name} ({host})')
     collected = run(collect_command(spec), None)
     ids, errored = parse_ids(collected), parse_collection_errors(collected)
@@ -501,8 +503,8 @@ def load_state(sha: str, part: str, machine: Machine, runners: dict[str, Runner]
         except Unreachable:
             continue
         answered = True
-        if text.strip():  # live state: a run in flight across a change is upgraded on read
-            return upgraded_state(json.loads(text)), runners[grant.account]
+        if text.strip():  # a retired shape is refused by name with its migration
+            return current_state(json.loads(text)), runners[grant.account]
     if not answered:
         msg = f'no login host of any grant answered; the jobs of {sha[:12]} keep running -- gather again later'
         raise Unreachable(msg)

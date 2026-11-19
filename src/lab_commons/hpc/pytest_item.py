@@ -25,7 +25,7 @@ ONE FILE PER ROUND, NOT TWO PER ITEM (``runs/*/streams`` measured 600-1000 files
 counts files against a quota). Every item of a round appends to ``.lab-ci/<tag>.jsonl``, each line tagged
 ``"item": <index>`` and written by ONE ``O_APPEND`` write -- whole lines from many nodes interleave, they do
 not tear. An attempt opens with ``{"item": i, "begin": ...}``, so a restarted item reads its last attempt
-only (:func:`split_streams`); its id list goes to node-local scratch. FORMATS-UPGRADE-ON-READ: a round
+only (:func:`split_streams`); its id list goes to node-local scratch. OLD-SHAPE-READER: a round
 submitted before the change (``.lab-ci/<tag>/<i>.jsonl``, one file per item) is upgraded one way -- its
 manifest by :func:`run` (the new runner appends to the round file), what it already wrote by
 :func:`tagged` (``@@@ <i>.jsonl`` sections) -- and nothing writes that shape any more.
@@ -55,6 +55,7 @@ __all__ = [
     'NOT_APPLICABLE_LINE',
     'NOT_APPLICABLE_MARKER',
     'STREAM_ENV',
+    'TEMP_PREFIX',
     'badness',
     'canonical',
     'declared_resources',
@@ -84,6 +85,9 @@ IDS_ENV = 'LAB_CI_IDS'
 #: restated by token because this file imports nothing (``tests/test_hpc_pytest_mapping.py`` pins the two equal).
 DECIDED: Final = frozenset({'ok', 'rejected', 'not_applicable'})
 
+#: :data:`lab_commons.temp.TEMP_PREFIX`, restated for the same reason (``tests/test_hpc_pytest_mapping.py`` pins it).
+TEMP_PREFIX: Final = 'dev-lab-'
+
 #: The marker DECLARING that a test may not apply here: a skip of a test carrying it is ``not_applicable``.
 NOT_APPLICABLE_MARKER: Final = 'not_applicable'
 
@@ -97,6 +101,12 @@ _RESOURCES: set[str] = set()
 #: The longest reason kept: the crash line, not the traceback -- a 3000-red run is triaged from the record,
 #: and a skip or xfail without its reason is an unexplained hole (measured 2026-10-10: 1127 empty skip reasons).
 _WHY_CHARS = 300
+
+#: THE marker of a failure SUBJECT line (``failure-subject: <subject>``): a ratchet test names each concrete
+#: subject of its red on one, and a failed phase's record keeps every such line, untruncated, after its crash
+#: line -- so a merge can tell a NEW subject inside a test already red on the base. Declared here, the layer
+#: that writes the record; ``dev_lab.dev.failprint`` imports it.
+SUBJECT_PREFIX: Final = 'failure-subject: '
 
 #: The crash text pytest-timeout writes; the strict-xpass prefix pytest writes.
 _TIMEOUT: Final = 'Timeout >'
@@ -133,11 +143,16 @@ def declared_resources(pyproject: Path) -> frozenset[str]:
     return frozenset(table.get('tests', {}).get('resources', []))
 
 
-def _cell(status: str, kind: str = '', text: str = '', expected: str = '', why: str = '') -> dict[str, Any]:
-    """A plain test cell (:class:`lab_commons.hpc.testcells.TestCell`'s plain form), spelled by token."""
+def _cell(
+    status: str, kind: str = '', text: str = '', expected: str = '', why: str = '', *, subjects: Collection[str] = ()
+) -> dict[str, Any]:
+    """A plain test cell (:class:`lab_commons.hpc.testcells.TestCell`'s plain form), spelled by token.
+
+    The reason text is cut to :data:`_WHY_CHARS`; each of *subjects* follows it on its own line, never cut.
+    """
     plain: dict[str, Any] = {'status': status}
     if kind:
-        plain['reason'] = {'kind': kind, 'text': text[:_WHY_CHARS]}
+        plain['reason'] = {'kind': kind, 'text': '\n'.join([text[:_WHY_CHARS], *subjects])}
     if expected:
         plain['expectation'] = {'status': expected, 'why': (why or 'xfail')[:_WHY_CHARS]}
     return plain
@@ -182,13 +197,25 @@ def _skipped(report: _Report, resources: Collection[str]) -> dict[str, Any]:
 def _failed(report: _Report) -> dict[str, Any]:
     """A failed phase: a timeout, a strict xpass, a failed call, or a setup/teardown error (:func:`judged`)."""
     text = str(report.longrepr or '')
+    named = subject_lines_of(text)
     if _TIMEOUT in text:
-        return _cell('timeout', 'timeout', _why(report.longrepr))
+        return _cell('timeout', 'timeout', _why(report.longrepr), subjects=named)
     if text.startswith(_STRICT_XPASS):
         return _cell('ok', expected='rejected', why=text.removeprefix(_STRICT_XPASS).strip())
     if report.when == 'call':
-        return _cell('rejected', 'assertion', _why(report.longrepr))
-    return _cell('error', report.when, _why(report.longrepr))
+        return _cell('rejected', 'assertion', _why(report.longrepr), subjects=named)
+    return _cell('error', report.when, _why(report.longrepr), subjects=named)
+
+
+def subject_lines_of(text: str) -> list[str]:
+    """Every distinct :data:`SUBJECT_PREFIX` line of *text*, in order, pytest's ``E`` gutter stripped."""
+    found: dict[str, None] = {}
+    marker = SUBJECT_PREFIX.strip()
+    for line in text.splitlines():
+        bare = line.strip().removeprefix('E ').strip()
+        if bare.startswith(marker) and (subject := bare.removeprefix(marker).strip()):
+            found[f'{SUBJECT_PREFIX}{subject}'] = None
+    return list(found)
 
 
 def badness(plain: Mapping[str, Any]) -> int:
@@ -356,7 +383,7 @@ def read_stream(text: str, node_ids: list[str]) -> dict[str, Any]:
     """Fold one item's stream into ``{cells, seconds, done, started}``.
 
     ``cells`` holds only the ids the stream reports, each its worst phase's line (:func:`badness`; the first
-    of equals): a plain test cell, or -- FORMATS-UPGRADE-ON-READ, a round in flight across the change -- a
+    of equals): a plain test cell, or -- OLD-SHAPE-READER, a round in flight across the change -- a
     retired ``{"outcome", "why"}`` line. ``seconds`` sums their phases; ``done`` is the closing record, or
     ``None`` when the item never closed -- then every id it did not report is still owed a run. ``started`` is
     the last id the plugin STARTED -- the one in flight if the process exited before its cell.
@@ -598,7 +625,10 @@ def run(item: dict[str, Any]) -> dict[str, Any]:
     target = str(stream.resolve())
     _write(target, index, {'begin': time.time()})
     start = time.monotonic()
-    with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryFile() as out:  # node-local, never GPFS
+    with (  # node-local, never GPFS
+        tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as scratch,
+        tempfile.TemporaryFile(prefix=TEMP_PREFIX) as out,
+    ):
         chosen = Path(scratch) / 'ids.json'
         env = {**os.environ, STREAM_ENV: target, ITEM_ENV: str(index), IDS_ENV: str(chosen)}
         rc, peak = _supervise(item, ids, target, index, env=env, out=out)

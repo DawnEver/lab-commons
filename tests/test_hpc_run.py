@@ -45,6 +45,7 @@ from lab_commons.hpc.plan import Plan, live_throttle, make_plan
 from lab_commons.hpc.progress import Progress, held_by_a_limit, parse_queue, where
 from lab_commons.hpc.pytest_item import canonical, item_argv, read_stream
 from lab_commons.hpc.records import (
+    STATE_KEYS,
     files_made,
     fold,
     held_cells,
@@ -126,7 +127,7 @@ def test_an_unclosed_stream_is_unfinished_and_keeps_what_it_finished() -> None:
 
 
 def test_a_retired_stream_line_of_a_round_in_flight_is_upgraded_on_read() -> None:
-    """FORMATS-UPGRADE-ON-READ: a round submitted before the change streams the retired words; fold reads them."""
+    """OLD-SHAPE-READER: a round submitted before the change streams the retired words; fold reads them."""
     items = [{'ids': ['t.py::a', 't.py::b']}]
     streams = {
         0: '{"id": "t.py::a", "outcome": "passed", "s": 1}\n'
@@ -652,21 +653,26 @@ class FakeRunCluster:
             self.scripts.append(stdin or '')
         if 'sbatch' in command:
             return f'{4242 + len(self.manifests)}\n'
-        if 'sacct' in command and self.active:
-            self.active -= 1
-            return '\n'.join(f'1_{i}|RUNNING' for i in range(9)) + '\n'
-        if 'sacct' in command:
-            state = 'OUT_OF_MEMORY' if (self.oom and len(self.manifests) == 1) or self.hog else 'TIMEOUT'
-            hour = 1 + len(self.manifests)
-            rows = (
-                f'1_{i}|{state if i == 0 else "COMPLETED"}|2026-10-11T0{hour}:00:00|2026-10-11T0{hour}:01:00'
-                f'|2026-10-11T0{hour}:{2 + i:02d}:00|{60 + 60 * i}|1'
-                for i in range(9)
-            )
-            return '\n'.join(rows) + '\n'
+        if 'sacct' in command:  # rows of the job ids asked (``-j a,b``): sacct never answers for another job
+            jobs = command.split(' -j ', 1)[1].split(maxsplit=1)[0].split(',')
+            rows = self._sacct_rows()
+            return ''.join(f'{job}_{row}\n' for job in jobs for row in rows)
         if '*.jsonl' in command:
             return self._streams()
         return ''
+
+    def _sacct_rows(self) -> list[str]:
+        """One job's nine shard rows after its ``<job>_`` prefix: RUNNING while *active* polls remain."""
+        if self.active:
+            self.active -= 1
+            return [f'{i}|RUNNING' for i in range(9)]
+        state = 'OUT_OF_MEMORY' if (self.oom and len(self.manifests) == 1) or self.hog else 'TIMEOUT'
+        hour = 1 + len(self.manifests)
+        return [
+            f'{i}|{state if i == 0 else "COMPLETED"}|2026-10-11T0{hour}:00:00|2026-10-11T0{hour}:01:00'
+            f'|2026-10-11T0{hour}:{2 + i:02d}:00|{60 + 60 * i}|1'
+            for i in range(9)
+        ]
 
     def _streams(self) -> str:
         out = []
@@ -1046,6 +1052,19 @@ def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
     assert 'E="$HOME"/ci/envs/k1' in script, 'every env lives under its key'
     assert '"$HOME"/ci/envs/k1.log' in script, 'the build log sits beside the env it builds'
     assert 'git uv cargo' in needs_script(spec)
+
+
+def test_a_build_marks_its_tree_in_flight_before_the_env_step() -> None:
+    """A build marks its tree in flight before the env step.
+
+    Measured 2026-11-11 on a cluster account: a re-run REUSED an old tree, touched none of its mtimes, and
+    retention's ``tree-not-in-flight`` (dev_lab.dev.retentionplan: active = tree or ``.lab-ci`` touched within
+    min_age_hours) removed it under ``uv sync`` -- the env log ended ``Current directory does not exist``.
+    """
+    script = build_script(RunSpec(sha=SHA, repo_url='u', builds=Builds(install='uv sync', env_key='k1')))
+    mark = 'touch .lab-ci'
+    assert mark in script, 'a reused tree must read as being built, or retention removes the cwd of the build'
+    assert script.index(f'cd "$HOME"/ci/trees/{SHA}') < script.index(mark) < script.index('uv venv')
 
 
 def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
@@ -1595,9 +1614,19 @@ def _gather_cli(fake: FakeRunCluster, tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(cli, 'load_grants', lambda: MACHINE)
     monkeypatch.setattr(cli, 'submitter', lambda: lambda _g: fake)  # gather: this login node's shell
     slept: list[float] = []
-    monkeypatch.setattr(cli, '_sleep', slept.append)
+
+    def sleep(seconds: float) -> None:  # a wait that never settles FAILS here, never hangs the suite
+        slept.append(seconds)
+        if len(slept) > _POLLS_MAX:
+            pytest.fail(f'gather --wait polled {len(slept)} times and never settled')
+
+    monkeypatch.setattr(cli, '_sleep', sleep)
     _submit(fake)
     return cli, slept
+
+
+#: More polls than any gather --wait scenario here needs; past it the wait is a hang, failed by name.
+_POLLS_MAX: Final = 50
 
 
 def test_gather_wait_polls_until_the_run_has_its_record(
@@ -1894,6 +1923,13 @@ def test_a_run_whose_every_id_is_carried_writes_its_record_without_a_job() -> No
     assert not fake.manifests, 'nothing was submitted'
     assert state['rounds'] == []
     assert _gather(fake) == state['record']
+
+
+def test_the_writer_writes_every_key_the_reader_requires() -> None:
+    """The state :func:`submit_run` writes holds every :data:`STATE_KEYS`, so the reader may fill none."""
+    fake = FakeRunCluster()
+    _submit(fake)
+    assert json.loads(fake.state).keys() >= STATE_KEYS
 
 
 def test_two_parts_of_one_sha_are_two_runs_with_two_states_and_two_job_names() -> None:

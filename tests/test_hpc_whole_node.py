@@ -108,7 +108,7 @@ def test_a_topology_shape_keeps_only_partitions_its_class_describes() -> None:
         (replace(NODE96, architecture=''), CATALOG, 'names no architecture'),
         (replace(NODE96, partitions=('hmemq',)), CATALOG, 'no node class'),
         (NODE96, CATALOG.replace('"0-5"', '"0-5,96-101"'), 'Slurm reports'),
-        # A defect of the catalog or the grant is not a lack of room: no costed grant may answer it.
+        # A defect of the catalog or the grant is not a lack of room: no billed grant may answer it.
         (replace(NODE96, architecture='b'), CATALOG, "no architecture 'b'"),
         (NODE96, None, 'junction'),
     ],
