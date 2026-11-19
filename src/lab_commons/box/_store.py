@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Final
 
 from lab_commons.box.demand import Holding, Refused
+from lab_commons.home import part
 
 __all__ = ['BOX_ENV', 'box_path', 'connect', 'immediate', 'read', 'untrusted']
 
@@ -44,15 +45,14 @@ CREATE TABLE IF NOT EXISTS tickets (
 """
 
 
-def box_path() -> Path:
-    """The ledger file; see the module docstring for why it lives there."""
+def box_path(*, platform: str = os.name) -> Path:
+    """The ledger file on *platform* (an ``os.name``); see the module docstring for why it lives there."""
     override = os.environ.get(BOX_ENV)
     if override:
         return Path(override).expanduser()
-    if os.name == 'nt':
+    if platform == 'nt':
         return Path(os.environ.get('PROGRAMDATA', r'C:\ProgramData')) / 'lab-commons' / 'box.sqlite'
-    state = os.environ.get('XDG_STATE_HOME') or str(Path.home() / '.local' / 'state')
-    return Path(state) / 'lab-commons' / 'box.sqlite'
+    return part('state') / 'box.sqlite'
 
 
 def untrusted(*, mode: int, uid: int, me: int, link: bool) -> str | None:
@@ -126,6 +126,7 @@ def _set_up(con: sqlite3.Connection) -> None:
             columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
             for name, spelled in added:
                 if name not in columns:  # a ledger file written before the column existed: the schema moves forward
+                    # OLD-SHAPE-READER
                     con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
 
 

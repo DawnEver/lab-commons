@@ -45,6 +45,7 @@ from lab_commons.hpc.plan import Plan, live_throttle, make_plan
 from lab_commons.hpc.progress import Progress, held_by_a_limit, parse_queue, where
 from lab_commons.hpc.pytest_item import canonical, item_argv, read_stream
 from lab_commons.hpc.records import (
+    STATE_KEYS,
     files_made,
     fold,
     held_cells,
@@ -126,7 +127,7 @@ def test_an_unclosed_stream_is_unfinished_and_keeps_what_it_finished() -> None:
 
 
 def test_a_retired_stream_line_of_a_round_in_flight_is_upgraded_on_read() -> None:
-    """FORMATS-UPGRADE-ON-READ: a round submitted before the change streams the retired words; fold reads them."""
+    """OLD-SHAPE-READER: a round submitted before the change streams the retired words; fold reads them."""
     items = [{'ids': ['t.py::a', 't.py::b']}]
     streams = {
         0: '{"id": "t.py::a", "outcome": "passed", "s": 1}\n'
@@ -1922,6 +1923,13 @@ def test_a_run_whose_every_id_is_carried_writes_its_record_without_a_job() -> No
     assert not fake.manifests, 'nothing was submitted'
     assert state['rounds'] == []
     assert _gather(fake) == state['record']
+
+
+def test_the_writer_writes_every_key_the_reader_requires() -> None:
+    """The state :func:`submit_run` writes holds every :data:`STATE_KEYS`, so the reader may fill none."""
+    fake = FakeRunCluster()
+    _submit(fake)
+    assert json.loads(fake.state).keys() >= STATE_KEYS
 
 
 def test_two_parts_of_one_sha_are_two_runs_with_two_states_and_two_job_names() -> None:

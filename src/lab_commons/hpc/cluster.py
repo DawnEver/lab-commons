@@ -40,7 +40,6 @@ __all__ = [
     'BUILD_TIMEOUT',
     'RUN_DIR',
     'SUBMIT_LIMIT',
-    'TERMINAL_OK',
     'NotOnCluster',
     'Runner',
     'Submission',
@@ -72,9 +71,6 @@ class SubmitLimit(RuntimeError):
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
 type Runner = Callable[[str, str | None], str]
-
-#: The only array-task state that means the shard's results file should exist.
-TERMINAL_OK: Final = 'COMPLETED'
 
 _TIMEOUT: Final = 300.0
 
@@ -426,7 +422,7 @@ def gather(run: Runner, run_dir: str) -> dict[int, list[dict[str, Any]]]:
     """Every RETURNED shard's item results, keyed by shard index -- read from the run's one results file.
 
     A run an earlier worker wrote holds one ``results/<shard>.json`` per shard instead; it is read the same
-    way (FORMATS-UPGRADE-ON-READ: jobs still running across the change must gather), never written.
+    way (OLD-SHAPE-READER: jobs still running across the change must gather), never written.
     """
     quoted = _sh_path(run_dir)
     out = run(
@@ -455,7 +451,7 @@ def _returned(text: str) -> dict[int, list[dict[str, Any]]]:
             ok = event.cell.status is Status.OK
             why = '' if event.cell.reason is None else event.cell.reason.text
             items[int(event.key)] = {**event.data, 'ok': ok, 'status': event.cell.status.value, 'error': why}
-        elif event.kind == ITEM:  # a pre-Cell worker's line (FORMATS-UPGRADE-ON-READ)
+        elif event.kind == ITEM:  # a pre-Cell worker's line (OLD-SHAPE-READER)
             items[int(event.key)] = {**event.data, 'status': 'ok' if event.data['ok'] else 'error'}
         elif event.kind == SHARD:
             codes[int(event.key)] = int(event.data['code'])

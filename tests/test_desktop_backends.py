@@ -176,7 +176,26 @@ class TestDarwin:
         assert found[0] == Window(handle=7, pid=4242, title='Solver', rect=(1, 2, 31, 42), visible=True, enabled=None,
                                   responding=None)  # fmt: skip
         assert not found[1].visible, 'a layer-25 window is not an application window'
+
+    def test_a_modal_dialog_is_visible(self) -> None:
+        """A dialog sits at the modal-panel level (8); with ``layer == 0`` alone it never read visible."""
+        rows = [
+            {'id': 9, 'pid': 4242, 'title': 'Licence', 'layer': 8, 'onscreen': True, 'x': 0, 'y': 0, 'w': 5, 'h': 5}
+        ]
+        recorder = _Recorder({'CGWindowListCopyWindowInfo': json.dumps(rows).encode()})
+        assert self._mac(recorder).windows()[0].visible
         assert recorder.argvs[0][:4] == ['osascript', '-l', 'JavaScript', '-e']
+
+    def test_an_empty_window_list_is_refused_by_name(self) -> None:
+        """An empty window list is a session the process cannot see, never "no windows".
+
+        A GUI session always has windows (the menu bar at least); macos-latest read ZERO rows while a dialog was up.
+        """
+        for empty in (b'[]', b''):
+            with pytest.raises(UnsupportedError) as refused:
+                self._mac(_Recorder({'CGWindowListCopyWindowInfo': empty})).windows()
+            assert refused.value.reason == 'desktop.no_accessibility'
+            assert 'window list' in str(refused.value)
 
     def test_press_resolves_the_label_then_passes_every_value_as_argv(self) -> None:
         rows = [

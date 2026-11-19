@@ -5,7 +5,11 @@ one accessible root per application, whose bus name maps to a pid through
 ``org.freedesktop.DBus.GetConnectionUnixProcessID``. AT-SPI knows no X window id, so a window is matched
 to the ONE frame of an application OF ITS PID whose name is exactly its title -- none or several is
 refused by name, and an application of any other pid is never walked. Each call is one ``gdbus call``
-with its own deadline; one missed is :class:`WindowBusyError`. Every argument is a GVariant literal built
+with its own deadline; one missed is :class:`WindowBusyError`, one refused is ``desktop.no_atspi`` carrying what
+``gdbus`` said. An OPTIONAL read (text, value, accessible id) a node declares and then refuses -- measured on GTK
+nodes on ubuntu-latest -- reads ``None``. The frame is waited for up to :data:`FRAME_WAIT_S`: the registry refuses
+``GetChildren`` just after a session starts and an application registers its frame after its window maps. Every
+argument is a GVariant literal built
 here (:func:`gvariant_string`), never a shell string; every answer is GVariant text read by
 :func:`parse_gvariant`.
 """
@@ -14,8 +18,9 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from lab_commons.desktop._core import Control, UnsupportedError, Window, WindowBusyError, pick
@@ -27,10 +32,18 @@ Runner = Callable[[list[str], float], bytes]
 
 _A11Y = 'org.a11y.atspi.'
 _ROOT = '/org/a11y/atspi/accessible/root'
-#: ``ATSPI_STATE_ENABLED``: bit 8 of the first state word.
-_STATE_ENABLED = 1 << 8
+#: ``ATSPI_STATE_ENABLED`` (bit 8) and ``ATSPI_STATE_SENSITIVE`` (bit 24) of the first state word: a control is enabled
+#: when EITHER is set. GTK3 sets both; GTK4 sets only SENSITIVE (``gtkatspicontext.c``; measured on ubuntu-latest,
+#: where zenity's OK button read disabled), so reading ENABLED alone refused every GTK4 press.
+_STATE_ENABLED = (1 << 8) | (1 << 24)
 #: The deadline on one ``gdbus call``, seconds.
 _CALL_S = 5.0
+#: How long the window's frame is waited for while the registry or the application comes up, seconds.
+FRAME_WAIT_S = 10.0
+#: The pause between two looks for the frame, seconds.
+_FRAME_POLL_S = 0.2
+#: What gdbus says when the bus address no longer answers (the bus moved).
+_UNREACHABLE = b'Error connecting'
 
 
 @dataclass(frozen=True)
@@ -86,26 +99,44 @@ class Atspi:
     # ---- the tree ----------------------------------------------------------------------------------------
 
     def _frame(self, window: Window) -> _Node:
-        """The ONE frame titled exactly ``window.title`` among the applications of ``window.pid``."""
+        """The ONE frame titled exactly ``window.title`` among the applications of ``window.pid``, waited for."""
+        self._bus_address()  # an absent bus is refused at once, never waited for
+        deadline = time.monotonic() + FRAME_WAIT_S
+        while True:
+            try:
+                frames = self._frames(window)
+                why = ''
+            except UnsupportedError as refused:
+                frames, why = [], f'; last refusal: {refused}'
+            if len(frames) == 1:
+                return frames[0]
+            if len(frames) > 1 or time.monotonic() >= deadline:
+                found = 'no' if not frames else f'{len(frames)}'
+                msg = (
+                    f'{found} AT-SPI frame(s) of pid {window.pid} titled exactly {window.title!r} '
+                    f'(window {window.handle:#x}) within {FRAME_WAIT_S:g} s: the application must expose its window '
+                    f'to AT-SPI, once{why}'
+                )
+                raise UnsupportedError(msg, 'desktop.no_atspi')
+            time.sleep(_FRAME_POLL_S)
+
+    def _frames(self, window: Window) -> list[_Node]:
+        """One look: the frames of ``window.pid`` titled exactly its title; an application gone mid-look is skipped."""
         frames = []
         for bus, path in self._call(window, f'{_A11Y}Registry', _ROOT, f'{_A11Y}Accessible.GetChildren')[0]:
-            pid = self._call(
-                window, 'org.freedesktop.DBus', '/org/freedesktop/DBus',
-                'org.freedesktop.DBus.GetConnectionUnixProcessID', gvariant_string(bus),
-            )[0]  # fmt: skip
+            try:
+                pid = self._call(
+                    window, 'org.freedesktop.DBus', '/org/freedesktop/DBus',
+                    'org.freedesktop.DBus.GetConnectionUnixProcessID', gvariant_string(bus),
+                )[0]  # fmt: skip
+            except UnsupportedError:
+                continue  # the application left the bus between the registry's answer and this question
             if pid != window.pid:
                 continue
             for child_bus, child in self._children(window, bus, path):
                 if self._name(window, child_bus, child) == window.title:
                     frames.append(_Node(child_bus, child, self._interfaces(window, child_bus, child)))
-        if len(frames) != 1:
-            found = 'no' if not frames else f'{len(frames)}'
-            msg = (
-                f'{found} AT-SPI frame(s) of pid {window.pid} titled exactly {window.title!r} '
-                f'(window {window.handle:#x}): the application must expose its window to AT-SPI, once'
-            )
-            raise UnsupportedError(msg, 'desktop.no_atspi')
-        return frames[0]
+        return frames
 
     def _walk(self, window: Window) -> list[tuple[Control, _Node]]:
         frame = self._frame(window)
@@ -118,19 +149,30 @@ class Atspi:
             found.append((control, node))
             # depth first, in the tree's own order
             pending[:0] = [(child, control.id) for child in self._children(window, bus, path)]
-        return found
+        return _labelled(found)
 
     def _control(self, window: Window, node: _Node, parent: str | None) -> Control:
         call = lambda method, *args: self._call(window, node.bus, node.path, method, *args)[0]  # noqa: E731
+
+        def optional(method: str, *args: str) -> Any:  # noqa: ANN401 -- GVariant
+            try:
+                return call(method, *args)
+            except UnsupportedError:
+                return None  # declared, then refused by the node: no value, not a failed walk
+
         actions: list[str] = []
         value: str | None = None
-        if f'{_A11Y}Action' in node.interfaces:
+        # GTK4 declares Action on EVERY widget (measured on ubuntu-latest, #186): pressable is having an action
+        if f'{_A11Y}Action' in node.interfaces and optional(
+            'org.freedesktop.DBus.Properties.Get', gvariant_string(f'{_A11Y}Action'), gvariant_string('NActions')
+        ):
             actions.append('press')
         if f'{_A11Y}Text' in node.interfaces:
-            value = call(f'{_A11Y}Text.GetText', '0', '-1')
+            value = optional(f'{_A11Y}Text.GetText', '0', '-1')
         if f'{_A11Y}Value' in node.interfaces:
-            value = str(call('org.freedesktop.DBus.Properties.Get', gvariant_string(f'{_A11Y}Value'),
-                             gvariant_string('CurrentValue')))  # fmt: skip
+            current = optional('org.freedesktop.DBus.Properties.Get', gvariant_string(f'{_A11Y}Value'),
+                               gvariant_string('CurrentValue'))  # fmt: skip
+            value = None if current is None else str(current)
         if {f'{_A11Y}EditableText', f'{_A11Y}Value'} & node.interfaces:
             actions.append('set_value')
         return Control(
@@ -141,7 +183,7 @@ class Atspi:
             actions=tuple(actions),
             id=f'{node.bus}:{node.path}',
             parent=parent,
-            automation_id=call(
+            automation_id=optional(
                 'org.freedesktop.DBus.Properties.Get', gvariant_string(f'{_A11Y}Accessible'),
                 gvariant_string('AccessibleId'),
             ) or None,
@@ -176,14 +218,63 @@ class Atspi:
         return self._address
 
     def _call(self, window: Window, dest: str, path: str, method: str, *args: str) -> Any:  # noqa: ANN401 -- GVariant
-        argv = ['gdbus', 'call', '--address', self._bus_address(), '--dest', dest, '--object-path', path,
-                '--method', method, *args]  # fmt: skip
         try:
-            answer = self._run(argv, _CALL_S)
+            try:
+                answer = self._ask(dest, path, method, *args)
+            except subprocess.CalledProcessError as refused:
+                if _UNREACHABLE not in (refused.stderr or b''):
+                    raise
+                # the bus MOVED (its launcher restarted it; measured on ubuntu-latest): ask its address again, once
+                self._address = None
+                answer = self._ask(dest, path, method, *args)
         except subprocess.TimeoutExpired as late:
             msg = f'AT-SPI {method} on {dest}{path} for window {window.handle:#x} missed {_CALL_S:g} s: busy'
             raise WindowBusyError(msg) from late
+        except subprocess.CalledProcessError as refused:
+            said = (refused.stderr or b'').decode('utf-8', 'replace').strip() or f'exit {refused.returncode}'
+            msg = f'AT-SPI {method} on {dest}{path} for window {window.handle:#x} was refused: {said}'
+            raise UnsupportedError(msg, 'desktop.no_atspi') from refused
         return parse_gvariant(answer.decode('utf-8', 'replace'))
+
+    def _ask(self, dest: str, path: str, method: str, *args: str) -> bytes:
+        argv = ['gdbus', 'call', '--address', self._bus_address(), '--dest', dest, '--object-path', path,
+                '--method', method, *args]  # fmt: skip
+        return self._run(argv, _CALL_S)
+
+
+def _labelled(found: list[tuple[Control, _Node]]) -> list[tuple[Control, _Node]]:
+    """A nameless pressable control takes the ONE name its descendants carry (GTK4 names a button's child label).
+
+    Measured on ubuntu-latest: zenity's Cancel button read ('', 'push button') beside a ('Cancel', 'label') child, so a
+    press by the label it shows found no pressable control. Two different names below it stay nameless (ambiguous).
+    """
+    names_below: dict[str, set[str]] = {}
+    parents = {control.id: control.parent for control, _ in found}
+    for control, _ in found:
+        if not control.name:
+            continue
+        up = control.parent
+        while up is not None:
+            names_below.setdefault(up, set()).add(control.name)
+            up = parents.get(up)
+    named = [
+        (replace(control, name=next(iter(names_below[control.id]))), node)
+        if not control.name and 'press' in control.actions and len(names_below.get(control.id, ())) == 1
+        else (control, node)
+        for control, node in found
+    ]
+    # A pressable child repeating its pressable parent's name is that control's CONTENT, not a second control: GTK4
+    # labels carry an action too (#187), so the 'OK' label inside the 'OK' button made a press by 'OK' ambiguous.
+    by_id = {control.id: control for control, _ in named}
+    return [
+        (replace(control, actions=tuple(a for a in control.actions if a != 'press')), node)
+        if 'press' in control.actions
+        and (parent := by_id.get(control.parent or '')) is not None
+        and 'press' in parent.actions
+        and parent.name == control.name
+        else (control, node)
+        for control, node in named
+    ]
 
 
 def gvariant_string(text: str) -> str:

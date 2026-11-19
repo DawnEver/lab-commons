@@ -63,8 +63,8 @@ seat). Every row this code writes starts now and ends within :data:`~lab_commons
 a row starting in the future or ending past that is reaped on sight, live pid or not. And a ledger file
 another user could write is refused at open (:func:`untrusted`): its rows carry liveness probes the reaper
 RUNS, so a writable ledger would be code execution, not only a pinned seat. Elsewhere
-``$XDG_STATE_HOME/lab-commons/box.sqlite`` (``~/.local/state`` by default): per-user, since a
-POSIX machine-wide state dir needs root to create; on a single-user box the two coincide.
+the machine home's ``state/box.sqlite`` (:func:`lab_commons.home.part`): per-user, since a POSIX
+machine-wide state dir needs root to create; on a single-user box the two coincide.
 """
 
 from __future__ import annotations
@@ -141,8 +141,15 @@ def inside_a_claim() -> bool:
 
 
 def holdings() -> list[Holding]:
-    """Every claim in the ledger now, oldest first."""
+    """Every LIVE claim in the ledger now, oldest first: the rows admission would count.
+
+    The read reaps first (:func:`_reap`, no probe run: an external claim is left to the probing :func:`reap`),
+    so a kept claim whose holder died -- gone, or its pid reborn as another process -- is never read as held
+    (2026-11-16: a run killed by its shell timeout left a Designer claim reading the box full for ~23 h).
+    """
     with closing(_connect()) as con:
+        with _immediate(con):
+            _reap(con, time.time())
         return _read(con)
 
 

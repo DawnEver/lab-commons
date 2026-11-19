@@ -17,7 +17,8 @@ order. A grant whose login hosts all fail to answer is NAMED, never read as empt
 
 A JOB HAS A FILE BUDGET (``[policy] file_budget``): ``gather`` counts each placement's run directory on the
 shared home and names every one over it -- the job fails. A run an earlier worker wrote (one results file
-per shard) is upgraded on read and named as such; its file count was that worker's, so it is not judged.
+per shard) is read in its old shape (OLD-SHAPE-READER) and named as such; its file count was that
+worker's, so it is not judged.
 
 A DEAD GRANT'S SLICE IS RE-PLACED BY THE RETRY RULE. ``retry`` re-submits what has no results file and is
 not active -- on a grant that answers, its own shards, as before. On a grant that does not answer nothing is
@@ -29,6 +30,7 @@ re-placed slice is an ordinary new submission.
 from __future__ import annotations
 
 import json
+import shlex
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from typing import Any
@@ -51,6 +53,7 @@ __all__ = [
     'Gathered',
     'Reach',
     'built_config',
+    'cancel_job',
     'gather_job',
     'grant_of',
     'plan_job',
@@ -59,7 +62,6 @@ __all__ = [
     'settled',
     'shard_counts',
     'shard_counts_of',
-    'status_job',
     'status_lines',
     'submit_job',
 ]
@@ -438,16 +440,24 @@ def shard_counts_of(records: list[dict[str, Any]], machine: Machine, reach: Reac
             if isinstance(answer, Unreachable):
                 rows.append((placement['grant'], answer))
                 continue
-            states: dict[int, str] = {}
-            for job_id in placement['job_ids']:  # a resubmit supersedes, shard by shard
-                states.update(answer.get(job_id, {}))
-            counts: dict[str, int] = {}
-            for shard in range(placement['shards']):
-                state = states.get(shard, 'UNKNOWN')
-                counts[state] = counts.get(state, 0) + 1
-            rows.append((placement['grant'], counts))
+            rows.append((placement['grant'], _counted(placement, answer)))
         found.append(rows)
     return found
+
+
+def _counted(placement: dict[str, Any], answer: dict[str, dict[int, str]]) -> dict[str, int]:
+    """*placement*'s shards counted by state; a recorded cancellation still queued or unlisted counts CANCELLED."""
+    states: dict[int, str] = {}
+    for job_id in placement['job_ids']:  # a resubmit supersedes, shard by shard
+        states.update(answer.get(job_id, {}))
+    cancelled = set(placement.get('cancelled', ()))
+    counts: dict[str, int] = {}
+    for shard in range(placement['shards']):
+        state = states.get(shard, 'UNKNOWN')
+        if shard in cancelled and (state in ACTIVE or state == 'UNKNOWN'):
+            state = CANCELLED  # scancel'd while accounting lags: never waited on
+        counts[state] = counts.get(state, 0) + 1
+    return counts
 
 
 def shard_counts(record: dict[str, Any], machine: Machine, reach: Reach) -> Found:
@@ -470,9 +480,41 @@ def settled(found: list[tuple[str, dict[str, int] | Unreachable]]) -> bool:
     return all(not isinstance(c, Unreachable) and not ACTIVE.intersection(c) for _g, c in found)
 
 
-def status_job(record: dict[str, Any], machine: Machine, reach: Reach) -> list[str]:
-    """One line per placement: its shards by Slurm state, or that its grant did not answer."""
-    return status_lines(shard_counts(record, machine, reach))
+#: What a recorded cancellation reports while ``sacct`` still lists the shard as queued, running or absent.
+CANCELLED = 'CANCELLED'
+
+
+def cancel_job(record: dict[str, Any], machine: Machine, reach: Reach, *, pending_only: bool) -> list[str]:
+    """``scancel`` each placement's ACTIVE shards -- only the PENDING ones with *pending_only* -- and record them.
+
+    Through the runner ``status`` reads by: one ``sacct`` and at most one ``scancel`` per placement, each shard
+    named ``<job id>_<shard>`` of the submission holding it now (a resubmit supersedes). A started shard keeps
+    running under *pending_only*. Mutates *record*: ``placement['cancelled']`` lists the shards, so ``status``
+    and ``gather --wait`` count them CANCELLED and never wait on them. Returns one line per placement.
+    """
+    wanted = frozenset({'PENDING'}) if pending_only else ACTIVE
+    said = []
+    for placement in record['placements']:
+        run = reach(grant_of(placement, machine))
+        try:
+            per_job = job_states(run, placement['job_ids'])
+            holder: dict[int, tuple[str, str]] = {}
+            for job_id in placement['job_ids']:  # in submission order: a later one wins
+                holder.update({shard: (job_id, state) for shard, state in per_job.get(job_id, {}).items()})
+            hit = sorted(s for s, (_j, state) in holder.items() if state in wanted and s < placement['shards'])
+            if hit:
+                run('scancel ' + ' '.join(shlex.quote(f'{holder[s][0]}_{s}') for s in hit), None)
+        except Unreachable as silent:
+            said.append(f'{placement["grant"]}: did not answer ({silent}); nothing cancelled there')
+            continue
+        placement['cancelled'] = sorted(set(placement.get('cancelled', [])) | set(hit))
+        kept = sum(state in ACTIVE for _j, state in holder.values()) - len(hit)
+        said.append(
+            f'{placement["grant"]}: cancelled {len(hit)} shards'
+            + (f' ({", ".join(map(str, hit))})' if hit else '')
+            + (f'; {kept} started keep running' if pending_only and kept else '')
+        )
+    return said
 
 
 @dataclass(frozen=True)
@@ -557,6 +599,8 @@ def retry_job(
         charge(run, grant_of(placement, machine), ask_of(plan, len(redo)))
         sub = submit(run, plan, config, [], stamp=placement['stamp'], only=redo)
         placement['job_ids'].append(sub.job_id)
+        if 'cancelled' in placement:  # a re-submitted shard runs again: no longer cancelled
+            placement['cancelled'] = [c for c in placement['cancelled'] if c not in redo]
         said.append(f'{placement["grant"]}: resubmitted {len(redo)} shards as job {sub.job_id}')
     alive = tuple(g for g in machine.grants if g.account not in {tuple(p['account']) for p in dead})
     for n, placement in enumerate(dead):

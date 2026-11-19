@@ -1,9 +1,10 @@
 """A run's RESULTS: streams folded into test cells, and the record ``run-<sha>-<part>-<req>.json.gz``.
 
 A run's ``cells`` map each id it COVERED to its plain test cell (:class:`lab_commons.hpc.testcells.TestCell`);
-an id it hands to another part is in ``handed`` and nowhere else. A run's state (``state.json``) is LIVE
--- a run in flight crosses any change -- so a state still holding the retired ``outcomes`` words is upgraded
-on read (:func:`upgraded_state`). A run RECORD is regenerable: one in the retired shape is refused by name
+an id it hands to another part is in ``handed`` and nowhere else. A run's state (``state.json``) is read in
+its CURRENT shape only (:func:`current_state`): one in a retired shape, or lacking a key every writer now
+writes, is refused by name (:class:`RetiredState`) with its one-shot migration, :func:`migrated_state`
+(FORMATS-MIGRATE-ONCE). A run RECORD is regenerable: one in the retired shape is refused by name
 (:func:`read_record`) and the forge re-produces its sha.
 """
 
@@ -17,12 +18,14 @@ import math
 import re
 import zlib
 from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
 from lab_commons.compute.durable import durable_write
 from lab_commons.compute.learned import Run
 from lab_commons.compute.measured import Measured
+from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
 from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, badness, read_stream, split_streams, tagged
@@ -31,14 +34,18 @@ from lab_commons.hpc.testcells import TestCell, counts, upgraded
 from lab_commons.outcomes import Cell, Reason, Status
 
 __all__ = [
+    'STATE_KEYS',
     'RecordRefused',
     'RetiredRecord',
+    'RetiredState',
     'cells_of',
+    'current_state',
     'files_made',
     'fold',
     'held_cells',
     'job_measured',
     'kept_text',
+    'migrated_state',
     'read_record',
     'read_streams',
     'record_name',
@@ -48,7 +55,6 @@ __all__ = [
     'split_streams',
     'stream_sources',
     'summary',
-    'upgraded_state',
     'write_record',
 ]
 
@@ -76,6 +82,14 @@ _RETIRED_KEY: Final = 'outcomes'
 
 class RetiredRecord(ValueError):
     """A run record in the retired word shape: regenerable, so refused -- the forge re-produces its sha."""
+
+
+class RetiredState(ValueError):
+    """A run state in a retired shape, or lacking a key every writer writes: migrate it once, never read it."""
+
+
+#: Keys every run state's writer (:func:`lab_commons.hpc.run.submit_run`) writes; a state lacking one is retired.
+STATE_KEYS: Final = frozenset({'cells', 'rounds', 'measured', 'priced', 'item_wall', 'grown', 'held'})
 
 
 class RecordRefused(ValueError):
@@ -354,7 +368,7 @@ def kept_text(live: Path) -> str:
 def read_streams(run: Runner, live: str, kept: str) -> dict[int, str]:
     """Every item stream of a round in one command: its tree's file while the tree exists, else the kept file.
 
-    FORMATS-UPGRADE-ON-READ: a round in flight across the change also has its retired directory read, and a
+    OLD-SHAPE-READER: a round in flight across the change also has its retired directory read, and a
     run kept before it its retired ``streams/<tag>.txt``; both are upgraded by :func:`tagged`.
     """
     tag = PurePosixPath(live).stem
@@ -530,11 +544,11 @@ def held_cells(state: dict[str, Any], run: Runner) -> dict[str, tuple[dict[str, 
 
     Its record when it has one, else its folded rounds plus every id the streams of its round in flight
     already reported -- the finished shards of a SUPERSEDED run. A RETRYABLE cell (never reported, lost, killed)
-    is no answer and is never carried. *state* is LIVE and is read through :func:`upgraded_state`.
+    is no answer and is never carried. *state* is read in its current shape only (:func:`current_state`).
 
     A cell carried into it keeps its origin; one it ran names its own sha.
     """
-    state = upgraded_state(state)
+    state = current_state(state)
     record = state.get('record')
     cells = dict((record or state)['cells'])
     current = state.get('current')
@@ -608,12 +622,56 @@ def _grown_by_id(grown: Mapping[str, float], nodes: Sequence[str]) -> dict[str, 
     return by_id
 
 
-def upgraded_state(state: dict[str, Any]) -> dict[str, Any]:
-    """A run's LIVE *state*, its retired word and array shapes (and its record's words) upgraded on read."""
+def _retired_shape(state: Mapping[str, Any]) -> list[str]:
+    """What makes *state* a retired shape: each retired key it holds and each current key it lacks."""
+    found = [f'missing {key!r}' for key in sorted(STATE_KEYS - state.keys())]
+    found += [f'retired {key!r}' for key in (_RETIRED_KEY, 'oom') if key in state]
+    record = state.get('record')
+    if isinstance(record, dict) and _RETIRED_KEY in record:
+        found.append(f'retired record {_RETIRED_KEY!r}')
+    if any('job_id' in r for r in state.get('rounds', [])) or 'job_id' in (state.get('current') or {}):
+        found.append("retired 'job_id' (one array per round)")
+    if any('::' not in key for key in state.get('grown', {})):
+        found.append("retired file-keyed 'grown'")
+    return found
+
+
+def current_state(state: dict[str, Any]) -> dict[str, Any]:
+    """*state* when it is in the current shape; else :class:`RetiredState`, naming what and the migration.
+
+    Every key of :data:`STATE_KEYS` is written by every writer, so a missing one is an OLD FORMAT, never "not
+    yet": the reader fills nothing. ``record`` and ``current`` are the exceptions that legitimately come and
+    go -- a run without ``record`` has not settled, one without ``current`` has no round in flight.
+    """
+    found = _retired_shape(state)
+    if found:
+        msg = (
+            f'run state of {str(state.get("sha", "?"))[:12]} is a retired shape ({", ".join(found)}); '
+            'migrate it once with lab_commons.hpc.records.migrated_state and write it back, or re-run the sha'
+        )
+        raise RetiredState(msg)
+    return state
+
+
+def migrated_state(state: dict[str, Any]) -> dict[str, Any]:
+    """The ONE-SHOT migration of a run state to the current shape (FORMATS-MIGRATE-ONCE); no reader calls it.
+
+    The retired ``outcomes`` words (here and in its record) become ``cells``; one array per round (``job_id``,
+    a run-wide ``oom``) becomes one per memory class; a file-keyed ``grown`` lands on its ids in flight; a
+    state written before ``priced``, ``item_wall``, ``held`` or ``measured`` existed gets what its writer then
+    meant: no declared floors, the declared :class:`ItemWall` defaults, no held asks, nothing learned.
+    """
     state = _upgraded_arrays(_upgraded_words(state))
     if isinstance(state.get('record'), dict):
         state = {**state, 'record': _upgraded_words(state['record'])}
-    return state
+    absent = {
+        'cells': {},
+        'measured': Measured.of({}).record(),
+        'priced': {},
+        'item_wall': asdict(ItemWall()),
+        'held': {},
+    }
+    return {**{key: value for key, value in absent.items() if key not in state}, **state}
 
 
 def record_of(state: dict[str, Any], account: str) -> dict[str, Any]:

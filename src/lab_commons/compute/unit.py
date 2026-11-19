@@ -39,7 +39,6 @@ __all__ = [
     'Unit',
     'canonical',
     'content_hash',
-    'environment_at',
     'environment_here',
 ]
 
@@ -92,11 +91,6 @@ def _git(repo: Path, *args: str) -> str:
     return _door.run(
         [_GIT, '-C', str(repo), *args], capture_output=True, text=True, encoding='utf-8', check=True
     ).stdout
-
-
-def environment_at(repo: Path, sha: str, *, python: str = '') -> Environment:
-    """The environment commit *sha* of *repo* builds: its key is the build key every host shares."""
-    return Environment(sha, builds_at(repo, sha, python=python).env_key)
 
 
 def environment_here(repo: Path, *, python: str = '') -> Environment:

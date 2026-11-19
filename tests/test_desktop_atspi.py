@@ -28,19 +28,24 @@ _ROOT = '/org/a11y/atspi/accessible/root'
 _A11Y = 'org.a11y.atspi.'
 _PROP = 'org.freedesktop.DBus.Properties.Get'
 _ENABLED = 1 << 8  # ATSPI_STATE_ENABLED in the first state word
+_SENSITIVE = 1 << 24  # ATSPI_STATE_SENSITIVE: GTK4 sets only this one
 
 
-def _node(path: str, role: str, name: str, interfaces: list[str], *, enabled: bool = True,
-          children: tuple[str, ...] = (), ident: str = '') -> dict[tuple[str, str, tuple[str, ...]], str]:  # fmt: skip
+def _node(path: str, role: str, name: str, interfaces: list[str], *, enabled: bool = True, state: int | None = None,
+          children: tuple[str, ...] = (), ident: str = '', n_actions: int = 1,
+          ) -> dict[tuple[str, str, tuple[str, ...]], str]:  # fmt: skip
     kids = ', '.join(f"(':1.7', objectpath '{c}')" for c in children)
     ifaces = ', '.join(f"'{_A11Y}{i}'" for i in ['Accessible', *interfaces])
+    bits = (_ENABLED if enabled else 0) if state is None else state
+    actions = {(path, _PROP, (f"'{_A11Y}Action'", "'NActions'")): f'(<{n_actions}>,)'} if 'Action' in interfaces else {}
     return {
+        **actions,
         (path, f'{_A11Y}Accessible.GetChildren', ()): f'([{kids}],)' if kids else '(@a(so) [],)',
         (path, f'{_A11Y}Accessible.GetRoleName', ()): f"('{role}',)",
         (path, _PROP, (f"'{_A11Y}Accessible'", "'Name'")): f"(<'{name}'>,)",
         (path, _PROP, (f"'{_A11Y}Accessible'", "'AccessibleId'")): f"(<'{ident}'>,)",
         (path, f'{_A11Y}Accessible.GetInterfaces', ()): f'([{ifaces}],)',
-        (path, f'{_A11Y}Accessible.GetState', ()): f'([uint32 {_ENABLED if enabled else 0}, 0],)',
+        (path, f'{_A11Y}Accessible.GetState', ()): f'([uint32 {bits}, 0],)',
     }
 
 
@@ -190,6 +195,14 @@ class TestAtspi:
         with pytest.raises(ControlDisabledError):
             _x(_Bus()).press(_WINDOW, 'Apply', None)
 
+    def test_a_gtk4_control_marked_only_sensitive_is_enabled(self) -> None:
+        """GTK4 never sets ENABLED, only SENSITIVE (measured: zenity's OK read disabled on ubuntu-latest)."""
+        bus = _Bus()
+        for (path, method, args), answer in _node('/ok', 'button', 'OK', ['Action'], state=_SENSITIVE).items():
+            bus.answers[(':1.7', path, method, args)] = answer
+        _x(bus).press(_WINDOW, 'OK', None)
+        assert bus.methods()[-1] == ('/ok', f'{_A11Y}Action.DoAction')
+
     def test_set_value_on_editable_text_passes_the_text_as_one_quoted_argument(self) -> None:
         bus = _Bus()
         _x(bus).set_value(_WINDOW, 'Run name:', None, "it's \\ new")
@@ -220,13 +233,6 @@ class TestAtspi:
             _x(bus).close(_WINDOW)
         assert refused.value.reason == 'desktop.not_closable'
 
-    def test_no_frame_with_the_windows_title_is_refused_by_name(self) -> None:
-        window = Window(**{**_WINDOW.__dict__, 'title': 'Gone'})
-        with pytest.raises(UnsupportedError) as refused:
-            _x(_Bus()).controls(window)
-        assert refused.value.reason == 'desktop.no_atspi'
-        assert 'Gone' in str(refused.value)
-
     def test_an_absent_bus_is_refused_by_name(self) -> None:
         bus = _Bus()
         del bus.answers[('org.a11y.Bus', '/org/a11y/bus', 'org.a11y.Bus.GetAddress', ())]
@@ -254,3 +260,121 @@ class TestAtspi:
 
         with pytest.raises(WindowBusyError):
             _x11.X11(run=slow, env={'DISPLAY': ':0'}, which=lambda n: n).controls(_WINDOW)
+
+
+class TestAtspiOnALiveBus:
+    """Measured on ubuntu-latest (lab-commons #183): a live bus refuses calls the fake never did."""
+
+    def test_a_refused_optional_read_leaves_the_control_listed_without_it(self) -> None:
+        """Zenity's GTK nodes declare Text yet refuse GetText: the control stays, its value reads None."""
+        bus = _Bus()
+        del bus.answers[(':1.7', '/name', f'{_A11Y}Text.GetText', ('0', '-1'))]
+        del bus.answers[(':1.7', '/ok', _PROP, (f"'{_A11Y}Accessible'", "'AccessibleId'"))]
+        controls = {c.name: c for c in _x(bus).controls(_WINDOW)}
+        assert controls['Run name:'].value is None
+        assert controls['OK'].automation_id is None
+        assert controls['OK'].actions == ('press',)
+
+    def test_a_nameless_button_is_labelled_by_its_one_named_descendant(self) -> None:
+        """GTK4 names a button's child label, not the button: zenity's Cancel read ('Cancel', 'label') live."""
+        bus = _Bus()
+        frame = (':1.7', '/frame', f'{_A11Y}Accessible.GetChildren', ())
+        bus.answers[frame] = bus.answers[frame].replace("'/off')", "'/off'), (':1.7', objectpath '/cancel')")
+        nodes = {
+            **_node('/cancel', 'push button', '', ['Action'], children=('/cancel-label',)),
+            **_node('/cancel-label', 'label', 'Cancel', ['Action'], n_actions=0),
+        }
+        for (path, method, args), answer in nodes.items():
+            bus.answers[(':1.7', path, method, args)] = answer
+        bus.answers[(':1.7', '/cancel', f'{_A11Y}Action.DoAction', ('0',))] = '(true,)'
+        x11 = _x(bus)
+        buttons = [(c.name, c.role) for c in x11.controls(_WINDOW) if 'press' in c.actions and c.name == 'Cancel']
+        assert buttons == [('Cancel', 'push button')]
+        x11.press(_WINDOW, 'Cancel', None)
+        assert bus.methods()[-1] == ('/cancel', f'{_A11Y}Action.DoAction')
+
+    def test_a_node_declaring_action_with_no_actions_is_not_pressable(self) -> None:
+        """Pressable is NActions > 0, not the Action interface.
+
+        GTK4 puts Action on EVERY widget (measured, #186): a label inside the OK button read pressable, so a press
+        by 'OK' found two controls.
+        """
+        bus = _Bus()
+        frame = (':1.7', '/frame', f'{_A11Y}Accessible.GetChildren', ())
+        bus.answers[frame] = bus.answers[frame].replace("'/off')", "'/off'), (':1.7', objectpath '/btn')")
+        nodes = {
+            **_node('/btn', 'button', 'Go', ['Action'], children=('/btn-label',)),
+            **_node('/btn-label', 'label', 'Go', ['Action'], n_actions=1),  # GTK4 labels carry an action (#187)
+        }
+        for (path, method, args), answer in nodes.items():
+            bus.answers[(':1.7', path, method, args)] = answer
+        bus.answers[(':1.7', '/btn', f'{_A11Y}Action.DoAction', ('0',))] = '(true,)'
+        x11 = _x(bus)
+        assert [(c.role, 'press' in c.actions) for c in x11.controls(_WINDOW) if c.name == 'Go'] == [
+            ('button', True),
+            ('label', False),
+        ]
+        x11.press(_WINDOW, 'Go', None)
+        assert bus.methods()[-1] == ('/btn', f'{_A11Y}Action.DoAction')
+
+    def test_a_vanished_bus_address_is_asked_again_once(self) -> None:
+        """The a11y bus moved mid-run on ubuntu-latest: 'Error connecting: Could not connect: No such file'."""
+        bus = _Bus()
+        stale = {'left': 1}
+
+        def moving(argv: list[str], timeout_s: float) -> bytes:
+            if '--address' in argv and stale['left']:
+                stale['left'] -= 1
+                raise subprocess.CalledProcessError(
+                    1, argv, stderr=b'Error connecting: Could not connect: No such file or directory'
+                )
+            return bus(argv, timeout_s)
+
+        x11 = _x11.X11(run=moving, env={'DISPLAY': ':0'}, which=lambda name: f'/usr/bin/{name}')
+        assert 'OK' in {c.name for c in x11.controls(_WINDOW)}
+        address_asks = [a for a in bus.argvs if 'org.a11y.Bus.GetAddress' in a]
+        assert len(address_asks) == 2, 'the address is asked again after the bus moved'
+
+    def test_a_refused_required_call_is_refused_by_name_with_what_gdbus_said(self) -> None:
+        bus = _Bus()
+        del bus.answers[(':1.7', '/ok', f'{_A11Y}Accessible.GetRoleName', ())]
+        with pytest.raises(UnsupportedError) as refused:
+            _x(bus).controls(_WINDOW)
+        assert refused.value.reason == 'desktop.no_atspi'
+        assert 'GetRoleName' in str(refused.value)
+        assert 'UnknownObject' in str(refused.value)
+
+    def test_an_application_gone_from_the_bus_is_skipped(self) -> None:
+        bus = _Bus()
+        del bus.answers[('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                         'org.freedesktop.DBus.GetConnectionUnixProcessID', ("':1.9'",))]  # fmt: skip
+        assert 'OK' in {c.name for c in _x(bus).controls(_WINDOW)}
+
+    def test_the_frame_is_waited_for_while_the_registry_comes_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The registry refuses GetChildren just after the session starts (measured live)."""
+        bus = _Bus()
+        key = ('org.a11y.atspi.Registry', _ROOT, f'{_A11Y}Accessible.GetChildren', ())
+        late = bus.answers.pop(key)
+        asked = {'registry': 0}
+
+        def warming(argv: list[str], timeout_s: float) -> bytes:
+            if 'org.a11y.atspi.Registry' in argv:
+                asked['registry'] += 1
+                if asked['registry'] == 3:
+                    bus.answers[key] = late
+            return bus(argv, timeout_s)
+
+        monkeypatch.setattr(_atspi.time, 'sleep', lambda _s: None)
+        x11 = _x11.X11(run=warming, env={'DISPLAY': ':0'}, which=lambda name: f'/usr/bin/{name}')
+        assert 'OK' in {c.name for c in x11.controls(_WINDOW)}
+        assert asked['registry'] >= 3
+
+    def test_planted_a_frame_that_never_comes_is_still_refused_by_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        clock = iter(range(10_000))
+        monkeypatch.setattr(_atspi.time, 'sleep', lambda _s: None)
+        monkeypatch.setattr(_atspi.time, 'monotonic', lambda: float(next(clock)))
+        window = Window(**{**_WINDOW.__dict__, 'title': 'Gone'})
+        with pytest.raises(UnsupportedError) as refused:
+            _x(_Bus()).controls(window)
+        assert refused.value.reason == 'desktop.no_atspi'
+        assert 'Gone' in str(refused.value)

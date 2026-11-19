@@ -84,7 +84,6 @@ __all__ = [
     'Q_0Wb',
     'Q_0Wb_per_m',
     'Q_0deg',
-    'Q_0degC',
     'Q_0kg',
     'Q_0mm',
     'Q_0mm2',
@@ -107,7 +106,6 @@ __all__ = [
     'Q_1rad',
     'Q_2pi',
     'Q_10Wb',
-    'Q_20degC',
     'Q_50Hz',
     'Q_90deg',
     'Q_180deg',
@@ -270,8 +268,6 @@ Q_0rpm = Q_(0.0, 'rpm')
 Q_0s = Q_(0.0, 's')
 Q_0kg = Q_(0.0, 'kg')
 Q_1kg = Q_(1.0, 'kg')
-Q_0degC = Q_(0.0, 'degC')
-Q_20degC = Q_(20.0, 'degC')
 Q_0Hz = Q_(0.0, 'Hz')
 Q_1Hz = Q_(1.0, 'Hz')
 Q_50Hz = Q_(50.0, 'Hz')
