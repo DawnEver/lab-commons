@@ -9,8 +9,9 @@ The machine file (:mod:`lab_commons.config`) may declare::
 
     [storage]
     roots = { output = "E:/work/{repo}/output", venvs = "E:/work/{repo}/venvs" }
-    reach = ["results"]                 # the family remotes this machine reaches
-    secrets = "~/.config/lab-commons/storage-secrets"   # where each reached remote's secret is placed
+
+    [storage.reach.results]             # one sub-table per family remote this machine reaches
+    credentials_file = "~/.motronics/secrets/results"   # that remote's secret, placed by `ops secret place`
 
 and the FAMILY file declares the remotes every machine shares, once and without a secret::
 
@@ -19,9 +20,11 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     endpoint = "https://objects.example"
 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
-name: ``roots``, ``reach`` and ``secrets`` belong to one machine, ``remotes`` to the family. A kind
-outside :data:`KINDS`, a remote the family does not declare, and a reach with no ``secrets`` path are
-refused by name. A remote's options are handed to the transport (rclone) verbatim; this module names
+name: ``roots`` and ``reach`` belong to one machine, ``remotes`` to the family. A kind outside
+:data:`KINDS`, a remote the family does not declare, and a reached remote with no ``credentials_file`` are
+refused by name; so are the retired spellings -- a ``secrets`` directory and a list-form ``reach``
+(user ruling 2026-11-19: one declared file per secret, the family's ``credentials_file`` key).
+A remote's options are handed to the transport (rclone) verbatim; this module names
 no provider and no host.
 
 This module never moves data: a binding takes effect for new writes, and moving an existing tree is
@@ -52,7 +55,13 @@ KINDS: Final[Mapping[str, str | None]] = {
     'uv_cache': None,
 }
 
-_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'secrets'})
+_MACHINE_KEYS: Final = frozenset({'roots', 'reach'})
+
+#: Retired machine spellings (2026-11-19), refused by name with the shape that replaced them; never read.
+_RETIRED_SHAPE: Final = (
+    '[storage.reach.<remote>] credentials_file = "<file>" -- one declared secret file per reached remote'
+)
+_RETIRED_KEYS: Final = {'secrets': f'a secrets directory is retired: declare {_RETIRED_SHAPE}'}
 _FAMILY_KEYS: Final = frozenset({'remotes'})
 
 
@@ -62,19 +71,22 @@ class StorageError(ValueError):
 
 @dataclass(frozen=True)
 class Remote:
-    """One family remote: its name and the transport options handed over verbatim."""
+    """One reached family remote: its name, the transport options handed over verbatim, its secret's file.
+
+    ``credentials_file`` is ``None`` only for a family remote no machine reaches here.
+    """
 
     name: str
     options: Mapping[str, str]
+    credentials_file: Path | None = None
 
 
 @dataclass(frozen=True)
 class Storage:
-    """One machine's resolved ``[storage]``: its bound roots, the remotes it reaches, its secrets path."""
+    """One machine's resolved ``[storage]``: its bound roots and the remotes it reaches, each with its secret file."""
 
     roots: Mapping[str, str] = field(default_factory=dict)
     reach: tuple[Remote, ...] = ()
-    secrets: Path | None = None
 
 
 def _table(layer: Mapping[str, Any], where: str) -> dict[str, Any]:
@@ -96,19 +108,16 @@ def declared(machine: Mapping[str, Any] | None = None, family: Mapping[str, Any]
     shared = _table(family, 'the family file')
     _check_layers(local, shared)
     roots = _roots(local.get('roots', {}))
-    reach = _reach(local.get('reach', []), shared.get('remotes', {}))
-    secrets = local.get('secrets')
-    if reach and secrets is None:
-        msg = (
-            f'the machine file: [{TABLE}] reaches {[r.name for r in reach]} but declares no secrets path: '
-            'declare [storage] secrets, then place each secret there (ops secret place)'
-        )
-        raise StorageError(msg)
-    return Storage(roots, reach, Path(secrets).expanduser() if secrets is not None else None)
+    reach = _reach(local.get('reach', {}), shared.get('remotes', {}))
+    return Storage(roots, reach)
 
 
 def _check_layers(local: Mapping[str, Any], shared: Mapping[str, Any]) -> None:
-    """Refuse a key in the wrong layer, or no storage key at all."""
+    """Refuse a retired key, a key in the wrong layer, or no storage key at all."""
+    for key, remedy in _RETIRED_KEYS.items():
+        if key in local or key in shared:
+            msg = f'[{TABLE}] {key} is retired: {remedy}'
+            raise StorageError(msg)
     if misplaced := sorted(set(local) & _FAMILY_KEYS):
         msg = f'the machine file: [{TABLE}] {misplaced[0]} is a family fact: declare it once in the family file'
         raise StorageError(msg)
@@ -136,15 +145,29 @@ def _roots(roots: Mapping[str, Any]) -> dict[str, str]:
     return {str(kind): str(value) for kind, value in roots.items()}
 
 
-def _reach(names: list[str], remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
-    """The family remotes this machine reaches, each declared by the family."""
-    reach = []
-    for name in names:
+def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
+    """The family remotes this machine reaches: each a family-declared remote with its own credentials file."""
+    if not isinstance(reach, dict):
+        msg = f'the machine file: [{TABLE}] reach as a list is retired: declare {_RETIRED_SHAPE}'
+        raise StorageError(msg)
+    found = []
+    for name, entry in reach.items():
         if name not in remotes:
-            msg = f'the machine file: [{TABLE}] reach names {name!r}, which the family file declares no remote for'
+            msg = f'the machine file: [{TABLE}.reach] names {name!r}, which the family file declares no remote for'
             raise StorageError(msg)
-        reach.append(Remote(name, {str(k): str(v) for k, v in remotes[name].items()}))
-    return tuple(reach)
+        file = entry.get('credentials_file') if isinstance(entry, dict) else None
+        if not file:
+            msg = (
+                f'the machine file: [{TABLE}.reach.{name}] declares no credentials_file: declare the file its '
+                'secret lives in, then place it (ops secret place --path <that file>)'
+            )
+            raise StorageError(msg)
+        if unknown := sorted(set(entry) - {'credentials_file'}):
+            msg = f'the machine file: [{TABLE}.reach.{name}] {unknown[0]} is not a reach key; allowed: credentials_file'
+            raise StorageError(msg)
+        options = {str(k): str(v) for k, v in remotes[name].items()}
+        found.append(Remote(str(name), options, Path(str(file)).expanduser()))
+    return tuple(found)
 
 
 def root(kind: str, repo: str, tree: Path, *, storage: Storage | None = None) -> Path | None:
