@@ -31,12 +31,14 @@ first-wins holds per generation, so the re-put after it is a new result, not a n
 carries the tombstones (``bury`` / ``graves``) and posts per generation, and every get, put and invalidate first
 applies the tier's graves this host has not seen -- an invalidation on one host is seen on all.
 
-THE LOCAL TIER IS A CACHE WITH A CAP THE CALLER PASSES IN (``cap_bytes``; ``None``: unbounded). Every hit -- a
-local get, an arrival from the shared tier, a put -- stamps the result's recency; after each install the live
-results over the cap are evicted least recently hit first, never the one just installed. Eviction removes a live
-copy only (renamed out of place first, so a crash never leaves half a result): an evicted unit is a miss here and
-a shareable one comes back from the shared tier; graves are never evicted. The cap is the caller's (its config),
-never a value in this module.
+THE LOCAL TIER IS A CACHE BOUNDED BY ITS VOLUME'S FREE-SPACE FLOOR (``free_floor_bytes``; ``None``: unbounded;
+D54). Every hit -- a local get, an arrival from the shared tier, a put -- stamps the result's recency; after each
+install :func:`lab_commons.compute.floor.keep` evicts the least recently hit results, never the one just installed,
+until the volume keeps the floor free -- and if it cannot, the install is undone and refused
+(:class:`~lab_commons.compute.floor.BelowFloor`). Eviction removes a live copy only (renamed out of place first, so
+a crash never leaves half a result): an evicted unit is a miss here and a shareable one comes back from the shared
+tier; graves are never evicted. The floor is the caller's -- the machine's ``[storage] free_floor_gb``
+(:func:`lab_commons.storage.free_floor_bytes`) -- never a value in this module. The fixed ``cap_bytes`` is retired.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, Protocol
 
+from lab_commons.compute import floor
 from lab_commons.compute.durable import durable_write
 from lab_commons.compute.unit import canonical, content_hash
 
@@ -238,16 +241,26 @@ class ResultStore:
         root: Path,
         shared: SharedTier | None = None,
         *,
-        cap_bytes: int | None = None,
+        free_floor_bytes: int | None = None,
         objects: LargeObjects | None = None,
+        **retired: object,
     ) -> None:
         """Results under *root*; *shared* is asked for a miss and handed every shareable put.
 
-        *cap_bytes* bounds the live local results (``None``: unbounded); over it, the least recently hit go.
-        *objects* holds the files of a shareable result over the shared tier's limit (``None``: such a result is
-        :class:`TooLarge`).
+        *free_floor_bytes* is the free space the store's volume keeps (``None``: unbounded); under it, the least
+        recently hit results go. *objects* holds the files of a shareable result over the shared tier's limit
+        (``None``: such a result is :class:`TooLarge`).
         """
-        self.root, self.shared, self.cap_bytes, self.objects = root, shared, cap_bytes, objects
+        if retired:
+            name = min(retired)
+            msg = f'ResultStore() got an unexpected keyword argument {name!r}'
+            if name == 'cap_bytes':
+                msg = (
+                    "cap_bytes is retired (D54): a cache is bounded by its volume's free-space floor -- pass "
+                    'free_floor_bytes (lab_commons.storage.free_floor_bytes())'
+                )
+            raise TypeError(msg)
+        self.root, self.shared, self.free_floor_bytes, self.objects = root, shared, free_floor_bytes, objects
         self._clock = 0
 
     def path(self, unit_hash: str) -> Path:
@@ -482,22 +495,27 @@ class ResultStore:
         return found
 
     def _kept(self, result: Result) -> Result:
-        """Stamp *result* hit, then evict the least recently hit others while the live tier is over the cap."""
+        """Stamp *result* hit, then evict the least recently hit others until the volume keeps the floor.
+
+        Raises:
+            BelowFloor: the floor does not hold with every other result evicted; *result* is evicted too.
+
+        """
         self._hit(result)
-        if self.cap_bytes is None:
+        if self.free_floor_bytes is None:
             return result
-        live = self._live()
-        total = sum(size for _, _, size in live)
-        for _, held, size in sorted(live):
-            if total <= self.cap_bytes:
-                break
-            if held == result.path:
-                continue
-            gone = self.staging()
-            held.rename(gone / 'evicted')
-            shutil.rmtree(gone)
-            total -= size
+        try:
+            floor.keep(self.root, self._live(), self.free_floor_bytes, evict=self._evict, keep=result.path)
+        except floor.BelowFloor:
+            self._evict(result.path)
+            raise
         return result
+
+    def _evict(self, held: Path) -> None:
+        """Remove the live result *held*: renamed out of place first, so a crash never leaves half of it."""
+        gone = self.staging()
+        held.rename(gone / 'evicted')
+        shutil.rmtree(gone)
 
     @staticmethod
     def _first_stands(staged: Path, record: Record, held: Result) -> Result:

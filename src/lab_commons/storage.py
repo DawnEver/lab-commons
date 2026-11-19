@@ -11,6 +11,7 @@ The machine file (:mod:`lab_commons.config`) may declare::
     roots = { output = "E:/work/{repo}/output", venvs = "E:/work/{repo}/venvs" }
     reach = ["results"]                 # the family remotes this machine reaches
     secrets = "~/.config/lab-commons/storage-secrets"   # where each reached remote's secret is placed
+    free_floor_gb = 50                  # the free space every regenerable cache leaves on its volume
 
 and the FAMILY file declares the remotes every machine shares, once and without a secret::
 
@@ -19,7 +20,9 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     endpoint = "https://objects.example"
 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
-name: ``roots``, ``reach`` and ``secrets`` belong to one machine, ``remotes`` to the family. A kind
+name: ``roots``, ``reach``, ``secrets`` and ``free_floor_gb`` belong to one machine, ``remotes`` to the
+family. A cache is bounded by ``free_floor_gb`` (default :data:`FREE_FLOOR_GB_DEFAULT`; the door is
+:mod:`lab_commons.compute.floor`), never a fixed size: a retired cap key is refused by name. A kind
 outside :data:`KINDS`, a remote the family does not declare, and a reach with no ``secrets`` path are
 refused by name. A remote's options are handed to the transport (rclone) verbatim; this module names
 no provider and no host.
@@ -35,10 +38,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-__all__ = ['KINDS', 'TABLE', 'Remote', 'Storage', 'StorageError', 'declared', 'root']
+__all__ = [
+    'FREE_FLOOR_GB_DEFAULT',
+    'KINDS',
+    'TABLE',
+    'Remote',
+    'Storage',
+    'StorageError',
+    'declared',
+    'free_floor_bytes',
+    'root',
+]
 
 #: The table both layers use.
 TABLE: Final = 'storage'
+
+#: The free space (GiB) every regenerable cache leaves on its volume when the machine declares none (D54).
+FREE_FLOOR_GB_DEFAULT: Final = 50
+GIB: Final = 1024**3
 
 #: Every kind, with its in-tree default relative to the checkout (``None``: the tool's own default,
 #: outside the checkout -- a package cache).
@@ -52,8 +69,10 @@ KINDS: Final[Mapping[str, str | None]] = {
     'uv_cache': None,
 }
 
-_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'secrets'})
+_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'secrets', 'free_floor_gb'})
 _FAMILY_KEYS: Final = frozenset({'remotes'})
+#: Fixed cache caps, retired by D54 for the free-space floor; refused by name, never read.
+_RETIRED_KEYS: Final = frozenset({'vendor_cache_cap_gb', 'cache_cap_gb', 'cap_gb'})
 
 
 class StorageError(ValueError):
@@ -75,6 +94,12 @@ class Storage:
     roots: Mapping[str, str] = field(default_factory=dict)
     reach: tuple[Remote, ...] = ()
     secrets: Path | None = None
+    free_floor_gb: float = FREE_FLOOR_GB_DEFAULT
+
+
+def free_floor_bytes(storage: Storage | None = None) -> int:
+    """The free space, in bytes, every regenerable cache on this machine leaves on its volume (D54)."""
+    return int((storage if storage is not None else declared()).free_floor_gb * GIB)
 
 
 def _table(layer: Mapping[str, Any], where: str) -> dict[str, Any]:
@@ -104,11 +129,31 @@ def declared(machine: Mapping[str, Any] | None = None, family: Mapping[str, Any]
             'declare [storage] secrets, then place each secret there (ops secret place)'
         )
         raise StorageError(msg)
-    return Storage(roots, reach, Path(secrets).expanduser() if secrets is not None else None)
+    return Storage(roots, reach, Path(secrets).expanduser() if secrets is not None else None, _floor(local))
+
+
+def _floor(local: Mapping[str, Any]) -> float:
+    """The machine's ``free_floor_gb``: a positive number of GiB, :data:`FREE_FLOOR_GB_DEFAULT` when undeclared."""
+    value = local.get('free_floor_gb', FREE_FLOOR_GB_DEFAULT)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        msg = (
+            f'the machine file: [{TABLE}] free_floor_gb = {value!r} must be a positive number of GiB '
+            f'(the free space every cache leaves on its volume; default {FREE_FLOOR_GB_DEFAULT})'
+        )
+        raise StorageError(msg)
+    return float(value)
 
 
 def _check_layers(local: Mapping[str, Any], shared: Mapping[str, Any]) -> None:
-    """Refuse a key in the wrong layer, or no storage key at all."""
+    """Refuse a retired key, a key in the wrong layer, or no storage key at all."""
+    for table in (local, shared):
+        if retired := sorted(set(table) & _RETIRED_KEYS):
+            msg = (
+                f'[{TABLE}] {retired[0]} is retired (D54): a cache is bounded by the free space its volume keeps, '
+                'not a fixed size -- declare [storage] free_floor_gb in the machine file (default '
+                f'{FREE_FLOOR_GB_DEFAULT}), then delete {retired[0]}'
+            )
+            raise StorageError(msg)
     if misplaced := sorted(set(local) & _FAMILY_KEYS):
         msg = f'the machine file: [{TABLE}] {misplaced[0]} is a family fact: declare it once in the family file'
         raise StorageError(msg)

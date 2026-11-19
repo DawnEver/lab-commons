@@ -79,3 +79,32 @@ def test_output_root_derives_from_the_storage_binding(tmp_path: Path, monkeypatc
     assert paths.output_root('appx') == tmp_path / 'big' / 'appx'
     monkeypatch.setattr(storage, 'declared', lambda: declared({}, {}))
     assert paths.output_root('appx') == home.resolve() / 'output'
+
+
+def test_the_free_floor_defaults_to_fifty_gb_when_a_machine_declares_none() -> None:
+    """PLANTED CONTROL for the declared floor below: an undeclared floor is the family default, not unbounded."""
+    assert declared({}, {}).free_floor_gb == storage.FREE_FLOOR_GB_DEFAULT == 50
+    assert storage.free_floor_bytes(declared({}, {})) == 50 * 1024**3
+
+
+def test_a_machine_declares_its_own_free_floor() -> None:
+    small = declared({'storage': {'free_floor_gb': 8}}, {})
+    assert small.free_floor_gb == 8
+    assert storage.free_floor_bytes(small) == 8 * 1024**3
+
+
+@pytest.mark.parametrize('bad', [0, -5, 'fifty', True])
+def test_a_free_floor_that_is_not_a_positive_number_is_refused(bad: object) -> None:
+    with pytest.raises(StorageError, match=r'\[storage\] free_floor_gb'):
+        declared({'storage': {'free_floor_gb': bad}}, {})
+
+
+def test_the_free_floor_is_a_machine_fact() -> None:
+    with pytest.raises(StorageError, match='free_floor_gb belongs to one machine'):
+        declared({}, {'storage': {'free_floor_gb': 50}})
+
+
+@pytest.mark.parametrize('retired', ['vendor_cache_cap_gb', 'cache_cap_gb', 'cap_gb'])
+def test_a_retired_cache_cap_is_refused_by_name(retired: str) -> None:
+    with pytest.raises(StorageError, match=f'{retired} is retired.*free_floor_gb'):
+        declared({'storage': {retired: 200}}, {})
