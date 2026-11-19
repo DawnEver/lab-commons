@@ -103,13 +103,17 @@ def test_temp_environment_points_every_name_at_the_repos_output_tmp(tmp_path: Pa
 
 
 @pytest.mark.usefixtures('machine')
-def test_claude_homes_and_agent_repos_are_outside_the_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agent_homes_and_agent_repos_are_outside_the_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, 'home', classmethod(lambda _cls: tmp_path / 'user'))
     _declare(f'[agent_repos]\ncc-config = "{(tmp_path / "cc").as_posix()}"\n')
     assert home.exempt(tmp_path / 'user' / '.claude' / 'settings.json')
     assert home.exempt(tmp_path / 'user' / '.claude-evans' / 'x')
+    assert home.exempt(tmp_path / 'user' / '.codex' / 'config.toml')
+    assert home.exempt(tmp_path / 'user' / '.gemini' / 'config' / 'hooks.json')
+    assert home.exempt(tmp_path / 'user' / '.gemini' / 'antigravity-cli' / 'worktrees' / 'w' / 'a.py')
     assert home.exempt(tmp_path / 'cc' / 'hooks' / 'a.js')
     assert not home.exempt(tmp_path / 'user' / '.claudette' / 'x')  # planted: a near-miss name
+    assert not home.exempt(tmp_path / 'user' / '.geminix' / 'x')  # planted: a near-miss name
     assert not home.exempt(tmp_path / 'user' / 'Documents' / 'x')  # planted: an ordinary path
 
 
