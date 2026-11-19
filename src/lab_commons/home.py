@@ -23,7 +23,7 @@ the user confirmed an external tool may be installed into, e.g. ``<X>:/Program F
 and ``min_free_gb`` (the free space an install needs there). Any other key is refused by name. The toolchain's
 own managed tool root is :func:`tools`.
 
-OUTSIDE THE POLICY (:func:`exempt`): the agent hosts' own configuration (:data:`CLAUDE_HOMES` under the user's
+OUTSIDE THE POLICY (:func:`exempt`): the agent hosts' own configuration (:data:`AGENT_HOMES` under the user's
 home -- Claude Code, Codex and Antigravity -- never touched by the toolchain) and the AGENT repos of
 ``[agent_repos]`` (name -> absolute path; the agent configuration and plugin market), which are not toolchain
 repos. And git's credential store (:func:`git_credential_stores`; user ruling 2026-11-07): ``credential.helper
@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import Final
 
 __all__ = [
-    'CLAUDE_HOMES',
+    'AGENT_HOMES',
     'HOME_ENV',
     'PARTS',
     'TEMP_NAMES',
@@ -87,7 +87,7 @@ PARTS: Final = ('config', 'state', 'cache', 'tools', 'repos', 'backups')
 TEMP_NAMES: Final = ('TMP', 'TEMP', 'TMPDIR')
 
 #: Agent host configuration directories under the user's home: outside the policy (user ruling 2026-11-03).
-CLAUDE_HOMES: Final = ('.claude', '.claude-evans', '.codex', '.gemini')
+AGENT_HOMES: Final = ('.claude', '.claude-evans', '.codex', '.gemini')
 
 #: A repo's two writable children.
 _WRITABLE: Final = ('output', 'scratch')
@@ -256,7 +256,7 @@ def git_credential_stores() -> tuple[Path, ...]:
 
 def exempt(path: Path) -> bool:
     """Whether *path* is outside the policy: an agent host configuration, an agent repo, or git's credential store."""
-    roots = [Path.home() / name for name in CLAUDE_HOMES] + list(agent_repos().values())
+    roots = [Path.home() / name for name in AGENT_HOMES] + list(agent_repos().values())
     target = _key(str(canonical(path)), sys.platform)
     stores = {_key(str(canonical(store)), sys.platform) for store in git_credential_stores()}
     return target in stores or any(within(path, root) for root in roots)
