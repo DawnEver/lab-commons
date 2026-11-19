@@ -99,3 +99,24 @@ def test_an_item_that_closed_cleanly_still_stamps_unreported_ids_pending() -> No
     assert fold(items, streams, cells, Measured.of({}), shards=[(0, 1)], walls=[60.0])[:2] == ([], False)
     assert _words(cells) == {'t.py::a': 'ok', 't.py::b': 'pending'}
     assert TestCell.from_plain(cells['t.py::b']).why == 'the item exited 0 without reporting it'
+
+
+def test_a_failure_carries_every_subject_line_untruncated_after_its_crash_line() -> None:
+    """A ratchet's red names its subjects; the record keeps each, so a merge can tell a NEW one (D13)."""
+    long = 'p/' + 'x' * 400 + '.py'
+    longrepr = (
+        'def test_ratchet():\n>       assert not found, msg\n'
+        f'E   AssertionError: 2 new\nE     {pytest_item.SUBJECT_PREFIX}a.py:3\n'
+        f'E     {pytest_item.SUBJECT_PREFIX}{long}\n\nt.py:9: AssertionError'
+    )
+    line = pytest_item.entry_of(_report('call', 'failed', longrepr))
+    assert line is not None
+    text = line['reason']['text']
+    assert text.splitlines() == ['t.py:9: AssertionError', f'{pytest_item.SUBJECT_PREFIX}a.py:3',
+                                 f'{pytest_item.SUBJECT_PREFIX}{long}']  # fmt: skip
+
+
+def test_a_failure_naming_no_subject_carries_only_its_crash_line() -> None:
+    line = pytest_item.entry_of(_report('call', 'failed', 'E   assert 1 == 2\n\nt.py:9: AssertionError'))
+    assert line is not None
+    assert line['reason'] == {'kind': 'assertion', 'text': 't.py:9: AssertionError'}

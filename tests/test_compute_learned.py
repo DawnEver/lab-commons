@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from pathlib import Path
@@ -476,3 +477,40 @@ def test_a_measured_exit_supersedes_an_ask_even_lower_and_a_kill_only_raises() -
     assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] >= 300.0
     learned.record_run(REPO, learned.SLURM, (), Run(peak_mem_gb=40.0, cpu_s=1.0, wall_s=1.0), ended='exit')
     assert learned.cluster_demand(REPO)(frozenset())['mem_gb'] == pytest.approx(60.0)
+
+
+def test_a_table_is_parsed_once_per_version_and_a_rewrite_is_never_served_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One forge read asked for the same table ~140 times; it is parsed once per version of the file.
+
+    PLANTED CONTROL: a write in between (a new file version) is read, never the parse held from before.
+    """
+    learned.learn_peaks(REPO, {'a.py': 1.0})
+    parses = []
+    real = learned.json.loads
+    monkeypatch.setattr(learned.json, 'loads', lambda text: parses.append(1) or real(text))
+    assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
+    assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
+    assert len(parses) == 1, 'an unchanged table was parsed twice'
+    learned.learn_peaks(REPO, {'a.py': 2.0})
+    assert learned.learned(REPO)['peaks_mb'] == {'a.py': 2.0}, 'a rewritten table was served stale'
+
+
+def test_a_settled_unchanged_table_is_not_even_read_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A forge queue pass read and hashed a 24 MB table 119 times (~10 s): a settled file is read once.
+
+    PLANTED CONTROL: a whole-file rewrite (a new file: other id, size or mtime) is read again, never served stale.
+    """
+    learned.learn_peaks(REPO, {'a.py': 1.0})
+    path = learned._path(REPO)
+    settled = path.stat().st_mtime - 2 * learned.SETTLED_S
+    os.utime(path, (settled, settled))
+    reads = []
+    real = Path.read_bytes
+    monkeypatch.setattr(Path, 'read_bytes', lambda self: reads.append(self) or real(self))
+    for _ in range(5):
+        assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
+    assert len([p for p in reads if p == path]) <= 1, 'a settled, unchanged table was read again'
+    learned.learn_peaks(REPO, {'a.py': 2.0})
+    assert learned.learned(REPO)['peaks_mb'] == {'a.py': 2.0}, 'a rewritten table was served stale'

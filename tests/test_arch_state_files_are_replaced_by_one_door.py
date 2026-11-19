@@ -22,6 +22,7 @@ DOOR: Final = 'compute/durable.py'
 EXEMPT: Final[dict[str, str]] = {
     '_records.py': 'lock records: publish is link-or-replace that must report a contested rename',
     'hpc/collect.py': 'shipped to the cluster as a standalone stdlib-only script',
+    'outcomes/record.py': 'outcomes stays standalone (stdlib and itself only); its one-shot migrate stages with fsync',
 }
 
 _STAGED: Final = ('staged', 'temp', 'tmp', 'part', 'temporary')

@@ -38,13 +38,14 @@ from lab_commons.outcomes.record import OUTCOME, Event
 
 __all__ = [
     'BUILD_TIMEOUT',
+    'RUN_DIR',
     'SUBMIT_LIMIT',
-    'TERMINAL_OK',
     'NotOnCluster',
     'Runner',
     'Submission',
     'SubmitLimit',
     'Unreachable',
+    'bind',
     'failover_runner',
     'files_of',
     'gather',
@@ -70,9 +71,6 @@ class SubmitLimit(RuntimeError):
 
 #: Run one shell command, feeding *stdin*, and return its stdout; raise on a non-zero exit.
 type Runner = Callable[[str, str | None], str]
-
-#: The only array-task state that means the shard's results file should exist.
-TERMINAL_OK: Final = 'COMPLETED'
 
 _TIMEOUT: Final = 300.0
 
@@ -273,6 +271,22 @@ class Submission:
     shards: int
 
 
+#: The token an item's string values may hold for its submission's run directory (``"out": "{run_dir}/3"``):
+#: a re-submission writes under its own directory, so no ``out`` is edited by hand to keep an earlier run.
+RUN_DIR: Final = '{run_dir}'
+
+
+def bind(value: Any, run_dir: str) -> Any:  # noqa: ANN401 -- an item is any JSON value
+    """*value* with every :data:`RUN_DIR` in its strings replaced by *run_dir*, at any depth."""
+    if isinstance(value, str):
+        return value.replace(RUN_DIR, run_dir)
+    if isinstance(value, list):
+        return [bind(v, run_dir) for v in value]
+    if isinstance(value, dict):
+        return {k: bind(v, run_dir) for k, v in value.items()}
+    return value
+
+
 def _array_spec(indices: Sequence[int], throttle: int) -> str:
     """Sorted shard indices as Slurm ranges -- ``0-99,104%24`` -- so a large array stays one short argument."""
     runs: list[list[int]] = []
@@ -304,7 +318,7 @@ def submit(
     if only is None:
         manifest = {
             'entry': config.job.entry,
-            'items': items,
+            'items': bind(items, run_dir),
             'shards': [list(s) for s in plan.shards],
             'lanes': lanes_of(plan),
         }
@@ -336,7 +350,7 @@ def submit_bands(
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
     quoted = _sh_path(run_dir)
     shards = [list(s) for plan in plans for s in plan.shards]
-    manifest = {'entry': config.job.entry, 'items': items, 'shards': shards, 'lanes': lanes_of(plans[0])}
+    manifest = {'entry': config.job.entry, 'items': bind(items, run_dir), 'shards': shards, 'lanes': lanes_of(plans[0])}
     run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
     run(f'cat > {quoted}/job.sh', render_script(plans[0], config, run_dir))
     job_ids, first = [], 0
@@ -408,7 +422,7 @@ def gather(run: Runner, run_dir: str) -> dict[int, list[dict[str, Any]]]:
     """Every RETURNED shard's item results, keyed by shard index -- read from the run's one results file.
 
     A run an earlier worker wrote holds one ``results/<shard>.json`` per shard instead; it is read the same
-    way (FORMATS-UPGRADE-ON-READ: jobs still running across the change must gather), never written.
+    way (OLD-SHAPE-READER: jobs still running across the change must gather), never written.
     """
     quoted = _sh_path(run_dir)
     out = run(
@@ -437,7 +451,7 @@ def _returned(text: str) -> dict[int, list[dict[str, Any]]]:
             ok = event.cell.status is Status.OK
             why = '' if event.cell.reason is None else event.cell.reason.text
             items[int(event.key)] = {**event.data, 'ok': ok, 'status': event.cell.status.value, 'error': why}
-        elif event.kind == ITEM:  # a pre-Cell worker's line (FORMATS-UPGRADE-ON-READ)
+        elif event.kind == ITEM:  # a pre-Cell worker's line (OLD-SHAPE-READER)
             items[int(event.key)] = {**event.data, 'status': 'ok' if event.data['ok'] else 'error'}
         elif event.kind == SHARD:
             codes[int(event.key)] = int(event.data['code'])

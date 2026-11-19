@@ -154,8 +154,10 @@ Order now: P0 baseline computed -> P1 session identity + one PR per session -> P
 P5 (#413 P1-P4, forge try) -> P6 (derived registries, forge regroup, rule census). Review redesign
 (tagged/blocking findings, security part, declared risk tiers, recurring findings -> rules) runs alongside.
 
-| A10 | P1: "`forge pr create` and the pre-push of a new `pr/*` refuse a second open PR of the same session" | user ruling 2026-10-25 (dev-lab 87e1675) made ONE-SESSION-ONE-PR advice; confirmed by the user 2026-10-26 ("只提醒") | P1 session identity is DONE: `ai_lab.session` issues `LAB_SESSION`, the commit-msg row stamps `Lab-Session:`, owner notices address it; a second PR of a session gets an `Admission:` advice line, never a refusal. Correction: the 2026-10-26 gap list called this not done; it was already on integrate/main. Origin branch sprawl is closed separately by ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES |
+| A10 | P1: "`forge pr create` and the pre-push of a new `pr/*` refuse a second open PR of the same session" | user ruling 2026-10-25 (dev-lab 87e1675) made ONE-SESSION-ONE-PR advice; confirmed by the user 2026-10-26 ("only remind" (user, translated)) | P1 session identity is DONE: `ai_lab.session` issues `LAB_SESSION`, the commit-msg row stamps `Lab-Session:`, owner notices address it; a second PR of a session gets an `Admission:` advice line, never a refusal. Correction: the 2026-10-26 gap list called this not done; it was already on integrate/main. Origin branch sprawl is closed separately by ORIGIN-HOLDS-ONLY-DECLARED-BRANCHES |
 
 **User ruling 2026-10-26: amendments A1-A10 ACCEPTED as proposed** (A1 drain under the watchdog; A2 guard files
 committed, other rendered files not; A5 branch namespace stays a local pre-push check; A6 no reservation,
 `box claim` instead).
+
+> Amended 2026-11-17: translated to English (D26) -- approved: "(user, translated) .claude/memory/ and .claude/tasks/ should also be English only"

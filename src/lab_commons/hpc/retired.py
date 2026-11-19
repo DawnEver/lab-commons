@@ -231,6 +231,11 @@ RETIRED: Final[dict[str, str]] = {
     'NOT_COVERED': "nothing: a handed id is no cell; the run record's `handed` names its part",
     'UNCARRIED': 'nothing: lab_commons.hpc.records.held_cells offers DECIDED cells only',
     'held_outcomes': 'lab_commons.hpc.records.held_cells',
+    # A run state migrates ONCE (FORMATS-MIGRATE-ONCE, D51 2026-11-11); its reader refuses a retired shape.
+    # A persisted format is never upgraded on read (user ruling D51, 2026-11-11): it migrates once, then refuses.
+    'FORMATS-UPGRADE-ON-READ': 'FORMATS-MIGRATE-ONCE (tests/test_arch_formats_migrate_once.py)',
+    'test_arch_formats_upgrade_on_read': 'tests/test_arch_formats_migrate_once.py',
+    'upgraded_state': 'lab_commons.hpc.records.current_state (reads), migrated_state (the one-shot migration)',
     'lab_commons.dev.outcomes': 'dev_lab.dev.test_outcomes (a Record of test cells per process)',
     'read_reasons': 'dev_lab.dev.test_outcomes.read_cells (a reason travels in its cell)',
     'OutcomeRecorder': 'dev_lab.dev.test_outcomes.CellRecorder',
@@ -242,7 +247,7 @@ RETIRED: Final[dict[str, str]] = {
 }
 
 #: THE RETIRED PER-TEST WORDS, and only for LIVE state -- a cluster run's ``state.json`` and the stream of a
-#: round in flight across the change (FORMATS-UPGRADE-ON-READ): each word -> ``(status word, reason kind)`` it
+#: round in flight across the change (OLD-SHAPE-READER): each word -> ``(status word, reason kind)`` it
 #: now reads as (:func:`lab_commons.hpc.testcells.upgraded`; a status word is ``TestCell.word``'s spelling).
 #: ``None``: a handed id, which is no cell. A regenerable artefact in these words is refused, never upgraded.
 TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {

@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Final
 
 from lab_commons.hpc.cluster import Runner, Unreachable, ssh_runner
+from lab_commons.hpc.grants import AccessRefused, check_target
 from lab_commons.log import emit
 
 __all__ = ['MAX_LINES', 'OUTSIDE', 'main']
@@ -101,6 +102,11 @@ def main(argv: list[str], *, at: Callable[[str, float], Runner] = ssh_runner) ->
     try:
         command = _chosen(args.tick, args.path, _lines(args.lines))
     except _Refused as refused:
+        emit(f'log refused: {refused}', err=True)
+        return 2
+    try:
+        check_target(args.at)
+    except AccessRefused as refused:
         emit(f'log refused: {refused}', err=True)
         return 2
     try:

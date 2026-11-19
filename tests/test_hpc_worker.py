@@ -51,3 +51,18 @@ def test_a_failed_item_returns_its_completed_rows_beside_its_reason(tmp_path: Pa
     }
     assert 'value' not in got[2]
     assert 'ZeroDivisionError' in got[2]['error']
+
+
+def _command(item: int) -> dict:
+    return {'exit': item, 'out': f'/o/{item}', 'stdout_tail': 'Traceback (most recent call last)' if item else ''}
+
+
+def test_a_returned_value_that_reports_a_non_zero_exit_is_an_error_never_ok(tmp_path: Path) -> None:
+    """An item returning ``{'exit': N}`` ran a command: N != 0 is ERROR with reason ``exit``; 0 stays OK (control)."""
+    results = tmp_path / RESULTS
+    run_shard({'items': [0, 2, 1], 'shards': [[0, 3]], 'lanes': []}, 0, results, entry=_command)
+    got = _gathered(results)
+    assert [(r['ok'], r['status']) for r in got] == [(True, 'ok'), (False, 'error'), (False, 'error')]
+    assert got[1]['error'] == 'the command exited 2'
+    assert got[1]['value']['exit'] == 2  # the value rides back beside why
+    assert sum(not r['ok'] for r in got) == 2  # the gather summary's "item errors"

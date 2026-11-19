@@ -188,7 +188,7 @@ def test_a_printed_version_is_ordered_by_its_first_numbered_token() -> None:
 
 
 def test_a_reading_taken_against_an_exact_pin_is_upgraded_on_read_and_re_probed(tmp_path: Path) -> None:
-    """FORMATS-UPGRADE-ON-READ: a stored entry without ``required`` predates floors, so it is due at once."""
+    """OLD-SHAPE-READER: a stored entry without ``required`` predates floors, so it is due at once."""
     state, fake = tmp_path / 'presence.json', Fake(version='25.2.01zp')
     pinned = Presence('jmag', present=False, evidence=(Evidence('version', 'declared 25.2.0.0', NOW.isoformat()),))
     state.write_text(json.dumps({'jmag': {**pinned.row(), 'probed': NOW.isoformat()}}), 'utf-8')
