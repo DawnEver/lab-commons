@@ -272,3 +272,21 @@ def test_a_heavy_file_is_packed_alone_and_the_run_peak_is_priced_without_it() ->
 
     run = job_measured([], nodes, measured, cpus=1, heavy=alone)
     assert run.peak_mem_gb == pytest.approx(500.0 / 1024, rel=1e-12, abs=0.0), 'the part demand leaves it out'
+
+
+def test_a_file_grown_heavy_during_the_run_never_prices_the_part() -> None:
+    """The heavy list is planned BEFORE the run; a file whose measured peak crossed the bar DURING it is heavy too.
+
+    A file the plan read light grew to 209.6 GB mid-run, priced the part at 1.5x that (capped at a 309.8 GB
+    grant), and no base part was admitted again. The run's peak leaves out every file past the bar the plan
+    recorded (HEAVY_SHARE of the grant). PLANTED CONTROL: with no bar recorded only the planned list is left out.
+    """
+    from lab_commons.hpc.records import job_measured  # noqa: PLC0415 -- the part's demand, read where it is made
+
+    grown, light = 'tests/grown.py', 'tests/light.py'
+    measured = Measured(peaks_mb={grown: 209.6 * 1024, light: 20.0 * 1024})
+    nodes = [f'{grown}::t', f'{light}::t']
+    run = job_measured([], nodes, measured, cpus=1, heavy=(), heavy_bar_gb=309.8 * HEAVY_SHARE)
+    assert run.peak_mem_gb == pytest.approx(20.0, rel=1e-12, abs=0.0), 'the grown file is left out'
+    unbarred = job_measured([], nodes, measured, cpus=1, heavy=())
+    assert unbarred.peak_mem_gb == pytest.approx(209.6, rel=1e-12, abs=0.0), 'CONTROL: no bar, planned list only'
