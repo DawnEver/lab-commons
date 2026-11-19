@@ -27,6 +27,7 @@ Example::
 
     [policy]                              # optional: how the work is cut
     shard_minutes_max = 30
+    grants = ["ada-alice"]                # optional: only these grants (user or <cluster>-<user>) may run it
 
     [task]                                # optional: what ONE array task holds (default: one item, shared node)
     lane_domains = 2                      # a WHOLE node in lanes of 2 L3 domains, one item each (no [cost] cpus)
@@ -107,6 +108,8 @@ class Policy:
     #: The most files one job's run directory may hold on the shared home, judged at gather (a file is an HPC
     #: resource: the home's quota counts files). A run is its manifest, its script and its one results file.
     file_budget: int = 10
+    #: The grants this job may be placed on (``user`` or ``<cluster>-<user>``); empty: every reachable grant.
+    grants: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """A window that is empty or inverted cannot place a single shard."""
