@@ -40,9 +40,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.resources.dimensions import CPU, GPU, MEMORY
+from lab_commons.dimensions import CPU, GPU, MEMORY
 
-#: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.resources.dimensions.MEMORY` counts bytes.
+#: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.dimensions.MEMORY` counts bytes.
 GIB: Final = 1024**3
 
 #: The shortest ``status``/``gather --wait`` poll: each poll is an ssh to a login host (user ruling 2026-11-11).
@@ -75,7 +75,7 @@ class Cost:
             raise ValueError(msg)
 
     def demands(self) -> dict[str, float]:
-        """The cost in :data:`~lab_commons.resources.dimensions.DIMENSIONS` units (read by `width.fits`)."""
+        """The cost in :data:`~lab_commons.dimensions.DIMENSIONS` units (read by `width.fits`)."""
         return {CPU.name: self.cpus, MEMORY.name: self.mem_gb * GIB, GPU.name: self.gpus}
 
 

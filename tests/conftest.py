@@ -15,6 +15,7 @@ from typing import Final
 import pytest
 
 from lab_commons.box import BOX_ENV, CPU_ENV, INSIDE_ENV
+from lab_commons.box.devices import Devices
 from lab_commons.config import CONFIG_ENV
 from lab_commons.home import HOME_ENV
 
@@ -26,6 +27,13 @@ def _a_box_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(HOME_ENV, str(tmp_path / 'machine-home'))
     monkeypatch.delenv(INSIDE_ENV, raising=False)  # the verify running these tests is boxed; a test is not
     monkeypatch.delenv(CPU_ENV, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _a_box_without_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test is decided by the GPUs or NPUs of the host it runs on: a device test builds its own reading."""
+    monkeypatch.setattr('lab_commons.box.demand.read_devices', Devices)
+    monkeypatch.setattr('lab_commons.box.supply.read_devices', Devices)
 
 
 #: Git and Git Credential Manager never ask a person: a fake forge host once popped a GCM dialog on a

@@ -3,7 +3,9 @@
 What once lived beside this table -- a per-box broker of pools, seats and memory -- is folded into the ONE
 box ledger (:mod:`lab_commons.box`, D2 2026-10-16); what remains is the vocabulary a Slurm plan
 (:mod:`lab_commons.hpc.plan`) and :func:`lab_commons.width.fits` read: a demand keyed by these names, in
-these units (memory in bytes), refused by name for a dimension the table does not declare.
+these units (memory in bytes), refused by name for a dimension the table does not declare -- and the box
+(:mod:`lab_commons.box.gpu`) takes its GPU names from. A LEAF: it imports nothing of this package, so every tier
+below the resource engine may read it.
 """
 
 from __future__ import annotations
@@ -18,9 +20,13 @@ __all__ = [
     'CPU',
     'DIMENSIONS',
     'DISK',
+    'EXCLUSIVE',
     'GPU',
     'MEMORY',
+    'NPU',
+    'PRECISIONS',
     'SEATS',
+    'VRAM',
     'WALLCLOCK',
     'Accounting',
     'Dimension',
@@ -169,22 +175,54 @@ WALLCLOCK: Final = Dimension(
     conservative=None,
     note='how long the job expects to run. RECORDED, never enforced here: a duration is not a stock.',
 )
-#: DISK and GPU have the SHAPE and no values, deliberately. There is no portable stdlib reader for
-#: either that would answer on every box in this family, and a dimension with a reader that works
-#: on SOME machines is the silent-degradation defect this module exists to refuse. Declaring them
-#: means a consumer can demand them and SEE, in :attr:`Grant.unbounded`, that nothing bounded them
-#: -- which is strictly better than the demand being a ``KeyError`` or, worse, silently believed.
-#: DECLARING A VALUE FOR THEM DOES NOT MAKE THEM BOUNDED: a number nobody can check is not a
-#: ceiling, and letting a declaration flip the flag would move the same lie one level up.
+#: DISK has the SHAPE and no values, deliberately. There is no portable stdlib reader for it that would
+#: answer on every box in this family, and a dimension with a reader that works on SOME machines is the
+#: silent-degradation defect this module exists to refuse. Declaring it means a consumer can demand it and SEE
+#: that nothing bounded it -- strictly better than a ``KeyError`` or, worse, a demand silently believed.
+#: DECLARING A VALUE FOR IT DOES NOT MAKE IT BOUNDED: a number nobody can check is not a ceiling.
 DISK: Final = Dimension(
     'disk', 'bytes', Accounting.BOX_GLOBAL, Enforcement.NONE, conservative=None, note='shape only; no reader'
 )
+#: THE ACCELERATOR DEVICES -- GPU, NPU -- and the GPU's memory are READ: on a box by its device probes
+#: (:mod:`lab_commons.box.devices`), which see every process on a device, admitted or not; on a cluster the GPU by
+#: Slurm's ``gres/gpu`` (:mod:`lab_commons.hpc.plan`, ``--gres=gpu:N``). A GPU may be shared by memory
+#: (:data:`VRAM`, per GPU taken); see :mod:`lab_commons.box.devices`. A box that cannot read
+#: them is blind and lends none -- the conservative value is 0, not 1: not every box has one.
 GPU: Final = Dimension(
-    'gpu', 'count', Accounting.COUNTED, Enforcement.NONE, conservative=None, note='shape only; no reader'
+    'gpu',
+    'devices',
+    Accounting.COUNTED,
+    Enforcement.OS_READING,
+    conservative=0,
+    note='GPUs, each shared by memory or taken whole. An unread box lends none.',
+)
+NPU: Final = Dimension(
+    'npu',
+    'devices',
+    Accounting.COUNTED,
+    Enforcement.OS_READING,
+    conservative=0,
+    note='whole NPUs (inference accelerators), each lent to one claim. An unread box lends none.',
+)
+VRAM: Final = Dimension(
+    'vram_gb',
+    'GiB',
+    Accounting.BOX_GLOBAL,
+    Enforcement.OS_READING,
+    conservative=0,
+    note='GPU memory a claim takes on EACH GPU it holds, whole GiB. An unread box lends none.',
 )
 
+#: The NATIVE PRECISIONS a device may be required to compute in. A demand names one with a count of 1
+#: (``{'gpu': 1, 'f64': 1}``): every device the claim takes must do it natively. A REQUIREMENT, not a stock -- so
+#: it is not a :class:`Dimension` and :func:`lab_commons.width.fits` never sizes by it.
+PRECISIONS: Final = ('f64', 'f32', 'f16', 'int8')
+#: The requirement that takes each GPU of a claim WHOLE (``{'gpu': 1, 'exclusive': 1}``); without it a GPU claim
+#: is a share of its memory. A requirement like :data:`PRECISIONS`, not a stock.
+EXCLUSIVE: Final = 'exclusive'
+
 DIMENSIONS: Final[Mapping[str, Dimension]] = {
-    dimension.name: dimension for dimension in (SEATS, BOX_SEATS, MEMORY, CPU, WALLCLOCK, DISK, GPU)
+    dimension.name: dimension for dimension in (SEATS, BOX_SEATS, MEMORY, CPU, WALLCLOCK, DISK, GPU, NPU, VRAM)
 }
 
 
