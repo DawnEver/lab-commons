@@ -85,7 +85,7 @@ from lab_commons.hpc.jobs import (
     status_lines,
     submit_job,
 )
-from lab_commons.hpc.needsets import BASE, vocabulary_at
+from lab_commons.hpc.needsets import BASE, needs_of, vocabulary_at
 from lab_commons.hpc.restrict import restricted
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import submit_run
@@ -145,7 +145,9 @@ def _ensure(config: Config, repo: Path) -> Ensure | None:
     job = config.job
     if not job.sha:
         return None
-    spec = RunSpec(sha=job.sha, repo_url=job.repo_url, pack_from=repo, builds=builds_at(repo, job.sha, python=''))
+    spec = RunSpec(
+        sha=job.sha, repo_url=job.repo_url, pack_from=repo, builds=builds_at(repo, job.sha, python='', needs=job.needs)
+    )
 
     def ensure(grant: Grant) -> None:
         build_artifact(spec, runner_for(grant, BUILD_TIMEOUT), grant.name, job.artifact)
@@ -320,7 +322,7 @@ def _only(path: Path | None) -> frozenset[str] | None:
 
 def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> int:
     try:
-        builds = builds_at(args.repo, args.sha, python=args.python)
+        builds = builds_at(args.repo, args.sha, python=args.python, needs=needs_of(args.part))
     except ValueError as undeclared:
         emit(f'run submit refused: {undeclared}', err=True)
         return 2
@@ -357,7 +359,7 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
 
 def _run_build(args: argparse.Namespace, _machine: Machine, _config: Config) -> int:
     try:
-        builds = builds_at(args.repo, args.sha, python=args.python)
+        builds = builds_at(args.repo, args.sha, python=args.python, needs=needs_of(args.part))
     except ValueError as undeclared:
         emit(f'run build refused: {undeclared}', err=True)
         return 2
@@ -438,7 +440,9 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
     group.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
     group.add_argument(
-        '--part', default=BASE, help=f'run submit/gather: the part (a need-set) the run runs; default {BASE}'
+        '--part',
+        default=BASE,
+        help=f'run submit/gather/build: the part (a need-set) the run runs and its venv serves; default {BASE}',
     )
     group.add_argument(
         '--repo',
