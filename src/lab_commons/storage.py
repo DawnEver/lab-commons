@@ -9,11 +9,12 @@ The machine file (:mod:`lab_commons.config`) may declare::
 
     [storage]
     roots = { output = "E:/work/{repo}/output", venvs = "E:/work/{repo}/venvs" }
-    reach = ["results"]                 # the family remotes this machine reaches
-    secrets = "~/.config/lab-commons/storage-secrets"   # where each reached remote's secret is placed
     free_floor_gb = 50                  # the free space every regenerable cache leaves on its volume
     quota = { probe = ["mmlsquota", "--block-size", "1"], format = "mmlsquota" }  # only where a quota binds
     free_floor_files = 20000            # only with a file-limited quota (default: 1% of its file limit)
+
+    [storage.reach.results]             # one sub-table per family remote this machine reaches
+    credentials_file = "~/.motronics/secrets/results"   # that remote's secret, placed by `ops secret place`
 
 and the FAMILY file declares the remotes every machine shares, once and without a secret::
 
@@ -22,13 +23,14 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     endpoint = "https://objects.example"
 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
-name: ``roots``, ``reach``, ``secrets`` and the floor keys belong to one machine, ``remotes`` to the
-family. A cache is bounded by ``free_floor_gb`` (default :data:`FREE_FLOOR_GB_DEFAULT`; the door is
-:mod:`lab_commons.compute.floor`), never a fixed size: a retired cap key is refused by name. Where an account
-QUOTA binds below the volume (a shared filesystem), ``quota`` names its probe and format
-(:mod:`lab_commons.headroom`) and the floor holds against the smaller of the two. A kind
-outside :data:`KINDS`, a remote the family does not declare, and a reach with no ``secrets`` path are
-refused by name. A remote's options are handed to the transport (rclone) verbatim; this module names
+name: ``roots``, ``reach`` and the floor keys belong to one machine, ``remotes`` to the family. A cache is
+bounded by ``free_floor_gb`` (default :data:`FREE_FLOOR_GB_DEFAULT`; the door is :mod:`lab_commons.compute.floor`),
+never a fixed size. Where an account QUOTA binds below the volume (a shared filesystem), ``quota`` names its probe
+and format (:mod:`lab_commons.headroom`) and the floor holds against the smaller of the two. A kind outside
+:data:`KINDS`, a remote the family does not declare, and a reached remote with no ``credentials_file`` are
+refused by name; so are the retired spellings -- a ``secrets`` directory, a list-form ``reach`` (user ruling
+2026-11-19: one declared file per secret, the family's ``credentials_file`` key) and a fixed cap key (D54).
+A remote's options are handed to the transport (rclone) verbatim; this module names
 no provider and no host.
 
 This module never moves data: a binding takes effect for new writes, and moving an existing tree is
@@ -75,10 +77,24 @@ KINDS: Final[Mapping[str, str | None]] = {
     'uv_cache': None,
 }
 
-_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'secrets', 'free_floor_gb', 'free_floor_files', 'quota'})
-_FAMILY_KEYS: Final = frozenset({'remotes'})
+_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'free_floor_gb', 'free_floor_files', 'quota'})
+
+#: Retired machine spellings (2026-11-19), refused by name with the shape that replaced them; never read.
+_RETIRED_SHAPE: Final = (
+    '[storage.reach.<remote>] credentials_file = "<file>" -- one declared secret file per reached remote'
+)
 #: Fixed cache caps, retired by D54 for the free-space floor; refused by name, never read.
-_RETIRED_KEYS: Final = frozenset({'vendor_cache_cap_gb', 'cache_cap_gb', 'cap_gb'})
+_CAP_REMEDY: Final = (
+    'a cache is bounded by the free space its volume keeps, not a fixed size (D54) -- declare [storage] '
+    f'free_floor_gb in the machine file (default {FREE_FLOOR_GB_DEFAULT})'
+)
+_RETIRED_KEYS: Final = {
+    'secrets': f'a secrets directory is retired: declare {_RETIRED_SHAPE}',
+    'vendor_cache_cap_gb': _CAP_REMEDY,
+    'cache_cap_gb': _CAP_REMEDY,
+    'cap_gb': _CAP_REMEDY,
+}
+_FAMILY_KEYS: Final = frozenset({'remotes'})
 
 
 class StorageError(ValueError):
@@ -87,19 +103,22 @@ class StorageError(ValueError):
 
 @dataclass(frozen=True)
 class Remote:
-    """One family remote: its name and the transport options handed over verbatim."""
+    """One reached family remote: its name, the transport options handed over verbatim, its secret's file.
+
+    ``credentials_file`` is ``None`` only for a family remote no machine reaches here.
+    """
 
     name: str
     options: Mapping[str, str]
+    credentials_file: Path | None = None
 
 
 @dataclass(frozen=True)
 class Storage:
-    """One machine's resolved ``[storage]``: its bound roots, the remotes it reaches, its secrets path."""
+    """One machine's resolved ``[storage]``: its bound roots and the remotes it reaches, each with its secret file."""
 
     roots: Mapping[str, str] = field(default_factory=dict)
     reach: tuple[Remote, ...] = ()
-    secrets: Path | None = None
     free_floor_gb: float = FREE_FLOOR_GB_DEFAULT
     free_floor_files: int | None = None
     quota: Quota | None = None
@@ -130,16 +149,8 @@ def declared(machine: Mapping[str, Any] | None = None, family: Mapping[str, Any]
     shared = _table(family, 'the family file')
     _check_layers(local, shared)
     roots = _roots(local.get('roots', {}))
-    reach = _reach(local.get('reach', []), shared.get('remotes', {}))
-    secrets = local.get('secrets')
-    if reach and secrets is None:
-        msg = (
-            f'the machine file: [{TABLE}] reaches {[r.name for r in reach]} but declares no secrets path: '
-            'declare [storage] secrets, then place each secret there (ops secret place)'
-        )
-        raise StorageError(msg)
-    secrets_path = Path(secrets).expanduser() if secrets is not None else None
-    return Storage(roots, reach, secrets_path, _floor(local), _files(local), _quota(local.get('quota')))
+    reach = _reach(local.get('reach', {}), shared.get('remotes', {}))
+    return Storage(roots, reach, _floor(local), _files(local), _quota(local.get('quota')))
 
 
 def _files(local: Mapping[str, Any]) -> int | None:
@@ -185,13 +196,9 @@ def _floor(local: Mapping[str, Any]) -> float:
 
 def _check_layers(local: Mapping[str, Any], shared: Mapping[str, Any]) -> None:
     """Refuse a retired key, a key in the wrong layer, or no storage key at all."""
-    for table in (local, shared):
-        if retired := sorted(set(table) & _RETIRED_KEYS):
-            msg = (
-                f'[{TABLE}] {retired[0]} is retired (D54): a cache is bounded by the free space its volume keeps, '
-                'not a fixed size -- declare [storage] free_floor_gb in the machine file (default '
-                f'{FREE_FLOOR_GB_DEFAULT}), then delete {retired[0]}'
-            )
+    for key, remedy in _RETIRED_KEYS.items():
+        if key in local or key in shared:
+            msg = f'[{TABLE}] {key} is retired: {remedy}'
             raise StorageError(msg)
     if misplaced := sorted(set(local) & _FAMILY_KEYS):
         msg = f'the machine file: [{TABLE}] {misplaced[0]} is a family fact: declare it once in the family file'
@@ -220,15 +227,29 @@ def _roots(roots: Mapping[str, Any]) -> dict[str, str]:
     return {str(kind): str(value) for kind, value in roots.items()}
 
 
-def _reach(names: list[str], remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
-    """The family remotes this machine reaches, each declared by the family."""
-    reach = []
-    for name in names:
+def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
+    """The family remotes this machine reaches: each a family-declared remote with its own credentials file."""
+    if not isinstance(reach, dict):
+        msg = f'the machine file: [{TABLE}] reach as a list is retired: declare {_RETIRED_SHAPE}'
+        raise StorageError(msg)
+    found = []
+    for name, entry in reach.items():
         if name not in remotes:
-            msg = f'the machine file: [{TABLE}] reach names {name!r}, which the family file declares no remote for'
+            msg = f'the machine file: [{TABLE}.reach] names {name!r}, which the family file declares no remote for'
             raise StorageError(msg)
-        reach.append(Remote(name, {str(k): str(v) for k, v in remotes[name].items()}))
-    return tuple(reach)
+        file = entry.get('credentials_file') if isinstance(entry, dict) else None
+        if not file:
+            msg = (
+                f'the machine file: [{TABLE}.reach.{name}] declares no credentials_file: declare the file its '
+                'secret lives in, then place it (ops secret place --path <that file>)'
+            )
+            raise StorageError(msg)
+        if unknown := sorted(set(entry) - {'credentials_file'}):
+            msg = f'the machine file: [{TABLE}.reach.{name}] {unknown[0]} is not a reach key; allowed: credentials_file'
+            raise StorageError(msg)
+        options = {str(k): str(v) for k, v in remotes[name].items()}
+        found.append(Remote(str(name), options, Path(str(file)).expanduser()))
+    return tuple(found)
 
 
 def root(kind: str, repo: str, tree: Path, *, storage: Storage | None = None) -> Path | None:
