@@ -80,10 +80,14 @@ pruned_paths = ['.claude/worktrees']
 scratch = 'scratch/'
 max_age_days = 3.0
 
-# How the cluster builds this repo's env, read at the commit being judged (lab_commons.hpc.builds).
-# It installs the project itself: the venv must import lab_commons.envkey to report its env key.
+# Every environment of this repo carries every capability extra: its own tests exercise each one
+# (lab_commons.extras derives each sync from this; there is no install-everything switch).
+[tool.dev_lab.dep]
+extras = ["units", "paths", "io", "structured", "viz", "viz-mpl", "viz-bokeh"]
+
+# The cluster builds this repo's env from [tool.dev_lab.dep] (lab_commons.hpc.builds), installing the project
+# itself: the venv must import lab_commons.envkey to report its env key.
 [tool.lab_commons.hpc]
-install = "uv sync --frozen --all-extras"
 
 # The run record's root (dev_lab.dev.platformparts).
 [tool.dev_lab.parts]

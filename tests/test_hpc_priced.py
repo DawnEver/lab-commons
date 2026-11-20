@@ -108,7 +108,7 @@ def _commit(repo: Path, files: dict[str, str]) -> str:
     return _git(repo, 'rev-parse', 'HEAD')
 
 
-PYPROJECT: Final = '[project]\nname = "x"\n[tool.lab_commons.hpc]\ninstall = "uv sync"\n'
+PYPROJECT: Final = '[project]\nname = "x"\n[tool.lab_commons.hpc]\n'
 
 
 def test_the_floors_are_read_at_the_commit_being_run(tmp_path: Path) -> None:

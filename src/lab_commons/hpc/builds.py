@@ -3,7 +3,6 @@ r"""CLUSTER BUILD REUSE -- a venv and a native build keyed by their REAL inputs,
 THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being judged)::
 
     [tool.lab_commons.hpc]
-    install = "uv sync --extra dev"                         # the venv's build command (required)
     needs = ["cargo", "cc"]                                 # login-node commands beyond git and uv
     dependency_inputs = ["pyproject.toml", "uv.lock"]      # what the venv is a function of
     source_roots = ["src"]                                  # put on PYTHONPATH from each sha's tree
@@ -12,6 +11,11 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     timeout_s = { incremental = 300, full = 3000 }          # pytest --timeout per run scope (absent: the repo's own)
     item_wall = { multiple = 10, floor_s = 300, unmeasured_s = 3600 }  # per-test kill bound (these are the defaults)
     priced = "tests/priced.toml"                            # measured peaks/walls, no margin (read_priced)
+
+THE VENV'S BUILD COMMAND IS DERIVED, never declared: ``uv sync --frozen`` of the extras the repo's
+``[tool.dev_lab.dep]`` selects for the run's NEED-SET (:func:`lab_commons.extras.sync_command`), so a part or job
+that needs nothing heavy builds an environment without it, and each need-set keys its own venv. A declared
+``install`` is retired and refused by name.
 
 A venv lives in ``~/ci/envs/<env key>`` and a native build in ``~/ci/native/<native key>``; each sha is
 only a ``git worktree`` whose ``source_roots`` reach the venv through ``PYTHONPATH`` -- no per-sha
@@ -37,14 +41,19 @@ import shutil
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import lab_commons.launch as _door
+from lab_commons.extras import sync_command
 from lab_commons.hpc.declared import InvalidDeclaration, kit_tables
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 __all__ = [
     'FULL',
     'INCREMENTAL',
+    'RETIRED_INSTALL',
     'SCOPES',
     'Builds',
     'ItemWall',
@@ -170,29 +179,24 @@ def read_priced(text: str, path: str) -> dict[str, dict[str, float]]:
     return floors
 
 
-_NO_PROJECT: Final = '--no-install-project'
+#: The key a declaration may no longer carry, with its door (FORMATS-MIGRATE-ONCE: refused, never read).
+RETIRED_INSTALL: Final = (
+    '[tool.lab_commons.hpc] install is retired: the venv is `uv sync --frozen` of the extras [tool.dev_lab.dep] '
+    'selects for the need-set (lab_commons.extras) -- delete the line and declare extras/needs there'
+)
 
 
-def _dependencies_only(install: str) -> str:
-    """*install* for a venv SHARED across shas: dependencies only, the project always from the run's own tree.
+def read_builds(text: str, needs: Iterable[str] = ()) -> Builds:
+    """The ``[tool.lab_commons.hpc]`` declaration of pyproject *text* for *needs*; absent is an empty :class:`Builds`.
 
-    An editable project install points into the tree that built the venv, so every later sha reusing it
-    imports -- or fails to import -- that first tree's project (measured 2026-10-25, numerics-lab #33). Only a
-    ``uv sync`` can be told so; any other command is refused rather than trusted.
+    The install is derived for *needs* (:func:`lab_commons.extras.sync_command`) wherever the table is declared.
     """
-    words = install.split()
-    if words[:2] != ['uv', 'sync']:
-        msg = f'[tool.lab_commons.hpc] install {install!r}: a shared venv holds dependencies only -- use uv sync'
-        raise InvalidDeclaration(msg)
-    return install if _NO_PROJECT in words else f'{install} {_NO_PROJECT}'
-
-
-def read_builds(text: str) -> Builds:
-    """The ``[tool.lab_commons.hpc]`` declaration of pyproject *text*; absent is an empty :class:`Builds`."""
-    raw = kit_tables(text).get('hpc', {})
+    tables = kit_tables(text)
+    raw = tables.get('hpc', {})
+    if 'install' in raw:
+        raise InvalidDeclaration(RETIRED_INSTALL)
     native = raw.get('native', {})
     builds = Builds(
-        install=str(raw.get('install', '')),
         needs=tuple(raw.get('needs', ())),
         dependency_inputs=tuple(raw.get('dependency_inputs', ())),
         source_roots=tuple(raw.get('source_roots', ())),
@@ -210,8 +214,12 @@ def read_builds(text: str) -> Builds:
     if builds.dependency_inputs and not builds.source_roots:
         msg = '[tool.lab_commons.hpc] dependency_inputs needs source_roots: a shared venv holds no sha source'
         raise InvalidDeclaration(msg)
-    if builds.dependency_inputs and builds.install:
-        builds = replace(builds, install=_dependencies_only(builds.install))
+    if 'hpc' in tables:
+        try:
+            install = sync_command(tomllib.loads(text), needs, project=not builds.dependency_inputs)
+        except (ValueError, TypeError) as undeclared:
+            raise InvalidDeclaration(str(undeclared)) from undeclared
+        builds = replace(builds, install=install)
     if bool(builds.native_inputs) != bool(builds.native_build):
         msg = '[tool.lab_commons.hpc] native needs both inputs and build'
         raise InvalidDeclaration(msg)
@@ -252,11 +260,11 @@ def _oids(repo: Path, sha: str, paths: tuple[str, ...]) -> dict[str, str]:
     return out
 
 
-def builds_at(repo: Path, sha: str, *, python: str) -> Builds:
-    """The declaration commit *sha* of *repo* carries, with its keys -- every git call here only READS.
+def builds_at(repo: Path, sha: str, *, python: str, needs: Iterable[str] = ()) -> Builds:
+    """The declaration commit *sha* of *repo* carries for *needs*, with its keys -- every git call here only READS.
 
     Raises:
-        ValueError: the commit declares no ``[tool.lab_commons.hpc] install`` -- a venv with no build command.
+        ValueError: the commit declares no ``[tool.lab_commons.hpc]`` table -- a venv with no build command.
 
     """
     text = _door.run(
@@ -266,9 +274,9 @@ def builds_at(repo: Path, sha: str, *, python: str) -> Builds:
         encoding='utf-8',
         check=True,
     ).stdout
-    builds = read_builds(text)
+    builds = read_builds(text, needs)
     if not builds.install:
-        msg = f'{sha[:12]} declares no [tool.lab_commons.hpc] install, e.g. install = "uv sync --extra dev"'
+        msg = f'{sha[:12]} declares no [tool.lab_commons.hpc] table: the cluster builds no venv for it'
         raise ValueError(msg)
     if builds.priced:
         shown = _door.run(

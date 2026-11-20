@@ -172,6 +172,9 @@ class JobSpec:
     rerun_safe: bool = False
     #: The artifact format a job at ``sha`` runs from (:data:`lab_commons.hpc.artifact.FORMATS`).
     artifact: str = 'tarball'
+    #: The needs the job's environment serves (the tests' need vocabulary): their extras, and only theirs, are
+    #: installed (:func:`lab_commons.extras.sync_command`) -- a job needing no heavy extra builds none.
+    needs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """A commit names its remote."""
