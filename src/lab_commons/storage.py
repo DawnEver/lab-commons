@@ -112,6 +112,8 @@ class Remote:
     name: str
     options: Mapping[str, str]
     credentials_file: Path | None = None
+    #: What each secret key is and where a person finds it (``[storage.remotes.<r>.ask]``): shown when it is asked.
+    ask: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -233,13 +235,35 @@ def _roots(roots: Mapping[str, Any]) -> dict[str, str]:
     return {str(kind): str(value) for kind, value in roots.items()}
 
 
+#: A family remote's sub-tables that are not rclone options: the family-wide reach, and the ask hints.
+_REMOTE_META: Final = frozenset({'reach', 'ask'})
+
+
 def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
-    """The family remotes this machine reaches: each a family-declared remote with its own credentials file."""
+    """The family remotes this machine reaches, each with its credentials file.
+
+    A family remote declaring ``[storage.remotes.<r>.reach] credentials_file`` is reached by EVERY machine at that
+    file -- the fact stated once (user ruling 2026-11-20: every machine holds the key). A machine file names a remote
+    in ``[storage.reach]`` only to reach one the family does not give everyone, or to keep the key elsewhere; the
+    same file restated is refused (one source).
+    """
     if not isinstance(reach, dict):
         msg = f'the machine file: [{TABLE}] reach as a list is retired: declare {_RETIRED_SHAPE}'
         raise StorageError(msg)
-    found = []
+    everyone = {
+        name: dict(remote['reach'])
+        for name, remote in remotes.items()
+        if isinstance(remote, dict) and isinstance(remote.get('reach'), dict)
+    }
     for name, entry in reach.items():
+        if name in everyone and isinstance(entry, dict) and entry == everyone[name]:
+            msg = (
+                f'the machine file: [{TABLE}.reach.{name}] restates the family reach of {name}: delete it here '
+                '(the family file gives every machine that credentials_file)'
+            )
+            raise StorageError(msg)
+    found = []
+    for name, entry in {**everyone, **reach}.items():
         if name not in remotes:
             msg = f'the machine file: [{TABLE}.reach] names {name!r}, which the family file declares no remote for'
             raise StorageError(msg)
@@ -253,8 +277,9 @@ def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
         if unknown := sorted(set(entry) - {'credentials_file'}):
             msg = f'the machine file: [{TABLE}.reach.{name}] {unknown[0]} is not a reach key; allowed: credentials_file'
             raise StorageError(msg)
-        options = {str(k): str(v) for k, v in remotes[name].items()}
-        found.append(Remote(str(name), options, Path(str(file)).expanduser()))
+        options = {str(k): str(v) for k, v in remotes[name].items() if k not in _REMOTE_META}
+        ask = {str(k): str(v) for k, v in dict(remotes[name].get('ask', {})).items()}
+        found.append(Remote(str(name), options, Path(str(file)).expanduser(), ask))
     return tuple(found)
 
 
