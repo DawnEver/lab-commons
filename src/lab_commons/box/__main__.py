@@ -13,6 +13,11 @@ A PERSON DECLARES THEIR USE with no process under it (ruling 2026-10-25)::
     python -m lab_commons.box claims [--json]
     python -m lab_commons.box release <id>
 
+A ledger file at an older schema version is refused on open until it is migrated, once
+(:func:`~lab_commons.box._store.migrate`)::
+
+    python -m lab_commons.box migrate
+
 The claim is a ledger row owned by the person, gone at its wall deadline or on release; every admission
 (a forge hold) gets only the room outside it (:func:`~lab_commons.box.ledger.declare`).
 """
@@ -27,6 +32,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from lab_commons.box._store import SCHEMA_VERSION, box_path, migrate
 from lab_commons.box.demand import CPU, GB, MEM_GB, WALL_CEILING_S, Capacity, Refused, write_ended
 from lab_commons.box.ledger import declare, holdings, release
 from lab_commons.box.run import run
@@ -94,6 +100,7 @@ def _parser() -> argparse.ArgumentParser:
     listing.add_argument('--json', action='store_true', help='one JSON array')
     gone = verbs.add_parser('release', help='drop a claim now')
     gone.add_argument('id', type=int)
+    verbs.add_parser('migrate', help='move this box ledger to the schema version this lab-commons writes, once')
     return parser
 
 
@@ -147,6 +154,10 @@ def main(args: Sequence[str] | None = None) -> int:
         return _claims(as_json=ns.json)
     if ns.verb == 'release':
         return _release(ns.id)
+    if ns.verb == 'migrate':
+        was = migrate()
+        emit(f'box: ledger {box_path()} at schema version {SCHEMA_VERSION} (was {was})')
+        return 0
     argv = ns.argv[1:] if ns.argv[:1] == ['--'] else ns.argv
     if not argv:
         parser.error('run: no command after --')
