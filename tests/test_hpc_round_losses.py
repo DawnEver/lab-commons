@@ -63,7 +63,7 @@ def test_an_expected_failure_is_no_loss() -> None:
 def test_round_losses_agrees_with_what_fold_re_queues() -> None:
     """The ids a kill cut are the ones fold re-queues: the loss names the cut, the rest follow it."""
     streams = {0: OOM, 1: SLOW, 2: FAILED}
-    pending, killed, _ = fold(ITEMS, streams, {}, Measured.of({}), shards=[(0, 1), (1, 2), (2, 3)], walls=[30, 3600, 5])
+    pending, killed, _ = fold(ITEMS, streams, {}, Measured(), shards=[(0, 1), (1, 2), (2, 3)], walls=[30, 3600, 5])
     assert killed
     requeued = {n for part in pending for n in part}
     lost = round_losses(ITEMS, streams, shards=[(0, 1), (1, 2), (2, 3)], walls=[30, 3600, 5], states={})

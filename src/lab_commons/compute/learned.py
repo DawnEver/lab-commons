@@ -232,7 +232,7 @@ def learn_record(repo: str, name: str, record: Mapping[str, Any]) -> Path:
     host prices from the same numbers; *name* is remembered so a record is downloaded and folded once.
     """
     table = learned(repo)
-    merged = {key: {**table.get(key, {}), **facts} for key, facts in Measured.of(dict(record)).record().items()}
+    merged = {key: {**table.get(key, {}), **facts} for key, facts in Measured.carried(record).record().items()}
     parts = dict(table.get(PART_FILES, {}))
     files = sorted({file_of(n) for n in (record.get('durations') or {})} | set(record.get('peaks_mb') or {}))
     if files and record.get('platform'):
@@ -251,7 +251,7 @@ def learn_round(repo: str, before: Mapping[str, Any], after: Mapping[str, Any]) 
     removed; every other fact stays as the table holds it.
     """
     table = learned(repo)
-    old, new = Measured.of(dict(before)).record(), Measured.of(dict(after)).record()
+    old, new = Measured.of(before).record(), Measured.of(after).record()
     merged: dict[str, dict[str, float]] = {}
     for key, facts in new.items():
         kept = {name: value for name, value in table.get(key, {}).items() if name in facts or name not in old[key]}
@@ -379,7 +379,7 @@ def demand(repo: str, producer: str, needs: Iterable[str], *, prior: Run) -> Dem
 
 def worker_gb(repo: str, files: Iterable[str], *, prior_gb: float, safety: float) -> float:
     """GB one worker running *files* needs, from *repo*'s per-file peaks (:meth:`Measured.worker_gb`)."""
-    return Measured.of(learned(repo)).worker_gb(files, prior_gb=prior_gb, safety=safety)
+    return Measured.carried(learned(repo)).worker_gb(files, prior_gb=prior_gb, safety=safety)
 
 
 #: What an unmeasured cluster run is taken to hold: one core (the run sizes its array to what is free), and

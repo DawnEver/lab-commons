@@ -62,6 +62,7 @@ __all__ = [
     'OOM_GROWTH',
     'TIMEOUT_GROWTH',
     'Measured',
+    'UnmigratedRecord',
     'file_of',
     'killed_need_mb',
     'memory_band',
@@ -93,6 +94,14 @@ TIMEOUT_GROWTH: Final = 2
 ACCUMULATED_CLASSES: Final = 1
 
 
+#: The command that migrates, once, a record written before one of :class:`Measured`'s keys existed.
+MIGRATE_COMMAND: Final = 'python -m lab_commons.hpc migrate <state.json | run-*.json.gz>...'
+
+
+class UnmigratedRecord(ValueError):
+    """A record in a shape older than its reader: refused by name, never upgraded on read (FORMATS-MIGRATE-ONCE)."""
+
+
 def _mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
@@ -119,14 +128,22 @@ class Measured:
 
     @classmethod
     def of(cls, record: dict[str, Any]) -> Measured:
-        """The measurements a previous run record carries; an older record without them gives none."""
-        return cls(
-            durations=dict(record.get('durations', {})),
-            floors=dict(record.get('floors', {})),
-            overheads=dict(record.get('overheads', {})),
-            peaks_mb=dict(record.get('peaks_mb', {})),
-            id_peaks_mb=dict(record.get('id_peaks_mb', {})),
-        )
+        """The measurements a run record carries, every key of :meth:`record`; an older record is refused by name."""
+        missing = [key for key in cls().record() if key not in record]
+        if missing:
+            msg = f'a record without {missing} predates them: migrate it once with `{MIGRATE_COMMAND}`'
+            raise UnmigratedRecord(msg)
+        return cls(**{key: dict(record[key]) for key in cls().record()})
+
+    @classmethod
+    def carried(cls, facts: Mapping[str, Any]) -> Measured:
+        """The facts a FACT BAG carries; a kind it holds no fact of is none learned.
+
+        A bag -- the learned table, a forge record of a producer that measures some kinds or none (a box verify
+        record carries none) -- is grown fact by fact and has no shape to be older than. A run state or record
+        is read by :meth:`of`.
+        """
+        return cls(**{key: dict(facts.get(key) or {}) for key in cls().record()})
 
     def record(self) -> dict[str, dict[str, float]]:
         """The record's keys for these measurements."""

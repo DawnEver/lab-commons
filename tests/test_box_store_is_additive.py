@@ -84,8 +84,11 @@ def test_a_test_never_opens_the_machine_ledger() -> None:
     assert 'lab-commons-box' in str(box_path()), 'each test has its own ledger (conftest)'
 
 
-def test_a_posix_ledger_lives_in_the_machine_homes_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_the_ledger_lives_in_the_machine_homes_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """One state root on every platform: box_path has no platform branch left to parametrise."""
     monkeypatch.delenv(BOX_ENV)
     monkeypatch.setenv(HOME_ENV, str(tmp_path))
-    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'xdg'))  # planted: a second root the ledger must not follow
-    assert box_path(platform='posix') == tmp_path / 'state' / 'box.sqlite'
+    # planted: second roots the ledger must not follow, on either platform
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'xdg'))
+    monkeypatch.setenv('PROGRAMDATA', str(tmp_path / 'programdata'))
+    assert box_path() == tmp_path / 'state' / 'box.sqlite'
