@@ -145,3 +145,40 @@ def test_the_free_floor_is_a_machine_fact() -> None:
 def test_a_retired_cache_cap_is_refused_by_name(retired: str) -> None:
     with pytest.raises(StorageError, match=f'{retired} is retired.*free_floor_gb'):
         declared({'storage': {retired: 200}}, {})
+
+
+EVERYONE = {
+    'storage': {
+        'remotes': {
+            'results': {
+                'type': 's3',
+                'endpoint': 'https://objects.example',
+                'reach': {'credentials_file': '/keys/results'},
+                'ask': {'access_key_id': 'the Access Key column'},
+                'shape': {'access_key_id': '[0-9a-f]{40}'},
+            }
+        }
+    }
+}
+
+
+def test_a_family_reach_gives_every_machine_the_remote_and_its_file() -> None:
+    """Stated once in the family; a machine declaring nothing reaches it. PLANTED: the meta never reaches rclone."""
+    (remote,) = storage.declared({'storage': {}}, EVERYONE).reach
+    assert remote.credentials_file == Path('/keys/results')
+    assert remote.ask == {'access_key_id': 'the Access Key column'}
+    assert 'reach' not in remote.options
+    assert 'ask' not in remote.options
+    assert remote.options['endpoint'] == 'https://objects.example'
+
+
+def test_a_machine_restating_the_family_reach_is_refused() -> None:
+    machine = {'storage': {'reach': {'results': {'credentials_file': '/keys/results'}}}}
+    with pytest.raises(storage.StorageError, match='restates the family reach'):
+        storage.declared(machine, EVERYONE)
+
+
+def test_a_machine_keeps_the_key_elsewhere_by_declaring_its_own_file() -> None:
+    machine = {'storage': {'reach': {'results': {'credentials_file': '/other/results'}}}}
+    (remote,) = storage.declared(machine, EVERYONE).reach
+    assert remote.credentials_file == Path('/other/results')
