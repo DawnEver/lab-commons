@@ -25,6 +25,7 @@ _SHIPPED: Final = frozenset(
         'BARE-PYTHON',
         'BARE-TEST-INVOCATION',
         'CI-CRON-NEEDS-CONSENT',  # gained 2026-11-17 with dev-lab b9875921
+        'FAMILY-REPO-IS-CHECKED-OUT',  # gained 2026-11-20 with dev-lab #801 (relock in #213)
         'FORGE-WRITE-VIA-CLI',
         'FORGE-WRITE-VIA-GH-API',
         'FORGE-WRITE-VIA-HTTP',
@@ -34,6 +35,7 @@ _SHIPPED: Final = frozenset(
         'GIT-STASH',
         'HEAVY-IS-THE-MAIN-SESSIONS',  # gained 2026-11-17 with dev-lab b9875921
         'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
+        'MACHINE-FILE-IS-RENDERED',  # gained 2026-11-20 with dev-lab #801 (relock in #213)
         'PUSH-FORCE',
         'PUSH-NO-VERIFY',
         'PUSH-REMOTE-DELETE',
