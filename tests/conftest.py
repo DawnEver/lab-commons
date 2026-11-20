@@ -17,6 +17,7 @@ import pytest
 from lab_commons.box import BOX_ENV, CPU_ENV, INSIDE_ENV
 from lab_commons.box.devices import Devices
 from lab_commons.config import CONFIG_ENV
+from lab_commons.headroom import Floor
 from lab_commons.home import HOME_ENV
 
 
@@ -34,6 +35,12 @@ def _a_box_without_devices(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test is decided by the GPUs or NPUs of the host it runs on: a device test builds its own reading."""
     monkeypatch.setattr('lab_commons.box.demand.read_devices', Devices)
     monkeypatch.setattr('lab_commons.box.supply.read_devices', Devices)
+
+
+@pytest.fixture(autouse=True)
+def _a_box_without_a_disk_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test is decided by the free space of the host it runs on: a disk test plants its own floor and volume."""
+    monkeypatch.setattr('lab_commons.box.ledger.free_floor', lambda: Floor(bytes=0))
 
 
 #: Git and Git Credential Manager never ask a person: a fake forge host once popped a GCM dialog on a

@@ -78,6 +78,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
@@ -101,6 +102,7 @@ from lab_commons.box.demand import (
     seats,
 )
 from lab_commons.box.devices import KINDS, NAMES, assign, oversized
+from lab_commons.box.disk import verdict as disk_verdict
 from lab_commons.box.order import blocks
 from lab_commons.box.providers import Read, measured, size
 from lab_commons.box.supply import Reading
@@ -108,6 +110,7 @@ from lab_commons.compute.model import Demand, Resources
 from lab_commons.liveness import creation_stamp, still_the_same_process
 from lab_commons.log import emit
 from lab_commons.resources.engine import admits
+from lab_commons.storage import free_floor
 
 __all__ = [
     'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Read', 'adopted', 'box_path', 'declare',
@@ -418,6 +421,12 @@ def hold(
         blind = [f'{name} is not measured: {capacity.blind[name]}' for name in never.lacking if name in capacity.blind]
         msg = f'{what}: larger than this box, refused at once -- {"; ".join([never.why, *blind])}'
         raise Refused(msg)
+    low, near = disk_verdict((box_path(), Path.cwd()), free_floor())
+    if low is not None:
+        msg = f'{what}: refused at once, a volume it writes is below the free-space floor -- {low}'
+        raise Refused(msg)
+    if near is not None:
+        emit(f'box: warning -- {what}: {near}', err=True)
     with closing(_connect()) as con:
         gives_up = time.time() + queue_s
         pid = os.getpid()
