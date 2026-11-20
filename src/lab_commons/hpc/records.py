@@ -28,8 +28,8 @@ from lab_commons.compute.measured import Measured
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, Unreachable
 from lab_commons.hpc.grants import Machine
+from lab_commons.hpc.layout import ENVS, RUNS, run_tree
 from lab_commons.hpc.pytest_item import MANY_FILE_HEADER, badness, read_stream, split_streams, tagged
-from lab_commons.hpc.shell import ROOT
 from lab_commons.hpc.testcells import TestCell, counts, upgraded
 from lab_commons.outcomes import Cell, Reason, Status
 
@@ -341,7 +341,7 @@ def stream_sources(sha: str, tag: str) -> tuple[str, str]:
     retention keeps the round's stream beside the run state (:func:`kept_text`) before the tree goes
     (:mod:`dev_lab.dev.retentionplan`): a file is an HPC resource.
     """
-    return f'{ROOT}/trees/{sha}/.lab-ci/{tag}.jsonl', f'{ROOT}/runs/{sha}/streams.jsonl'
+    return f'{run_tree(sha)}/.lab-ci/{tag}.jsonl', f'{RUNS}/{sha}/streams.jsonl'
 
 
 def _retired(live: str, kept: str, tag: str) -> tuple[str, str]:
@@ -520,19 +520,19 @@ def files_made(home: Runner, state: dict[str, Any]) -> float:
     The account's FILE quota is a supply admission compares (user ruling 2026-10-14), so a run's file cost
     is learned like its memory. 0 is "not measured": the demand then falls back to the prior, never to free.
     """
-    paths = [f'{ROOT}/trees/{state["sha"]}', f'{ROOT}/runs/{state["sha"]}']
+    paths = [run_tree(state['sha']), f'{RUNS}/{state["sha"]}']
     if env := (state.get('builds') or {}).get('env'):
-        paths.append(f'{ROOT}/envs/{env}')
+        paths.append(f'{ENVS}/{env}')
     text = home(f'find {" ".join(paths)} -xdev 2>/dev/null | wc -l', None).strip()
     return float(text) if text.isdigit() else 0.0
 
 
 def run_shas(machine: Machine, runners: dict[str, Runner], part: str) -> list[str]:
-    """Every sha some grant holds a run of *part* of (``~/ci/runs/<sha>/<part>/state.json``); unreachable holds none."""
+    """Every sha some grant holds a run of *part* of (``runs/<sha>/<part>/state.json``); unreachable holds none."""
     found: set[str] = set()
     for grant in machine.grants:
         try:
-            listing = runners[grant.account](f'ls {ROOT}/runs/*/{part}/state.json 2>/dev/null || true', None)
+            listing = runners[grant.account](f'ls {RUNS}/*/{part}/state.json 2>/dev/null || true', None)
         except Unreachable:
             continue
         found |= {line.split('/')[-3] for line in listing.split() if line.endswith(f'/{part}/state.json')}

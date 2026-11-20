@@ -1,13 +1,14 @@
 """A remote run: one commit's test suite, sharded over a cluster, gathered into a record bound to the commit.
 
-EVERYTHING LIVES UNDER ``~/ci/`` ON THE CLUSTER, AND NOTHING ELSE IS TOUCHED. A day-to-day checkout in
-``~/<repo>`` and its venv are someone's working state; a run must neither reinstall nor read them::
+EVERYTHING LIVES IN THE ACCOUNT'S DECLARED LAYOUT (:mod:`lab_commons.hpc.layout`), AND NOTHING ELSE IS TOUCHED. A
+checkout under ``<root>/repos`` and its venv are the account's working state; a run must neither reinstall nor read
+them::
 
-    ~/ci/cache/<repo>.git       one bare cache PER REPOSITORY (shell.cache_dir); origin = its URL, heads pruned
-    ~/ci/packs/<sha>.pack       only when the commit is not on the remote (sent over stdin, indexed here)
-    ~/ci/runs/<sha>/<part>/state.json  the run of one part: its rounds, cells so far and the job in flight
-    ~/ci/trees/<sha>/           a worktree of the cache, with its OWN .venv (reused when present)
-    ~/ci/bin/lab_ci_pytest_item.py   the item runner, shipped from this checkout (pytest_item.py)
+    <root>/cache/git/<repo>.git        one bare cache PER REPOSITORY (shell.cache_dir); origin = its URL, heads pruned
+    <root>/cache/packs/<sha>.pack      only when the commit is not on the remote (sent over stdin, indexed here)
+    <root>/runs/<sha>/<part>/state.json  the run of one part: its rounds, cells so far and the job in flight
+    <root>/runs/<sha>/tree/            a worktree of the cache; its env is <root>/envs/<key>
+    <root>/serve/bin/lab_ci_pytest_item.py   the item runner, shipped from this checkout (pytest_item.py)
 
 THE FLOW. Probe every grant and pick the cluster (:func:`lab_commons.hpc.plan.allocate`); fetch the
 commit (or ship a pack); add the tree; build its venv on the login node with the caller's install
@@ -74,6 +75,7 @@ from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, sca
 from lab_commons.hpc.config import Config, Cost, JobSpec, Policy
 from lab_commons.hpc.grants import Grant, Machine
 from lab_commons.hpc.homedoor import QuotaRefused, guard
+from lab_commons.hpc.layout import RUNS, run_tree
 from lab_commons.hpc.needsets import need_sets
 from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
@@ -84,7 +86,6 @@ from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
     ENV,
     ITEM_MODULE,
-    ROOT,
     RunSpec,
     collect_command,
     group_items,
@@ -140,9 +141,9 @@ OOM_ROUNDS: Final = 3
 def shares_home(grant: Grant, builder: Grant) -> bool:
     """Whether *grant* may run a round of the tree *builder* built: same cluster AND same login user.
 
-    The tree, its venv and the item runner live in the BUILDER'S ``~/ci``. Measured 2026-10-09: two
+    The tree, its venv and the item runner live in the BUILDER'S root. Measured 2026-10-09: two
     grants on one cluster under different users -- the build ran in one home and the
-    rounds went to the other, whose ``~/ci/trees/<sha>`` held no ``.venv``, so 276 shards died on
+    rounds went to the other, whose run tree held no env, so 276 shards died on
     ``.venv/bin/activate``. Same cluster is not same home.
     """
     return grant.same_cluster(builder) and grant.user == builder.user
@@ -150,7 +151,7 @@ def shares_home(grant: Grant, builder: Grant) -> bool:
 
 def _state_dir(sha: str, part: str) -> str:
     """One run is one PART of one sha: two parts of a sha are two runs, never one state (Ada, 2026-10-17)."""
-    return f'{ROOT}/runs/{sha}/{part}'
+    return f'{RUNS}/{sha}/{part}'
 
 
 def save_state(run: Runner, state: dict[str, Any]) -> None:
@@ -284,7 +285,7 @@ def submit_round(
     ]
     sha = state['sha']
     job = JobSpec(
-        name=job_name(sha, state['platform']), workdir=f'~/ci/trees/{sha}', setup=(ENV,), entry=f'{ITEM_MODULE}:run'
+        name=job_name(sha, state['platform']), workdir=run_tree(sha), setup=(ENV,), entry=f'{ITEM_MODULE}:run'
     )
     config = Config(job=job, cost=cost, policy=policy)
     charge(runners[chosen.account], chosen, sum(ask_of(plan) for plan in plans))
@@ -336,7 +337,7 @@ def submit_run(
 ) -> dict[str, Any]:
     """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns that state.
 
-    The state is ``~/ci/runs/<sha>/<part>/state.json``; :func:`lab_commons.hpc.gather.gather_run` reads it.
+    The state is ``<root>/runs/<sha>/<part>/state.json``; :func:`lab_commons.hpc.gather.gather_run` reads it.
     *history* is a previous record, read for its measurements only. Nothing here waits for a job.
 
     *carry*, given the env key the build reported, names the cells earlier runs of THAT env hold for
@@ -384,7 +385,7 @@ def submit_run(
         'system': told.get('platform', ''),
         'env': told['env'],
         'resolved': json.loads(told.get('resolved') or '[]'),  # every name==version it ran against (envkey)
-        'builds': {'env': spec.builds.env_key, 'native': spec.builds.native_key},  # ~/ci/envs, ~/ci/native keys
+        'builds': {'env': spec.builds.env_key, 'native': spec.builds.native_key},  # <root>/envs, <root>/native keys
         'cluster': host,
         'python': told.get('python', ''),
         'prep': {**told['prep'], **parse_times(collected)},

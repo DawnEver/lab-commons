@@ -1,14 +1,14 @@
 """LEASED TREES: the one place an ad-hoc per-commit tree lives on a cluster, and the reaper that bounds them.
 
 An A/B comparison, a bisect or a census needs a checkout of a commit on the login node; a test run's tree
-(``~/ci/trees/<sha>``, :mod:`lab_commons.hpc.tree`) is retention's and goes once its run is out of flight. Before
+(``<root>/runs/<sha>/tree``, :mod:`lab_commons.hpc.tree`) is retention's and goes once its run is out of flight. Before
 this door, lanes ran ``git worktree add ~/ab/cn/<sha>`` over ``ssh`` -- 69 trees and 2.3 M files that nothing
 reaped (Ada 2026-11-05). A lease is the same worktree, of the SAME bare cache per repository
 (:func:`lab_commons.hpc.shell.cache_dir`), with a record saying who holds it, why, and until when::
 
-    ~/ci/leases/trees/<sha>/              the detached worktree (submodules included)
-    ~/ci/leases/records/<sha>/<holder>.json   {sha, repo_url, holder, purpose, created, expires}
-    ~/ci/leases/reaped/<yyyy-mm-dd>.jsonl     one line per removal: path, sha, why, when
+    <root>/leases/trees/<sha>/            the detached worktree (submodules included)
+    <root>/leases/records/<sha>/<holder>.json   {sha, repo_url, holder, purpose, created, expires}
+    <root>/leases/reaped/<yyyy-mm-dd>.jsonl    one line per removal: path, sha, why, when
 
 THE RECORD IS WRITTEN BEFORE THE TREE, so a tree never exists without a lease naming it, and the reaper never
 races an acquire. A tree is REAPED (:func:`reap_script`) once no holder's lease is unexpired AND no queued or
@@ -34,7 +34,8 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 from lab_commons.hpc.cluster import Runner
-from lab_commons.hpc.shell import BUILD_FAILED, CACHES, ROOT, RunSpec, cache_dir, fetch_script, submodules_script
+from lab_commons.hpc.layout import CACHES, LEASES
+from lab_commons.hpc.shell import BUILD_FAILED, RunSpec, cache_dir, fetch_script, submodules_script
 
 __all__ = [
     'LEASES',
@@ -48,8 +49,6 @@ __all__ = [
     'release',
 ]
 
-#: The lease root, under the managed ``~/ci``.
-LEASES: Final = f'{ROOT}/leases'
 
 #: A lease that never expires is ``~/ab`` again: every lease ends, and one may be renewed by acquiring again.
 MAX_TTL_HOURS: Final = 7 * 24
@@ -204,7 +203,7 @@ def reap(run: Runner, *, now: float) -> list[Reaped]:
     """Remove every leased tree no unexpired lease and no queued or running job holds; log each to a dated record.
 
     The tree, its records and the cache's worktree entry go together; each removal is verified and appended to
-    ``~/ci/leases/reaped/<yyyy-mm-dd>.jsonl`` ON THE CLUSTER. A tree a job still uses is kept, its expiry noted.
+    ``<root>/leases/reaped/<yyyy-mm-dd>.jsonl`` ON THE CLUSTER. A tree a job still uses is kept, its expiry noted.
     """
     leases, trees, jobs = _state(run)
     by_sha: dict[str, list[Lease]] = {}
