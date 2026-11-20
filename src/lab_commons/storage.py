@@ -23,7 +23,8 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     endpoint = "https://objects.example"
 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
-name: ``roots``, ``reach`` and the floor keys belong to one machine, ``remotes`` to the family. A cache is
+name: ``roots``, ``reach`` and the floor keys belong to one machine, ``remotes`` to the family; a machine file that
+declares no family layer is a render of family + host and carries the family's ``remotes`` inline. A cache is
 bounded by ``free_floor_gb`` (default :data:`FREE_FLOOR_GB_DEFAULT`; the door is :mod:`lab_commons.compute.floor`),
 never a fixed size. Where an account QUOTA binds below the volume (a shared filesystem), ``quota`` names its probe
 and format (:mod:`lab_commons.headroom`) and the floor holds against the smaller of the two. A kind outside
@@ -147,6 +148,11 @@ def declared(machine: Mapping[str, Any] | None = None, family: Mapping[str, Any]
         family = config.family() if family is None else family
     local = _table(machine, 'the machine file')
     shared = _table(family, 'the family file')
+    if not family:
+        # No family layer: the machine file is a RENDER of family + host and carries the family's tables inline,
+        # so its remotes ARE the family's -- read once from there, never a restatement.
+        shared = {key: local[key] for key in _FAMILY_KEYS & set(local)}
+        local = {key: value for key, value in local.items() if key not in _FAMILY_KEYS}
     _check_layers(local, shared)
     roots = _roots(local.get('roots', {}))
     reach = _reach(local.get('reach', {}), shared.get('remotes', {}))

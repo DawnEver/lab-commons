@@ -90,9 +90,18 @@ def test_the_retired_list_form_reach_is_refused_by_name_with_the_new_shape() -> 
         declared({'storage': {'reach': ['results']}}, FAMILY)
 
 
+def test_a_rendered_machine_file_carries_the_family_remotes_inline(tmp_path: Path) -> None:
+    """No family layer is declared: the machine file IS the render of family + host, so its remotes are read."""
+    file = tmp_path / 'results'
+    rendered = {'storage': {**FAMILY['storage'], 'reach': {'results': {'credentials_file': str(file)}}}}
+    got = declared(rendered, {})
+    assert [(r.name, r.credentials_file) for r in got.reach] == [('results', file)]
+
+
 def test_each_key_lives_in_its_own_layer() -> None:
+    """Planted control: with a family layer present, remotes in the machine file restate it and are refused."""
     with pytest.raises(StorageError, match='remotes is a family fact'):
-        declared({'storage': {'remotes': {}}}, {})
+        declared({'storage': {'remotes': {}}}, FAMILY)
     with pytest.raises(StorageError, match='roots belongs to one machine'):
         declared({}, {'storage': {'roots': {}}})
     with pytest.raises(StorageError, match='mirror is not a storage key'):
