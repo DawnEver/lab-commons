@@ -43,7 +43,15 @@ def test_a_relative_root_is_refused() -> None:
         _bound(output='work/{repo}')
 
 
-FAMILY = {'storage': {'remotes': {'results': {'type': 's3', 'endpoint': 'https://objects.example'}}}}
+FAMILY = {
+    'storage': {
+        'remotes': {
+            'results': {
+                'type': 's3', 'endpoint': 'https://objects.example', 'secret_keys': ['secret_access_key'],
+            }
+        }
+    }
+}  # fmt: skip
 
 
 def test_a_reached_remote_comes_from_the_family_with_its_own_credentials_file(tmp_path: Path) -> None:
@@ -154,8 +162,10 @@ EVERYONE = {
                 'type': 's3',
                 'endpoint': 'https://objects.example',
                 'reach': {'credentials_file': '/keys/results'},
-                'ask': {'access_key_id': 'the Access Key column'},
-                'shape': {'access_key_id': '[0-9a-f]{40}'},
+                'access_key_id': '0123abcd',
+                'secret_keys': ['secret_access_key'],
+                'ask': {'secret_access_key': 'shown once when the key is generated'},
+                'shape': {'secret_access_key': '[A-Za-z0-9+/=]{44}'},
             }
         }
     }
@@ -166,9 +176,10 @@ def test_a_family_reach_gives_every_machine_the_remote_and_its_file() -> None:
     """Stated once in the family; a machine declaring nothing reaches it. PLANTED: the meta never reaches rclone."""
     (remote,) = storage.declared({'storage': {}}, EVERYONE).reach
     assert remote.credentials_file == Path('/keys/results')
-    assert remote.ask == {'access_key_id': 'the Access Key column'}
-    assert 'reach' not in remote.options
-    assert 'ask' not in remote.options
+    assert remote.ask == {'secret_access_key': 'shown once when the key is generated'}
+    assert remote.secret_keys == ('secret_access_key',)
+    assert remote.options['access_key_id'] == '0123abcd'
+    assert not {'reach', 'ask', 'shape', 'secret_keys'} & set(remote.options)
     assert remote.options['endpoint'] == 'https://objects.example'
 
 
@@ -182,3 +193,25 @@ def test_a_machine_keeps_the_key_elsewhere_by_declaring_its_own_file() -> None:
     machine = {'storage': {'reach': {'results': {'credentials_file': '/other/results'}}}}
     (remote,) = storage.declared(machine, EVERYONE).reach
     assert remote.credentials_file == Path('/other/results')
+
+
+def _family(**remote: object) -> dict[str, object]:
+    return {'storage': {'remotes': {'results': {**EVERYONE['storage']['remotes']['results'], **remote}}}}
+
+
+@pytest.mark.parametrize(
+    ('remote', 'why'),
+    [
+        ({'secret_keys': []}, 'declares no secret_keys'),
+        ({'secret_keys': ['access_key_id']}, 'both as a fact and as a secret key'),
+        ({'ask': {'access_key_id': 'the Access Key column'}}, 'access_key_id, which is not a secret key'),
+        ({'shape': {'endpoint': '.*'}}, 'endpoint, which is not a secret key'),
+    ],
+)
+def test_only_a_declared_secret_is_asked(remote: dict[str, object], why: str) -> None:
+    """Asking a declared non-secret key (an S3 access key ID) is refused at the declaration.
+
+    PLANTED CONTROL: the well-declared family above resolves (test_a_family_reach_gives_every_machine_...).
+    """
+    with pytest.raises(storage.StorageError, match=why):
+        storage.declared({'storage': {}}, _family(**remote))

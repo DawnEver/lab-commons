@@ -21,6 +21,8 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     [storage.remotes.results]
     type = "s3"
     endpoint = "https://objects.example"
+    access_key_id = "<the key's ID>"     # a fact: declared, never asked
+    secret_keys = ["secret_access_key"]  # the only keys the credentials_file holds and a person is asked
 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
 name: ``roots``, ``reach`` and the floor keys belong to one machine, ``remotes`` to the family; a machine file that
@@ -116,6 +118,9 @@ class Remote:
     ask: Mapping[str, str] = field(default_factory=dict)
     #: The regular expression each secret key's value must match (``[storage.remotes.<r>.shape]``), checked at entry.
     shape: Mapping[str, str] = field(default_factory=dict)
+    #: The keys the ``credentials_file`` holds (``secret_keys``): the only values a person is asked. Every other
+    #: transport key -- an S3 access key ID too -- is a declared fact among :attr:`options`, never asked or placed.
+    secret_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -237,8 +242,26 @@ def _roots(roots: Mapping[str, Any]) -> dict[str, str]:
     return {str(kind): str(value) for kind, value in roots.items()}
 
 
-#: A family remote's sub-tables that are not rclone options: the family-wide reach, the ask hints, the value shapes.
-_REMOTE_META: Final = frozenset({'reach', 'ask', 'shape'})
+#: A family remote's keys that are not rclone options: the family-wide reach, its secret keys, their hints and shapes.
+_REMOTE_META: Final = frozenset({'reach', 'secret_keys', 'ask', 'shape'})
+
+
+def _secret_keys(name: str, value: object, options: Mapping[str, str], asked: Mapping[str, str]) -> tuple[str, ...]:
+    """A reached remote's declared ``secret_keys``: present, disjoint from its facts, and the only keys asked."""
+    where = f'the family file: [{TABLE}.remotes.{name}]'
+    if not isinstance(value, list) or not value or not all(isinstance(k, str) and k for k in value):
+        msg = f'{where} declares no secret_keys: list the keys its credentials_file holds, e.g. ["secret_access_key"]'
+        raise StorageError(msg)
+    if both := sorted(set(value) & set(options)):
+        msg = f'{where} declares {both[0]} both as a fact and as a secret key: a fact is declared, a secret placed'
+        raise StorageError(msg)
+    if not_secret := sorted(set(asked) - set(value)):
+        msg = (
+            f'{where} ask/shape names {not_secret[0]}, which is not a secret key: only a secret is asked; '
+            'declare a fact among the remote options'
+        )
+        raise StorageError(msg)
+    return tuple(value)
 
 
 def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
@@ -282,7 +305,8 @@ def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
         options = {str(k): str(v) for k, v in remotes[name].items() if k not in _REMOTE_META}
         ask = {str(k): str(v) for k, v in dict(remotes[name].get('ask', {})).items()}
         shape = {str(k): str(v) for k, v in dict(remotes[name].get('shape', {})).items()}
-        found.append(Remote(str(name), options, Path(str(file)).expanduser(), ask, shape))
+        secrets = _secret_keys(str(name), remotes[name].get('secret_keys'), options, {**ask, **shape})
+        found.append(Remote(str(name), options, Path(str(file)).expanduser(), ask, shape, secrets))
     return tuple(found)
 
 
