@@ -43,24 +43,51 @@ def test_a_relative_root_is_refused() -> None:
         _bound(output='work/{repo}')
 
 
-def test_a_reached_remote_comes_from_the_family_with_its_options_verbatim(tmp_path: Path) -> None:
-    family = {'storage': {'remotes': {'results': {'type': 's3', 'endpoint': 'https://objects.example'}}}}
-    got = declared({'storage': {'reach': ['results'], 'secrets': str(tmp_path)}}, family)
-    assert [(r.name, dict(r.options)) for r in got.reach] == [
-        ('results', {'type': 's3', 'endpoint': 'https://objects.example'})
+FAMILY = {'storage': {'remotes': {'results': {'type': 's3', 'endpoint': 'https://objects.example'}}}}
+
+
+def test_a_reached_remote_comes_from_the_family_with_its_own_credentials_file(tmp_path: Path) -> None:
+    file = tmp_path / 'results'
+    got = declared({'storage': {'reach': {'results': {'credentials_file': str(file)}}}}, FAMILY)
+    assert [(r.name, dict(r.options), r.credentials_file) for r in got.reach] == [
+        ('results', {'type': 's3', 'endpoint': 'https://objects.example'}, file)
     ]
-    assert got.secrets == tmp_path
+
+
+def test_a_credentials_file_expands_the_home() -> None:
+    got = declared({'storage': {'reach': {'results': {'credentials_file': '~/.motronics/secrets/results'}}}}, FAMILY)
+    assert got.reach[0].credentials_file == Path('~/.motronics/secrets/results').expanduser()
+
+
+def test_no_reach_declared_reaches_nothing() -> None:
+    """PLANTED CONTROL for the refusals below: a machine declaring no reach reaches no remote and needs no file."""
+    assert declared({}, FAMILY).reach == ()
 
 
 def test_a_remote_the_family_does_not_declare_is_refused() -> None:
-    with pytest.raises(StorageError, match="reach names 'results'"):
-        declared({'storage': {'reach': ['results'], 'secrets': '/s'}}, {})
+    with pytest.raises(StorageError, match="names 'results', which the family file declares no remote"):
+        declared({'storage': {'reach': {'results': {'credentials_file': '/s/results'}}}}, {})
 
 
-def test_a_reach_without_a_secrets_path_is_refused() -> None:
-    family = {'storage': {'remotes': {'results': {'type': 's3'}}}}
-    with pytest.raises(StorageError, match='declares no secrets path'):
-        declared({'storage': {'reach': ['results']}}, family)
+def test_a_reached_remote_without_a_credentials_file_is_refused_by_name() -> None:
+    with pytest.raises(StorageError, match=r'\[storage.reach.results\] declares no credentials_file'):
+        declared({'storage': {'reach': {'results': {}}}}, FAMILY)
+
+
+def test_an_unknown_reach_key_is_refused() -> None:
+    with pytest.raises(StorageError, match='secret_dir is not a reach key'):
+        declared({'storage': {'reach': {'results': {'credentials_file': '/s', 'secret_dir': '/d'}}}}, FAMILY)
+
+
+def test_the_retired_secrets_directory_is_refused_by_name_with_the_new_shape() -> None:
+    """FORMATS-MIGRATE-ONCE: the old directory spelling is never read, only refused, naming what replaced it."""
+    with pytest.raises(StorageError, match=r'secrets is retired: .*\[storage.reach.<remote>\] credentials_file'):
+        declared({'storage': {'reach': {'results': {'credentials_file': '/s'}}, 'secrets': '/old'}}, FAMILY)
+
+
+def test_the_retired_list_form_reach_is_refused_by_name_with_the_new_shape() -> None:
+    with pytest.raises(StorageError, match=r'reach as a list is retired: .*credentials_file'):
+        declared({'storage': {'reach': ['results']}}, FAMILY)
 
 
 def test_each_key_lives_in_its_own_layer() -> None:
