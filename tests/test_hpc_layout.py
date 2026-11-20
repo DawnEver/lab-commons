@@ -48,7 +48,7 @@ def test_every_path_derives_from_the_declared_root_and_serving_dirs_only_for_a_s
     assert set(verify.owned) == set(verify.shared) | set(verify.serving)
 
 
-@pytest.mark.parametrize('root', ['', '~/lab', 'lab'])
+@pytest.mark.parametrize('root', ['', '~/lab', 'lab', '$HOME/lab'])
 def test_an_undeclared_or_home_relative_root_is_refused_by_name(root: str) -> None:
     with pytest.raises(RootUndeclared, match='root'):
         account_paths(root, serves=False, account='u')
@@ -75,3 +75,9 @@ def test_the_scan_catches_a_planted_home_path() -> None:
     assert _home_literals("JOBS = '~/ci/jobs'\n") == ['~/ci/jobs']
     assert _home_literals('X = f\'"$HOME"/ci/{a}\'\n'), 'an f-string part is a literal too'
     assert _home_literals('"""~/ci in a docstring is prose."""\n') == []
+
+
+def test_on_the_account_the_root_comes_from_its_deploy_and_unset_is_refused() -> None:
+    assert layout.local_root({'LAB_ROOT': '/epccfs/p/u'}).root == '/epccfs/p/u'
+    with pytest.raises(RootUndeclared, match='deploy-fleet'):
+        layout.local_root({})  # PLANTED CONTROL: no default, no home fallback

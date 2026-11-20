@@ -27,8 +27,11 @@ it; :data:`REQUIRE_ROOT` refuses, by name and with its door, a shell where it is
 
 from __future__ import annotations
 
+import ntpath
+import os
 import posixpath
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -52,6 +55,7 @@ __all__ = [
     'RootUndeclared',
     'account_paths',
     'export_line',
+    'local_root',
     'run_tree',
 ]
 
@@ -131,7 +135,7 @@ def account_paths(root: str, *, serves: bool, account: str = '') -> AccountPaths
             "account file's [deploy] root) in the family config, on a filesystem the compute nodes see"
         )
         raise RootUndeclared(msg)
-    if not posixpath.isabs(root):
+    if not (posixpath.isabs(root) or ntpath.isabs(root)):  # a cluster is POSIX; a test's tmp may be a drive
         msg = f'{account or "this account"}: root {root!r} must be an absolute path (a declared root, never ~)'
         raise RootUndeclared(msg)
     return AccountPaths(posixpath.normpath(root), serves)
@@ -140,3 +144,15 @@ def account_paths(root: str, *, serves: bool, account: str = '') -> AccountPaths
 def export_line(paths: AccountPaths) -> str:
     """The one login-profile line that carries the root to every login shell and job of the account."""
     return f'export {ROOT_VAR}={shlex.quote(paths.root)}'
+
+
+def local_root(env: Mapping[str, str] | None = None) -> AccountPaths:
+    """The layout of the account this runs on, from ``LAB_ROOT`` (its deploy sets it); unset is refused by name."""
+    root = (os.environ if env is None else env).get(ROOT_VAR, '')
+    if not root:
+        msg = (
+            f'{ROOT_VAR} is unset: this account was not deployed with its declared root -- '
+            'run python -m dev_lab.dev.hpcaccount deploy-fleet --account <user>'
+        )
+        raise RootUndeclared(msg)
+    return account_paths(root, serves=True)
