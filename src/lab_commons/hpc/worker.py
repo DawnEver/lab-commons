@@ -20,7 +20,7 @@ ONE RESULT FILE PER JOB (a file is an HPC resource). Every array task of a run a
 task's script once the worker has exited, whatever its exit -- one ``shard`` line carrying the worker's
 exit code and the tail of its output. The task's own stdout/stderr go to node-local ``$TMPDIR``, never to
 the shared filesystem; only that tail is kept. Lines are :class:`lab_commons.outcomes.record.Event`
-lines (the outcomes JSONL format, its schema and upgrade-on-read included).
+lines (the outcomes JSONL format, its schema and its one-shot migration included).
 :class:`~lab_commons.outcomes.record.Record` keeps ONE writer per file and a run has one writer per array
 task, so each append here takes an exclusive lock on the file, cuts a killed writer's torn tail, and
 appends one line, fsynced.

@@ -88,6 +88,7 @@ from lab_commons.hpc.jobs import (
     submit_job,
 )
 from lab_commons.hpc.needsets import BASE, vocabulary_at
+from lab_commons.hpc.restrict import restricted
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
@@ -169,6 +170,8 @@ def _gather(record: dict[str, Any], machine: Machine, reach: Reach, output: Path
     if output is not None:
         output.write_text(json.dumps(got.results), encoding='utf-8')
         _out(f'written {output}')
+    else:  # a success line with no artefact reads as a result kept (dev-lab #483)
+        _out('nothing written: the merged results were read and dropped; pass -o <path> to keep them')
     return 1 if got.over else 0
 
 
@@ -474,7 +477,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     config = load_config(args.config[0]) if args.config else Config()
     steps = {'submit': _run_submit, 'gather': _run_gather, 'build': _run_build}
     try:
-        machine = load_grants()
+        machine = restricted(load_grants(), config.policy.grants)
         return steps[args.step](args, allocation.resolve(machine) if args.step == 'submit' else machine, config)
     except NotOnCluster as off:
         emit(f'run {args.step} refused: {off}', err=True)
@@ -565,6 +568,11 @@ def _dispatch(argv: list[str] | None) -> int:
     if args.verb in {'plan', 'submit', 'retry'}:
         machine = affinity.resolve(allocation.resolve(machine))
     configs = _job_configs(parser, args)
+    if args.verb in {'plan', 'submit', 'retry'}:
+        try:
+            machine = restricted(machine, configs[0].policy.grants)
+        except ValueError as refused:
+            parser.error(str(refused))
     if args.verb == 'status':
         return _status(configs, machine, runner_for, watch_minutes=args.watch_minutes if args.watch else None)
     if args.verb == 'cancel':

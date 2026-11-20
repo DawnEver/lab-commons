@@ -33,27 +33,54 @@ from lab_commons.outcomes.identity import Identity
 from lab_commons.outcomes.jsonl import read_jsonl
 from lab_commons.outcomes.status import Status
 
-__all__ = ['OUTCOME', 'SCHEMA_VERSION', 'SUBMITTED', 'Event', 'FinalityError', 'Record', 'UnknownSchema']
+__all__ = [
+    'MIGRATES_FROM',
+    'OUTCOME',
+    'SCHEMA_VERSION',
+    'SUBMITTED',
+    'Event',
+    'FinalityError',
+    'Record',
+    'UnknownSchema',
+    'migrate',
+]
 
 #: The event-line format version, written into every line.
 SCHEMA_VERSION: Final = 3
 
 
-def _v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
-    """Schema 1 -> 2: a v1 line is a v2 line without the optional ``attempt``; only the version moves."""
-    return {**raw, 'schema': 2}
+#: Each older schema a stored line may still carry; :func:`migrate` rewrites it ONCE to the current one
+#: (FORMATS-MIGRATE-ONCE), and the reader refuses it by name until then. Both steps only move the version:
+#: schema 1 lines carry no ``attempt`` (:class:`Record` numbers them 1.. in file order) and schema 2 outcomes
+#: carry no ``expectation`` (they declared none).
+MIGRATES_FROM: Final = frozenset({1, 2})
 
 
-def _v2_to_v3(raw: dict[str, Any]) -> dict[str, Any]:
-    """Schema 2 -> 3: a v2 line is a v3 line without the optional ``expectation``; only the version moves."""
-    return {**raw, 'schema': 3}
+def migrate(path: Path) -> int:
+    """The ONE-SHOT migration of the record at *path* to :data:`SCHEMA_VERSION`; how many lines it moved.
 
+    No reader calls it. A torn tail is dropped; a line at an unknown schema is refused before anything is written.
+    """
+    rows = list(read_jsonl(path).rows)
+    if unknown := sorted({str(row.get('schema')) for row in rows} - {str(v) for v in (*MIGRATES_FROM, SCHEMA_VERSION)}):
+        msg = f'{path}: event schema {unknown} is neither {SCHEMA_VERSION} nor migratable from {sorted(MIGRATES_FROM)}'
+        raise UnknownSchema(msg)
+    moved = sum(row.get('schema') != SCHEMA_VERSION for row in rows)
+    text = ''.join(
+        json.dumps(
+            {**row, 'schema': SCHEMA_VERSION},
+        )
+        + '\n'
+        for row in rows
+    )
+    temp = path.with_name(f'{path.name}.{os.getpid()}.migrating')
+    with temp.open('w', encoding='utf-8') as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temp.replace(path)
+    return moved
 
-#: Each older version this build reads, and the step taking it one version on (FORMATS-UPGRADE-ON-READ:
-#: a Record is LIVE state, appended to across a change).
-#: v1 -> v2: v1 lines carry no ``attempt``; :class:`Record` numbers their outcomes 1.. in file order.
-#: v2 -> v3: v2 outcomes carry no ``expectation``; they declared none.
-_UPGRADES: Final[dict[int, Any]] = {1: _v1_to_v2, 2: _v2_to_v3}
 
 #: The two kinds this module gives meaning to; any other kind is a caller's and is only recorded.
 SUBMITTED: Final = 'submitted'
@@ -65,7 +92,7 @@ class FinalityError(ValueError):
 
 
 class UnknownSchema(ValueError):
-    """An event line names a schema this build neither writes nor can upgrade."""
+    """An event line names a schema other than the one this build writes (an older one names :func:`migrate`)."""
 
 
 @dataclass(frozen=True)
@@ -110,12 +137,15 @@ class Event:
 
     @classmethod
     def from_plain(cls, plain: Mapping[str, Any]) -> Event:
-        """The inverse of :meth:`to_plain`, upgrading an older schema first; an unknown one is refused."""
+        """The inverse of :meth:`to_plain`; any other schema is refused by name, an older one with its migration."""
         raw = dict(plain)
-        while raw.get('schema') in _UPGRADES:
-            raw = _UPGRADES[raw['schema']](raw)
-        if raw.get('schema') != SCHEMA_VERSION:
-            msg = f'event schema {raw.get("schema")!r} is not {SCHEMA_VERSION} and has no upgrade'
+        if (schema := raw.get('schema')) != SCHEMA_VERSION:
+            remedy = (
+                'migrate the record once: lab_commons.outcomes.record.migrate(<path>)'
+                if schema in MIGRATES_FROM
+                else 'this build cannot read it'
+            )
+            msg = f'event schema {schema!r} is not {SCHEMA_VERSION}: {remedy}'
             raise UnknownSchema(msg)
         cell = raw.get('cell')
         expectation = raw.get('expectation')

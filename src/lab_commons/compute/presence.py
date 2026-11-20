@@ -225,7 +225,7 @@ def _current(entry: Mapping[str, Any], required: str, now: datetime, ttl: timede
     """A reading still holds: inside its TTL, taken against today's requirement, and no unit failed since.
 
     An entry with no ``required`` was written when a declaration was an exact pin; upgraded on read it is
-    due, so the next refresh re-probes it against its floor (FORMATS-UPGRADE-ON-READ).
+    due, so the next refresh re-probes it against its floor (OLD-SHAPE-READER).
     """
     probed = datetime.fromisoformat(entry['probed'])
     failed = entry.get('failed')

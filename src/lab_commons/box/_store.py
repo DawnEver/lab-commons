@@ -124,6 +124,7 @@ def _set_up(con: sqlite3.Connection) -> None:
             columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
             for name, spelled in added:
                 if name not in columns:  # a ledger file written before the column existed: the schema moves forward
+                    # OLD-SHAPE-READER
                     con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
 
 
@@ -136,6 +137,7 @@ def _set_up(con: sqlite3.Connection) -> None:
 #: EVERY amount but cores and memory, by name -- tool seats, lent slots, OS, consumables.
 #: A ticket's demand is NULL on a ticket written before it was declared: such a ticket contends for everything.
 #: A claim written before :mod:`lab_commons.resources` named scopes and kinds is the box's, OCCUPANCY, windowless.
+#: A claim's ``devices`` (its device ids, JSON) is NULL when it holds none.
 _ADDED: Final = {
     'claims': (
         ('kept', 'kept INTEGER NOT NULL DEFAULT 0'),
@@ -143,6 +145,7 @@ _ADDED: Final = {
         ('scope', "scope TEXT NOT NULL DEFAULT 'box'"),
         ('kind', "kind TEXT NOT NULL DEFAULT 'occupancy'"),
         ('window', 'window TEXT'),
+        ('devices', 'devices TEXT'),
     ),
     'tickets': (('cpu', 'cpu INTEGER'), ('mem_bytes', 'mem_bytes INTEGER'), ('seats', 'seats TEXT')),
 }
@@ -166,7 +169,8 @@ def read(con: sqlite3.Connection) -> list[Holding]:
     A row :mod:`lab_commons.resources` wrote for another scope (an API key, a cluster account) holds nothing here.
     """
     rows = con.execute(
-        "SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe, kept FROM claims WHERE scope = 'box' "
+        'SELECT what, pid, cpu, mem_bytes, seats, deadline, id, key, probe, kept, devices FROM claims '
+        "WHERE scope = 'box' "
         'ORDER BY id'
     ).fetchall()
     return [
@@ -181,6 +185,7 @@ def read(con: sqlite3.Connection) -> list[Holding]:
             key,
             None if probe is None else tuple(json.loads(probe)),
             bool(kept),
+            tuple(json.loads(devices or '[]')),
         )
-        for what, pid, cpu, mem, seats, deadline, row_id, key, probe, kept in rows
+        for what, pid, cpu, mem, seats, deadline, row_id, key, probe, kept, devices in rows
     ]

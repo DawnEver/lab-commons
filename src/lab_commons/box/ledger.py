@@ -76,6 +76,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 
 import lab_commons.launch as _door
@@ -98,6 +99,8 @@ from lab_commons.box.demand import (
     mem_bytes,
     seats,
 )
+from lab_commons.box.devices import KINDS, NAMES, assign, oversized
+from lab_commons.box.disk import verdict as disk_verdict
 from lab_commons.box.order import blocks
 from lab_commons.box.providers import Read, measured, size
 from lab_commons.box.supply import Reading
@@ -105,6 +108,7 @@ from lab_commons.compute.model import Demand, Resources
 from lab_commons.liveness import creation_stamp, still_the_same_process
 from lab_commons.log import emit
 from lab_commons.resources.engine import admits
+from lab_commons.storage import free_floor
 
 __all__ = [
     'BOX_ENV', 'CPU_ENV', 'GRACE_S', 'INSIDE_ENV', 'POLL_S', 'PROBE_S', 'Read', 'adopted', 'box_path', 'declare',
@@ -139,8 +143,15 @@ def inside_a_claim() -> bool:
 
 
 def holdings() -> list[Holding]:
-    """Every claim in the ledger now, oldest first."""
+    """Every LIVE claim in the ledger now, oldest first: the rows admission would count.
+
+    The read reaps first (:func:`_reap`, no probe run: an external claim is left to the probing :func:`reap`),
+    so a kept claim whose holder died -- gone, or its pid reborn as another process -- is never read as held
+    (2026-11-16: a run killed by its shell timeout left a Designer claim reading the box full for ~23 h).
+    """
     with closing(_connect()) as con:
+        with _immediate(con):
+            _reap(con, time.time())
         return _read(con)
 
 
@@ -271,8 +282,11 @@ def _when(epoch: float) -> str:
 
 def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, demand: Demand, what: str) -> str | None:
     """``None`` when THE RULE admits *demand* on the box's measure less every claim, else why not, naming holders."""
-    supply = measured(capacity, held, reading, seats=seats(demand), asker=os.getpid())
-    verdict = admits(supply.resources, demand, present=supply.present, running=[_vector_of(h) for h in held], what=what)
+    counted = _counted(demand)
+    supply = measured(capacity, held, reading, seats=seats(counted), asker=os.getpid())
+    verdict = admits(
+        supply.resources, counted, present=supply.present, running=[_vector_of(h) for h in held], what=what
+    )
     if verdict:
         return None
     holders = [
@@ -281,14 +295,23 @@ def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, deman
         for h in held
         if (amount := _vector_of(h)[name])
     ]
-    why_blind = {**reading.unseen, **capacity.blind}
+    why_blind = {**reading.unread, **capacity.blind}
     blind = [f'{name} is not measured: {why_blind[name]}' for name in verdict.lacking if name in why_blind]
     outside = 'held by nobody on the ledger -- the rest is in use outside it'
     return f'{verdict.why}; ' + ', '.join([*holders, *blind] or [outside])
 
 
 def _vector_of(held: Holding) -> Resources:
-    return Resources({'cpu': held.cpu, 'mem_gb': held.mem_bytes / GB, **held.seats})
+    return Resources({'cpu': held.cpu, 'mem_gb': held.mem_bytes / GB, **_without_devices(held.seats)})
+
+
+def _without_devices(amounts: Mapping[str, float]) -> dict[str, float]:
+    return {name: amount for name, amount in amounts.items() if name not in NAMES}
+
+
+def _counted(demand: Demand) -> Demand:
+    """*demand* as the engine decides it: every name but the devices, which :func:`assign` decides by device."""
+    return Demand(_without_devices(demand))
 
 
 def _try(
@@ -328,10 +351,13 @@ def _try(
         for earlier, *asked in ahead.fetchall():
             if blocks((asked[0], asked[1], asked[2]), jumper, capacity=capacity, held=held, reading=reading, now=now):
                 return f'queued behind {earlier!r}, which came first: holding this would delay its earliest start'
+    devices = assign(demand, reading.devices, held)
+    if isinstance(devices, str):
+        return devices
     deadline = now + wall_s
     cursor = con.execute(
-        'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key, fingerprint) '
-        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO claims (pid, created, cpu, mem_bytes, seats, deadline, started, what, key, fingerprint, devices) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (
             pid,
             creation_stamp(pid),
@@ -342,10 +368,11 @@ def _try(
             now,
             what,
             *tag,
+            json.dumps(devices) if devices else None,
         ),
     )
     con.execute('DELETE FROM tickets WHERE id = ?', (ticket,))
-    return Claim(int(cursor.lastrowid or 0), deadline)
+    return Claim(int(cursor.lastrowid or 0), deadline, devices)
 
 
 @contextmanager
@@ -382,11 +409,22 @@ def hold(
         yield Claim(0, float('inf'))  # this tree's enclosing claim already holds it
         return
     capacity = Capacity.read() if capacity is None else capacity
-    whole = size(capacity, seats(demand))
-    never = admits(whole.resources, demand, present=whole.present, what=what)
-    if not never:
-        msg = f'{what}: larger than this box, refused at once -- {never.why}'
+    counted = _counted(demand)
+    whole = size(capacity, seats(counted))
+    never = admits(whole.resources, counted, present=whole.present, what=what)
+    if (device_never := oversized(demand, capacity.seats, capacity.blind)) is not None:
+        msg = f'{what}: larger than this box, refused at once -- {device_never}'
         raise Refused(msg)
+    if not never:
+        blind = [f'{name} is not measured: {capacity.blind[name]}' for name in never.lacking if name in capacity.blind]
+        msg = f'{what}: larger than this box, refused at once -- {"; ".join([never.why, *blind])}'
+        raise Refused(msg)
+    low, near = disk_verdict((box_path(), Path.cwd()), free_floor())
+    if low is not None:
+        msg = f'{what}: refused at once, a volume it writes is below the free-space floor -- {low}'
+        raise Refused(msg)
+    if near is not None:
+        emit(f'box: warning -- {what}: {near}', err=True)
     with closing(_connect()) as con:
         gives_up = time.time() + queue_s
         pid = os.getpid()
@@ -487,19 +525,22 @@ def external(
 
 
 @contextmanager
-def adopted(claim_id: int) -> Iterator[None]:
+def adopted(claim_id: int) -> Iterator[Claim]:
     """Hold the claim another process :func:`take`-s for the ``with`` body: no second admission, released after.
+
+    Yields the claim as the ledger records it, with the devices it holds.
 
     Raises:
         Refused: no claim *claim_id* is on this box's ledger (released, or reaped with its taker).
 
     """
-    if all(one.id != claim_id for one in holdings()):
+    row = next((one for one in holdings() if one.id == claim_id), None)
+    if row is None:
         msg = f'claim {claim_id} is not on this box ledger -- nothing to adopt'
         raise Refused(msg)
     hand_over(Claim(claim_id, 0.0), os.getpid())
     try:
-        yield
+        yield row.claim
     finally:
         release(Claim(claim_id, 0.0))
 
@@ -532,7 +573,8 @@ def _wait(
 ) -> Claim:
     warned = False
     while True:
-        reading = _NO_SHARE if not cores(demand) and not mem_bytes(demand) else read([h.pid for h in _read(con)])
+        shares = cores(demand) or mem_bytes(demand) or any(demand[kind] for kind in KINDS)
+        reading = read([h.pid for h in _read(con)]) if shares else _NO_SHARE
         dead = _dead_externals(con, time.time())
         with _immediate(con):
             outcome = _try(con, ticket, capacity, demand, wall_s=wall_s, what=what, reading=reading, tag=tag, dead=dead)

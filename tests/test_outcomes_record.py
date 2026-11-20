@@ -1,4 +1,4 @@
-"""A0.5: Record -- append + fsync, idempotence, DECIDED finality, views, replay; schema upgrade on read."""
+"""A0.5: Record -- append + fsync, idempotence, DECIDED finality, views, replay; an older schema migrates once."""
 
 from __future__ import annotations
 
@@ -113,17 +113,11 @@ def test_a_torn_tail_is_cut_before_the_next_append(tmp_path: Path) -> None:
     assert list(Record(path).replay()) == [Event(OUTCOME, A.key, OK, attempt=1), Event(OUTCOME, B.key, OK, attempt=1)]
 
 
-def test_an_older_schema_is_upgraded_on_read_and_an_unknown_one_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """FORMATS-UPGRADE-ON-READ: the reader consults ``_UPGRADES`` before it refuses."""
-    plain = {'schema': 0, 'kind': SUBMITTED, 'id': A.key}
-    with pytest.raises(UnknownSchema):
-        Event.from_plain(plain)
-    upgrades = {0: lambda raw: {'schema': record_module.SCHEMA_VERSION, 'kind': raw['kind'], 'key': raw['id']}}
-    monkeypatch.setattr(record_module, '_UPGRADES', upgrades)
-    assert Event.from_plain(plain) == Event(SUBMITTED, A.key)
-    with pytest.raises(UnknownSchema):
+def test_an_older_schema_is_refused_by_name_with_its_migration() -> None:
+    """FORMATS-MIGRATE-ONCE: no older schema is read; its refusal names the one-shot migration."""
+    with pytest.raises(UnknownSchema, match=r'migrate the record once: lab_commons\.outcomes\.record\.migrate'):
+        Event.from_plain({'schema': 2, 'kind': SUBMITTED, 'key': A.key})
+    with pytest.raises(UnknownSchema, match='cannot read it'):
         Event.from_plain({'schema': 99, 'kind': SUBMITTED, 'key': A.key})
 
 
@@ -176,7 +170,7 @@ def test_decided_finality_is_unchanged_by_attempts(tmp_path: Path) -> None:
     assert record.attempts(A) == 2
 
 
-def test_a_v1_file_reads_with_attempts_numbered_in_order(tmp_path: Path) -> None:
+def test_a_migrated_v1_file_reads_with_attempts_numbered_in_order(tmp_path: Path) -> None:
     path = tmp_path / 'r.jsonl'
     oom, ok = json.dumps(OOM.to_plain()), json.dumps(OK.to_plain())
     lines = [
@@ -186,6 +180,7 @@ def test_a_v1_file_reads_with_attempts_numbered_in_order(tmp_path: Path) -> None
         f'{{"schema":1,"kind":"outcome","key":"{B.key}","cell":{oom}}}',
     ]
     path.write_text(''.join(line + '\n' for line in lines))
+    record_module.migrate(path)
     record = Record(path)
     assert [e.attempt for e in record.replay()] == [None, 1, 2, 1]
     assert (record.attempts(A), record.attempts(B)) == (2, 1)
@@ -212,9 +207,26 @@ def test_planted_control_only_an_outcome_carries_an_expectation() -> None:
         Event(SUBMITTED, A.key, expectation=XFAIL)
 
 
-def test_a_v2_line_is_upgraded_on_read_a_record_is_live_state(tmp_path: Path) -> None:
-    """A Record is appended to across the change (FORMATS-UPGRADE-ON-READ): a v2 line reads as a v3 one."""
+def test_a_record_of_older_lines_migrates_once_then_reads(tmp_path: Path) -> None:
+    """FORMATS-MIGRATE-ONCE: v1/v2 lines are refused until :func:`migrate` rewrites them; then they replay."""
     path = tmp_path / 'r.jsonl'
-    path.write_text(f'{{"schema":2,"kind":"outcome","key":"{A.key}","attempt":1,"cell":{json.dumps(OK.to_plain())}}}\n')
-    (event,) = Record(path).replay()
-    assert (event.cell, event.expectation, event.attempt) == (OK, None, 1)
+    cell = json.dumps(OK.to_plain())
+    path.write_text(
+        f'{{"schema":1,"kind":"outcome","key":"{A.key}","cell":{cell}}}\n'
+        f'{{"schema":2,"kind":"outcome","key":"{B.key}","attempt":1,"cell":{cell}}}\n'
+    )
+    with pytest.raises(UnknownSchema, match='migrate'):
+        Record(path)
+    assert record_module.migrate(path) == 2
+    events = list(Record(path).replay())
+    assert [(e.key, e.cell, e.expectation, e.attempt) for e in events] == [(A.key, OK, None, 1), (B.key, OK, None, 1)]
+    assert record_module.migrate(path) == 0, 'a migrated record has nothing left to move'
+
+
+def test_planted_control_migrate_refuses_an_unknown_schema_and_writes_nothing(tmp_path: Path) -> None:
+    path = tmp_path / 'r.jsonl'
+    original = f'{{"schema":99,"kind":"submitted","key":"{A.key}"}}\n'
+    path.write_text(original)
+    with pytest.raises(UnknownSchema, match='neither'):
+        record_module.migrate(path)
+    assert path.read_text() == original

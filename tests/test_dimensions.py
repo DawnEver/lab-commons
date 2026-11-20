@@ -1,4 +1,4 @@
-"""``lab_commons.resources`` -- the resource DIMENSIONS as data, and the guard over their table.
+"""``lab_commons.dimensions`` -- the resource DIMENSIONS as data, and the guard over their table.
 
 The per-box broker that once lived beside this table is folded into the one box ledger (D2 2026-10-16);
 its behaviour -- seats, a dead holder, a job outliving its client, a bounded wait -- is pinned by
@@ -7,7 +7,7 @@ its behaviour -- seats, a dead holder, a job outliving its client, a bounded wai
 
 import pytest
 
-from lab_commons.resources.dimensions import (
+from lab_commons.dimensions import (
     CPU,
     DIMENSIONS,
     DISK,

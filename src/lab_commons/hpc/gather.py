@@ -235,6 +235,7 @@ def _recorded(
             cpus=cost.cpus,
             files=files_made(home, state),
             heavy=state.get('heavy', ()),
+            heavy_bar_gb=state.get('heavy_bar_gb'),
         ),
         ended=learned.EXITED,  # the array is gathered: a shard Slurm killed is priced per test (Measured.killed)
     )

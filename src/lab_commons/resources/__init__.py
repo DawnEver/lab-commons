@@ -3,7 +3,7 @@
 Declared demand -> measured supply (a :class:`Provider` per scope) -> one admission rule (:func:`admits`) ->
 enforced limit -> recorded actual. Three kinds (:data:`KINDS`) differ only in their supply formula and their
 return moment (:mod:`lab_commons.resources.engine`). The names and units a Slurm plan sizes by are
-:mod:`lab_commons.resources.dimensions`.
+:mod:`lab_commons.dimensions`.
 """
 
 from __future__ import annotations

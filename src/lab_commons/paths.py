@@ -65,9 +65,21 @@ def resolve_home(app_name: str) -> Path | None:
 
 
 def output_root(app_name: str) -> Path:
-    """The user-writable output root: ``<home>/output`` or platformdirs cache dir."""
+    """The user-writable output root: the ``output`` storage kind of ``<home>``, or the platformdirs cache dir.
+
+    In a checkout it is :func:`lab_commons.storage.root` -- ``<home>/output`` unless this machine binds
+    ``[storage.roots] output`` elsewhere -- so every writer and cleaner agrees on one place.
+    """
     home = resolve_home(app_name)
-    return (home / 'output') if home is not None else user_cache_path(app_name)
+    if home is None:
+        return user_cache_path(app_name)
+    from lab_commons import storage  # noqa: PLC0415 -- storage reads the machine config, which reads home
+
+    found = storage.root('output', app_name, home)
+    if found is None:  # pragma: no cover -- 'output' always has an in-tree default
+        msg = 'the output storage kind has no in-tree default'
+        raise storage.StorageError(msg)
+    return found
 
 
 def config_root(app_name: str) -> Path:

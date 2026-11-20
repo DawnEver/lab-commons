@@ -24,6 +24,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Final
 
+from lab_commons.box.devices import EXCLUSIVE, GPU, VRAM_GB, read_devices
+from lab_commons.box.devices import sizes as device_sizes
 from lab_commons.box.machine import own_reserve, provided, reserve_table, watched
 from lab_commons.compute.durable import durable_text
 from lab_commons.compute.model import Demand
@@ -96,11 +98,21 @@ def checked(demand: Mapping[str, float], wall_s: int) -> Demand:
         *(['wall_s must be a positive int of seconds'] if not _positive_int(wall_s) else []),
         *([f'wall_s must not exceed WALL_CEILING_S ({WALL_CEILING_S})'] if _past_ceiling(wall_s) else []),
         *(f'seats[{name!r}] must be a whole count' for name, count in wanted.items() if count != asked[name]),
+        *([f'{VRAM_GB} needs {GPU} >= 1: GPU memory is lent on the GPUs a claim takes'] if _vram_alone(asked) else []),
+        *([f'a shared {GPU} claim states its {VRAM_GB}, else asks {EXCLUSIVE}'] if _unsized_share(asked) else []),
     ]
     if bad:
         msg = f'Demand: {"; ".join(bad)}'
         raise ValueError(msg)
     return asked
+
+
+def _vram_alone(demand: Mapping[str, float]) -> bool:
+    return bool(demand.get(VRAM_GB, 0.0)) and not demand.get(GPU, 0.0)
+
+
+def _unsized_share(demand: Mapping[str, float]) -> bool:
+    return bool(demand.get(GPU, 0.0)) and not demand.get(EXCLUSIVE, 0.0) and not demand.get(VRAM_GB, 0.0)
 
 
 def cores(demand: Mapping[str, float]) -> int:
@@ -188,23 +200,25 @@ class Capacity:
         reserve = reserve_table(section('reserve'))
         kept = own_reserve(total, reserve)
         sizes, blind = seat_sizes()
+        devices, unread = device_sizes(read_devices())
         return cls(
             cpu=cores - kept['cpu'],
             mem_bytes=int(memory.total_bytes - kept['mem_gb'] * GB),
-            seats=sizes,
+            seats={**sizes, **devices},
             kept_cpu=kept['cpu'],
             kept_bytes=int(kept['mem_gb'] * GB),
             watched=tuple(sorted(watched(provided(section('capabilities'))))),
-            blind=blind,
+            blind={**blind, **unread},
         )
 
 
 @dataclass(frozen=True)
 class Claim:
-    """An admitted run's row: its id in the ledger and the moment its time limit ends."""
+    """An admitted run's row: its id in the ledger, the moment its time limit ends, and the devices it holds."""
 
     id: int
     deadline: float
+    devices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -212,7 +226,8 @@ class Holding:
     """One running claim as the ledger records it.
 
     ``id``, ``key`` and ``probe`` are its identity: any process may rebuild its :attr:`claim` and release it
-    (an external job found finished offline). ``probe`` is ``None`` unless the claim is external.
+    (an external job found finished offline). ``probe`` is ``None`` unless the claim is external. ``devices`` are
+    the device ids it holds (``gpu.nvidia.0``, :mod:`lab_commons.box.devices`).
     """
 
     what: str
@@ -225,11 +240,12 @@ class Holding:
     key: str = ''
     probe: tuple[str, ...] | None = None
     kept: bool = False
+    devices: tuple[str, ...] = ()
 
     @property
     def claim(self) -> Claim:
         """The :class:`Claim` this row is, for :func:`~lab_commons.box.ledger.release`."""
-        return Claim(self.id, self.deadline)
+        return Claim(self.id, self.deadline, self.devices)
 
 
 @dataclass(frozen=True)

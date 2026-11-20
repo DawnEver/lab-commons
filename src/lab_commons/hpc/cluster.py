@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 import lab_commons.launch as _door
+from lab_commons.dimensions import GPU
 from lab_commons.hpc.config import Config, JobSpec
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.plan import Plan
@@ -227,7 +228,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         '--ntasks=1',
         f'--cpus-per-task={plan.cpus}',
         f'--mem={plan.mem_mb}M',
-        f'--gres=gpu:{plan.gpus}' if plan.gpus else '',
+        f'--gres={GPU.name}:{plan.gpus}' if plan.gpus else '',  # Slurm's GRES name is the dimension's
         f'--time={plan.minutes}',
         f'--comment={plan.comment}' if plan.comment else '',
         # A task's output is node-local (below); Slurm writes no file of its own on the shared home.
@@ -422,7 +423,7 @@ def gather(run: Runner, run_dir: str) -> dict[int, list[dict[str, Any]]]:
     """Every RETURNED shard's item results, keyed by shard index -- read from the run's one results file.
 
     A run an earlier worker wrote holds one ``results/<shard>.json`` per shard instead; it is read the same
-    way (FORMATS-UPGRADE-ON-READ: jobs still running across the change must gather), never written.
+    way (OLD-SHAPE-READER: jobs still running across the change must gather), never written.
     """
     quoted = _sh_path(run_dir)
     out = run(
@@ -451,7 +452,7 @@ def _returned(text: str) -> dict[int, list[dict[str, Any]]]:
             ok = event.cell.status is Status.OK
             why = '' if event.cell.reason is None else event.cell.reason.text
             items[int(event.key)] = {**event.data, 'ok': ok, 'status': event.cell.status.value, 'error': why}
-        elif event.kind == ITEM:  # a pre-Cell worker's line (FORMATS-UPGRADE-ON-READ)
+        elif event.kind == ITEM:  # a pre-Cell worker's line (OLD-SHAPE-READER)
             items[int(event.key)] = {**event.data, 'status': 'ok' if event.data['ok'] else 'error'}
         elif event.kind == SHARD:
             codes[int(event.key)] = int(event.data['code'])

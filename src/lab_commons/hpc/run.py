@@ -67,7 +67,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from typing import Any, Final
 
-from lab_commons.compute.measured import MIGRATE_COMMAND, Measured, UnmigratedRecord, memory_band
+from lab_commons.compute.measured import HEAVY_SHARE, Measured, memory_band
 from lab_commons.hpc.budget import ask_of, charge
 from lab_commons.hpc.builds import ItemWall
 from lab_commons.hpc.cluster import Runner, SubmitLimit, Unreachable, probe, scancel, submit_bands
@@ -77,8 +77,8 @@ from lab_commons.hpc.homedoor import QuotaRefused, guard
 from lab_commons.hpc.needsets import need_sets
 from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
 from lab_commons.hpc.records import (
+    current_state,
     record_of,
-    upgraded_state,
 )
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
@@ -181,18 +181,15 @@ def _no_room() -> Iterator[None]:
 
 def planned(state: Mapping[str, Any]) -> Measured:
     """What a PLAN prices with: the run's learned facts raised to its commit's declared floors (``priced``)."""
-    return Measured.of(state['measured']).floored(state.get('priced', {}))
+    return Measured.of(state['measured']).floored(state['priced'])
 
 
 def item_walls(ids: Sequence[str], state: Mapping[str, Any]) -> dict[str, int]:
     """Each id's wall in seconds: the run's declared :class:`ItemWall` over what the id was MEASURED to take.
 
     The measurement is the larger of its recorded duration and its floor (a kill's lower bound); an id with
-    neither is unmeasured. A state written before the wall existed is refused by name (:class:`UnmigratedRecord`).
+    neither is unmeasured. *state* is current (:func:`lab_commons.hpc.records.current_state`).
     """
-    if 'item_wall' not in state:
-        msg = f'a run state without item_wall predates it: migrate it once with `{MIGRATE_COMMAND}`'
-        raise UnmigratedRecord(msg)
     wall = ItemWall(**state['item_wall'])
     measured = planned(state)
     seen = {**measured.floors, **{n: max(s, measured.floors.get(n, 0.0)) for n, s in measured.durations.items()}}
@@ -393,7 +390,7 @@ def submit_run(
         'prep': {**told['prep'], **parse_times(collected)},
         'handed': handed,
         'cells': cells,
-        'measured': Measured.carried(history or {}).record(),
+        'measured': Measured.of(history or {}).record(),
         'priced': spec.builds.priced_floors,  # the commit's declared floors; only a plan reads them (planned)
         'rounds': [],
         'grown': {},  # node id -> this run's memory growth after an OOM kill cut it
@@ -407,8 +404,11 @@ def submit_run(
         return memory_band(measured.item_gb(ids, cost, policy))
 
     same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
-    heavy = measured.heavy(files, cost, policy, ceiling_gb=grantable_gb(same_cluster))
+    ceiling_gb = grantable_gb(same_cluster)
+    heavy = measured.heavy(files, cost, policy, ceiling_gb=ceiling_gb)
     state['heavy'] = sorted(heavy)  # packed alone, and left out of the peak that prices the part (job_measured)
+    # the bar, so a file that crosses it DURING the run is left out of that peak too (job_measured)
+    state['heavy_bar_gb'] = None if ceiling_gb is None else ceiling_gb * HEAVY_SHARE
     pending = measured.pack(files, cost, item_seconds(policy), band, alone=heavy)
     if not pending:  # every id was carried or handed: the record needs no job
         state['record'] = record_of(state, grant.slurm_account)
@@ -506,8 +506,8 @@ def load_state(sha: str, part: str, machine: Machine, runners: dict[str, Runner]
         except Unreachable:
             continue
         answered = True
-        if text.strip():  # live state: a run in flight across a change is upgraded on read
-            return upgraded_state(json.loads(text)), runners[grant.account]
+        if text.strip():  # a retired shape is refused by name with its migration
+            return current_state(json.loads(text)), runners[grant.account]
     if not answered:
         msg = f'no login host of any grant answered; the jobs of {sha[:12]} keep running -- gather again later'
         raise Unreachable(msg)
