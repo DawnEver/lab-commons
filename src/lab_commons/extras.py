@@ -6,6 +6,7 @@ A repo declares ONCE, in its pyproject, the extras every environment of it carri
     [tool.dev_lab.dep]
     extras = ["dev"]                       # every environment's extras
     needs = { learn = "learn" }            # need -> the extra that serves it (a heavy one stays selectable)
+    no_install = ["<pkg>"]                 # workspace packages no sync installs (built by their own step)
 
 A CI part, a cluster build (:mod:`lab_commons.hpc.builds`), a research job (``[job] needs``) and a workstation
 sync (``dev_lab.dev.dep``) all ask :func:`extras_for` / :func:`sync_command` for THEIR need-set, so a part that
@@ -13,7 +14,9 @@ needs nothing heavy installs nothing heavy (user, 2026-11-20: "most tasks don't 
 
 NO "EVERYTHING" SWITCH: there is no ``--all-extras`` path. A repo with optional dependencies and no declared
 ``extras`` is refused by name (an undeclared default is the over-install this module exists to end); a need
-mapped to an extra the repo does not declare is refused by name. Standard library only.
+mapped to an extra the repo does not declare is refused by name, and so is any key the table does not know.
+A ``no_install`` package (e.g. a native module its own build step produces) becomes ``--no-install-package``
+on every sync. Standard library only.
 """
 
 from __future__ import annotations
@@ -28,6 +31,8 @@ __all__ = ['TABLE', 'Declared', 'declared', 'extras_for', 'sync_command']
 TABLE: Final = 'tool.dev_lab.dep'
 #: What a shared (cross-sha) environment adds, so it holds dependencies only (:mod:`lab_commons.hpc.builds`).
 NO_PROJECT: Final = '--no-install-project'
+#: The keys ``[tool.dev_lab.dep]`` holds; any other is refused by name.
+KEYS: Final = frozenset({'extras', 'needs', 'no_install'})
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,7 @@ class Declared:
 
     extras: tuple[str, ...]
     needs: Mapping[str, str]
+    no_install: tuple[str, ...] = ()
 
 
 def declared(manifest: Mapping[str, Any], origin: str = 'pyproject.toml') -> Declared:
@@ -47,6 +53,9 @@ def declared(manifest: Mapping[str, Any], origin: str = 'pyproject.toml') -> Dec
         raise TypeError(msg)
     if 'all' in dep:
         msg = f'{origin}: [{TABLE}] all is retired -- there is no install-everything switch; list the extras'
+        raise ValueError(msg)
+    if unknown_keys := sorted(set(dep) - KEYS):
+        msg = f'{origin}: [{TABLE}] has unknown keys {unknown_keys} -- it holds only {sorted(KEYS)}'
         raise ValueError(msg)
     if available and 'extras' not in dep:
         msg = (
@@ -62,10 +71,14 @@ def declared(manifest: Mapping[str, Any], origin: str = 'pyproject.toml') -> Dec
     if not isinstance(needs, dict) or not all(isinstance(v, str) for v in needs.values()):
         msg = f'{origin}: [{TABLE}] needs must be a table of need = "<extra>"'
         raise ValueError(msg)
+    no_install = dep.get('no_install', [])
+    if not isinstance(no_install, list) or not all(isinstance(p, str) for p in no_install):
+        msg = f'{origin}: [{TABLE}] no_install must be a list of package names'
+        raise ValueError(msg)
     if unknown := sorted({*extras, *needs.values()} - set(available)):
         msg = f'{origin}: [{TABLE}] names {unknown}, no declared extra ({sorted(available)})'
         raise ValueError(msg)
-    return Declared(tuple(extras), dict(needs))
+    return Declared(tuple(extras), dict(needs), tuple(no_install))
 
 
 def extras_for(manifest: Mapping[str, Any], needs: Iterable[str], origin: str = 'pyproject.toml') -> tuple[str, ...]:
@@ -81,5 +94,6 @@ def sync_command(
     manifest: Mapping[str, Any], needs: Iterable[str] = (), *, project: bool = True, origin: str = 'pyproject.toml'
 ) -> str:
     """The ``uv sync`` building the environment for *needs*; ``project=False`` installs dependencies only."""
-    words = ['uv', 'sync', '--frozen', *(f'--extra {e}' for e in extras_for(manifest, needs, origin))]
+    skip = (f'--no-install-package {p}' for p in declared(manifest, origin).no_install)
+    words = ['uv', 'sync', '--frozen', *(f'--extra {e}' for e in extras_for(manifest, needs, origin)), *skip]
     return ' '.join(words if project else [*words, NO_PROJECT])
