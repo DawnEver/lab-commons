@@ -114,6 +114,8 @@ class Remote:
     credentials_file: Path | None = None
     #: What each secret key is and where a person finds it (``[storage.remotes.<r>.ask]``): shown when it is asked.
     ask: Mapping[str, str] = field(default_factory=dict)
+    #: The regular expression each secret key's value must match (``[storage.remotes.<r>.shape]``), checked at entry.
+    shape: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -235,8 +237,8 @@ def _roots(roots: Mapping[str, Any]) -> dict[str, str]:
     return {str(kind): str(value) for kind, value in roots.items()}
 
 
-#: A family remote's sub-tables that are not rclone options: the family-wide reach, and the ask hints.
-_REMOTE_META: Final = frozenset({'reach', 'ask'})
+#: A family remote's sub-tables that are not rclone options: the family-wide reach, the ask hints, the value shapes.
+_REMOTE_META: Final = frozenset({'reach', 'ask', 'shape'})
 
 
 def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
@@ -279,7 +281,8 @@ def _reach(reach: object, remotes: Mapping[str, Any]) -> tuple[Remote, ...]:
             raise StorageError(msg)
         options = {str(k): str(v) for k, v in remotes[name].items() if k not in _REMOTE_META}
         ask = {str(k): str(v) for k, v in dict(remotes[name].get('ask', {})).items()}
-        found.append(Remote(str(name), options, Path(str(file)).expanduser(), ask))
+        shape = {str(k): str(v) for k, v in dict(remotes[name].get('shape', {})).items()}
+        found.append(Remote(str(name), options, Path(str(file)).expanduser(), ask, shape))
     return tuple(found)
 
 

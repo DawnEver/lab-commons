@@ -155,6 +155,7 @@ EVERYONE = {
                 'endpoint': 'https://objects.example',
                 'reach': {'credentials_file': '/keys/results'},
                 'ask': {'access_key_id': 'the Access Key column'},
+                'shape': {'access_key_id': '[0-9a-f]{40}'},
             }
         }
     }
