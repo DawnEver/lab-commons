@@ -2,8 +2,8 @@
 
 A job needs a runnable thing, not the repository: its env, the commit's ``source_roots`` and the paths it
 declares it reads (``[tool.lab_commons.hpc] artifact_paths``, e.g. the cases a campaign evaluates). A test
-run legitimately needs the whole tree and keeps ``~/ci/trees/<sha>`` (:mod:`lab_commons.hpc.tree`); a job
-gets ``~/ci/artifacts/<sha>.<suffix>`` and nothing else on the shared home. Measured 2026-10-17 on Ada: a
+run legitimately needs the whole tree and keeps ``<root>/runs/<sha>/tree`` (:mod:`lab_commons.hpc.tree`); a job
+gets ``<root>/artifacts/<sha>.<suffix>`` and nothing else. Measured 2026-10-17 on Ada: a
 tree plus an unpacked env per sha cost ~46 k files against a 2 M file quota.
 
 THE FORMAT IS A DECLARED CHOICE (:data:`FORMATS`, ``[job] artifact``), because which one a cluster can run
@@ -19,7 +19,7 @@ THE BUILD LEAVES ONE FILE. It runs on the login node in a scratch directory unde
 removed when it ends: the commit is exported there (``git archive``, never a worktree) WITH every submodule at
 the commit it pins (a path dependency may point into one), its env built there
 with uv's cache there too (no resident build cache), and the members packed. Only a native build stays
-keyed in ``~/ci/native/<key>`` (with its ``cargo-target``), as for a test run: a Rust rebuild costs minutes,
+keyed in ``<root>/native/<key>`` (with its ``cargo-target``), as for a test run: a Rust rebuild costs minutes,
 and retention removes it once unreferenced. An artifact that exists is reused as is: a commit's artifact is
 a function of the commit and its declaration.
 
@@ -36,7 +36,8 @@ from typing import Final
 
 from lab_commons.hpc.builds import cargo_target
 from lab_commons.hpc.cluster import Runner
-from lab_commons.hpc.shell import BUILD_FAILED, ROOT, RunSpec, cache_dir, export_submodules_script, facts, keyed_build
+from lab_commons.hpc.layout import ARTIFACTS, NATIVE, REQUIRE_ROOT, ROOT, UV_CACHE
+from lab_commons.hpc.shell import BUILD_FAILED, RunSpec, cache_dir, export_submodules_script, facts, keyed_build
 from lab_commons.hpc.tree import NotSubmitted, fetch
 
 __all__ = [
@@ -85,9 +86,9 @@ def require(fmt: str) -> None:
 
 
 def artifact_path(sha: str, fmt: str = TARBALL) -> str:
-    """The one file of *sha*'s artifact, under :data:`~lab_commons.hpc.shell.ROOT` (shell-quoted home)."""
+    """The one file of *sha*'s artifact, under the account layout's artifacts (:mod:`lab_commons.hpc.layout`)."""
     require(fmt)
-    return f'{ROOT}/artifacts/{sha}.{_SUFFIX[fmt]}'
+    return f'{ARTIFACTS}/{sha}.{_SUFFIX[fmt]}'
 
 
 def artifact_script(spec: RunSpec, fmt: str = TARBALL) -> str:
@@ -111,22 +112,23 @@ def artifact_script(spec: RunSpec, fmt: str = TARBALL) -> str:
     ])  # fmt: skip
     lines = [
         'set -eo pipefail',
+        REQUIRE_ROOT,
         f'A={target}',
         'if [ ! -s "$A" ]; then',
-        f'  mkdir -p {ROOT}/artifacts',
+        f'  mkdir -p {ARTIFACTS}',
         '  S=$(mktemp -d "${TMPDIR:-/tmp}/lab-ci-artifact.XXXXXX"); trap \'rm -rf "$S"\' EXIT',
         f'  mkdir -p "$S/tree" "$S/pack/tree" && git -C {cache} archive {spec.sha} | tar -x -C "$S/tree"',
         '  cd "$S/tree"',
         *export_submodules_script(spec.repo_url, cache, spec.sha),
-        '  export E="$S/pack/env" UV_CACHE_DIR="$S/uv-cache" UV_LINK_MODE=copy',
+        f'  export E="$S/pack/env" UV_CACHE_DIR={UV_CACHE} UV_LINK_MODE=copy',
         f'  if ! bash -eo pipefail -c {shlex.quote(install)} > "$S/build.log" 2>&1; then',
         f'    echo "{BUILD_FAILED} env"; tail -n {_LOG_TAIL} "$S/build.log"; exit 0',
         '  fi',
         f'  [ -x "$E/bin/python" ] || {{ echo "{BUILD_FAILED} no bin/python in the env"; exit 0; }}',
     ]
     if builds.native_key:
-        native = f'{ROOT}/native/{builds.native_key}'
-        cargo = f'export CARGO_TARGET_DIR="$HOME"/{cargo_target(builds.native_key)}\nmkdir -p "$CARGO_TARGET_DIR"'
+        native = f'{NATIVE}/{builds.native_key}'
+        cargo = f'export CARGO_TARGET_DIR={ROOT}/{cargo_target(builds.native_key)}\nmkdir -p "$CARGO_TARGET_DIR"'
         cargo += '\nexec 8> "$CARGO_TARGET_DIR.lock"; flock 8'
         build = (
             f'export VIRTUAL_ENV="$E" PATH="$E/bin:$PATH"\nexport LAB_CI_NATIVE="$N"\n{cargo}\n{builds.native_build}'

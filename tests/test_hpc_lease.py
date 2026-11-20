@@ -48,11 +48,12 @@ def cluster(tmp_path: Path) -> tuple[Runner, Path, str, list[str]]:
 
     def run(command: str, stdin: str | None = None) -> str:
         (home / 'queue.txt').write_text(''.join(q + '\n' for q in queue), encoding='utf-8', newline='\n')
-        env = {**os.environ, 'HOME': home.as_posix()}
+        env = {**os.environ, 'HOME': home.as_posix(), 'LAB_ROOT': home.as_posix()}
         script = f'export PATH="$(cd {stub.as_posix()!r} && pwd):$PATH"; {command}'  # no drive colon in PATH
         done = subprocess.run(
-            [bash, '-c', script], input=stdin, capture_output=True, text=True, encoding='utf-8', env=env, check=True
+            [bash, '-c', script], input=stdin, capture_output=True, text=True, encoding='utf-8', env=env, check=False
         )
+        assert done.returncode == 0, f'exit {done.returncode}: {done.stderr[-2000:]}'
         return done.stdout
 
     return run, home, origin.as_posix(), queue
@@ -66,8 +67,8 @@ def test_a_lease_writes_its_record_and_checks_out_the_commit(cluster: tuple[Runn
     run, home, origin, _ = cluster
     sha = _shas(origin)[1]
     tree = lease.acquire(run, origin, sha, holder='lane-a', purpose='A/B of c1', ttl_hours=2, now=NOW)
-    assert tree.endswith(f'/ci/leases/trees/{sha}')
-    record = json.loads((home / 'ci/leases/records' / sha / 'lane-a.json').read_text(encoding='utf-8'))
+    assert tree.endswith(f'/leases/trees/{sha}')
+    record = json.loads((home / 'leases/records' / sha / 'lane-a.json').read_text(encoding='utf-8'))
     assert record == {
         'sha': sha,
         'repo_url': origin,
@@ -76,7 +77,7 @@ def test_a_lease_writes_its_record_and_checks_out_the_commit(cluster: tuple[Runn
         'created': int(NOW),
         'expires': int(NOW + 7200),
     }
-    assert (home / 'ci/leases/trees' / sha / 'f.txt').read_text(encoding='utf-8') == '1'
+    assert (home / 'leases/trees' / sha / 'f.txt').read_text(encoding='utf-8') == '1'
     assert [x.holder for x in lease.held(run)] == ['lane-a']
 
 
@@ -117,18 +118,18 @@ def test_the_reaper_keeps_live_and_busy_trees_and_removes_and_logs_the_rest(
     live_tree = lease.acquire(run, origin, new, holder='live', purpose='p', ttl_hours=1, now=NOW)
     queue.append(f'{busy_tree}/.lab-hpc/run-1')
     assert [r.outcome for r in lease.reap(run, now=NOW)] == ['kept']
-    assert Path(home / 'ci/leases/trees' / old).is_dir()
+    assert Path(home / 'leases/trees' / old).is_dir()
     queue[:] = [f'{busy_tree}0/elsewhere']
     done = lease.reap(run, now=NOW)
     assert [(r.sha, r.outcome, r.why) for r in done] == [(old, 'gone', 'every lease expired')]
-    assert not (home / 'ci/leases/trees' / old).exists()
-    assert not (home / 'ci/leases/records' / old).exists()
-    assert Path(home / 'ci/leases/trees' / new / 'f.txt').is_file(), live_tree
-    (log,) = (home / 'ci/leases/reaped').iterdir()
+    assert not (home / 'leases/trees' / old).exists()
+    assert not (home / 'leases/records' / old).exists()
+    assert Path(home / 'leases/trees' / new / 'f.txt').is_file(), live_tree
+    (log,) = (home / 'leases/reaped').iterdir()
     assert log.name == '2027-01-15.jsonl'
     entry = json.loads(log.read_text(encoding='utf-8'))
     assert (entry['sha'], entry['why'], entry['when']) == (old, 'every lease expired', int(NOW))
-    worktrees = _git('--git-dir', str(next((home / 'ci/cache').iterdir())), 'worktree', 'list', cwd=home)
+    worktrees = _git('--git-dir', str(next((home / 'cache/git').iterdir())), 'worktree', 'list', cwd=home)
     assert old[:7] not in worktrees, 'the cache forgot the reaped worktree'
 
 
@@ -143,14 +144,14 @@ def test_a_released_lease_frees_its_tree_but_another_holders_lease_keeps_it(
     assert lease.reap(run, now=NOW) == []
     lease.release(run, sha, 'b')
     assert [r.why for r in lease.reap(run, now=NOW)] == ['no lease names it']
-    assert not (home / 'ci/leases/trees' / sha).exists()
+    assert not (home / 'leases/trees' / sha).exists()
 
 
 def test_a_commit_the_remote_lacks_is_refused(cluster: tuple[Runner, Path, str, list[str]]) -> None:
     run, home, origin, _ = cluster
     with pytest.raises(LeaseRefused, match='not on'):
         lease.acquire(run, origin, 'b' * 40, holder='x', purpose='p', ttl_hours=1, now=NOW)
-    assert not (home / 'ci/leases/records').exists()
+    assert not (home / 'leases/records').exists()
 
 
 def test_a_job_dir_as_ada_reports_it_keeps_its_tree() -> None:

@@ -10,7 +10,7 @@ the batch spans (:mod:`lab_commons.hpc.jobs`: its ssh targets, items, run direct
 ``status``/``gather``/``retry`` need nothing more -- through whichever of those login hosts answers.
 ``submit -c <job> [--sha <sha>] [--only 3,7]`` runs the job file at another commit (its ``repo_url`` stays) and
 only the chosen item indices; an item string holding ``{run_dir}`` is bound to the submission's own run directory
-(``~/ci/jobs/<sha>/<name>-<stamp>-<n>``), so a re-submission never writes over an earlier one. ``status -c a -c b``
+(``<root>/jobs/<sha>/<name>-<stamp>-<n>``), so a re-submission never writes over an earlier one. ``status -c a -c b``
 reads several jobs with ONE ``sacct`` per grant; ``--watch`` polls until any line changes, prints the change and
 exits 0 -- at once when every shard is already settled, and exit :data:`PENDING` after ``--watch-minutes``.
 ``gather -c <job> -o <out> --wait`` polls as ``status`` does every ``[policy] poll_seconds``, prints each
@@ -48,7 +48,7 @@ under that root through the grant, refusing everything if a running job works un
 cancels that user's own selected Slurm jobs (:mod:`lab_commons.hpc.cancel`).
 
 ``tree acquire|release|list|reap`` is the ONE door for an ad-hoc commit tree on a cluster (a lease under
-``~/ci/leases``, reaped once it expires), and ``home`` prints the quota, the reaps and the stray directories the
+``<root>/leases``, reaped once it expires), and ``home`` prints the quota, the reaps and the stray directories the
 forge tick reports (:mod:`lab_commons.hpc.homedoor`). Both, and ``run submit``, pass the home quota guard.
 """
 

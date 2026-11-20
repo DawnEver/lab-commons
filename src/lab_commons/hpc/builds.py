@@ -13,7 +13,7 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     item_wall = { multiple = 10, floor_s = 300, unmeasured_s = 3600 }  # per-test kill bound (these are the defaults)
     priced = "tests/priced.toml"                            # measured peaks/walls, no margin (read_priced)
 
-A venv lives in ``~/ci/envs/<env key>`` and a native build in ``~/ci/native/<native key>``; each sha is
+A venv lives in ``<root>/envs/<env key>`` and a native build in ``<root>/native/<native key>``; each sha is
 only a ``git worktree`` whose ``source_roots`` reach the venv through ``PYTHONPATH`` -- no per-sha
 editable install. A fresh sha with unchanged inputs therefore builds NOTHING. The native build runs with
 ``$LAB_CI_NATIVE`` naming its output directory, which is put on ``PYTHONPATH`` after the source roots.
@@ -219,7 +219,7 @@ def read_builds(text: str) -> Builds:
 
 
 def cargo_target(native_key: str) -> str:
-    """Cargo's target dir for the native build keyed *native_key*, relative to ``$HOME``.
+    """Cargo's target dir for the native build keyed *native_key*, relative to the account root.
 
     A target dir may be shared only by builds of IDENTICAL native inputs: cargo's freshness is mtime-based,
     so one dir shared by every native build reused artifacts compiled from another tree's source.
@@ -229,7 +229,7 @@ def cargo_target(native_key: str) -> str:
     if not native_key:
         msg = 'a cargo target dir needs a native key'
         raise ValueError(msg)
-    return f'ci/cargo-target/{native_key}'
+    return f'cache/cargo/{native_key}'
 
 
 def key_of(oids: dict[str, str], *recipe: str) -> str:

@@ -221,14 +221,14 @@ def test_a_commit_runs_from_its_artifact_never_a_tree() -> None:
     job = built_config(config).job
     assert job.workdir == '~', 'no checkout: the task enters the unpacked artifact'
     assert job.setup[-1] == 'echo'
-    assert any(f'ci/artifacts/{"a" * 40}.tar.gz' in line for line in job.setup)
-    assert not any('ci/trees' in line for line in job.setup)
+    assert any(f'/artifacts/{"a" * 40}.tar.gz' in line for line in job.setup)
+    assert not any('/runs/' in line for line in job.setup)
     with pytest.raises(ValueError, match='come together'):
         JobSpec(sha='a' * 40)
     with pytest.raises(ValueError, match='drop \\[job\\] workdir'):
         built_config(Config(job=JobSpec(workdir='~/p', sha='a' * 40, repo_url='https://x/r.git')))
     with pytest.raises(ValueError, match='test run tree, retired for jobs'):
-        built_config(Config(job=JobSpec(workdir=f'~/ci/trees/{"a" * 40}')))
+        built_config(Config(job=JobSpec(workdir=f'/r/runs/{"a" * 40}/tree')))
 
 
 def test_a_one_grant_record_is_refused_by_its_retired_name(tmp_path: Path) -> None:
