@@ -9,6 +9,9 @@ The machine file (:mod:`lab_commons.config`) may declare::
 
     [storage]
     roots = { output = "E:/work/{repo}/output", venvs = "E:/work/{repo}/venvs" }
+    free_floor_gb = 50                  # the free space every regenerable cache leaves on its volume
+    quota = { probe = ["mmlsquota", "--block-size", "1"], format = "mmlsquota" }  # only where a quota binds
+    free_floor_files = 20000            # only with a file-limited quota (default: 1% of its file limit)
 
     [storage.reach.results]             # one sub-table per family remote this machine reaches
     credentials_file = "~/.motronics/secrets/results"   # that remote's secret, placed by `ops secret place`
@@ -20,10 +23,13 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     endpoint = "https://objects.example"
 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
-name: ``roots`` and ``reach`` belong to one machine, ``remotes`` to the family. A kind outside
+name: ``roots``, ``reach`` and the floor keys belong to one machine, ``remotes`` to the family. A cache is
+bounded by ``free_floor_gb`` (default :data:`FREE_FLOOR_GB_DEFAULT`; the door is :mod:`lab_commons.compute.floor`),
+never a fixed size. Where an account QUOTA binds below the volume (a shared filesystem), ``quota`` names its probe
+and format (:mod:`lab_commons.headroom`) and the floor holds against the smaller of the two. A kind outside
 :data:`KINDS`, a remote the family does not declare, and a reached remote with no ``credentials_file`` are
-refused by name; so are the retired spellings -- a ``secrets`` directory and a list-form ``reach``
-(user ruling 2026-11-19: one declared file per secret, the family's ``credentials_file`` key).
+refused by name; so are the retired spellings -- a ``secrets`` directory, a list-form ``reach`` (user ruling
+2026-11-19: one declared file per secret, the family's ``credentials_file`` key) and a fixed cap key (D54).
 A remote's options are handed to the transport (rclone) verbatim; this module names
 no provider and no host.
 
@@ -38,10 +44,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-__all__ = ['KINDS', 'TABLE', 'Remote', 'Storage', 'StorageError', 'declared', 'root']
+from lab_commons.headroom import FORMATS, Floor, Quota
+
+__all__ = [
+    'FREE_FLOOR_GB_DEFAULT',
+    'KINDS',
+    'TABLE',
+    'Remote',
+    'Storage',
+    'StorageError',
+    'declared',
+    'free_floor',
+    'root',
+]
 
 #: The table both layers use.
 TABLE: Final = 'storage'
+
+#: The free space (GiB) every regenerable cache leaves on its volume when the machine declares none (D54).
+FREE_FLOOR_GB_DEFAULT: Final = 50
+GIB: Final = 1024**3
 
 #: Every kind, with its in-tree default relative to the checkout (``None``: the tool's own default,
 #: outside the checkout -- a package cache).
@@ -55,13 +77,23 @@ KINDS: Final[Mapping[str, str | None]] = {
     'uv_cache': None,
 }
 
-_MACHINE_KEYS: Final = frozenset({'roots', 'reach'})
+_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'free_floor_gb', 'free_floor_files', 'quota'})
 
 #: Retired machine spellings (2026-11-19), refused by name with the shape that replaced them; never read.
 _RETIRED_SHAPE: Final = (
     '[storage.reach.<remote>] credentials_file = "<file>" -- one declared secret file per reached remote'
 )
-_RETIRED_KEYS: Final = {'secrets': f'a secrets directory is retired: declare {_RETIRED_SHAPE}'}
+#: Fixed cache caps, retired by D54 for the free-space floor; refused by name, never read.
+_CAP_REMEDY: Final = (
+    'a cache is bounded by the free space its volume keeps, not a fixed size (D54) -- declare [storage] '
+    f'free_floor_gb in the machine file (default {FREE_FLOOR_GB_DEFAULT})'
+)
+_RETIRED_KEYS: Final = {
+    'secrets': f'a secrets directory is retired: declare {_RETIRED_SHAPE}',
+    'vendor_cache_cap_gb': _CAP_REMEDY,
+    'cache_cap_gb': _CAP_REMEDY,
+    'cap_gb': _CAP_REMEDY,
+}
 _FAMILY_KEYS: Final = frozenset({'remotes'})
 
 
@@ -87,6 +119,15 @@ class Storage:
 
     roots: Mapping[str, str] = field(default_factory=dict)
     reach: tuple[Remote, ...] = ()
+    free_floor_gb: float = FREE_FLOOR_GB_DEFAULT
+    free_floor_files: int | None = None
+    quota: Quota | None = None
+
+
+def free_floor(storage: Storage | None = None) -> Floor:
+    """What every regenerable cache on this machine leaves free -- bytes, files, and the quota they hold in (D54)."""
+    held = storage if storage is not None else declared()
+    return Floor(int(held.free_floor_gb * GIB), held.free_floor_files, held.quota)
 
 
 def _table(layer: Mapping[str, Any], where: str) -> dict[str, Any]:
@@ -109,7 +150,48 @@ def declared(machine: Mapping[str, Any] | None = None, family: Mapping[str, Any]
     _check_layers(local, shared)
     roots = _roots(local.get('roots', {}))
     reach = _reach(local.get('reach', {}), shared.get('remotes', {}))
-    return Storage(roots, reach)
+    return Storage(roots, reach, _floor(local), _files(local), _quota(local.get('quota')))
+
+
+def _files(local: Mapping[str, Any]) -> int | None:
+    """The machine's ``free_floor_files``: a positive count, or ``None`` (1% of a quota's file limit)."""
+    value = local.get('free_floor_files')
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        msg = f'the machine file: [{TABLE}] free_floor_files = {value!r} must be a positive count of files'
+        raise StorageError(msg)
+    return value
+
+
+def _quota(value: object) -> Quota | None:
+    """The machine's ``quota``: a probe argv and one of :data:`lab_commons.headroom.FORMATS`."""
+    if value is None:
+        return None
+    probe = value.get('probe') if isinstance(value, dict) else None
+    fmt = value.get('format') if isinstance(value, dict) else None
+    if not (isinstance(probe, list) and probe and all(isinstance(one, str) and one for one in probe)):
+        msg = f'the machine file: [{TABLE}] quota.probe must be a non-empty argv list of strings, got {probe!r}'
+        raise StorageError(msg)
+    if fmt not in FORMATS:
+        msg = f'the machine file: [{TABLE}] quota.format = {fmt!r} must be one of {sorted(FORMATS)}'
+        raise StorageError(msg)
+    if unknown := sorted(set(value) - {'probe', 'format'}):
+        msg = f'the machine file: [{TABLE}] quota.{unknown[0]} is not a quota key; keys: probe, format'
+        raise StorageError(msg)
+    return Quota(tuple(probe), fmt)
+
+
+def _floor(local: Mapping[str, Any]) -> float:
+    """The machine's ``free_floor_gb``: a positive number of GiB, :data:`FREE_FLOOR_GB_DEFAULT` when undeclared."""
+    value = local.get('free_floor_gb', FREE_FLOOR_GB_DEFAULT)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        msg = (
+            f'the machine file: [{TABLE}] free_floor_gb = {value!r} must be a positive number of GiB '
+            f'(the free space every cache leaves on its volume; default {FREE_FLOOR_GB_DEFAULT})'
+        )
+        raise StorageError(msg)
+    return float(value)
 
 
 def _check_layers(local: Mapping[str, Any], shared: Mapping[str, Any]) -> None:
