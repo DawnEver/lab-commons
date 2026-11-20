@@ -147,7 +147,7 @@ def test_streams_are_read_back_per_item_in_one_command() -> None:
         calls.append((command, stdin))
         return '{"item": 0, "a": 1}\n{"item": 12, "b": 2}\n{"item": 12, "c": 3}\n'
 
-    assert read_streams(run, '"$HOME"/ci/x.jsonl', '"$HOME"/ci/y') == {
+    assert read_streams(run, '"$LAB_ROOT"/x.jsonl', '"$LAB_ROOT"/y') == {
         0: '{"item": 0, "a": 1}',
         12: '{"item": 12, "b": 2}\n{"item": 12, "c": 3}',
     }
@@ -186,7 +186,7 @@ def _bash_runner() -> Callable[[str, str | None], str]:
 
 def test_a_round_streams_into_one_file_and_a_live_many_file_round_reads_through_the_upgrade(tmp_path: Path) -> None:
     """A round in flight across the change left ``.lab-ci/<tag>/<i>.jsonl``; the upgraded writer appends the rest."""
-    live, kept = (d.replace('"$HOME"', tmp_path.as_posix()) for d in stream_sources('s1', 'r0'))
+    live, kept = (d.replace('"$LAB_ROOT"', tmp_path.as_posix()) for d in stream_sources('s1', 'r0'))
     run = _bash_runner()
     assert live.endswith('/.lab-ci/r0.jsonl'), 'ONE file per round, beside the old directory'
     assert kept.endswith('/runs/s1/streams.jsonl'), 'ONE kept file per run'
@@ -202,7 +202,7 @@ def test_a_round_streams_into_one_file_and_a_live_many_file_round_reads_through_
 
 def test_streams_are_read_where_retention_kept_them_once_the_tree_is_gone(tmp_path: Path) -> None:
     """A superseded run's tree is garbage; its round's streams were kept in ONE file beside its state."""
-    live, kept = (d.replace('"$HOME"', tmp_path.as_posix()) for d in stream_sources('s1', 'r0'))
+    live, kept = (d.replace('"$LAB_ROOT"', tmp_path.as_posix()) for d in stream_sources('s1', 'r0'))
     run = _bash_runner()
     old_kept = Path(kept).with_suffix('') / 'r0.txt'  # the shape retention kept before one file per run
     old_kept.parent.mkdir(parents=True)
@@ -745,7 +745,7 @@ def test_the_run_records_cells_and_never_passes_what_it_did_not_run() -> None:
     assert record['overheads'] == {'tests/a.py': 5.0, 'tests/b.py': 5.0}
     assert record['peaks_mb'] == {'tests/a.py': 2048.0, 'tests/b.py': 2048.0}
     assert '#SBATCH --comment=lc:session=ws-a' in fake.scripts[0]
-    assert 'cd "$HOME"/ci/trees/' + SHA in fake.scripts[0]
+    assert 'cd "$LAB_ROOT"/runs/' + SHA + '/tree' in fake.scripts[0]
     assert 'lab_ci_pytest_item' in json.dumps(fake.manifests[0])
 
 
@@ -1049,8 +1049,8 @@ def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
     script = build_script(spec)
     assert "bash -eo pipefail -c 'uv venv" in script, 'a failing first install line cannot be masked by the next'
     assert '[ -x "$E/bin/python" ]' in script
-    assert 'E="$HOME"/ci/envs/k1' in script, 'every env lives under its key'
-    assert '"$HOME"/ci/envs/k1.log' in script, 'the build log sits beside the env it builds'
+    assert 'E="$LAB_ROOT"/envs/k1' in script, 'every env lives under its key'
+    assert '"$LAB_ROOT"/envs/k1.log' in script, 'the build log sits beside the env it builds'
     assert 'git uv cargo' in needs_script(spec)
 
 
@@ -1064,7 +1064,7 @@ def test_a_build_marks_its_tree_in_flight_before_the_env_step() -> None:
     script = build_script(RunSpec(sha=SHA, repo_url='u', builds=Builds(install='uv sync', env_key='k1')))
     mark = 'touch .lab-ci'
     assert mark in script, 'a reused tree must read as being built, or retention removes the cwd of the build'
-    assert script.index(f'cd "$HOME"/ci/trees/{SHA}') < script.index(mark) < script.index('uv venv')
+    assert script.index(f'cd "$LAB_ROOT"/runs/{SHA}/tree') < script.index(mark) < script.index('uv venv')
 
 
 def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
@@ -1238,10 +1238,10 @@ def test_record_gzip_integrity_and_expanded_metadata_budget(tmp_path: Path, faul
 def test_declared_inputs_share_one_env_and_native_build_and_put_the_source_on_pythonpath() -> None:
     builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', 'uv sync', env_key='e1', native_key='n1')
     script = build_script(RunSpec(sha=SHA, repo_url='u', builds=builds))
-    assert 'export E="$HOME"/ci/envs/e1' in script
-    assert 'export N="$HOME"/ci/native/n1' in script
+    assert 'export E="$LAB_ROOT"/envs/e1' in script
+    assert 'export N="$LAB_ROOT"/native/n1' in script
     assert 'flock 9' in script, 'two runs building one key wait for each other'
-    assert f'$HOME/ci/trees/{SHA}/src:$HOME/ci/native/n1:$HOME/ci/bin' in script
+    assert f'$LAB_ROOT/runs/{SHA}/tree/src:$LAB_ROOT/native/n1:$LAB_ROOT/serve/bin' in script
     assert '.venv' not in script, 'no per-sha venv when the inputs are declared'
 
 
@@ -1259,13 +1259,13 @@ def test_a_commit_off_the_remote_without_a_pack_source_is_refused() -> None:
 def test_env_and_native_builds_share_persistent_caches_and_cargo_is_locked() -> None:
     builds = Builds(('uv.lock',), ('src',), ('rust',), 'make', 'uv sync', env_key='e1', native_key='n1')
     script = build_script(RunSpec(sha=SHA, repo_url='u', builds=builds))
-    assert ' UV_CACHE_DIR="$HOME"/ci/uv-cache' in script, 'one uv cache across every env key'
+    assert ' UV_CACHE_DIR="$LAB_ROOT"/cache/uv' in script, 'one uv cache across every env key'
     assert ' UV_LINK_MODE=hardlink' in script, 'an env shares its inodes with the cache: files are a quota'
-    assert 'export CARGO_TARGET_DIR="$HOME"/ci/cargo-target/n1\n' in script, "the target is the native key's own"
+    assert 'export CARGO_TARGET_DIR="$LAB_ROOT"/cache/cargo/n1\n' in script, "the target is the native key's own"
     assert 'flock 8' in script, 'two runs building one native key take turns on its target'
     other = build_script(RunSpec(sha=SHA, repo_url='u', builds=replace(builds, native_key='n2')))
-    assert 'CARGO_TARGET_DIR="$HOME"/ci/cargo-target/n2\n' in other
-    assert 'CARGO_TARGET_DIR="$HOME"/ci/cargo-target\n' not in script, 'PLANTED CONTROL: no account-wide target'
+    assert 'CARGO_TARGET_DIR="$LAB_ROOT"/cache/cargo/n2\n' in other
+    assert 'CARGO_TARGET_DIR="$LAB_ROOT"/cache/cargo\n' not in script, 'PLANTED CONTROL: no account-wide target'
 
 
 def test_a_cargo_target_is_shared_only_by_identical_native_inputs() -> None:
@@ -1747,7 +1747,9 @@ def test_a_runs_file_cost_is_one_count_of_its_tree_run_and_env_and_unread_is_unm
 
     state = {'sha': SHA, 'builds': {'env': 'e1', 'native': 'n1'}}
     assert files_made(home, state) == 12345.0
-    assert asked == [f'find "$HOME"/ci/trees/{SHA} "$HOME"/ci/runs/{SHA} "$HOME"/ci/envs/e1 -xdev 2>/dev/null | wc -l']
+    assert asked == [
+        f'find "$LAB_ROOT"/runs/{SHA}/tree "$LAB_ROOT"/runs/{SHA} "$LAB_ROOT"/envs/e1 -xdev 2>/dev/null | wc -l'
+    ]
     assert files_made(lambda *_a: '', state) == 0.0, 'PLANTED CONTROL: unread is 0, the prior prices it'
 
 
@@ -1800,7 +1802,7 @@ def test_every_id_carries_a_wall_derived_from_its_measured_duration() -> None:
 
 
 def test_the_run_state_names_the_build_directories_it_runs_in() -> None:
-    """Retention ties ``~/ci/envs/<key>`` and ``~/ci/native/<key>`` to a run only through these keys."""
+    """Retention ties ``<root>/envs/<key>`` and ``<root>/native/<key>`` to a run only through these keys."""
     builds = Builds(install='true', env_key='k1', native_key='n1')
     state = submit_run(
         RunSpec(sha=SHA, repo_url='u', builds=builds), MACHINE, lambda _g: FakeRunCluster(), cost=COST, policy=POLICY
@@ -1865,15 +1867,13 @@ def test_run_build_builds_the_artifact_and_names_the_job_lines(
     fake = FakeRunCluster()
     _build_cli(monkeypatch, fake)
     built = []
-    monkeypatch.setattr(
-        cli, 'build_artifact', lambda spec, *_a: built.append(spec.sha) or f'/h/ci/artifacts/{SHA}.tar.gz'
-    )
+    monkeypatch.setattr(cli, 'build_artifact', lambda spec, *_a: built.append(spec.sha) or f'/r/artifacts/{SHA}.tar.gz')
     assert cli.main(['run', 'build', '--sha', SHA, '--repo-url', 'u']) == 0
     out = capsys.readouterr().out
     assert built == [SHA]
     assert f'sha = "{SHA}"' in out
     assert 'artifact = "tarball"' in out
-    assert 'ci/trees' not in out, 'a job never runs in a test run tree'
+    assert '/tree' not in out, 'a job never runs in a test run tree'
     assert not fake.manifests
 
 
@@ -1936,7 +1936,7 @@ def test_two_parts_of_one_sha_are_two_runs_with_two_states_and_two_job_names() -
     """Two parts of one sha never share a run state or a job name.
 
     Measured on Ada 2026-10-17: the femm part of a sha whose base part ran there found BASE's state at
-    ``~/ci/runs/<sha>``, took it as its own submission, settled it into a base record and never ran a job.
+    ``<root>/runs/<sha>``, took it as its own submission, settled it into a base record and never ran a job.
     """
     fake = FakeRunCluster()
     _submit(fake)
@@ -1959,7 +1959,7 @@ def test_a_superseded_run_holds_its_folded_rounds_and_every_id_its_last_round_st
         'tests/b.py::t3': (OK_CELL, SHA),
     }, 'the killed item kept what it streamed; the handed id is not a cell'
     assert state['sha'] == SHA
-    assert run_shas(MACHINE, {GRANT.account: lambda _c, _s: f'/h/ci/runs/{SHA}/{BASE}/state.json\n'}, BASE) == [SHA]
+    assert run_shas(MACHINE, {GRANT.account: lambda _c, _s: f'/r/runs/{SHA}/{BASE}/state.json\n'}, BASE) == [SHA]
 
 
 def test_the_build_facts_report_the_key_and_the_resolved_list_of_one_reading() -> None:
@@ -1980,7 +1980,7 @@ def test_the_build_facts_report_the_key_and_the_resolved_list_of_one_reading() -
 def test_each_repository_fetches_into_its_own_cache_whose_origin_is_that_repository() -> None:
     url = 'https://github.com/family/numerics-lab.git'
     cache = cache_dir(url)
-    assert cache.startswith(f'{ROOT}/cache/family-numerics-lab-'), cache
+    assert cache.startswith(f'{ROOT}/cache/git/family-numerics-lab-'), cache
     assert cache.endswith('.git'), cache
     spec = RunSpec(sha=SHA, repo_url=url, builds=Builds(install='true', env_key='k1'))
     script = fetch_script(spec)
@@ -2044,7 +2044,12 @@ def test_a_tree_gets_every_submodule_recursively_each_from_its_own_cache(tmp_pat
     home = tmp_path / 'home'
     home.mkdir()
     command = '\n'.join(['set -eo pipefail', f'cd {tree.as_posix()}', *shell.submodules_script(top)])
-    env = {**os.environ, 'HOME': home.as_posix(), 'GIT_CONFIG_PARAMETERS': "'protocol.file.allow=always'"}
+    env = {
+        **os.environ,
+        'HOME': home.as_posix(),
+        'LAB_ROOT': home.as_posix(),
+        'GIT_CONFIG_PARAMETERS': "'protocol.file.allow=always'",
+    }
     for attempt in ('first', 'reused'):
         done = subprocess.run(
             [bash_executable(), '-c', command], capture_output=True, text=True, encoding='utf-8', env=env, check=False
@@ -2054,7 +2059,7 @@ def test_a_tree_gets_every_submodule_recursively_each_from_its_own_cache(tmp_pat
         assert (tree / 'mid' / 'leaf' / 'leaf.txt').is_file(), f'{attempt}: recursive'
     for name in ('mid', 'leaf'):
         url = top.replace('top.git', f'{name}.git')
-        assert Path(shell.cache_dir(url).replace('"$HOME"', home.as_posix())).is_dir(), f'{name} has cache_dir'
+        assert Path(shell.cache_dir(url).replace('"$LAB_ROOT"', home.as_posix())).is_dir(), f'{name} has cache_dir'
     assert not (Path(top) / 'modules').exists(), 'nothing written into the parent repository'
     pinned = _git('ls-tree', 'HEAD', 'mid', cwd=tree).split()[2]
     assert _git('rev-parse', 'HEAD', cwd=tree / 'mid') == pinned, 'the checkout is the recorded gitlink'

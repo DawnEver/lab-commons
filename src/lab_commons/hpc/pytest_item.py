@@ -1,7 +1,7 @@
 """One remote-run item on a compute node: run a group of pytest node ids, STREAM each one's outcome.
 
 STANDALONE AND STDLIB-ONLY ON PURPOSE. :mod:`lab_commons.hpc.run` ships this file's TEXT to the
-cluster (``~/ci/bin/lab_ci_pytest_item.py``) and the array task imports it from there inside the tested
+cluster (``<root>/serve/bin/lab_ci_pytest_item.py``) and the array task imports it from there inside the tested
 tree's own venv -- so the code that runs is the one this checkout wrote, whatever version of
 ``lab_commons`` the tested project happens to pin. It imports nothing from ``lab_commons``.
 

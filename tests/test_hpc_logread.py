@@ -1,4 +1,4 @@
-"""``lab_commons.hpc log``: a read-only tail of a file under the account's ``~/ci``, through the gated ssh door."""
+"""``lab_commons.hpc log``: a read-only tail of a file under the account's root, through the gated ssh door."""
 
 from __future__ import annotations
 
@@ -28,11 +28,11 @@ def _run(argv: list[str], answer: str = 'line\n') -> tuple[int, list[str]]:
 
 def test_a_ci_log_is_tailed_with_its_line_count() -> None:
     """The planted control of every refusal below."""
-    code, sent = _run(['--at', DEST, '--lines', '50', '/gpfs01/home/alice/ci/envs/abc.log'])
+    code, sent = _run(['--at', DEST, '--lines', '50', '/epccfs/p/alice/envs/abc.log'])
     assert code == 0
     assert len(sent) == 1
     assert 'tail -n 50' in sent[0]
-    assert '"$HOME/ci/"' in sent[0]  # the remote side confines the real path to ~/ci
+    assert 'case "$p" in "$r"/*)' in sent[0]  # the remote side confines the real path to the account root
 
 
 def test_a_path_relative_to_ci_is_read_there() -> None:
@@ -40,7 +40,7 @@ def test_a_path_relative_to_ci_is_read_there() -> None:
     assert 'realpath -e -- envs/abc.log' in sent[0]
 
 
-@pytest.mark.parametrize('path', ['../.ssh/id_rsa', '/etc/passwd', '/gpfs01/home/alice/ci/../.ssh/id_rsa', ''])
+@pytest.mark.parametrize('path', ['../.ssh/id_rsa', '/epccfs/p/alice/../.ssh/id_rsa', ''])
 def test_a_path_outside_ci_is_refused_before_ssh(path: str) -> None:
     code, sent = _run(['--at', DEST, path])
     assert code == 2

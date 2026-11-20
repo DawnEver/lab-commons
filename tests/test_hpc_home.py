@@ -75,12 +75,13 @@ def test_a_stray_is_an_unowned_directory_past_the_limit_and_a_managed_root_never
     consumers = [
         Consumer('ab', 11, capped=True),
         Consumer('at-limit', 10, capped=False),
-        Consumer('ci', 11, capped=True),
+        Consumer('.cache', 11, capped=True),
         Consumer('src', 11, capped=True),
     ]
     assert [c.name for c in home.strays(consumers, managed=('src',), limit=10)] == ['ab']
     assert [c.name for c in home.strays(consumers, limit=10)] == ['ab', 'src'], 'a deploy root is passed by its owner'
-    assert 'ci' in MANAGED
+    assert '.cache' in MANAGED
+    assert 'ci' not in MANAGED, 'the retired ~/ci tree is a stray: the layout lives under the declared root'
     assert STRAY_FILES > 23_000, 'one worktree of a large repository is not yet a stray'
 
 
