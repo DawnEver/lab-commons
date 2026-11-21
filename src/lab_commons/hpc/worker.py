@@ -170,6 +170,11 @@ def _returned_cell(value: object) -> Cell:
     return Cell(Status.OK)
 
 
+#: The INNERMOST frames an item's ERROR reason keeps: the raising line, not the driver that called it
+#: (a positive limit keeps the outermost ones -- measured 2026-10-24 losing every mesher frame).
+TRACE_FRAMES: Final = 8
+
+
 def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callable[[Any], Any] | None = None) -> int:
     """Run shard *shard* of *manifest*, appending each item's outcome to *results*; the item count."""
     start, stop = manifest['shards'][shard]
@@ -208,7 +213,7 @@ def run_shard(manifest: dict[str, Any], shard: int, results: Path, entry: Callab
             data['value'] = failed.value
             cell = Cell(Status.ERROR, reason=failed.reason)
         except Exception:  # noqa: BLE001 -- an item's failure is recorded, not propagated; see the module docstring
-            cell = Cell(Status.ERROR, reason=Reason('exception', traceback.format_exc(limit=5)))
+            cell = Cell(Status.ERROR, reason=Reason('exception', traceback.format_exc(limit=-TRACE_FRAMES)))
         append_event(results, Event(OUTCOME, str(index), cell=cell, data=data))
 
     with ThreadPoolExecutor(max_workers=max(1, len(lanes))) as pool:
