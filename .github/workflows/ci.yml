@@ -91,7 +91,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "name": "Install the normal measurement hooks",
@@ -136,7 +136,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "id": "pending",
@@ -160,7 +160,8 @@
     },
     "part": {
       "env": {
-        "GITHUB_TOKEN": "${{ github.token }}"
+        "GITHUB_TOKEN": "${{ github.token }}",
+        "LAB_COMMONS_BOX": "${{ github.workspace }}/../lab-commons/box.sqlite"
       },
       "needs": "parts",
       "if": "${{ (!(github.event.pull_request.draft || startsWith(github.event.pull_request.title, 'WIP:') || startsWith(github.event.pull_request.title, '[WIP]'))) && ((inputs.measurement_paths == '' && inputs.measurement_sha == '') && (needs.parts.outputs.matrix != '')) }}",
@@ -184,7 +185,12 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
+        },
+        {
+          "name": "Sync the part's extras",
+          "shell": "bash",
+          "run": "uv sync --frozen $(uv run --no-sync python -m dev_lab.dev.depneeds flags --part \"${{ matrix.part }}\")"
         },
         {
           "name": "Produce and post the part",
@@ -196,7 +202,7 @@
           "uses": "actions/upload-artifact@v4",
           "with": {
             "name": "verify-log-${{ matrix.part }}-${{ github.run_attempt }}",
-            "path": "**/verify/verify-*.log",
+            "path": "**/verify/verify-*.log\n**/verify/verify-*.outcomes/**",
             "if-no-files-found": "warn"
           }
         }
@@ -238,7 +244,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "name": "Post every part no job settled",
@@ -274,7 +280,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "name": "tests/security",
@@ -310,7 +316,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "name": "head gates",
@@ -355,7 +361,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "id": "ready",
@@ -405,7 +411,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "name": "Promote main",
@@ -425,7 +431,8 @@
     },
     "part-linux": {
       "env": {
-        "GITHUB_TOKEN": "${{ github.token }}"
+        "GITHUB_TOKEN": "${{ github.token }}",
+        "LAB_COMMONS_BOX": "${{ github.workspace }}/../lab-commons/box.sqlite"
       },
       "needs": "parts",
       "if": "${{ (!(github.event.pull_request.draft || startsWith(github.event.pull_request.title, 'WIP:') || startsWith(github.event.pull_request.title, '[WIP]'))) && ((inputs.measurement_paths == '' && inputs.measurement_sha == '') && (needs.parts.outputs.matrix != '')) }}",
@@ -449,7 +456,12 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
+        },
+        {
+          "name": "Sync the part's extras",
+          "shell": "bash",
+          "run": "uv sync --frozen $(uv run --no-sync python -m dev_lab.dev.depneeds flags --part \"linux\")"
         },
         {
           "name": "Set up tests/linux",
@@ -465,7 +477,7 @@
           "uses": "actions/upload-artifact@v4",
           "with": {
             "name": "verify-log-linux-${{ github.run_attempt }}",
-            "path": "**/verify/verify-*.log",
+            "path": "**/verify/verify-*.log\n**/verify/verify-*.outcomes/**",
             "if-no-files-found": "warn"
           }
         }
