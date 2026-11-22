@@ -49,7 +49,7 @@
         },
         {
           "name": "Sync the environment",
-          "run": "uv sync --frozen --all-extras"
+          "run": "uv sync --frozen --extra units --extra paths --extra io --extra structured --extra viz --extra viz-mpl --extra viz-bokeh"
         },
         {
           "id": "ready",
