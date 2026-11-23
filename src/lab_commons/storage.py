@@ -24,6 +24,9 @@ and the FAMILY file declares the remotes every machine shares, once and without 
     access_key_id = "<the key's ID>"     # a fact: declared, never asked
     secret_keys = ["secret_access_key"]  # the only keys the credentials_file holds and a person is asked
 
+    [storage]
+    runs = "results:bucket"              # the remote:path every run's oversize result files go to (optional)
+
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
 name: ``roots``, ``reach`` and the floor keys belong to one machine, ``remotes`` to the family; a machine file that
 declares no family layer is a render of family + host and carries the family's ``remotes`` inline. A cache is
@@ -34,7 +37,9 @@ and format (:mod:`lab_commons.headroom`) and the floor holds against the smaller
 refused by name; so are the retired spellings -- a ``secrets`` directory, a list-form ``reach`` (user ruling
 2026-11-19: one declared file per secret, the family's ``credentials_file`` key) and a fixed cap key (D54).
 A remote's options are handed to the transport (rclone) verbatim; this module names
-no provider and no host.
+no provider and no host. The family's ``runs`` names the store every run's oversize files use (``<remote>:<path>``,
+the remote one the family declares); undeclared, no run has one and an oversize result stays local
+(:class:`lab_commons.compute.store.TooLarge`). Whether THIS machine reaches it is the transport's door to prove.
 
 This module never moves data: a binding takes effect for new writes, and moving an existing tree is
 the migrate door's (``dev_lab.dev.storage migrate``) -- once, never an upgrade on read.
@@ -97,7 +102,7 @@ _RETIRED_KEYS: Final = {
     'cache_cap_gb': _CAP_REMEDY,
     'cap_gb': _CAP_REMEDY,
 }
-_FAMILY_KEYS: Final = frozenset({'remotes'})
+_FAMILY_KEYS: Final = frozenset({'remotes', 'runs'})
 
 
 class StorageError(ValueError):
@@ -132,6 +137,10 @@ class Storage:
     free_floor_gb: float = FREE_FLOOR_GB_DEFAULT
     free_floor_files: int | None = None
     quota: Quota | None = None
+    #: The family's ``runs``: the ``<remote>:<path>`` every run's oversize files go to; ``None``: undeclared.
+    runs: str | None = None
+    #: The remote :attr:`runs` names, as the family declares it, whether or not this machine reaches it.
+    runs_remote: str | None = None
 
 
 def free_floor(storage: Storage | None = None) -> Floor:
@@ -165,7 +174,28 @@ def declared(machine: Mapping[str, Any] | None = None, family: Mapping[str, Any]
     _check_layers(local, shared)
     roots = _roots(local.get('roots', {}))
     reach = _reach(local.get('reach', {}), shared.get('remotes', {}))
-    return Storage(roots, reach, _floor(local), _files(local), _quota(local.get('quota')))
+    runs = _runs(shared.get('runs'), shared.get('remotes', {}))
+    return Storage(
+        roots, reach, _floor(local), _files(local), _quota(local.get('quota')), runs,
+        runs.partition(':')[0] if runs else None,
+    )  # fmt: skip
+
+
+def _runs(value: object, remotes: Mapping[str, Any]) -> str | None:
+    """The family's ``runs``: ``<remote>:<path>`` on a remote it declares, or ``None`` undeclared."""
+    if value is None:
+        return None
+    remote, colon, path = value.partition(':') if isinstance(value, str) else ('', '', '')
+    if not (remote and colon and path.strip('/')):
+        msg = f'the family file: [{TABLE}] runs = {value!r} must be "<remote>:<path>", e.g. "results:bucket"'
+        raise StorageError(msg)
+    if remote not in remotes:
+        msg = (
+            f'the family file: [{TABLE}] runs names remote {remote!r}, which it declares no '
+            f'[{TABLE}.remotes.{remote}] for; declared: {sorted(remotes)}'
+        )
+        raise StorageError(msg)
+    return value
 
 
 def _files(local: Mapping[str, Any]) -> int | None:
