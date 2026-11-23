@@ -215,3 +215,30 @@ def test_only_a_declared_secret_is_asked(remote: dict[str, object], why: str) ->
     """
     with pytest.raises(storage.StorageError, match=why):
         storage.declared({'storage': {}}, _family(**remote))
+
+
+_RUNS_REMOTE = {'type': 's3', 'secret_keys': ['secret_access_key'], 'reach': {'credentials_file': '~/k'}}
+
+
+def test_the_family_names_the_store_every_run_uses() -> None:
+    held = declared({}, {'storage': {'remotes': {'results': _RUNS_REMOTE}, 'runs': 'results:bucket'}})
+    assert (held.runs, held.runs_remote) == ('results:bucket', 'results')
+
+
+def test_no_runs_declared_is_no_run_store() -> None:
+    """PLANTED CONTROL: undeclared reads None, never a guessed remote."""
+    held = declared({}, {'storage': {'remotes': {'results': _RUNS_REMOTE}}})
+    assert (held.runs, held.runs_remote) == (None, None)
+
+
+@pytest.mark.parametrize('bad', ['results', 'results:', ':bucket', 7])
+def test_a_runs_value_not_remote_colon_path_is_refused(bad: object) -> None:
+    with pytest.raises(StorageError, match=r'runs = .* must be "<remote>:<path>"'):
+        declared({}, {'storage': {'remotes': {'results': _RUNS_REMOTE}, 'runs': bad}})
+
+
+def test_runs_on_an_undeclared_remote_or_in_a_machine_file_is_refused() -> None:
+    with pytest.raises(StorageError, match=r"runs names remote 'other'"):
+        declared({}, {'storage': {'remotes': {'results': _RUNS_REMOTE}, 'runs': 'other:bucket'}})
+    with pytest.raises(StorageError, match='runs is a family fact'):
+        declared({'storage': {'runs': 'results:bucket'}}, {'storage': {'remotes': {'results': _RUNS_REMOTE}}})
