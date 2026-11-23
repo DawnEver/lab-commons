@@ -17,6 +17,8 @@ TIER_ONE = (
     'lab_commons.box.machine',
     'lab_commons.compute',
     'lab_commons.config',
+    'lab_commons.dimensions',
+    'lab_commons.extras',
     'lab_commons.home',
     'lab_commons.hpc',
     'lab_commons.launch',

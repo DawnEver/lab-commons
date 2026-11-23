@@ -50,6 +50,8 @@ def test_a_test_that_redirects_the_stream_variable_still_reports_to_the_run(
         f"    monkeypatch.setenv('{pytest_item.STREAM_ENV}', str(tmp_path / 'elsewhere.jsonl'))\n",
         encoding='utf-8',
     )
+    # its own ini anchors the inner rootdir here: the test's tmp may lie inside a checkout whose ini would win
+    (tmp_path / 'pytest.ini').write_text('[pytest]\n', encoding='utf-8')
     monkeypatch.setenv('PYTHONPATH', str(Path(pytest_item.__file__).parent))
     monkeypatch.chdir(tmp_path)
     done = pytest_item.run({'ids': ['test_inner.py::test_redirects'], 'stream': str(tmp_path / 'run.jsonl'), 'item': 0})

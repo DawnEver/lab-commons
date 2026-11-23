@@ -411,6 +411,12 @@ class Measured:
         named = {file_of(n) for n in nodes} - set(without)
         return max((self.peaks_mb.get(f, 0.0) for f in named), default=0.0) / _MB_PER_GB
 
+    def past_gb(self, bar_gb: float | None) -> frozenset[str]:
+        """The files whose MEASURED peak is past *bar_gb* -- heavy by what they did; none without a bar."""
+        if bar_gb is None:
+            return frozenset()
+        return frozenset(f for f, mb in self.peaks_mb.items() if mb / _MB_PER_GB > bar_gb)
+
     def worker_gb(self, nodes: Iterable[str], *, prior_gb: float, safety: float) -> float:
         """The worst peak of these nodes' files times *safety*, never under *prior_gb*.
 

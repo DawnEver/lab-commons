@@ -25,6 +25,7 @@ _SHIPPED: Final = frozenset(
         'BARE-PYTHON',
         'BARE-TEST-INVOCATION',
         'CI-CRON-NEEDS-CONSENT',  # gained 2026-11-17 with dev-lab b9875921
+        'FAMILY-REPO-IS-CHECKED-OUT',  # gained 2026-11-20 with dev-lab #801 (relock in #213)
         'FORGE-WRITE-VIA-CLI',
         'FORGE-WRITE-VIA-GH-API',
         'FORGE-WRITE-VIA-HTTP',
@@ -34,6 +35,9 @@ _SHIPPED: Final = frozenset(
         'GIT-STASH',
         'HEAVY-IS-THE-MAIN-SESSIONS',  # gained 2026-11-17 with dev-lab b9875921
         'HPC-THROUGH-THE-DOOR',  # gained 2026-11-07 with dev-lab 8c4ab734
+        'MACHINE-FILE-IS-RENDERED',  # gained 2026-11-20 with dev-lab #801 (relock in #213)
+        'MAIN-ONLY-DOOR',  # gained 2026-11-22 with dev-lab 77ef8452
+        'OUTPUT-HOLDS-NO-CODE',  # gained 2026-11-22 with dev-lab 77ef8452
         'PUSH-FORCE',
         'PUSH-NO-VERIFY',
         'PUSH-REMOTE-DELETE',
@@ -48,6 +52,7 @@ _SHIPPED: Final = frozenset(
         'TRACKED-CITES-NO-EPHEMERAL',  # gained 2026-11-17 with dev-lab b9875921
         'TREE-HAS-A-LIVE-RUN',
         'WORKTREE-BASE-IS-EXPLICIT',
+        'WORKTREE-NAMES-ITS-TASK',  # gained 2026-11-22 with dev-lab 77ef8452
         'WORKTREES-STAY-INSIDE',
         'WRITES-STAY-IN-THE-TREE',  # gained 2026-11-07 with dev-lab 8c4ab734
     }

@@ -30,6 +30,7 @@ re-placed slice is an ordinary new submission.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
@@ -82,7 +83,7 @@ def built_config(config: Config) -> Config:
 
     """
     job = config.job
-    if '/ci/trees/' in f'/{job.workdir.lstrip("~")}':
+    if re.search(r'/runs/[0-9a-f]{40}/tree(/|$)', job.workdir):
         msg = (
             f'[job] workdir = {job.workdir!r} is a test run tree, retired for jobs: declare [job] sha and '
             'repo_url and the job runs from that commit artifact, one file (lab_commons.hpc.artifact)'

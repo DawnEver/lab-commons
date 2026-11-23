@@ -217,6 +217,38 @@ def test_a_dead_launchers_row_is_reaped(box: Path) -> None:
         assert [row.what for row in holdings()] == ['after']
 
 
+@pytest.mark.usefixtures('box')
+def test_a_dead_holders_kept_claim_is_gone_from_holdings() -> None:
+    """2026-11-16: a kept Designer claim whose pid died stayed in holdings() ~23 h, reading the box as full."""
+    with hold(*_demand(cpu=4, mem_gb=8.0), 'get_jmag_app', queue_s=1, **_ON) as claim:
+        hand_over(claim, _dead_pid())
+    assert holdings() == [], 'a dead pid holds nothing where holdings are read'
+
+
+def test_a_recycled_pids_kept_claim_is_gone_from_holdings(box: Path) -> None:
+    """A live pid whose birth time differs from the recorded one is another process: it holds nothing."""
+    with hold(*_demand(cpu=4), 'get_jmag_app', queue_s=1, **_ON) as claim:
+        hand_over(claim, os.getpid())
+    with sqlite3.connect(box) as con:
+        con.execute('UPDATE claims SET created = -1')
+    assert holdings() == []
+
+
+@pytest.mark.usefixtures('box')
+def test_a_live_holders_kept_claim_still_counts() -> None:
+    """PLANTED CONTROL: a kept claim whose process lives is read and blocks admission."""
+    vendor = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        with hold(*_demand(cpu=4), 'designer', queue_s=1, **_ON) as claim:
+            hand_over(claim, vendor.pid)
+        assert [(row.what, row.kept) for row in holdings()] == [('designer', True)]
+        with pytest.raises(Refused, match='designer'), hold(*_demand(cpu=1), 'after', queue_s=0.5, **_ON):
+            pass
+    finally:
+        vendor.kill()
+        vendor.wait(30)
+
+
 def test_an_expired_deadline_row_is_reaped(box: Path) -> None:
     _row(box, pid=os.getpid(), created=None, deadline=time.time() - GRACE_S - 1)
     with hold(*_demand(cpu=4), 'after', queue_s=1, **_ON):

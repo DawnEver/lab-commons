@@ -62,9 +62,9 @@ class Thresholds:
 #: THE ONE DECLARATION of the home quota thresholds; every door and the tick read it.
 QUOTA: Final = Thresholds(soft=0.80, hard=0.90)
 
-#: Home directories with an OWNER, each naming it. A deploy root (``[deploy] root``) is passed in by its owner.
+#: Home directories with an OWNER, each naming it. The account's declared root (:mod:`lab_commons.hpc.layout`), when
+#: it lies in the home, is passed in by its owner.
 MANAGED: Final[Mapping[str, str]] = {
-    'ci': 'lab_commons.hpc: run trees, envs and leased trees; reaped by forge retention and the lease reaper',
     '.cache': 'tool caches (uv, the tick log); bounded by the tools that write them',
     '.cargo': 'the Rust toolchain install',
     '.rustup': 'the Rust toolchain install',
