@@ -89,6 +89,7 @@ def gather_run(
         for n in range(len(planned['shards']))
     ]
     shard_of = {i: n for n, (a, b) in enumerate(planned['shards']) for i in range(a, b)}
+    limits = {i: band_of[n]['mem_mb'] for i, n in shard_of.items()}
     oomed = [i for i, n in shard_of.items() if states.get(n) == 'OUT_OF_MEMORY']
     pending, killed, busy = fold(
         current['items'],
@@ -101,14 +102,16 @@ def gather_run(
         alone={i: band_of[shard_of[i]]['mem_mb'] for i in oomed if band_of[shard_of[i]]['at_ceiling']},
         timed_out={n for n, s in states.items() if s == 'TIMEOUT'},
         tops={n: band['top_minutes'] * 60 for n, band in band_of.items() if band.get('top_minutes')},
+        limit_mb=limits,
     )
     planned['clock'] = round_clock(clocks, busy)
-    planned['lost'] = round_losses(current['items'], streams, shards=planned['shards'], walls=walls, states=states)
+    planned['lost'] = round_losses(
+        current['items'], streams, shards=planned['shards'], walls=walls, states=states, limit_mb=limits
+    )
     planned['walls_s'] = walls
     before, state['measured'] = state['measured'], measured.record()
     learned.learn_round(state['repo'], before, state['measured'])
-    timed_out = 'TIMEOUT' in states.values()
-    oom = 'OUT_OF_MEMORY' in states.values() or (killed and not timed_out)
+    oom = 'OUT_OF_MEMORY' in states.values() or (killed and 'TIMEOUT' not in states.values())
     pending = oom_bounded(pending, current['items'], state, shard_of=shard_of, states=states) if oom else pending
     state['held'] = held_after(
         current['items'], state['cells'], shard_of, states, band_of=band_of, held=state.get('held', {})

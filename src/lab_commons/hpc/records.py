@@ -150,6 +150,26 @@ def _cell(status: Status, kind: str, text: str) -> dict[str, Any]:
     return TestCell(Cell(status, reason=Reason(kind, text))).to_plain()
 
 
+#: The share of its memory limit under which a signalled item's peak says the signal was NOT memory: a cgroup
+#: OOM kill lands at the limit, so a peak at 0.8 of it or below is the test's own crash (a native fault, a kill
+#: it sent itself). Measured 2026-11-23: two crash-probe tests died by their own signal at ~375 MB, were labelled
+#: out_of_memory and bisected over four retry rounds.
+_OOM_PEAK_SHARE: Final = 0.8
+
+
+def _low_peak_kill(folded: dict[str, Any], limit_mb: float | None) -> tuple[int, float] | None:
+    """``(signal, peak MB)`` of an item a signal closed well under its limit, else None (memory may have done it)."""
+    done = folded['done']
+    if done is None or int(done.get('done', 0)) >= 0 or limit_mb is None or done.get('peak_mb') is None:
+        return None
+    peak = float(done['peak_mb'])
+    return (-int(done['done']), peak) if peak < _OOM_PEAK_SHARE * limit_mb else None
+
+
+def _killed_why(signal: int, peak: float, limit_mb: float) -> str:
+    return f'signal {signal} at peak {peak:.0f} MB, under {_OOM_PEAK_SHARE:.0%} of its {limit_mb:.0f} MB limit'
+
+
 def fold(
     items: list[dict[str, Any]],
     streams: dict[int, str],
@@ -162,6 +182,7 @@ def fold(
     alone: Mapping[int, int] | None = None,
     timed_out: Collection[int] = (),
     tops: Mapping[int, float] | None = None,
+    limit_mb: Mapping[int, float] | None = None,
 ) -> tuple[list[list[str]], bool, float]:
     """Record one round's streams; return the unfinished ids, halved, whether an item was KILLED, and busy seconds.
 
@@ -201,6 +222,11 @@ def fold(
     that ran that long cannot be given more, so its cut id is ``TIMEOUT`` by id with the wall as its reason
     and is never re-queued -- and a cut below it learns its floor held to that wall, never 2x past it.
     Ada 2026-10-26: two ids cut after ~1 day each learned 48 h floors, to hold defq 48 h and then retry.
+
+    A LOW-PEAK SIGNAL IS THE TEST'S OWN CRASH. *limit_mb* maps an item to its memory limit (MB); an item a
+    signal closed outside a TIMEOUT shard, that Slurm did not call OUT_OF_MEMORY, at a peak under
+    ``_OOM_PEAK_SHARE`` of that limit is a decided ``REJECTED`` cell of kind ``killed`` (signal and peak) for
+    the id it cut; the ids after it re-run as one item, never bisected, and the item is not counted KILLED.
     """
     pending: list[list[str]] = []
     limits = oom_mb or {}
@@ -216,7 +242,6 @@ def fold(
         measured.learn(group, folded, allowed_mb=limits.get(index))
         rest = [n for n in group if n not in folded['cells']]
         signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
-        killed = killed or signalled
         if folded['done'] is not None and not signalled:
             hit = folded['started']
             if hit not in rest:
@@ -229,6 +254,14 @@ def fold(
             pending += [after] if after else []
             continue
         shard = shard_of.get(index)
+        low = None if shard in cut or index in limits else _low_peak_kill(folded, (limit_mb or {}).get(index))
+        if low is not None:
+            hit = folded['started'] if folded['started'] in rest else rest[0]
+            cells[hit] = _cell(Status.REJECTED, 'killed', _killed_why(*low, (limit_mb or {})[index]))
+            after = [n for n in rest if n != hit]
+            pending += [after] if after else []
+            continue
+        killed = killed or signalled
         top = (tops or {}).get(shard) if shard is not None else None
         measured.killed(group, folded, spent.get(index, 0.0), timed_out=shard in cut, top=top)
         if shard in cut and top is not None and walls[shard] >= top - _KILL_SLACK_S:
@@ -274,6 +307,7 @@ def round_losses(
     shards: Sequence[Sequence[int]],
     walls: Sequence[float],
     states: Mapping[int, str],
+    limit_mb: Mapping[int, float] | None = None,
 ) -> list[dict[str, Any]]:
     """WHAT ONE ROUND LOST, by test id: each failed, killed, out-of-memory or timed-out id with its peak and wall.
 
@@ -281,7 +315,8 @@ def round_losses(
     ruling 2026-10-31: the cluster being unreachable is normal). A decided miss (:func:`badness` 0) is a loss of
     its status' kind with its reason; an item a signal or the wall closed names the id it cut (its last unreported
     START, else its first unreported id) as ``out_of_memory`` (Slurm said so, or a signal outside a TIMEOUT
-    shard), ``timeout`` (a TIMEOUT shard) or ``killed`` (any other end, its Slurm state named), and an item that
+    shard), ``killed`` (such a signal at a peak under ``_OOM_PEAK_SHARE`` of its *limit_mb*, as :func:`fold`
+    decides it), ``timeout`` (a TIMEOUT shard) or ``killed`` (any other end, its Slurm state named), and an item that
     EXITED mid-test names that test ``exit``. *states* maps a shard to its Slurm state; a clean round loses nothing.
     """
     losses: list[dict[str, Any]] = []
@@ -306,7 +341,10 @@ def round_losses(
             continue
         state = states.get(shard_of.get(index, -1), '')
         wall = done.get('wall') if code is not None else spent.get(index)
-        if state == 'OUT_OF_MEMORY' or (code is not None and state != 'TIMEOUT'):
+        low = None if state in {'OUT_OF_MEMORY', 'TIMEOUT'} else _low_peak_kill(folded, (limit_mb or {}).get(index))
+        if low is not None:
+            kind, why = 'killed', _killed_why(*low, (limit_mb or {})[index])
+        elif state == 'OUT_OF_MEMORY' or (code is not None and state != 'TIMEOUT'):
             kind, why = 'out_of_memory', f'killed out of memory ({state or f"exit {code}"})'
         elif state == 'TIMEOUT':
             kind, why = 'timeout', 'cut by the shard wall (TIMEOUT)'

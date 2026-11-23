@@ -68,3 +68,42 @@ def test_round_losses_agrees_with_what_fold_re_queues() -> None:
     requeued = {n for part in pending for n in part}
     lost = round_losses(ITEMS, streams, shards=[(0, 1), (1, 2), (2, 3)], walls=[30, 3600, 5], states={})
     assert {one['id'] for one in lost if one['kind'] != 'rejected'} <= requeued
+
+
+_LIMIT_MB = 4096.0
+_CRASH = (
+    '{"id": "f.py::ok", "status": "ok", "s": 1}\n{"start": "f.py::crash"}\n'
+    '{"done": -11, "wall": 3.0, "peak_mb": 375.0}\n'
+)
+_NEAR = '{"start": "f.py::ok"}\n{"done": -9, "wall": 3.0, "peak_mb": 4000.0}\n'
+_FOUR = [{'ids': ['f.py::ok', 'f.py::crash', 'f.py::x', 'f.py::y']}]
+
+
+def test_a_low_peak_signal_is_the_tests_own_crash_decided_and_never_bisected() -> None:
+    """Measured 2026-11-23: a test that faults its own item at 375 MB was bisected as out_of_memory for 4 rounds."""
+    cells: dict[str, dict[str, object]] = {}
+    pending, killed, _ = fold(
+        _FOUR, {0: _CRASH}, cells, Measured.of({}), shards=[(0, 1)], walls=[5.0], limit_mb={0: _LIMIT_MB}
+    )
+    assert cells['f.py::crash']['status'] == 'rejected'
+    reason = cells['f.py::crash']['reason']
+    assert reason['kind'] == 'killed'
+    assert 'signal 11' in reason['text']
+    assert '375 MB' in reason['text']
+    assert pending == [['f.py::x', 'f.py::y']], 'the cut id is decided; the ids after it re-run whole'
+    assert not killed
+    lost = round_losses(_FOUR, {0: _CRASH}, shards=[(0, 1)], walls=[5.0], states={}, limit_mb={0: _LIMIT_MB})
+    assert [(one['id'], one['kind']) for one in lost] == [('f.py::crash', 'killed')]
+
+
+def test_a_near_limit_signal_keeps_the_out_of_memory_bisection() -> None:
+    """PLANTED CONTROL: the same signal at a peak near the limit is still memory, re-queued and halved."""
+    cells: dict[str, dict[str, object]] = {}
+    pending, killed, _ = fold(
+        _FOUR, {0: _NEAR}, cells, Measured.of({}), shards=[(0, 1)], walls=[5.0], limit_mb={0: _LIMIT_MB}
+    )
+    assert cells == {}
+    assert pending == [['f.py::ok', 'f.py::crash'], ['f.py::x', 'f.py::y']]
+    assert killed
+    lost = round_losses(_FOUR, {0: _NEAR}, shards=[(0, 1)], walls=[5.0], states={}, limit_mb={0: _LIMIT_MB})
+    assert [(one['id'], one['kind']) for one in lost] == [('f.py::ok', 'out_of_memory')]
