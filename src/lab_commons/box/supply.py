@@ -13,7 +13,9 @@ before a claim showed its load never lends what a declaration already owns.
 
 A TOOL SEAT IS SUPPLY LIKE A CORE (2026-10-25). Its size is its tool's supply as its own probe measures it
 (:func:`lab_commons.box.providers.seat_sizes`; the declared ``[capabilities]`` count when there is no probe,
-1 when undeclared). A seat whose row declares ``in_use = { process = [images] }`` is also OBSERVED:
+1 for an undeclared exclusion seat, REFUSED for an undeclared vendor tool --
+:func:`~lab_commons.box.machine.seat_size`). A seat whose row declares ``in_use = { process = [images] }`` is
+also OBSERVED:
 the running processes of those images are its seats in use now, so a solve a person starts outside the ledger
 takes its seat. Then
 
@@ -42,7 +44,7 @@ from typing import Final
 
 from lab_commons.box.demand import GB, Capacity, Holding
 from lab_commons.box.devices import KINDS, NAMES, PRECISIONS, VRAM_GB, Devices, free, free_gib, read_devices
-from lab_commons.box.machine import provided, watched
+from lab_commons.box.machine import provided, seat_size, watched
 from lab_commons.compute.model import Resources
 from lab_commons.config import section
 from lab_commons.proc import _process_rows, process_tree, system_memory, working_set_bytes
@@ -181,7 +183,7 @@ def _seats_left(name: str, capacity: Capacity, held: Sequence[Holding], reading:
         if name in reading.unseen or name not in reading.seats_in_use:
             return 0
         claimed = max(claimed, reading.seats_in_use[name])
-    return capacity.seats.get(name, 1) - claimed
+    return seat_size(capacity.seats, name) - claimed
 
 
 def _device_view(name: str, devices: Devices, held: Sequence[Holding]) -> int:
