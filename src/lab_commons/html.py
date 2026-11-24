@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
 from html import escape
@@ -22,7 +22,13 @@ from lab_commons.compute.durable import durable_write
 
 __all__ = [
     'NAVIGATION_ID',
+    'Cell',
+    'Column',
+    'Markup',
     'ReportIdentity',
+    'data_table',
+    'data_table_css',
+    'data_table_script',
     'html_document',
     'key_value_table',
     'navigation_script',
@@ -33,6 +39,7 @@ __all__ = [
 
 _INVALID_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _SCRIPT_ID = re.compile(r'[A-Za-z][A-Za-z0-9_-]*\Z')
+_CLASS_NAMES = re.compile(r'[A-Za-z_-][A-Za-z0-9_-]*( [A-Za-z_-][A-Za-z0-9_-]*)*\Z')
 _DEVICE_NAMES = frozenset(
     {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'}
     | {f'{prefix}{i}' for prefix in ('COM', 'LPT') for i in '123456789¹²³'}
@@ -157,6 +164,7 @@ def html_document(
     javascript: str = '',
     json_data: Mapping[str, object] | None = None,
     navigation: Mapping[str, object] | None = None,
+    data_tables: bool = False,
 ) -> str:
     """Wrap trusted producer markup and safe data in one UTF-8 HTML document.
 
@@ -172,6 +180,8 @@ def html_document(
             :data:`NAVIGATION_ID` block with :func:`navigation_script` ahead of
             ``javascript``, which calls ``LabNavigation.start(hooks)`` with its items and
             ``group``/``groupTitle``/``itemTitle``/``show`` hooks.
+        data_tables: Embed :func:`data_table_css` and :func:`data_table_script`, which make
+            every :func:`data_table` in the page sortable and filterable.
 
     Returns:
         A standalone document shell; asset or plotting dependencies remain explicit
@@ -187,6 +197,9 @@ def html_document(
             raise ValueError(message)
         data[NAVIGATION_ID] = navigation
         javascript = f'{navigation_script()}\n{javascript}'
+    if data_tables:
+        javascript = f'{data_table_script()}\n{javascript}'
+        css = f'{data_table_css()}\n{css}'
     for identity, value in data.items():
         if not isinstance(identity, str) or not _SCRIPT_ID.fullmatch(identity):
             message = f'invalid JSON script element identity: {identity!r}'
@@ -257,3 +270,115 @@ def key_value_table(values: Mapping[object, object], *, min_col_width: int = 200
         f'<div class="responsive-table" style="--min-col-width:{min_col_width}px;">'
         '<div class="responsive-grid">' + ''.join(items) + '</div></div>'
     )
+
+
+@dataclass(frozen=True)
+class Markup:
+    """Producer-rendered HTML a :func:`data_table` cell embeds verbatim: the only opt-out of escaping."""
+
+    html: str
+
+    def __post_init__(self) -> None:
+        """Refuse anything but a string, so a value never reaches the page unescaped by accident."""
+        if not isinstance(self.html, str):
+            message = 'Markup wraps producer-rendered HTML text only'
+            raise TypeError(message)
+
+
+def _check_classes(css_class: str | None) -> None:
+    if css_class is not None and not _CLASS_NAMES.fullmatch(css_class):
+        message = f'invalid class attribute: {css_class!r}'
+        raise ValueError(message)
+
+
+@dataclass(frozen=True)
+class Column:
+    """A :func:`data_table` header: escaped label, optional hover title and class names."""
+
+    label: str
+    title: str | None = None
+    css_class: str | None = None
+
+    def __post_init__(self) -> None:
+        """Class names are plain tokens; label and title are escaped on render."""
+        _check_classes(self.css_class)
+
+
+@dataclass(frozen=True)
+class Cell:
+    """A :func:`data_table` cell with class names or a hover title; a bare value needs no wrapper."""
+
+    value: object
+    css_class: str | None = None
+    title: str | None = None
+
+    def __post_init__(self) -> None:
+        """Class names are plain tokens; value and title are escaped on render."""
+        _check_classes(self.css_class)
+
+
+def _attributes(css_class: str | None, title: str | None) -> str:
+    out = f' class="{css_class}"' if css_class else ''
+    return out + (f' title="{escape(title)}"' if title else '')
+
+
+def _content(value: object) -> str:
+    if isinstance(value, Markup):
+        return value.html
+    return '-' if value is None else escape(str(value))
+
+
+def _cell(value: object) -> str:
+    if isinstance(value, Cell):
+        return f'<td{_attributes(value.css_class, value.title)}>{_content(value.value)}</td>'
+    return f'<td>{_content(value)}</td>'
+
+
+def data_table(
+    columns: Sequence[str | Column],
+    rows: Sequence[Sequence[object]],
+    *,
+    caption: str | None = None,
+    filterable: bool = True,
+    table_id: str | None = None,
+) -> str:
+    """Render a table the packaged script makes sortable (every header) and filterable.
+
+    Values are escaped text (``None`` shows as ``-``); wrap producer-rendered HTML such as a link
+    in :class:`Markup`, and use :class:`Cell`/:class:`Column` for class names and hover titles.
+    The page needs :func:`data_table_script` and :func:`data_table_css` once, which
+    ``html_document(data_tables=True)`` embeds; a page assembled elsewhere includes them itself.
+    """
+    if table_id is not None and not _SCRIPT_ID.fullmatch(table_id):
+        message = f'invalid table element identity: {table_id!r}'
+        raise ValueError(message)
+    head = ''.join(
+        f'<th{_attributes(c.css_class, c.title)}>{escape(c.label)}</th>'
+        if isinstance(c, Column)
+        else f'<th>{escape(str(c))}</th>'
+        for c in columns
+    )
+    body = []
+    for number, row in enumerate(rows):
+        if len(row) != len(columns):
+            message = f'row {number} has {len(row)} cells, expected {len(columns)}'
+            raise ValueError(message)
+        body.append('<tr>' + ''.join(_cell(value) for value in row) + '</tr>')
+    attributes = (f' id="{table_id}"' if table_id else '') + ('' if filterable else ' data-lab-filter="off"')
+    return (
+        f'<div class="lab-table-wrap"><table data-lab-table class="lab-table"{attributes}>'
+        + (f'<caption>{escape(caption)}</caption>' if caption is not None else '')
+        + f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
+    )
+
+
+@cache
+def data_table_script() -> str:
+    """The packaged browser script defining ``LabDataTable``; wires every :func:`data_table` on load."""
+    return files('lab_commons').joinpath('html_assets', 'data_table.js').read_text(encoding='utf-8')
+
+
+@cache
+def data_table_css() -> str:
+    """The packaged stylesheet for :func:`data_table`: sticky headers and sort indicators."""
+    return files('lab_commons').joinpath('html_assets', 'data_table.css').read_text(encoding='utf-8')
