@@ -160,7 +160,7 @@ def test_a_job_declares_itself_rerun_safe_and_its_placement_reads_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / 'job.toml'
-    path.write_text('[job]\nrerun_safe = true\n[cost]\ncpus = 8\nmem_gb = 16\nseconds = 600\n', encoding='utf-8')
+    path.write_text('[job]\nrerun_safe = true\n[cost]\ncpus = 8\nmem = "16 GiB"\nwall = "10 min"\n', encoding='utf-8')
     config = load_config(path)
     assert config.job.rerun_safe
     pool = {g.slurm_account: snapshot for g, snapshot in _pool([350, 350, 350, 350, 0])}  # only the region has room

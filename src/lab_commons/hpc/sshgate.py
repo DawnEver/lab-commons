@@ -9,10 +9,11 @@ dozens of ssh connections in poll loops until the login nodes refused ssh. So th
   every agent and session on the machine rides ONE connection per host. Windows: OpenSSH for Windows has no
   multiplexing, so a machine-wide per-host file lock serializes the calls -- at most one live ssh per host.
 - RATE, machine-wide, per host (a state file under the same lock): a door invocation (one runner, however many
-  commands it sends) takes one slot; slots are at least ``min_interval_s`` apart and at most ``max_per_window``
-  per ``window_s``. Over the limit it REFUSES (:class:`RateLimited`) naming the wait and the server-side
-  pollers; only the window refuses -- the interval is waited out in the door, at most one interval.
-  Defaults :data:`LIMITS`; the machine file's ``[hpc.ssh]`` overrides them.
+  commands it sends) takes one slot; slots are at least ``min_interval`` apart and at most ``max_per_window``
+  per ``window`` (each a duration, ``"5 s"``, :mod:`lab_commons.quantity`). Over the limit it REFUSES
+  (:class:`RateLimited`) naming the wait and the server-side pollers; only the window refuses -- the interval is
+  waited out in the door, at most one interval. Defaults :data:`LIMITS`; the machine file's ``[hpc.ssh]``
+  overrides them.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from typing import Any, Final
 
 from lab_commons.config import machine
 from lab_commons.home import part
+from lab_commons.quantity import Renamed, parse, refuse_renamed
 
 __all__ = ['LIMITS', 'PERSIST', 'Gate', 'Limits', 'RateLimited', 'limits_of']
 
@@ -53,15 +55,25 @@ class Limits:
 
 
 LIMITS: Final = Limits()
+#: ``[hpc.ssh]``'s duration keys and the :class:`Limits` field (seconds) each fills.
+_DURATIONS: Final = {'min_interval': 'min_interval_s', 'window': 'window_s'}
+_KEYS: Final = frozenset({*_DURATIONS, 'max_per_window'})
+#: The unit-suffixed spellings the 2026-11-25 ruling retired, refused with their new line; never read.
+_RENAMED: Final = {'min_interval_s': Renamed('min_interval', 's'), 'window_s': Renamed('window', 's')}
 
 
 def limits_of(table: dict[str, Any] | None = None) -> Limits:
-    """The machine file's ``[hpc.ssh]`` over :data:`LIMITS`; an unknown key is refused by name."""
+    """The machine file's ``[hpc.ssh]`` over :data:`LIMITS`; a retired or unknown key is refused by name."""
     raw = (machine().get('hpc', {}) if table is None else table).get('ssh', {})
-    if unknown := set(raw) - set(Limits.__dataclass_fields__):
-        msg = f'[hpc.ssh] has unknown keys {sorted(unknown)}; known: {sorted(Limits.__dataclass_fields__)}'
+    refuse_renamed('[hpc.ssh]', raw, _RENAMED)
+    if unknown := set(raw) - _KEYS:
+        msg = f'[hpc.ssh] has unknown keys {sorted(unknown)}; known: {sorted(_KEYS)}'
         raise ValueError(msg)
-    return Limits(**raw)
+    values = {
+        _DURATIONS.get(key, key): parse(f'[hpc.ssh] {key}', value, 'duration') if key in _DURATIONS else value
+        for key, value in raw.items()
+    }
+    return Limits(**values)
 
 
 class RateLimited(RuntimeError):

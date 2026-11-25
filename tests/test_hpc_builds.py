@@ -202,13 +202,17 @@ def test_the_lock_keys_the_venv_and_no_remote_is_asked(repo: Path) -> None:
 
 
 def test_the_per_scope_timeout_is_declared_data_and_an_unknown_scope_is_refused() -> None:
-    text = '[tool.lab_commons.hpc]\ntimeout_s = {incremental = 300, full = 3000}\n'
+    text = '[tool.lab_commons.hpc]\ntimeout = {incremental = "5 min", full = "3000 s"}\n'
     assert read_builds(text).timeout_s == {'incremental': 300, 'full': 3000}
     assert read_builds('[tool.lab_commons.hpc]\n').timeout_s == {}
-    with pytest.raises(ValueError, match='timeout_s'):
-        read_builds('[tool.lab_commons.hpc]\ntimeout_s = {heavy = 3000}\n')
-    with pytest.raises(ValueError, match='timeout_s'):
-        read_builds('[tool.lab_commons.hpc]\ntimeout_s = {full = 0}\n')
+    with pytest.raises(ValueError, match='timeout'):
+        read_builds('[tool.lab_commons.hpc]\ntimeout = {heavy = "50 min"}\n')
+    with pytest.raises(ValueError, match=r'timeout\.full = "0 s" must be positive'):
+        read_builds('[tool.lab_commons.hpc]\ntimeout = {full = "0 s"}\n')
+    with pytest.raises(ValueError, match=r'timeout\.full = 3000 is a bare number'):
+        read_builds('[tool.lab_commons.hpc]\ntimeout = {full = 3000}\n')
+    with pytest.raises(ValueError, match=r'timeout_s .* is retired.*write timeout = \{ incremental = "300 s" \}'):
+        read_builds('[tool.lab_commons.hpc]\ntimeout_s = {incremental = 300}\n')
 
 
 def test_no_test_wall_passes_the_declared_ceiling_however_inflated_its_measurement() -> None:
@@ -221,15 +225,15 @@ def test_no_test_wall_passes_the_declared_ceiling_however_inflated_its_measureme
     assert wall.bound(104799.0) == 7200, 'the measured floor of the incident, held to the ceiling'
     assert wall.bound(60.0) == 600, 'a sane measurement is untouched'
     assert ItemWall().bound(1e9) == ItemWall().ceiling_s
-    text = '[tool.lab_commons.hpc]\nitem_wall = {ceiling_s = 1800}\n'
+    text = '[tool.lab_commons.hpc]\nitem_wall = {ceiling = "30 min"}\n'
     assert read_builds(text).item_wall.ceiling_s == 1800
     assert read_builds(text).item_wall.bound(None) == 1800, 'the unmeasured default is held too'
-    with pytest.raises(ValueError, match='ceiling_s'):
-        read_builds('[tool.lab_commons.hpc]\nitem_wall = {ceiling_s = 200}\n')
+    with pytest.raises(ValueError, match='floor may not pass ceiling'):
+        read_builds('[tool.lab_commons.hpc]\nitem_wall = {ceiling = "200 s"}\n')
 
 
 def test_the_per_test_wall_is_declared_data_with_one_set_of_defaults() -> None:
-    text = '[tool.lab_commons.hpc]\nitem_wall = {multiple = 5, floor_s = 120}\n'
+    text = '[tool.lab_commons.hpc]\nitem_wall = {multiple = 5, floor = "2 min"}\n'
     assert read_builds(text).item_wall == ItemWall(multiple=5, floor_s=120)
     assert read_builds('[tool.lab_commons.hpc]\n').item_wall == ItemWall()
     assert ItemWall(multiple=5, floor_s=120).bound(100.0) == 500
@@ -237,8 +241,12 @@ def test_the_per_test_wall_is_declared_data_with_one_set_of_defaults() -> None:
     assert ItemWall(unmeasured_s=900).bound(None) == 900
     with pytest.raises(ValueError, match='item_wall'):
         read_builds('[tool.lab_commons.hpc]\nitem_wall = {ceiling = 3}\n')
+    with pytest.raises(ValueError, match=r'item_wall\.floor = "0 s" must be positive'):
+        read_builds('[tool.lab_commons.hpc]\nitem_wall = {floor = "0 s"}\n')
     with pytest.raises(ValueError, match='item_wall'):
-        read_builds('[tool.lab_commons.hpc]\nitem_wall = {floor_s = 0}\n')
+        read_builds('[tool.lab_commons.hpc]\nitem_wall = {multiple = "5 s"}\n')
+    with pytest.raises(ValueError, match=r'item_wall floor_s = 120 is retired.*write floor = "120 s"'):
+        read_builds('[tool.lab_commons.hpc]\nitem_wall = {floor_s = 120}\n')
 
 
 def test_a_job_declares_the_needs_its_environment_serves(tmp_path: Path) -> None:

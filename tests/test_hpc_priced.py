@@ -69,23 +69,27 @@ def test_a_file_key_floors_the_files_peak_and_its_wall() -> None:
     assert priced.estimate([[LIGHT]], Cost(seconds=60))[0] == [900.0], 'a declared file is not unmeasured'
 
 
-GOOD: Final = f'"{HEAVY}" = {{ mem_gb = 9.6, wall_s = 750 }}\n"tests/b.py" = {{ mem_gb = 3 }}\n'
+GOOD: Final = f'"{HEAVY}" = {{ mem = "9.6 GiB", wall = "750 s" }}\n"tests/b.py" = {{ mem = "3 GiB" }}\n'
 
 
 def test_a_wellformed_file_reads_as_floors() -> None:
-    assert read_priced(GOOD, 'priced.toml') == {HEAVY: {'mem_gb': 9.6, 'wall_s': 750.0}, 'tests/b.py': {'mem_gb': 3.0}}
+    floors = read_priced(GOOD, 'priced.toml')
+    assert floors == {HEAVY: {'mem_gb': pytest.approx(9.6, abs=1e-9), 'wall_s': 750.0}, 'tests/b.py': {'mem_gb': 3.0}}
 
 
 @pytest.mark.parametrize(
     ('text', 'named'),
     [
-        (f'"{HEAVY}" = {{ mem_gb = 9, rss = 3 }}\n', 'rss'),
-        (f'"{HEAVY}" = {{ mem_gb = -1 }}\n', 'mem_gb'),
-        (f'"{HEAVY}" = {{ wall_s = true }}\n', 'wall_s'),
+        (f'"{HEAVY}" = {{ mem = "9 GiB", rss = 3 }}\n', 'rss'),
+        (f'"{HEAVY}" = {{ mem = "-1 GiB" }}\n', 'mem = "-1 GiB" must be positive'),
+        (f'"{HEAVY}" = {{ wall = true }}\n', 'wall = True is not a quantity'),
+        (f'"{HEAVY}" = {{ mem = 9 }}\n', 'mem = 9 is a bare number'),
+        (f'"{HEAVY}" = {{ mem_gb = 9 }}\n', 'mem_gb = 9 is retired (user ruling 2026-11-25'),
+        (f'"{HEAVY}" = {{ wall_s = 750 }}\n', 'write wall = "750 s"'),
         (f'"{HEAVY}" = {{}}\n', HEAVY),
         (f'"{HEAVY}" = 9\n', HEAVY),
-        ('"cases/x" = { mem_gb = 1 }\n', 'cases/x'),
-        ('"tests/b.py" = { mem_gb = 1 \n', 'priced.toml'),
+        ('"cases/x" = { mem = "1 GiB" }\n', 'cases/x'),
+        ('"tests/b.py" = { mem = "1 GiB" \n', 'priced.toml'),
     ],
 )
 def test_a_malformed_file_is_refused_by_name(text: str, named: str) -> None:
