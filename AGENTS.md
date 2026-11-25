@@ -2,7 +2,8 @@
 
 The family's shared runtime and execution layer. Python package `lab_commons`:
 
-- Runtime: `units`, `paths`, `file_io`, `log`, `structured`, `config`, `credentials`, `outcomes`, `viz`.
+- Runtime: `units`, `paths`, `file_io`, `log`, `structured`, `config`, `credentials`, `outcomes`, `viz`,
+  `graph_layout` (domain-free box placement and orthogonal wire routing; the domain is the caller's adapter).
 - Execution: `box` (one machine ledger), `compute` (units, results, executors), `hpc` (cluster tier),
   `supervise` (process supervision), and their helpers (`proc`, `liveness`, `resources`, `envkey`, ...).
 - Desktop: `desktop` -- see and act on a host's GUI windows (`python -m lab_commons.desktop ... --json`).
