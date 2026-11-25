@@ -6,7 +6,8 @@ writes ``memory = "32 GiB"`` instead -- the VALUE carries its unit -- and every 
 through :func:`parse`, the one boundary where a unit is read. Machine memory is written in GiB.
 
 WHAT :func:`parse` RETURNS: the magnitude in the BASE unit of its dimension (:data:`DIMENSIONS`) -- seconds for a
-duration, bytes for a size -- so every reader computes in one unit and converts nowhere else.
+duration, bytes for a size, a fraction for a percentage (``"90 %"`` -> 0.9) -- so every reader computes in one unit
+and converts nowhere else.
 
 WHAT IT REFUSES, each naming the key and the dimension it expected, with a value to copy: a bare number (the
 defect itself: ``32`` or ``"32"``), a value of another dimension (``"32 min"`` for a size), and a unit pint does
@@ -59,7 +60,11 @@ class Dimension:
 DIMENSIONS: Final[Mapping[str, Dimension]] = {
     'duration': Dimension('second', 's', '10 min'),
     'size': Dimension('bit', 'B', '32 GiB'),
+    'fraction': Dimension('percent', '', '90 %'),
 }
+#: A fraction is written in percent; pint reads ``"90 %"`` as the bare number 0.9 (unitless, like ``"0.9"``), so
+#: the percent sign is checked in the TEXT, never by pint.
+_PERCENT: Final = re.compile(r'^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(?:%|percent)\s*$')
 
 
 @dataclass(frozen=True)
@@ -89,7 +94,7 @@ def _shown(value: object) -> str:
 
 
 def parse(key: str, value: object, dimension: str, *, positive: bool = False) -> float:
-    """*value* (declared as *key*) in the base unit of *dimension* -- seconds or bytes.
+    """*value* (declared as *key*) in the base unit of *dimension* -- seconds, bytes, or a fraction (90 % -> 0.9).
 
     Raises:
         QuantityRefused: *value* is not a string with a number and a unit of *dimension* (or, with *positive*,
@@ -110,6 +115,8 @@ def parse(key: str, value: object, dimension: str, *, positive: bool = False) ->
     if not _NUMBER.match(value):
         msg = f'{shown} carries no number: write the {dimension} as a number and a unit, such as "{want.example}"'
         raise QuantityRefused(msg)
+    if dimension == 'fraction':
+        return _fraction(shown, value, want, positive=positive)
     ureg = _registry()
     try:
         quantity = ureg.Quantity(value)
@@ -121,10 +128,21 @@ def parse(key: str, value: object, dimension: str, *, positive: bool = False) ->
         raise QuantityRefused(msg)
     root = quantity.to_root_units().units
     if root != ureg.Unit(want.root):
-        other = next((name for name, d in DIMENSIONS.items() if root == ureg.Unit(d.root)), 'another dimension')
-        msg = f'{shown} is a {other}, not a {dimension}: write one such as "{want.example}"'
+        other = next((f'a {name}' for name, d in DIMENSIONS.items() if root == ureg.Unit(d.root)), 'another dimension')
+        msg = f'{shown} is {other}, not a {dimension}: write one such as "{want.example}"'
         raise QuantityRefused(msg)
     number = float(quantity.m_as(want.base))
+    if not math.isfinite(number) or (positive and number <= 0):
+        msg = f'{shown} must be positive and finite: write one such as "{want.example}"'
+        raise QuantityRefused(msg)
+    return number
+
+
+def _fraction(shown: str, text: str, want: Dimension, *, positive: bool) -> float:
+    if (match := _PERCENT.match(text)) is None:
+        msg = f'{shown} is not a percentage: write one such as "{want.example}"'
+        raise QuantityRefused(msg)
+    number = float(match.group(1)) / 100
     if not math.isfinite(number) or (positive and number <= 0):
         msg = f'{shown} must be positive and finite: write one such as "{want.example}"'
         raise QuantityRefused(msg)

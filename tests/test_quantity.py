@@ -38,6 +38,8 @@ def test_a_wrong_dimension_is_refused_naming_both() -> None:
         parse('memory', '32 min', 'size')
     with pytest.raises(QuantityRefused, match=r'test = "10 GiB" is a size, not a duration'):
         parse('test', '10 GiB', 'duration')
+    with pytest.raises(QuantityRefused, match=r'memory = "32 rad" is another dimension, not a size'):
+        parse('memory', '32 rad', 'size')
 
 
 def test_an_unknown_unit_is_refused_naming_the_key() -> None:
@@ -66,7 +68,7 @@ def test_an_unknown_dimension_is_a_caller_bug() -> None:
 
 def test_every_dimension_declares_its_base_and_example() -> None:
     """The examples a refusal teaches must themselves parse, or the door names a wall."""
-    assert set(quantity.DIMENSIONS) == {'duration', 'size'}
+    assert set(quantity.DIMENSIONS) == {'duration', 'size', 'fraction'}
     for name, dimension in quantity.DIMENSIONS.items():
         assert parse('k', dimension.example, name) > 0
 
@@ -95,3 +97,14 @@ def test_a_table_without_a_renamed_key_passes() -> None:
 def test_the_module_imports_with_the_standard_library_alone() -> None:
     """Pint is paid by a PARSE, never by an import: hooks and CLIs import readers they never call."""
     assert 'pint' not in quantity.__dict__
+
+
+def test_a_percentage_is_a_fraction_and_its_sign_is_required() -> None:
+    """Pint reads "90 %" as the bare 0.9, so the sign is checked in the text: "0.9" alone is the defect."""
+    assert parse('disk_ceiling', '90 %', 'fraction') == pytest.approx(0.9, abs=1e-12)
+    assert parse('disk_ceiling', '12.5 percent', 'fraction') == pytest.approx(0.125, abs=1e-12)
+    for bad in ('0.9', '90', '90 pct', '90 GiB'):
+        with pytest.raises(QuantityRefused, match=r'disk_ceiling = .* is not a percentage.*"90 %"'):
+            parse('disk_ceiling', bad, 'fraction')
+    with pytest.raises(QuantityRefused, match='bare number'):
+        parse('disk_ceiling', 90, 'fraction')
