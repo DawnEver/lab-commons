@@ -2,7 +2,7 @@
 
 The box admits on cpu, memory, seats and devices; a run also WRITES, and a full volume blocks every session that
 shares it (WS2, 2026-11-01: D: down to 0.1 MB, nothing warned). The bound is the ONE machine floor every cache
-already keeps (:func:`lab_commons.storage.free_floor`, ``[storage] free_floor_gb``, default 50 GiB; capped by a
+already keeps (:func:`lab_commons.storage.free_floor`, ``[storage] free_floor``, default "50 GiB"; capped by a
 declared quota, :mod:`lab_commons.headroom`) -- never a second constant.
 
 :func:`verdict` measures the volumes a run writes (:func:`volumes`: the box ledger's and the working directory's,
@@ -32,7 +32,7 @@ _GIB: Final = 1024**3
 #: What frees space on a development machine, named in every refusal and warning.
 _DOORS: Final = (
     'free space there (stale worktree venvs, scratch trees and regenerable output are the usual holders), '
-    'or lower [storage] free_floor_gb in the machine file (lab_commons.storage)'
+    'or lower [storage] free_floor in the machine file (lab_commons.storage)'
 )
 
 

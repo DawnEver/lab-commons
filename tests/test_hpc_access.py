@@ -18,7 +18,7 @@ from lab_commons.hpc.grants import ACCESS_RULE, AccessRefused, Budget, Grant, ch
 from lab_commons.hpc.plan import Plan
 
 _VERIFIER = 'lc_test_session_verifier'
-_WINDOW = {'core_hours': 100, 'since': '2026-01-01', 'until': '2028-01-01'}
+_WINDOW = {'core_time': '100 h', 'since': '2026-01-01', 'until': '2028-01-01'}
 
 
 def _declared(reach: list[str], **extra: object) -> dict[str, Any]:
@@ -38,7 +38,7 @@ def _declared(reach: list[str], **extra: object) -> dict[str, Any]:
                 'slurm_accounts': {
                     'proj': {
                         'billed': True,
-                        'budget': {'core_hours': 100, 'since': '2026-01-01', 'until': '2028-01-01'},
+                        'budget': _WINDOW,
                     }
                 },
             },
@@ -114,7 +114,8 @@ def test_the_cluster_facts_reach_each_grant_once_declared() -> None:
     assert paid.hosts == ('p1',)
     assert paid.root == '/work/proj/pay', "a root override is the cluster's, the user filled in"
     assert paid.billed
-    assert paid.budget == Budget(core_hours=100, since='2026-01-01', until='2028-01-01')
+    assert paid.budget == Budget(core_time=100 * 3600.0, since='2026-01-01', until='2028-01-01')
+    assert paid.budget.core_hours == pytest.approx(100.0, abs=1e-9)
     assert not machine.grant('res').billed
     assert machine.grant('res').root == '', 'planted control: no override, trees live under home'
 
@@ -135,7 +136,11 @@ _PLAN = Plan(
     shards=((0, 1), (1, 2)), throttle=2, free_slots=2, makespan_minutes=60.0,
 )  # fmt: skip
 _PAID = Grant(
-    user='pay', hosts=('p1',), slurm_account='proj', billed=True, budget=Budget(100, '2026-01-01', '2028-01-01')
+    user='pay',
+    hosts=('p1',),
+    slurm_account='proj',
+    billed=True,
+    budget=Budget(100 * 3600.0, '2026-01-01', '2028-01-01'),
 )
 _FREE = Grant(user='res', hosts=('f1',), slurm_account='acct-a')
 
@@ -221,3 +226,17 @@ def test_the_ledger_counts_only_the_window() -> None:
         user='pay', hosts=('p1',), slurm_account='proj', billed=True, budget=Budget(100, '2026-01-01', '2027-01-01')
     )
     assert '-E 2026-12-31T23:59:59' in budgetdoor.ledger_command(late, today=date(2026, 12, 31)), 'never past until'
+
+
+@pytest.mark.usefixtures('session_roles')
+def test_a_budget_carries_its_unit_and_the_old_key_is_refused_with_its_new_line() -> None:
+    """FORMATS-MIGRATE-ONCE (user ruling 2026-11-25): ``core_hours = 100`` is never read; its refusal is its line."""
+    old = _declared(['research'])
+    old['clusters']['paid']['slurm_accounts']['proj']['budget'] = {**_WINDOW, 'core_hours': 100}
+    del old['clusters']['paid']['slurm_accounts']['proj']['budget']['core_time']
+    with pytest.raises(ValueError, match=r'budget core_hours = 100 is retired.*write core_time = "100 h"'):
+        load_grants(old)
+    bare = _declared(['research'])
+    bare['clusters']['paid']['slurm_accounts']['proj']['budget'] = {**_WINDOW, 'core_time': 100}
+    with pytest.raises(ValueError, match=r'core_time = 100 is a bare number.*"100 min"'):
+        load_grants(bare)

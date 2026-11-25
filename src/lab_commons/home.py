@@ -20,8 +20,8 @@ a writer with no configured repo is refused, never given a fallback directory.
 
 THE TOOLS TABLE (:func:`tools_table`). ``[tools]`` has exactly two keys: ``install_root`` (the absolute directory
 the user confirmed an external tool may be installed into, e.g. ``<X>:/Program Files/``; it joins the write roots)
-and ``min_free_gb`` (the free space an install needs there). Any other key is refused by name. The toolchain's
-own managed tool root is :func:`tools`.
+and ``min_free`` (the free space an install needs there, a size such as ``"5 GiB"``). Any other key is refused by
+name. The toolchain's own managed tool root is :func:`tools`.
 
 OUTSIDE THE POLICY (:func:`exempt`): the agent hosts' own configuration (:data:`AGENT_HOMES` under the user's
 home -- Claude Code, Codex and Antigravity -- never touched by the toolchain) and the AGENT repos of
@@ -49,6 +49,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+
+from lab_commons.quantity import Renamed, parse, refuse_renamed
 
 __all__ = [
     'AGENT_HOMES',
@@ -160,10 +162,12 @@ class Tools:
     """The ``[tools]`` table: where the user lets an external tool install, and the free space it needs."""
 
     install_root: Path | None
-    min_free_gb: float | None
+    min_free: int | None  # bytes
 
 
-_TOOLS_KEYS: Final = frozenset({'install_root', 'min_free_gb'})
+_TOOLS_KEYS: Final = frozenset({'install_root', 'min_free'})
+#: Unit-suffixed keys retired by the 2026-11-25 ruling, refused with the line that replaces them; never read.
+_TOOLS_RENAMED: Final = {'min_free_gb': Renamed('min_free', 'GiB')}
 
 
 def _table(name: str) -> object:
@@ -177,19 +181,17 @@ def tools_table() -> Tools:
     if not isinstance(table, dict):
         msg = f'{path}: [tools] must be a table'
         raise TypeError(msg)
+    refuse_renamed(f'{path}: [tools]', table, _TOOLS_RENAMED)
     if unknown := sorted(set(table) - _TOOLS_KEYS):
         msg = f'{path}: [tools] has unknown key(s) {unknown}; the keys are {sorted(_TOOLS_KEYS)}'
         raise ValueError(msg)
-    root, size = table.get('install_root'), table.get('min_free_gb')
+    root, size = table.get('install_root'), table.get('min_free')
     if root is not None and (not isinstance(root, str) or not Path(root).expanduser().is_absolute()):
         msg = f'{path}: [tools] install_root = {root!r} must be an absolute path'
         raise ValueError(msg)
-    if size is not None and (isinstance(size, bool) or not isinstance(size, int | float)):
-        msg = f'{path}: [tools] min_free_gb = {size!r} must be a number'
-        raise ValueError(msg)
     return Tools(
         install_root=None if root is None else Path(root).expanduser(),
-        min_free_gb=None if size is None else float(size),
+        min_free=None if size is None else int(parse(f'{path}: [tools] min_free', size, 'size', positive=True)),
     )
 
 

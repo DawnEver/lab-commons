@@ -1,10 +1,10 @@
 """QUOTA PROTECTION FOR A BILLED ACCOUNT: every ``sbatch`` on it is charged against its declared TOTAL budget first.
 
 A billed Slurm account (``[hpc.clusters.<name>.slurm_accounts.<account>] billed = true``) declares
-``budget = { core_hours, since, until }`` (:class:`lab_commons.hpc.grants.Budget`). Before any submission on it,
+``budget = { core_time, since, until }`` (:class:`lab_commons.hpc.grants.Budget`). Before any submission on it,
 :func:`charge` reads the grant's own login's ledger ONCE from ``sacct`` and refuses (:class:`OverBudget`) unless
 
-    spent + committed + ask <= core_hours
+    spent + committed + ask <= core_time   (summed in core-hours)
 
 * ``spent``: ``CPUTimeRAW`` of every finished job the grant's own login ran on the account inside
   ``[since, until)`` -- never another user's: on a shared account their spend would refuse every submit of ours;
@@ -90,7 +90,7 @@ def charge(run: Runner, grant: Grant, ask_core_hours: float, *, today: date | No
     if grant.budget is None:
         msg = (
             f'{grant.name} is billed and declares no budget: declare [hpc.clusters.{grant.cluster_name or "<name>"}] '
-            f'slurm_accounts.{grant.slurm_account} budget = {{ core_hours = <total>, since = <YYYY-MM-DD>, '
+            f'slurm_accounts.{grant.slurm_account} budget = {{ core_time = "<total> h", since = <YYYY-MM-DD>, '
             'until = <YYYY-MM-DD> } '
             'before any submission spends it'
         )
