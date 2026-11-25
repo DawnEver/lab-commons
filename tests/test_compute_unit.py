@@ -87,7 +87,7 @@ def test_a_dirty_tree_is_local_only(tmp_path: Path) -> None:
     git('init', '-q')
     git('config', 'user.email', 'x@example.invalid')
     git('config', 'user.name', 'x')
-    (tmp_path / 'pyproject.toml').write_text('[tool.lab_commons.hpc]\ninstall = "uv sync"\n', encoding='utf-8')
+    (tmp_path / 'pyproject.toml').write_text('[tool.lab_commons.hpc]\n', encoding='utf-8')
     git('add', 'pyproject.toml')
     git('commit', '-q', '-m', 'init')
     clean = environment_here(tmp_path)

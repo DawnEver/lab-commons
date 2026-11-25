@@ -119,7 +119,7 @@ def test_the_machine_file_spells_the_observation() -> None:
 )
 def test_a_malformed_observation_is_refused(row: dict[str, object]) -> None:
     with pytest.raises(ValueError, match='in_use'):
-        provided({'jmag': row})
+        provided({'jmag': {'seats': 4, **row}})
 
 
 def test_no_seat_is_reserved_for_people() -> None:

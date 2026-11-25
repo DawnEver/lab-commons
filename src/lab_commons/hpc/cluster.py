@@ -26,8 +26,10 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 import lab_commons.launch as _door
+from lab_commons.dimensions import GPU
 from lab_commons.hpc.config import Config, JobSpec
 from lab_commons.hpc.grants import Grant
+from lab_commons.hpc.layout import JOBS, ROOT
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
 from lab_commons.hpc.sshgate import Gate
@@ -205,6 +207,8 @@ def probe(run: Runner, account: str = '') -> Snapshot:
 
 def _sh_path(path: str) -> str:
     """Quote a path for the shell while keeping a leading ``~`` expandable."""
+    if path == ROOT or path.startswith(f'{ROOT}/'):
+        return ROOT + shlex.quote(path[len(ROOT) :]) if len(path) > len(ROOT) else ROOT
     if path == '~' or path.startswith('~/'):
         return '"$HOME"' + (shlex.quote(path[1:]) if len(path) > 1 else '')
     return shlex.quote(path)
@@ -227,7 +231,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         '--ntasks=1',
         f'--cpus-per-task={plan.cpus}',
         f'--mem={plan.mem_mb}M',
-        f'--gres=gpu:{plan.gpus}' if plan.gpus else '',
+        f'--gres={GPU.name}:{plan.gpus}' if plan.gpus else '',  # Slurm's GRES name is the dimension's
         f'--time={plan.minutes}',
         f'--comment={plan.comment}' if plan.comment else '',
         # A task's output is node-local (below); Slurm writes no file of its own on the shared home.
@@ -254,12 +258,12 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
 
 
 def run_home(job: JobSpec) -> str:
-    """Where a job's run directories live: ``~/ci/jobs/<sha>`` for a job at a commit, else ``<workdir>/.lab-hpc``.
+    """Where a job's run directories live: ``<root>/jobs/<sha>`` for a job at a commit, else ``<workdir>/.lab-hpc``.
 
     A commit's jobs carry the sha in their submit directory, which ``squeue %Z`` reports, so retention reads
     which artifact a queued or running job needs (:mod:`dev_lab.dev.retentionplan`).
     """
-    return f'~/ci/jobs/{job.sha}' if job.sha else f'{job.workdir.rstrip("/")}/.lab-hpc'
+    return f'{JOBS}/{job.sha}' if job.sha else f'{job.workdir.rstrip("/")}/.lab-hpc'
 
 
 @dataclass(frozen=True)

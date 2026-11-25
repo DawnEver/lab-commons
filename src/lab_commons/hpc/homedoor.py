@@ -1,7 +1,7 @@
 """THE HOME DOOR: the quota guard every tree-making verb passes, the tick's home pass, and their CLI.
 
 ``python -m lab_commons.hpc tree acquire <repo-url> <sha> --purpose <why> [--ttl <hours>] [--holder <name>]``
-leases a commit's tree under ``~/ci/leases`` (:mod:`lab_commons.hpc.lease`) and prints its path;
+leases a commit's tree under ``<root>/leases`` (:mod:`lab_commons.hpc.lease`) and prints its path;
 ``tree release <sha>``, ``tree list`` and ``tree reap`` complete it. ``python -m lab_commons.hpc home`` prints the
 quota, the reaped leases and every stray directory -- exactly what the forge tick runs (:func:`home_pass`).
 
@@ -40,8 +40,8 @@ from lab_commons.hpc.home import (
     stray_text,
     strays,
 )
+from lab_commons.hpc.layout import UV_CACHE
 from lab_commons.hpc.lease import MAX_TTL_HOURS, LeaseRefused, Reaped, acquire, held, reap, release
-from lab_commons.hpc.shell import UV_CACHE
 from lab_commons.log import emit
 
 __all__ = ['HomeReport', 'QuotaRefused', 'env_hint', 'guard', 'home_main', 'home_pass', 'reach', 'tree_main']
@@ -156,7 +156,7 @@ def reach(at: str | None, grant: str | None) -> tuple[Runner, str]:
 def env_hint(tree: str) -> str:
     """How to build inside a leased *tree*: its env and build dirs live IN it, so the reap takes them too.
 
-    uv HARDLINKS from the one shared cache (``~/ci/uv-cache``, the run builds' own), so an env costs its directories,
+    uv HARDLINKS from the one shared cache (``<root>/cache/uv``, the run builds' own), so an env costs its directories,
     not a copy of every file -- per-tree caches were a large part of ``~/ab``'s 2.3 M files.
     """
     return (
@@ -177,7 +177,7 @@ def _reach_args(parser: argparse.ArgumentParser) -> None:
 def _tree_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='python -m lab_commons.hpc tree', description=__doc__.splitlines()[0])
     verbs = parser.add_subparsers(dest='verb', required=True)
-    get = verbs.add_parser('acquire', help='lease a commit tree under ~/ci/leases; prints its path')
+    get = verbs.add_parser('acquire', help='lease a commit tree under <root>/leases; prints its path')
     get.add_argument('repo_url')
     get.add_argument('sha')
     get.add_argument('--purpose', required=True, help='why: one line, e.g. "A/B of the mesh refine"')

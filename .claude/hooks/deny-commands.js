@@ -173,6 +173,7 @@ function commandWord(segment) {
  */
 function splitHeredocs(cmd) {
   const executed = [];
+  const shellBodies = [];
   let rest = '';
   let index = 0;
   const opener = /<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/g;
@@ -198,14 +199,18 @@ function splitHeredocs(cmd) {
     // EVERY command position, not just the first word: `timeout 900 python - <<PY` and
     // `uv run python - <<PY` both run an interpreter, and both read as `timeout`/`uv` at token
     // zero. Asking only `commandWord(opening)` reopened the 2026-08-22 evasion behind any wrapper.
-    if (commandPositions(opening).some((position) => INTERPRETERS.test(commandWord(position)))) executed.push(body);
+    const consumers = commandPositions(opening).map(commandWord);
+    if (consumers.some((word) => INTERPRETERS.test(word))) {
+      executed.push(body);
+      if (consumers.some((word) => SHELLS.test(word))) shellBodies.push(body);
+    }
 
     rest += cmd.slice(index, opener.lastIndex);
     index = bodyEnd;
     opener.lastIndex = bodyEnd;
   }
   rest += cmd.slice(index);
-  return { rest, executed };
+  return { rest, executed, shellBodies };
 }
 
 /** `-c <script>` payloads: executed text, whatever the surrounding quoting. */
@@ -218,11 +223,51 @@ function inlineScripts(line) {
 }
 
 /**
+ * Interpreter source with the CONTENT of its string literals blanked (quotes and newlines kept), so text a
+ * program only carries -- source it writes to a file, a message it prints -- is never read as a call it makes
+ * (O48, 2026-11-18: a heredoc writing a file whose text held `rmtree(` was refused RECURSIVE-DELETE).
+ * Triple quotes first, then ' " and `; a backslash escapes the next character. A call outside every literal
+ * still reads exactly as written.
+ */
+function withoutStrings(code) {
+  let out = '';
+  let i = 0;
+  while (i < code.length) {
+    const triple = code.startsWith('"""', i) ? '"""' : code.startsWith("'''", i) ? "'''" : null;
+    const quote = triple || (`'"\``.includes(code[i]) ? code[i] : null);
+    if (!quote) {
+      out += code[i];
+      i += 1;
+      continue;
+    }
+    out += quote;
+    i += quote.length;
+    while (i < code.length && !code.startsWith(quote, i)) {
+      if (code[i] === '\\' && i + 1 < code.length) {
+        out += code[i + 1] === '\n' ? '\n' : ' ';
+        out += ' ';
+        i += 2;
+        continue;
+      }
+      // A one-line literal ends at its line: an unbalanced quote never swallows the code after it.
+      if (code[i] === '\n' && !triple && quote !== '`') break;
+      out += code[i] === '\n' ? '\n' : ' ';
+      i += 1;
+    }
+    if (code.startsWith(quote, i)) {
+      out += quote;
+      i += quote.length;
+    }
+  }
+  return out;
+}
+
+/**
  * Everything the shell will execute, as {text, kind}. `kind` is 'segment' for a shell command and
  * 'code' for interpreter source, which anchor differently.
  */
 function executedTexts(cmd) {
-  const { rest, executed } = splitHeredocs(cmd);
+  const { rest, executed, shellBodies } = splitHeredocs(cmd);
   const out = [];
   for (const segment of segments(rest)) {
     const positions = commandPositions(segment);
@@ -236,6 +281,8 @@ function executedTexts(cmd) {
     }
   }
   for (const body of executed) out.push({ text: body, kind: 'code' });
+  // A body a SHELL consumes is a command line in its own right: its segments are shell text ('shell' rows read it).
+  for (const body of shellBodies) out.push(...executedTexts(body));
   return out;
 }
 
@@ -368,13 +415,20 @@ function ruleTarget(rule, cmd, cwd) {
   return targetDir(cmd, cwd, (text) => at.test(text));
 }
 
-/** The nearest directory at or above `dir` holding a `.git` (a worktree's `.git` is a file). */
+/** `dir` spelled for comparison: case-folded where the filesystem is (Windows), as Python's `os.path.normcase`. */
+const normcase = (dir) => (process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir));
+
+/** Directories git's discovery never climbs into: GIT_CEILING_DIRECTORIES, git's own contract. */
+const CEILINGS = new Set((process.env.GIT_CEILING_DIRECTORIES || '').split(path.delimiter).filter(Boolean).map(normcase));
+
+/** The nearest directory at or above `dir` holding a `.git` (a worktree's `.git` is a file), stopping where git
+ * does -- the walk dev_lab.dev.gitdirs.ancestors also takes. */
 function repoRoot(dir) {
   let at = path.resolve(dir);
   for (;;) {
     if (fs.existsSync(path.join(at, '.git'))) return at;
     const up = path.dirname(at);
-    if (up === at) return null;
+    if (up === at || CEILINGS.has(normcase(up))) return null;
     at = up;
   }
 }
@@ -414,14 +468,21 @@ const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toL
  * when a remedy names an interpreter, so a missing copy never stops a decision: the remedy names its door. */
 const MISSING_RESOLVER = 'venv_resolver.js is missing beside deny-commands.js -- run: python -m dev_lab.dev.agent_guard --install';
 let resolver;
-function currentEnv(root) {
+function theResolver() {
   if (resolver === undefined) {
     const file = [__dirname, path.dirname(__dirname)].map((dir) => path.join(dir, 'venv_resolver.js')).find(fs.existsSync);
     resolver = file ? require(file) : null;
   }
   if (!resolver) throw new Error(MISSING_RESOLVER);
-  return resolver.currentEnv(root);
+  return resolver;
 }
+/** The environment a LAUNCH from `root` runs: the pointer resolved, so a later swap leaves the launch running. */
+const currentEnv = (root) => theResolver().currentEnv(root);
+/** The environment a PRINTED door names: the pointer itself, `<root>/.venv` UNRESOLVED -- it survives the next
+ * bootstrap, where a resolved `.venvs/<id>` goes stale (2026-11-22: the hook printed the resolved spelling while the
+ * rendered rows held the pointer, and a consumer's guard read its own refusals as another rule's). The Python twin
+ * is dev_lab.dev.venvpath.door_interpreter. */
+const doorEnv = (root) => path.join(root, theResolver().POINTER);
 
 const VENV_TAIL = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'];
 const posix = (p) => p.replace(/\\/g, '/');
@@ -430,26 +491,80 @@ const posix = (p) => p.replace(/\\/g, '/');
  * exists (2026-11-03: a target with no venv was named `<target>/.venv/...python`, a command that cannot run); its
  * own spelling only when no interpreter exists anywhere. */
 function remedyPython(root) {
-  const own = path.join(currentEnv(path.resolve(root)), ...VENV_TAIL);
+  const checkout = checkoutPython(root);
+  if (checkout) return checkout;
+  const own = path.join(doorEnv(path.resolve(root)), ...VENV_TAIL);
+  const session = sessionRoot && path.join(doorEnv(sessionRoot), ...VENV_TAIL);
+  if (session && fs.existsSync(session)) return posix(session);
+  return posix(own);
+}
+
+/** `root`'s own venv interpreter, else its main checkout's (a linked worktree), else null: never another repo's. */
+function checkoutPython(root) {
+  const own = path.join(doorEnv(path.resolve(root)), ...VENV_TAIL);
   if (fs.existsSync(own)) return posix(own);
   try {
     const named = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(path.join(root, '.git'), 'utf8'));
     const gitdir = named ? path.resolve(root, named[1]) : '';
     if (gitdir && path.basename(path.dirname(gitdir)) === 'worktrees') {
-      const main = path.join(currentEnv(path.dirname(path.dirname(path.dirname(gitdir)))), ...VENV_TAIL);
+      const main = path.join(doorEnv(path.dirname(path.dirname(path.dirname(gitdir)))), ...VENV_TAIL);
       if (fs.existsSync(main)) return posix(main);
     }
   } catch {
-    // a `.git` directory, or none: the session's interpreter, else the checkout's own spelling below
+    // a `.git` directory, or none: no checkout interpreter
   }
-  const session = sessionRoot && path.join(currentEnv(sessionRoot), ...VENV_TAIL);
-  if (session && fs.existsSync(session)) return posix(session);
-  return posix(own);
+  return null;
+}
+
+const listDir = (dir) => {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+};
+
+/** Whether `python`'s venv has dev_lab installed: a `dev_lab-*.dist-info` in its site-packages. */
+function carriesDevLab(python) {
+  const lib = path.join(path.dirname(path.dirname(python)), process.platform === 'win32' ? 'Lib' : 'lib');
+  const sites = process.platform === 'win32' ? [lib] : listDir(lib).map((version) => path.join(lib, version));
+  return sites.some((site) => listDir(path.join(site, 'site-packages')).some((name) => /^dev_lab-.*\.dist-info$/.test(name)));
+}
+
+/** The exit of a per-repo-door rule when `target` declares none (2026-11-17: a pytest in one repo was sent to the
+ * session repo's `scripts/gate/runner.py`, absent there): the family verify door when the target's OWN
+ * interpreter carries dev_lab, else the declaration to add -- never another repo's path. A need whose family door
+ * reads no file of the target (FAMILY_DOORS; 2026-11-22: a network verb in a repo declaring no doors was told to
+ * declare one and named none) is sent to that door, printed with the session's interpreter. */
+const FAMILY_DOORS = {
+  'retry-wrapper': 'dev_lab.dev.netverb -- git <verb> (or uv <verb>)',
+  'process-tree-killer': 'dev_lab.dev.stoprun --pid <pid>',
+};
+function undeclaredDoor(rule, target, shown) {
+  if (FAMILY_DOORS[rule.needs]) {
+    return `${shown} declares no door for it; the family door runs from any directory: ${doorPython(target)} -m ${FAMILY_DOORS[rule.needs]}`;
+  }
+  const python = rule.needs === 'verdict-entry-point' ? checkoutPython(target) : null;
+  if (python && carriesDevLab(python)) {
+    return `${shown} declares no door for it; its own interpreter carries dev_lab: ${python} -m dev_lab.dev.verify -- <paths>`;
+  }
+  return `${shown} declares no door for it: declare one in its pyproject.toml as [tool.dev_lab.doors] ${rule.name} = "<the command that runs it there>"`;
+}
+
+/** The interpreter a FAMILY door is printed with: the session checkout's, whose rendered rules named the door --
+ * never the target's, whose older kit may lack the verb (2026-11-19, `worktrees --remove` in a sibling repo). */
+function doorPython(checkout) {
+  try {
+    return remedyPython(sessionRoot || checkout || root);
+  } catch (missing) {
+    return `<${missing.message}>`;
+  }
 }
 
 /** `text` with `{root}` as the cwd and the interpreter tokens as `checkout`'s absolute interpreter. */
 function expand(text, checkout) {
-  const out = String(text).replaceAll('{root}', root);
+  let out = String(text).replaceAll('{root}', root);
+  if (out.includes('{door}')) out = out.replaceAll('{door}', doorPython(checkout));
   if (!checkout || !/\{python\}|<venv python>/.test(out)) return out;
   let python;
   try {
@@ -474,8 +589,10 @@ function reasonFor(rule, reason, cmd, cwd, sessionRoot) {
   // One header line; the full wording is docs-src/dev/refusals.md#cross-repo-refusals (dev-lab).
   const details = reason.split('\n').filter((line) => line.startsWith('details: '));
   if (door) {
-    return [`${rule.name}: refused; ${shown} declares its own door for it:`, door, ...details].join('\n');
+    const said = rule.severity === 'hint' ? 'advised' : 'refused';
+    return [`${rule.name}: ${said}; ${shown} declares its own door for it:`, door, ...details].join('\n');
   }
+  if (rule.needs) return [reason.split('\n')[0], undeclaredDoor(rule, target, shown), ...details].join('\n');
   const session = sessionRoot.replace(/\\/g, '/');
   return `[targets ${shown}, which declares no door; repo files named below are ${session}'s]\n${reason}`;
 }
@@ -516,6 +633,28 @@ function liveRunRefusal(target, sessionRoot) {
   const why = done.error ? done.error.message : `exit ${done.status}${said ? '' : ', no answer'}`;
   return `TREE-HAS-A-LIVE-RUN: could not confirm that no run executes from ${target} (${why}); re-run when ` +
     `${remedyPython(sessionRoot)} -m dev_lab.dev.liverun --tree ${target} answers.`;
+}
+
+/* ================================ A ROW THAT BINDS ONLY ON A DECLARED REPO ================================
+ *
+ * `when: 'declared-repo'` (FAMILY-REPO-IS-CHECKED-OUT): the pattern names a clone, refused only when its url is a
+ * family repo this machine already checks out. That is the machine file's answer (the family layer's remotes, the
+ * local layer's paths), which this engine does not parse: it asks `python -m dev_lab.dev.familyrepos clone-check`
+ * with the command on stdin, only AFTER the pattern matched. Exit 1 prints the refusal; anything else -- no
+ * interpreter, no kit, a crash -- refuses NOTHING, because a duplicate clone is removable and a guard that cannot
+ * read the declaration must not block every clone.
+ */
+function declaredRepoRefusal(command, sessionRoot) {
+  const python = venvPython(sessionRoot);
+  if (!python) return '';
+  const done = spawnSync(python, ['-m', 'dev_lab.dev.familyrepos', 'clone-check'], {
+    input: command,
+    encoding: 'utf8',
+    timeout: 15000,
+    windowsHide: true,
+  });
+  const said = String(done.stdout || '').trim();
+  return done.status === 1 && said ? said : '';
 }
 
 /* `when: 'background'`: `python -m dev_lab.dev.shelllife --admit` judges the line on stdin -- exit 0 admitted, exit 1
@@ -638,6 +777,103 @@ function familySiblingClone(cmd, cwd) {
   }
 }
 
+/* ================================ A WORKTREE UNDER THE MACHINE'S BOUND HOME ================================
+ *
+ * `admits: 'bound-worktree-home'` (WORKTREES-STAY-INSIDE): a machine may bind the `worktrees` storage kind outside
+ * the checkout ([storage.roots] worktrees), a path no committed pattern can name. The binding is ONE fact in the
+ * machine file; `python -m dev_lab.dev.storage publish` renders it as JSON for this engine (no TOML here). A line is
+ * admitted only when EVERY `worktree add|move` / `clone` target lies inside the repository's worktree home -- the
+ * published root with `{repo}` filled by the main checkout's name, or its in-tree default. No file, no binding, a
+ * target the engine cannot place: admits nothing.
+ */
+const STORAGE_ROOTS_ENV = 'LAB_COMMONS_STORAGE_ROOTS';
+
+function publishedWorktrees() {
+  const file =
+    process.env[STORAGE_ROOTS_ENV] || path.join(require('os').homedir(), '.config', 'lab-commons', 'storage-roots.json');
+  try {
+    const kind = JSON.parse(fs.readFileSync(file, 'utf8')).worktrees;
+    return kind && typeof kind.root === 'string' && typeof kind.default === 'string' ? kind : null;
+  } catch {
+    return null;
+  }
+}
+
+function insideDir(target, base) {
+  const folded = normcase(base);
+  return normcase(target).startsWith(folded + path.sep);
+}
+
+/** The positional words after `options`: `-b`, `-B` and `--reason` consume the next word. */
+function positionalWords(words) {
+  const found = [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (words[i] === '-b' || words[i] === '-B' || words[i] === '--reason') i += 1;
+    else if (!words[i].startsWith('-')) found.push(words[i]);
+  }
+  return found;
+}
+
+function boundWorktreeHome(cmd, cwd) {
+  const kind = cwd && publishedWorktrees();
+  if (!kind) return false;
+  let dir = path.resolve(cwd);
+  let placed = 0;
+  for (const segment of segments(splitHeredocs(cmd).rest)) {
+    const text = segment.replace(ENV_PREFIX, '').trim();
+    if (!text) continue;
+    const words = (text.match(/"[^"\n]*"|'[^'\n]*'|\S+/g) || []).map((word) => word.replace(/^["']|["']$/g, ''));
+    if (words[0] === 'cd' || words[0] === 'pushd') {
+      dir = path.resolve(dir, hostPath(words[1] || '.'));
+      continue;
+    }
+    let base = dir;
+    let at;
+    if (/^git(?:\.exe)?$/i.test(words[0])) {
+      at = 1;
+      while (at + 1 < words.length && (words[at] === '-C' || words[at] === '-c')) {
+        if (words[at] === '-C') base = path.resolve(base, hostPath(words[at + 1]));
+        at += 2;
+      }
+    } else if (/^(?:sh|bash)$/.test(words[0]) && /retry/i.test(words[1] || '')) {
+      at = 2;
+    } else {
+      continue;
+    }
+    const rest = words.slice(at);
+    let index;
+    let positionals;
+    if (rest[0] === 'worktree' && (rest[1] === 'add' || rest[1] === 'move')) {
+      positionals = positionalWords(rest.slice(2));
+      index = rest[1] === 'add' ? 0 : 1;
+    } else if (rest[0] === 'clone') {
+      positionals = positionalWords(rest.slice(1));
+      index = 1;
+    } else {
+      continue;
+    }
+    if (positionals.length <= index) return false;
+    const target = path.resolve(base, hostPath(positionals[index]));
+    try {
+      const own = repoRoot(base);
+      const gitDir = own && commonGitDir(own);
+      if (!gitDir) return false;
+      const main = path.dirname(gitDir);
+      const home = path.resolve(kind.root.split('{repo}').join(path.basename(main)));
+      if (!insideDir(target, home) && !insideDir(target, path.join(main, ...kind.default.split('/')))) return false;
+    } catch {
+      return false;
+    }
+    placed += 1;
+  }
+  return placed > 0;
+}
+
+/** Whether `rule` carries the filesystem admission `name` (a row may carry one or several). */
+function admitsBy(rule, name) {
+  return Array.isArray(rule.admits) ? rule.admits.includes(name) : rule.admits === name;
+}
+
 /* ================================ A GREP WHOSE OPERANDS ARE FILES WALKS NOTHING ================================
  *
  * `admits: 'file-operands'` (RECURSIVE-GREP): `-r` names a WALK only when an operand is a directory, or when none is
@@ -735,7 +971,9 @@ function fires(rule, texts, cmd) {
   // interpreter code. An 'argument' rule names an option, so it is searched within the text.
   const atSegment = new RegExp(argument ? rule.pattern : `^(?:${rule.pattern})`);
   const atLine = new RegExp(argument ? rule.pattern : `^[ \\t]*(?:${rule.pattern})`, 'm');
-  return texts.some(({ text, kind }) => (kind === 'segment' ? atSegment : atLine).test(text));
+  // A 'shell' rule names a shell verb: interpreter code (python/node source) never spells it as a command.
+  if (rule.matches === 'shell') return texts.some(({ text, kind }) => kind === 'segment' && atSegment.test(text));
+  return texts.some(({ text, kind }) => (kind === 'segment' ? atSegment.test(text) : atLine.test(withoutStrings(text))));
 }
 
 let input;
@@ -767,8 +1005,9 @@ for (const rule of rules) {
   } catch {
     continue; // one malformed rule never blocks the session
   }
-  if (hit && rule.admits === 'family-sibling-clone' && familySiblingClone(cmd, input.cwd)) continue;
-  if (hit && rule.admits === 'file-operands' && fileOperands(rule, cmd, input.cwd)) continue;
+  if (hit && admitsBy(rule, 'family-sibling-clone') && familySiblingClone(cmd, input.cwd)) continue;
+  if (hit && admitsBy(rule, 'bound-worktree-home') && boundWorktreeHome(cmd, input.cwd)) continue;
+  if (hit && admitsBy(rule, 'file-operands') && fileOperands(rule, cmd, input.cwd)) continue;
   let liveReason = '';
   if (hit && rule.asks) {
     liveReason = askedRefusal(rule.asks, sessionRoot);
@@ -795,8 +1034,14 @@ for (const rule of rules) {
     liveReason = liveRunRefusal(input.cwd ? ruleTarget(rule, cmd, input.cwd) : null, sessionRoot);
     hit = liveReason !== '';
   }
+  if (hit && rule.when === 'declared-repo') {
+    liveReason = declaredRepoRefusal(cmd, sessionRoot);
+    hit = liveReason !== '';
+  }
   if (hit && rule.severity === 'hint') {
-    hints.push(expand(rule.reason || rule.name, remedyCheckout(rule, cmd, input.cwd)));
+    // A hint names the TARGET's door as a refusal does (2026-11-22: a network verb in a sibling repo was handed the
+    // session repo's wrapper, a file the sibling does not have).
+    hints.push(reasonFor(rule, expand(rule.reason || rule.name, remedyCheckout(rule, cmd, input.cwd)), cmd, input.cwd || '', sessionRoot));
   } else if (hit) {
     // A PROBE (run_engine) names where its refusal is logged, '' for nowhere; the tool never sends the key.
     const probed = typeof input.dev_lab_metrics_root === 'string';

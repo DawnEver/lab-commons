@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import os
+from pathlib import Path
 
 import pytest
 from _box_fake import quiet
@@ -65,12 +67,15 @@ def test_a_tool_with_every_seat_held_is_present_at_zero() -> None:
     assert supply.resources['jmag'] == 0.0
 
 
-def test_a_tool_its_probe_finds_is_present_without_any_declaration() -> None:
-    """PRESENCE IS PROBED, NOT DECLARED: no ``[capabilities.<tool>]`` row is needed for a probe-able tool."""
-    supply = _engine(simba=True, matlab=True, jmag=False).available('box')
-    assert {'simba', 'matlab'} <= supply.present
-    assert supply.resources['simba'] == 1.0, 'an undeclared tool has one seat'
-    assert 'jmag' not in supply.present, 'PLANTED CONTROL: a declared tool its probe misses is absent'
+def test_a_vendor_its_probe_finds_is_not_supplied_without_a_declared_seat_count() -> None:
+    """PRESENCE IS PROBED, THE COUNT IS DECLARED: a found vendor with no declared seats lends none.
+
+    User ruling 2026-11-18: no silent 1; demanding it is refused by name (``test_box_undeclared_vendor_seat``).
+    """
+    supply = _engine(simba=True, matlab=True, jmag=True).available('box')
+    assert not {'simba', 'matlab'} & supply.present
+    assert 'jmag' in supply.present, 'PLANTED CONTROL: a declared vendor its probe finds is present'
+    assert 'jmag' not in _engine(jmag=False).available('box').present, 'a declared tool its probe misses is absent'
 
 
 def test_a_lent_count_is_supplied_and_held_like_a_seat() -> None:
@@ -126,8 +131,11 @@ def test_an_account_whose_qos_is_full_has_no_submits() -> None:
 def test_an_account_supplies_its_tools_through_the_box_seat_provider() -> None:
     """A Slurm account has femm exactly where the probe finds it, through the ONE seat provider."""
     grant = [(_snapshot(cpus=8, mem_mb=1024, submit=None), 'normal')]
+    machine = Path(os.environ['LAB_COMMONS_CONFIG'])
+    machine.parent.mkdir(parents=True, exist_ok=True)
+    machine.write_text('[capabilities.femm]\nseats = 4\n', encoding='utf-8')
     found = Engine({'slurm:me': [SlurmAccount(grant), account_seats(_have(femm=True))]}).available('slurm:me')
-    assert found.resources['femm'] == 1.0, 'found and undeclared is present, at one seat'
+    assert found.resources['femm'] == 4.0, 'found and declared is present at its declared seats'
     assert {'femm', 'linux'} <= found.present
     missing = Engine({'slurm:me': [SlurmAccount(grant), account_seats(_have(femm=False))]}).available('slurm:me')
     assert 'femm' not in missing.present, 'PLANTED CONTROL: a tool its probe does not find is absent on an account'

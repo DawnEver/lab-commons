@@ -10,7 +10,7 @@ the batch spans (:mod:`lab_commons.hpc.jobs`: its ssh targets, items, run direct
 ``status``/``gather``/``retry`` need nothing more -- through whichever of those login hosts answers.
 ``submit -c <job> [--sha <sha>] [--only 3,7]`` runs the job file at another commit (its ``repo_url`` stays) and
 only the chosen item indices; an item string holding ``{run_dir}`` is bound to the submission's own run directory
-(``~/ci/jobs/<sha>/<name>-<stamp>-<n>``), so a re-submission never writes over an earlier one. ``status -c a -c b``
+(``<root>/jobs/<sha>/<name>-<stamp>-<n>``), so a re-submission never writes over an earlier one. ``status -c a -c b``
 reads several jobs with ONE ``sacct`` per grant; ``--watch`` polls until any line changes, prints the change and
 exits 0 -- at once when every shard is already settled, and exit :data:`PENDING` after ``--watch-minutes``.
 ``gather -c <job> -o <out> --wait`` polls as ``status`` does every ``[policy] poll_seconds``, prints each
@@ -48,7 +48,7 @@ under that root through the grant, refusing everything if a running job works un
 cancels that user's own selected Slurm jobs (:mod:`lab_commons.hpc.cancel`).
 
 ``tree acquire|release|list|reap`` is the ONE door for an ad-hoc commit tree on a cluster (a lease under
-``~/ci/leases``, reaped once it expires), and ``home`` prints the quota, the reaps and the stray directories the
+``<root>/leases``, reaped once it expires), and ``home`` prints the quota, the reaps and the stray directories the
 forge tick reports (:mod:`lab_commons.hpc.homedoor`). Both, and ``run submit``, pass the home quota guard.
 """
 
@@ -85,7 +85,8 @@ from lab_commons.hpc.jobs import (
     status_lines,
     submit_job,
 )
-from lab_commons.hpc.needsets import BASE, vocabulary_at
+from lab_commons.hpc.needsets import BASE, needs_of, vocabulary_at
+from lab_commons.hpc.restrict import restricted
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import FULL, INCREMENTAL, RunSpec
@@ -144,7 +145,9 @@ def _ensure(config: Config, repo: Path) -> Ensure | None:
     job = config.job
     if not job.sha:
         return None
-    spec = RunSpec(sha=job.sha, repo_url=job.repo_url, pack_from=repo, builds=builds_at(repo, job.sha, python=''))
+    spec = RunSpec(
+        sha=job.sha, repo_url=job.repo_url, pack_from=repo, builds=builds_at(repo, job.sha, python='', needs=job.needs)
+    )
 
     def ensure(grant: Grant) -> None:
         build_artifact(spec, runner_for(grant, BUILD_TIMEOUT), grant.name, job.artifact)
@@ -167,6 +170,8 @@ def _gather(record: dict[str, Any], machine: Machine, reach: Reach, output: Path
     if output is not None:
         output.write_text(json.dumps(got.results), encoding='utf-8')
         _out(f'written {output}')
+    else:  # a success line with no artefact reads as a result kept (dev-lab #483)
+        _out('nothing written: the merged results were read and dropped; pass -o <path> to keep them')
     return 1 if got.over else 0
 
 
@@ -317,7 +322,7 @@ def _only(path: Path | None) -> frozenset[str] | None:
 
 def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> int:
     try:
-        builds = builds_at(args.repo, args.sha, python=args.python)
+        builds = builds_at(args.repo, args.sha, python=args.python, needs=needs_of(args.part))
     except ValueError as undeclared:
         emit(f'run submit refused: {undeclared}', err=True)
         return 2
@@ -354,7 +359,7 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
 
 def _run_build(args: argparse.Namespace, _machine: Machine, _config: Config) -> int:
     try:
-        builds = builds_at(args.repo, args.sha, python=args.python)
+        builds = builds_at(args.repo, args.sha, python=args.python, needs=needs_of(args.part))
     except ValueError as undeclared:
         emit(f'run build refused: {undeclared}', err=True)
         return 2
@@ -435,7 +440,9 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument('--select', default='', help='marker expression choosing the tests (one -m, joined)')
     group.add_argument('--python', default='', help='interpreter request for `uv venv --python`')
     group.add_argument(
-        '--part', default=BASE, help=f'run submit/gather: the part (a need-set) the run runs; default {BASE}'
+        '--part',
+        default=BASE,
+        help=f'run submit/gather/build: the part (a need-set) the run runs and its venv serves; default {BASE}',
     )
     group.add_argument(
         '--repo',
@@ -472,7 +479,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     config = load_config(args.config[0]) if args.config else Config()
     steps = {'submit': _run_submit, 'gather': _run_gather, 'build': _run_build}
     try:
-        machine = load_grants()
+        machine = restricted(load_grants(), config.policy.grants)
         return steps[args.step](args, allocation.resolve(machine) if args.step == 'submit' else machine, config)
     except NotOnCluster as off:
         emit(f'run {args.step} refused: {off}', err=True)
@@ -562,6 +569,11 @@ def _dispatch(argv: list[str] | None) -> int:
     if args.verb in {'plan', 'submit', 'retry'}:
         machine = affinity.resolve(allocation.resolve(machine))
     configs = _job_configs(parser, args)
+    if args.verb in {'plan', 'submit', 'retry'}:
+        try:
+            machine = restricted(machine, configs[0].policy.grants)
+        except ValueError as refused:
+            parser.error(str(refused))
     if args.verb == 'status':
         return _status(configs, machine, runner_for, watch_minutes=args.watch_minutes if args.watch else None)
     if args.verb == 'cancel':

@@ -16,6 +16,7 @@ from typing import Final
 import pytest
 
 from lab_commons.hpc.builds import ItemWall, builds_at, read_builds
+from lab_commons.hpc.config import load_config
 
 _GIT: Final = shutil.which('git') or 'git'
 COLLECTOR: Final = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / 'collect.py'
@@ -23,7 +24,6 @@ COLLECTOR: Final = Path(__file__).parents[1] / 'src' / 'lab_commons' / 'hpc' / '
 PYPROJECT: Final = """[project]
 name = "x"
 [tool.lab_commons.hpc]
-install = "uv sync"
 dependency_inputs = ["pyproject.toml", "uv.lock"]
 source_roots = ["src"]
 native = { inputs = ["rust"], build = "make" }
@@ -62,24 +62,44 @@ def test_the_declaration_is_read_once_and_refuses_a_shared_venv_without_source_r
         read_builds('[tool.lab_commons.hpc]\ndependency_inputs = ["uv.lock"]\n')
 
 
-def _shared(install: str) -> str:
-    text = f'[tool.lab_commons.hpc]\ninstall = "{install}"\ndependency_inputs = ["uv.lock"]\nsource_roots = ["src"]\n'
-    return read_builds(text).install
-
-
 def test_a_shared_venv_holds_dependencies_only_so_each_tree_imports_its_own_project() -> None:
     """A shared venv's install never carries the project, which would point into one tree.
 
     Measured 2026-10-25 (numerics-lab #33): an editable project install in a SHARED venv points at the tree that
     built it, so every later sha reusing the venv imported -- or failed to import -- the FIRST tree's project.
     """
-    assert _shared('uv sync --frozen --extra dev') == 'uv sync --frozen --extra dev --no-install-project'
-    declared = 'uv sync --frozen --no-install-project --extra dev'
-    assert _shared(declared) == declared
-    # planted control: a venv per commit belongs to its one tree, so its project install stays as declared
-    assert read_builds('[tool.lab_commons.hpc]\ninstall = "uv sync"\n').install == 'uv sync'
-    with pytest.raises(ValueError, match='dependencies only'):
-        _shared('pip install -e .')
+    shared = '[tool.lab_commons.hpc]\ndependency_inputs = ["uv.lock"]\nsource_roots = ["src"]\n'
+    assert read_builds(shared).install == 'uv sync --frozen --no-install-project'
+    # planted control: a venv per commit belongs to its one tree, so it installs the project
+    assert read_builds('[tool.lab_commons.hpc]\n').install == 'uv sync --frozen'
+
+
+EXTRAS: Final = """[project]
+name = "x"
+[project.optional-dependencies]
+dev = ["pytest"]
+learn = ["torch"]
+[tool.dev_lab.dep]
+extras = ["dev"]
+needs = { learn = "learn" }
+[tool.lab_commons.hpc]
+"""
+
+
+def test_the_install_is_derived_for_the_need_set_so_a_part_needing_nothing_heavy_builds_nothing_heavy() -> None:
+    assert read_builds(EXTRAS).install == 'uv sync --frozen --extra dev'
+    assert read_builds(EXTRAS, ('learn',)).install == 'uv sync --frozen --extra dev --extra learn'
+
+
+def test_a_declared_install_is_retired_and_refused_by_name() -> None:
+    with pytest.raises(ValueError, match='install is retired'):
+        read_builds('[tool.lab_commons.hpc]\ninstall = "uv sync --all-extras"\n')
+
+
+def test_optional_dependencies_without_declared_extras_are_refused() -> None:
+    undeclared = EXTRAS.replace('[tool.dev_lab.dep]\nextras = ["dev"]\nneeds = { learn = "learn" }\n', '')
+    with pytest.raises(ValueError, match=r'no \[tool.dev_lab.dep\] extras'):
+        read_builds(undeclared)
 
 
 def test_a_new_sha_with_unchanged_inputs_keeps_both_keys_and_a_changed_input_moves_only_its_own(repo: Path) -> None:
@@ -92,11 +112,19 @@ def test_a_new_sha_with_unchanged_inputs_keeps_both_keys_and_a_changed_input_mov
     assert keys[0].native_key == keys[1].native_key != keys[2].native_key
     moved = builds_at(repo, lock_moved, python='3.13')
     assert moved.env_key != keys[0].env_key
-    reinstalled = _commit(repo, {'pyproject.toml': PYPROJECT.replace('"uv sync"', '"uv sync --extra all"')})
-    assert builds_at(repo, reinstalled, python='3.13').env_key not in {k.env_key for k in keys}
+    learn = (
+        '[project.optional-dependencies]\nlearn = ["torch"]\n'
+        '[tool.dev_lab.dep]\nextras = []\nneeds = {learn = "learn"}\n'
+    )
+    needing = _commit(repo, {'pyproject.toml': PYPROJECT + learn})
+    plain = builds_at(repo, needing, python='3.13')
+    assert builds_at(repo, needing, python='3.13', needs=('learn',)).env_key != plain.env_key, 'one venv per need-set'
 
 
-UNDECLARED: Final = '[project]\nname = "x"\n[tool.lab_commons.hpc]\ninstall = "uv sync --no-install-project"\n'
+UNDECLARED: Final = (
+    '[project]\nname = "x"\n[project.optional-dependencies]\ndev = ["pytest"]\n'
+    '[tool.dev_lab.dep]\nextras = ["dev"]\n[tool.lab_commons.hpc]\n'
+)
 
 
 def test_every_env_is_keyed_by_every_input_that_builds_it_even_with_no_declared_inputs(repo: Path) -> None:
@@ -104,7 +132,7 @@ def test_every_env_is_keyed_by_every_input_that_builds_it_even_with_no_declared_
     first = _commit(repo, {'pyproject.toml': UNDECLARED})
     wrong = builds_at(repo, first, python='3.13')
     assert wrong.env_key, 'no env goes unkeyed'
-    fixed = _commit(repo, {'pyproject.toml': UNDECLARED.replace(' --no-install-project', '')})
+    fixed = _commit(repo, {'pyproject.toml': UNDECLARED.replace('extras = ["dev"]', 'extras = []')})
     assert builds_at(repo, fixed, python='3.13').env_key != wrong.env_key
     assert builds_at(repo, first, python='3.12').env_key != wrong.env_key, 'the interpreter request is an input'
     needing = _commit(repo, {'pyproject.toml': UNDECLARED + 'needs = ["cargo"]\n'})
@@ -113,9 +141,9 @@ def test_every_env_is_keyed_by_every_input_that_builds_it_even_with_no_declared_
     assert builds_at(repo, first, python='3.13') == wrong, 'and an unchanged recipe reuses'
 
 
-def test_a_commit_declaring_no_install_is_refused_naming_the_key(repo: Path) -> None:
+def test_a_commit_declaring_no_hpc_table_is_refused_naming_the_table(repo: Path) -> None:
     sha = _commit(repo, {'pyproject.toml': '[project]\nname = "x"\n'})
-    with pytest.raises(ValueError, match=r'\[tool\.lab_commons\.hpc\] install'):
+    with pytest.raises(ValueError, match=r'declares no \[tool\.lab_commons\.hpc\] table'):
         builds_at(repo, sha, python='3.13')
 
 
@@ -133,7 +161,8 @@ def test_only_files_whose_content_changed_are_collected_again(repo: Path, tmp_pa
             'tests/test_a.py': 'def test_one():\n    pass\n',
             'tests/test_b.py': 'def test_two():\n    pass\n',
             'tests/test_broken.py': 'import nowhere_at_all\n',
-            'pyproject.toml': '[project]\nname = "x"\n',
+            # its own [tool.pytest.ini_options] anchors the inner rootdir: the test's tmp may lie inside a checkout
+            'pyproject.toml': '[project]\nname = "x"\n[tool.pytest.ini_options]\n',
         },
     )
     cache = tmp_path / 'cache'
@@ -173,13 +202,13 @@ def test_the_lock_keys_the_venv_and_no_remote_is_asked(repo: Path) -> None:
 
 
 def test_the_per_scope_timeout_is_declared_data_and_an_unknown_scope_is_refused() -> None:
-    text = '[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {incremental = 300, full = 3000}\n'
+    text = '[tool.lab_commons.hpc]\ntimeout_s = {incremental = 300, full = 3000}\n'
     assert read_builds(text).timeout_s == {'incremental': 300, 'full': 3000}
-    assert read_builds('[tool.lab_commons.hpc]\ninstall = "x"\n').timeout_s == {}
+    assert read_builds('[tool.lab_commons.hpc]\n').timeout_s == {}
     with pytest.raises(ValueError, match='timeout_s'):
-        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {heavy = 3000}\n')
+        read_builds('[tool.lab_commons.hpc]\ntimeout_s = {heavy = 3000}\n')
     with pytest.raises(ValueError, match='timeout_s'):
-        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\ntimeout_s = {full = 0}\n')
+        read_builds('[tool.lab_commons.hpc]\ntimeout_s = {full = 0}\n')
 
 
 def test_no_test_wall_passes_the_declared_ceiling_however_inflated_its_measurement() -> None:
@@ -192,21 +221,30 @@ def test_no_test_wall_passes_the_declared_ceiling_however_inflated_its_measureme
     assert wall.bound(104799.0) == 7200, 'the measured floor of the incident, held to the ceiling'
     assert wall.bound(60.0) == 600, 'a sane measurement is untouched'
     assert ItemWall().bound(1e9) == ItemWall().ceiling_s
-    text = '[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {ceiling_s = 1800}\n'
+    text = '[tool.lab_commons.hpc]\nitem_wall = {ceiling_s = 1800}\n'
     assert read_builds(text).item_wall.ceiling_s == 1800
     assert read_builds(text).item_wall.bound(None) == 1800, 'the unmeasured default is held too'
     with pytest.raises(ValueError, match='ceiling_s'):
-        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {ceiling_s = 200}\n')
+        read_builds('[tool.lab_commons.hpc]\nitem_wall = {ceiling_s = 200}\n')
 
 
 def test_the_per_test_wall_is_declared_data_with_one_set_of_defaults() -> None:
-    text = '[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {multiple = 5, floor_s = 120}\n'
+    text = '[tool.lab_commons.hpc]\nitem_wall = {multiple = 5, floor_s = 120}\n'
     assert read_builds(text).item_wall == ItemWall(multiple=5, floor_s=120)
-    assert read_builds('[tool.lab_commons.hpc]\ninstall = "x"\n').item_wall == ItemWall()
+    assert read_builds('[tool.lab_commons.hpc]\n').item_wall == ItemWall()
     assert ItemWall(multiple=5, floor_s=120).bound(100.0) == 500
     assert ItemWall(multiple=5, floor_s=120).bound(1.0) == 120
     assert ItemWall(unmeasured_s=900).bound(None) == 900
     with pytest.raises(ValueError, match='item_wall'):
-        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {ceiling = 3}\n')
+        read_builds('[tool.lab_commons.hpc]\nitem_wall = {ceiling = 3}\n')
     with pytest.raises(ValueError, match='item_wall'):
-        read_builds('[tool.lab_commons.hpc]\ninstall = "x"\nitem_wall = {floor_s = 0}\n')
+        read_builds('[tool.lab_commons.hpc]\nitem_wall = {floor_s = 0}\n')
+
+
+def test_a_job_declares_the_needs_its_environment_serves(tmp_path: Path) -> None:
+    """``[job] needs`` names the need-set the job's venv is built for (lab_commons.extras), read as data."""
+    path = tmp_path / 'job.toml'
+    path.write_text('[job]\nentry = "x"\nneeds = ["learn"]\n', encoding='utf-8')
+    assert load_config(path).job.needs == ('learn',)
+    path.write_text('[job]\nentry = "x"\n', encoding='utf-8')
+    assert load_config(path).job.needs == (), 'planted control: an undeclared job needs nothing heavy'

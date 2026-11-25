@@ -39,6 +39,12 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["git", "bundle", ["create"]],
+    decision = "forbidden",
+    justification = "ARCHIVE-IS-NO-STORE: a bundle parks unlanded work where nobody reads it again (ONLY-VERSION-TAGS). details: docs-src/dev/refusals.md#archive-is-no-store (dev-lab)",
+)
+
+prefix_rule(
     pattern = ["git", "stash", ["push", "pop", "apply", "drop", "clear", "save"]],
     decision = "forbidden",
     justification = "GIT-STASH: `refs/stash` is repo-wide, so a stash is popped by whoever pops next -- possibly another agent. details: docs-src/dev/refusals.md#git-stash (dev-lab)",
@@ -136,15 +142,20 @@ prefix_rule(
 
 # Not expressible as a prefix, so unjudged under Codex:
 # TREE-HAS-A-LIVE-RUN: binds only while a run is live; the process table decides, not a prefix
+# FAMILY-REPO-IS-CHECKED-OUT: judged on the clone url against the machine file's [repos]; a prefix reads neither
+# MACHINE-FILE-IS-RENDERED: judged on where a write lands (anywhere on the line); a prefix sees only argv[0]
 # BACKGROUND-SHELL-IS-BOUNDED: a property of a background call, which Codex execpolicy does not see
 # TRACKED-CITES-NO-EPHEMERAL: judged on what the journal line cites against the repo; a prefix reads neither
 # SUBAGENT-NO-PUSH: scoped to subagents; Codex execpolicy has no agent scope
+# MAIN-ONLY-DOOR: scoped to subagents; Codex execpolicy has no agent scope
 # HEAVY-IS-THE-MAIN-SESSIONS: scoped to subagents; Codex execpolicy has no agent scope
 # CONSENT-CODE-FROM-THE-USER: judged on the path it writes or removes, not on the command word
 # REPORTS-LIVE-IN-MEMORY: judged on the path it writes or removes, not on the command word
+# OUTPUT-HOLDS-NO-CODE: judged on the path it writes or removes, not on the command word
 # WRITES-STAY-IN-THE-TREE: judged on the path it writes or removes, not on the command word
 # RECURSIVE-DELETE: judged on the path it writes or removes, not on the command word
 # WORKTREES-STAY-INSIDE: judged on the path it writes or removes, not on the command word
+# WORKTREE-NAMES-ITS-TASK: judged on the name of the directory it makes, not on the command word
 # FORGE-WRITE-VIA-GH-API: a write is a method flag anywhere in the argv; reads share every prefix
 # FORGE-WRITE-VIA-HTTP: a write is a method and a forge URL anywhere in the argv
 # STATUS-VIA-DOORS: the forbidden status contexts are an argument value, not a prefix

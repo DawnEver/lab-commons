@@ -327,8 +327,10 @@ def test_every_path_stays_under_ci() -> None:
     )
     for script in (fetch_script(spec), build_script(spec), collect_command(spec, also='win')):
         for word in script.replace(';', ' ').replace('=', ' ').split():
-            if '$HOME' in word or word.startswith('~'):
-                assert word.startswith(('"$HOME"/ci', '~/ci', '"$HOME/ci/', '\\"$HOME/ci/', '$HOME/ci/')), word
+            assert '$HOME' not in word, word
+            assert not word.startswith('~'), word
+            if 'LAB_ROOT' in word:
+                assert word.lstrip('\\"').startswith(('"$LAB_ROOT"', '$LAB_ROOT', '${LAB_ROOT')), word
     assert '--python 3.13' in build_script(spec)
     assert '.lab-ci-installed' in build_script(spec), 'the venv is reused once installed'
     assert "-m '(not slow) and (win)'" in collect_command(spec, also='win')

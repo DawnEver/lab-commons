@@ -99,7 +99,7 @@ def test_an_unreadable_quota_is_warned_and_never_read_as_zero() -> None:
 
 
 def test_the_home_pass_reaps_reads_and_names_strays_but_never_a_managed_root() -> None:
-    census = ''.join(f'{CENSUS_PREFIX}{name}\t{STRAY_FILES + 1}\n' for name in ('ab', 'src', 'ci'))
+    census = ''.join(f'{CENSUS_PREFIX}{name}\t{STRAY_FILES + 1}\n' for name in ('ab', 'src', '.cache'))
     home = Home(_at(0.5), census=census)
     report = homedoor.home_pass(home, now=0, managed=('src',))
     assert home.calls == ['reap', 'quota', 'census'], 'every tick reaps expired leases, whatever the quota'
@@ -159,6 +159,6 @@ def _grant() -> Grant:
 
 def test_a_leases_env_and_build_dirs_live_inside_it_on_the_shared_hardlinked_cache() -> None:
     """Per-tree uv caches and cargo targets were much of ~/ab: the hint keeps both INSIDE the reaped tree."""
-    hint = homedoor.env_hint('/h/ci/leases/trees/abc')
-    assert 'UV_CACHE_DIR="$HOME"/ci/uv-cache UV_LINK_MODE=hardlink uv venv /h/ci/leases/trees/abc/.venv' in hint
-    assert '--target-dir /h/ci/leases/trees/abc/target' in hint
+    hint = homedoor.env_hint('/r/leases/trees/abc')
+    assert 'UV_CACHE_DIR="$LAB_ROOT"/cache/uv UV_LINK_MODE=hardlink uv venv /r/leases/trees/abc/.venv' in hint
+    assert '--target-dir /r/leases/trees/abc/target' in hint

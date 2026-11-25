@@ -1,7 +1,8 @@
 """What a remote run RUNS ON THE CLUSTER: the spec, the shell it sends, and the parsing of what comes back.
 
 Every script here is a plain string handed to a :data:`lab_commons.hpc.cluster.Runner`; nothing in this module
-runs anything except :func:`pack`, which only READS the caller's repository. Paths stay under ``~/ci``.
+runs anything except :func:`pack`, which only READS the caller's repository.
+Paths are the account layout's (:mod:`lab_commons.hpc.layout`).
 """
 
 from __future__ import annotations
@@ -17,11 +18,23 @@ from typing import Final
 
 import lab_commons.launch as _door
 from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds, cargo_target
+from lab_commons.hpc.layout import (
+    BIN,
+    CACHES,
+    COLLECT,
+    ENVS,
+    NATIVE,
+    PACKS,
+    REQUIRE_ROOT,
+    ROOT,
+    RUNS,
+    UV_CACHE,
+    run_tree,
+)
 from lab_commons.hpc.needsets import BASE, Vocabulary
 
 __all__ = [
     'BUILD_FAILED',
-    'CACHES',
     'COLLECT_MODULE',
     'ENV',
     'FULL',
@@ -29,9 +42,7 @@ __all__ = [
     'ITEM_MODULE',
     'NEEDS',
     'PREP_LOG',
-    'ROOT',
     'TIME',
-    'UV_CACHE',
     'UV_PRUNE',
     'RunSpec',
     'build_script',
@@ -53,18 +64,13 @@ __all__ = [
 #: The item runner's name on the cluster -- unique, so it can shadow nothing in the tested project.
 ITEM_MODULE: Final = 'lab_ci_pytest_item'
 
-ROOT: Final = '"$HOME"/ci'
-
-#: Every repository's bare cache lives here, one per repository (:func:`cache_dir`).
-CACHES: Final = f'{ROOT}/cache'
-
 
 def cache_dir(repo_url: str) -> str:
-    """The bare cache of *repo_url*: ``~/ci/cache/<owner>-<name>-<sha256(url)[:8]>.git``, one per repository.
+    """The bare cache of *repo_url*: ``<root>/cache/git/<owner>-<name>-<sha256(url)[:8]>.git``, one per repository.
 
     The readable part names the repository; the hash keeps two URLs apart that share it (another host). A
     cache's ``origin`` is *repo_url* and holds only its heads (:func:`fetch_script`), so a tree's repository
-    identity is its own -- the retired shared ``~/ci/cache.git`` mixed every repository's heads under one
+    identity is its own -- the retired shared ``cache.git`` mixed every repository's heads under one
     ``origin``.
     """
     parts = [p for p in repo_url.rstrip('/').removesuffix('.git').replace(':', '/').split('/') if p][-2:]
@@ -80,9 +86,6 @@ PREP_LOG: Final = '.lab-ci/prep.log'
 
 #: The prefix of a ``<step>=<seconds>s`` timing line -- printed AND appended to :data:`PREP_LOG`.
 TIME: Final = '@@@ time'
-
-#: uv's cache, shared by every key (concurrency-safe by its own lock).
-UV_CACHE: Final = f'{ROOT}/uv-cache'
 
 #: Ends every env build: the cache keeps only what was built from source, never a resident copy of the
 #: downloads (a file is an HPC resource; the uv cache measured 43-48 k files per account, 2026-10-17).
@@ -154,8 +157,8 @@ class RunSpec:
 
     @property
     def tree(self) -> str:
-        """The worktree, ``~``-relative so the shell expands it."""
-        return f'~/ci/trees/{self.sha}'
+        """The worktree, as the remote shell spells it (:func:`lab_commons.hpc.layout.run_tree`)."""
+        return run_tree(self.sha)
 
 
 def fetch_script(spec: RunSpec) -> str:
@@ -169,13 +172,14 @@ def fetch_script(spec: RunSpec) -> str:
     return '\n'.join(
         [
             'set -eu',
-            f'mkdir -p {ROOT}/trees {ROOT}/packs {ROOT}/bin {ROOT}/runs {CACHES}',
+            REQUIRE_ROOT,
+            f'mkdir -p {RUNS}/{sha} {PACKS} {BIN} {CACHES}',
             f'[ -d {cache} ] || git init -q --bare {cache}',
             f'git -C {cache} remote add origin {url} 2>/dev/null || git -C {cache} remote set-url origin {url}',
             f'have() {{ git -C {cache} cat-file -e {sha}^{{commit}} 2>/dev/null; }}',
             f'have || git -C {cache} fetch -q --prune origin "+refs/heads/*:refs/remotes/origin/*"',
             f'have || git -C {cache} fetch -q origin {sha} 2>/dev/null || true',
-            f'P={ROOT}/packs/{sha}.pack',
+            f'P={PACKS}/{sha}.pack',
             (
                 f'have || {{ [ -s "$P" ] && git -C {cache} index-pack --stdin < "$P" > /dev/null'
                 f' && git -C {cache} update-ref refs/lab-ci/{sha} {sha}; }} || true'
@@ -242,7 +246,7 @@ def submodules_script(repo_url: str) -> list[str]:
     A commit's tree INCLUDES its submodules at their pinned commits: without them a test reading a submodule's
     data fails as if the code were broken, and an install with a path dependency into one cannot build at all.
     Each submodule's URL comes from the commit's ``.gitmodules``, a relative one resolved against its parent's
-    URL as git resolves it; its objects live in ``~/ci/cache`` under the name :func:`cache_dir` gives that URL
+    URL as git resolves it; its objects live in the account's git cache under the name :func:`cache_dir` gives that URL
     (fetched over the same ``origin`` credentials as the repository's own), its pinned commit is held by a
     ``refs/lab-ci/<sha>`` ref, and its checkout is a detached worktree at its path -- nothing is written into
     another repository's cache, and a reused tree is re-pointed, never re-cloned. A pinned commit no fetch
@@ -317,11 +321,11 @@ def build_script(spec: RunSpec) -> str:
     """Add the tree, build (or REUSE) its venv and native build, write its ``.lab-ci/env.sh``. Prints the facts.
 
     The item runner's source arrives on stdin, so the script's first line is a ``cat``. Declared inputs
-    (:mod:`lab_commons.hpc.builds`) put the venv in ``~/ci/envs/<key>`` and the native build in
-    ``~/ci/native/<key>``, each built once per key under a ``flock``; the tree's ``source_roots`` reach
+    (:mod:`lab_commons.hpc.builds`) put the venv in ``<root>/envs/<key>`` and the native build in
+    ``<root>/native/<key>``, each built once per key under a ``flock``; the tree's ``source_roots`` reach
     them through ``PYTHONPATH``. A FAILED BUILD STOPS THE
     RUN: each build runs in its own ``bash -e``, its output is kept in a log next to what it builds
-    (``~/ci/envs/<key>.log`` beside the env), and a non-zero exit -- or no ``bin/python``
+    (``<root>/envs/<key>.log`` beside the env), and a non-zero exit -- or no ``bin/python``
     after it -- prints :data:`BUILD_FAILED` and the log's tail instead of the facts. Measured 2026-10-09:
     shards were submitted with no venv in their tree and all 276 died on ``.venv/bin/activate``.
 
@@ -336,16 +340,16 @@ def build_script(spec: RunSpec) -> str:
     ``min_age_hours`` (:mod:`dev_lab.dev.retentionplan`), and a re-run reusing an old tree touched nothing --
     measured 2026-11-11, it was removed under ``uv sync``, whose log ended ``Current directory does not exist``.
     """
-    cache, tree, builds = cache_dir(spec.repo_url), f'{ROOT}/trees/{spec.sha}', spec.builds
+    cache, tree, builds = cache_dir(spec.repo_url), run_tree(spec.sha), spec.builds
     python = f' --python {shlex.quote(spec.python)}' if spec.python else ''
     if not builds.env_key or not builds.install:
         msg = 'a build needs the declared install and its env key (lab_commons.hpc.builds.builds_at)'
         raise ValueError(msg)
-    env, env_log = f'{ROOT}/envs/{builds.env_key}', f'{ROOT}/envs/{builds.env_key}.log'
+    env, env_log = f'{ENVS}/{builds.env_key}', f'{ENVS}/{builds.env_key}.log'
     activate = 'export VIRTUAL_ENV="$E" PATH="$E/bin:$PATH" UV_PROJECT_ENVIRONMENT="$E"'
     lines = [
         'set -eo pipefail',
-        f'cat > {ROOT}/bin/{ITEM_MODULE}.py',
+        f'cat > {BIN}/{ITEM_MODULE}.py',
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
         *submodules_script(spec.repo_url),
@@ -363,13 +367,13 @@ def build_script(spec: RunSpec) -> str:
     ]
     path = [f'{tree}/{root}' for root in builds.source_roots]
     if builds.native_key:
-        native = f'{ROOT}/native/{builds.native_key}'
-        cargo = f'export CARGO_TARGET_DIR="$HOME"/{cargo_target(builds.native_key)}\nmkdir -p "$CARGO_TARGET_DIR"'
+        native = f'{NATIVE}/{builds.native_key}'
+        cargo = f'export CARGO_TARGET_DIR={ROOT}/{cargo_target(builds.native_key)}\nmkdir -p "$CARGO_TARGET_DIR"'
         cargo += '\nexec 8> "$CARGO_TARGET_DIR.lock"; flock 8'
         build = f'{activate}\nexport LAB_CI_NATIVE="$N"\n{cargo}\n{builds.native_build}'
         lines += [f'export N={native}', *_timed('native', keyed_build('"$N"', f'{native}.log', build))]
         path.append(native)
-    pythonpath = ':'.join([*path, f'{ROOT}/bin']).replace('"$HOME"', '$HOME')
+    pythonpath = ':'.join([*path, BIN]).replace(ROOT, ROOT.replace('"', ''))
     lines += [
         'printf \'export VIRTUAL_ENV="%s" PATH="%s/bin:$PATH"\\n\' "$E" "$E" > .lab-ci/env.sh',
         f'echo "export PYTHONPATH=\\"{pythonpath}\\${{PYTHONPATH:+:\\$PYTHONPATH}}\\"" >> .lab-ci/env.sh',
@@ -392,7 +396,7 @@ def collect_command(spec: RunSpec, *, also: str = '') -> str:
     if also:
         parts.append(f'({also})')
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
-    head = f'cd {ROOT}/trees/{spec.sha} && {ENV} && '
+    head = f'cd {run_tree(spec.sha)} && {ENV} && '
     if any(token.startswith('-') for token in shlex.split(spec.collect)):
         body = (
             f'python -m pytest --collect-only -q -p no:cacheprovider --color=no'
@@ -401,7 +405,7 @@ def collect_command(spec: RunSpec, *, also: str = '') -> str:
     else:
         seed = shlex.quote(f'{spec.builds.env_key}:{spec.builds.native_key}:{spec.python}')
         body = (
-            f'{{ python {ROOT}/bin/{COLLECT_MODULE}.py --cache {ROOT}/collect --key {seed}{select}'
+            f'{{ python {BIN}/{COLLECT_MODULE}.py --cache {COLLECT} --key {seed}{select}'
             f' --out .lab-ci/collected.txt -- {spec.collect} || true; }}; cat .lab-ci/collected.txt'
         )
     return head + '; '.join(_timed('collect', [f'{{ {body}; }}']))

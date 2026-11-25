@@ -27,6 +27,7 @@ Example::
 
     [policy]                              # optional: how the work is cut
     shard_minutes_max = 30
+    grants = ["ada-alice"]                # optional: only these grants (user or <cluster>-<user>) may run it
 
     [task]                                # optional: what ONE array task holds (default: one item, shared node)
     lane_domains = 2                      # a WHOLE node in lanes of 2 L3 domains, one item each (no [cost] cpus)
@@ -40,9 +41,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.resources.dimensions import CPU, GPU, MEMORY
+from lab_commons.dimensions import CPU, GPU, MEMORY
 
-#: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.resources.dimensions.MEMORY` counts bytes.
+#: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.dimensions.MEMORY` counts bytes.
 GIB: Final = 1024**3
 
 #: The shortest ``status``/``gather --wait`` poll: each poll is an ssh to a login host (user ruling 2026-11-11).
@@ -75,7 +76,7 @@ class Cost:
             raise ValueError(msg)
 
     def demands(self) -> dict[str, float]:
-        """The cost in :data:`~lab_commons.resources.dimensions.DIMENSIONS` units (read by `width.fits`)."""
+        """The cost in :data:`~lab_commons.dimensions.DIMENSIONS` units (read by `width.fits`)."""
         return {CPU.name: self.cpus, MEMORY.name: self.mem_gb * GIB, GPU.name: self.gpus}
 
 
@@ -107,6 +108,8 @@ class Policy:
     #: The most files one job's run directory may hold on the shared home, judged at gather (a file is an HPC
     #: resource: the home's quota counts files). A run is its manifest, its script and its one results file.
     file_budget: int = 10
+    #: The grants this job may be placed on (``user`` or ``<cluster>-<user>``); empty: every reachable grant.
+    grants: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """A window that is empty or inverted cannot place a single shard."""
@@ -169,6 +172,9 @@ class JobSpec:
     rerun_safe: bool = False
     #: The artifact format a job at ``sha`` runs from (:data:`lab_commons.hpc.artifact.FORMATS`).
     artifact: str = 'tarball'
+    #: The needs the job's environment serves (the tests' need vocabulary): their extras, and only theirs, are
+    #: installed (:func:`lab_commons.extras.sync_command`) -- a job needing no heavy extra builds none.
+    needs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """A commit names its remote."""
