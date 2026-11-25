@@ -46,6 +46,7 @@ import glob
 import os
 import sys
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -64,6 +65,7 @@ __all__ = [
     'git_credential_stores',
     'home',
     'part',
+    'pinned_bin',
     'repo_of',
     'repos',
     'sync_defaults',
@@ -123,6 +125,19 @@ def part(name: str) -> Path:
 def tools() -> Path:
     """The toolchain's managed tool root, ``<home>/tools``."""
     return part('tools')
+
+
+def pinned_bin(*, windows: bool | None = None, environ: Mapping[str, str] | None = None) -> Path:
+    """Where a pinned-release tool's binary is placed (rclone, uv): user-space and removable.
+
+    ``~/.local/bin`` on POSIX (already on a cluster tick's ``PATH``), ``%LOCALAPPDATA%/dev-lab/bin`` on Windows.
+    dev-lab's install door writes here; a product resolves a pinned tool here and nowhere else.
+    """
+    env = os.environ if environ is None else environ
+    if os.name == 'nt' if windows is None else windows:
+        base = env.get('LOCALAPPDATA') or str(Path(env.get('USERPROFILE', str(Path.home()))) / 'AppData' / 'Local')
+        return Path(base) / 'dev-lab' / 'bin'
+    return Path(env.get('HOME', str(Path.home()))) / '.local' / 'bin'
 
 
 def config_path() -> Path:

@@ -13,8 +13,9 @@ inputs and vendor results): an object lives once under ``<remote>/<prefix>/<sha[
 * :meth:`RcloneObjects.verify` re-hashes a stored object in place of trusting it.
 
 WHICH store is the family's fact (``[storage] runs``, :mod:`lab_commons.storage`): :func:`declared_objects`
-derives it. The rclone binary and its rendered config are the caller's to name (the pinned install and the render
-door live in dev-lab); this module never guesses one from ``PATH``.
+derives it, with the machine's pinned rclone (:func:`rclone_exe`, under :func:`lab_commons.home.pinned_bin`) and the
+config dev-lab renders (:data:`RCLONE_CONFIG`) -- so a product needs no dev-lab import. Either absent is refused by
+name with its door (:class:`RcloneAbsent`, :class:`ConfigUnrendered`); ``PATH`` is never guessed.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from lab_commons import home as _home
 from lab_commons import launch as _door
 from lab_commons import storage as _storage
 from lab_commons.compute.store import ArrivalMismatch, Ref
@@ -37,13 +39,17 @@ from lab_commons.compute.store import ArrivalMismatch, Ref
 __all__ = [
     'OBJECTS_PREFIX',
     'RCLONE',
+    'RCLONE_CONFIG',
     'SCRATCH_PREFIX',
+    'ConfigUnrendered',
     'NotLocked',
     'ObjectRefused',
+    'RcloneAbsent',
     'RcloneObjects',
     'UploadUnverified',
     'declared_objects',
     'file_sha256',
+    'rclone_exe',
 ]
 
 #: The durable key prefix every run's objects live under on the declared store.
@@ -52,6 +58,8 @@ OBJECTS_PREFIX: Final = 'results'
 SCRATCH_PREFIX: Final = 'scratch'
 #: The backend name a :class:`~lab_commons.compute.store.Ref` of this store carries.
 RCLONE: Final = 'rclone'
+#: Where dev-lab's ``storage render`` writes this machine's rclone remotes (owner-only, outside every repo).
+RCLONE_CONFIG: Final = Path('~/.config/lab-commons/rclone.conf')
 
 _SHA256: Final = re.compile(r'[0-9a-f]{64}')
 _FORBIDDEN: Final = frozenset('"*:<>?\\|')
@@ -69,6 +77,26 @@ class NotLocked(ObjectRefused):
 
 class UploadUnverified(ObjectRefused):
     """An upload whose stored bytes do not re-hash to the file's sha256; the object was removed."""
+
+
+class RcloneAbsent(ObjectRefused):
+    """The pinned rclone is not placed on this machine: the message names its install door."""
+
+
+class ConfigUnrendered(ObjectRefused):
+    """No rendered rclone config on this machine: the message names the render door."""
+
+
+def rclone_exe() -> Path:
+    """The pinned rclone under :func:`lab_commons.home.pinned_bin`; absent raises :class:`RcloneAbsent`."""
+    exe = _home.pinned_bin() / ('rclone.exe' if os.name == 'nt' else 'rclone')
+    if not exe.is_file():
+        msg = (
+            f'the pinned rclone is not at {exe} (a PATH rclone is not the pinned one): '
+            '`python -m dev_lab.dev.toolrelease install rclone`'
+        )
+        raise RcloneAbsent(msg)
+    return exe
 
 
 def file_sha256(path: Path) -> str:
@@ -209,13 +237,29 @@ class RcloneObjects:
 
 
 def declared_objects(
-    declared: _storage.Storage | None = None, *, rclone: Sequence[str], config: Path
+    declared: _storage.Storage | None = None, *, rclone: Sequence[str] | None = None, config: Path | None = None
 ) -> RcloneObjects | None:
-    """The family's run store (``[storage] runs``) through *rclone* reading *config*; ``None`` when undeclared.
+    """The family's run store (``[storage] runs``); ``None`` when undeclared, with nothing resolved.
 
-    Reach is not proven here: dev-lab's ``storage check`` renders *config* and lists the remote.
+    A product passes nothing: the pinned :func:`rclone_exe` and the rendered :data:`RCLONE_CONFIG` are resolved
+    here. dev-lab's reach door passes the *rclone* it names and the *config* it just rendered (its ``--to``).
+    Reach is not proven here: ``python -m dev_lab.dev.storage check <remote>`` lists the remote.
+
+    Raises:
+        RcloneAbsent: no *rclone* given and the pinned one is not placed.
+        ConfigUnrendered: no *config* given and :data:`RCLONE_CONFIG` was never rendered.
+
     """
     declared = _storage.declared() if declared is None else declared
     if declared.runs is None:
         return None
-    return RcloneObjects(declared.runs, OBJECTS_PREFIX, (*rclone, f'--config={config.expanduser()}'))
+    argv = (str(rclone_exe()),) if rclone is None else tuple(rclone)
+    if config is None:
+        config = RCLONE_CONFIG.expanduser()
+        if not config.is_file():
+            msg = (
+                f'no rendered rclone config at {config}: `python -m dev_lab.dev.storage render` '
+                f'(then `python -m dev_lab.dev.storage check {declared.runs_remote}`)'
+            )
+            raise ConfigUnrendered(msg)
+    return RcloneObjects(declared.runs, OBJECTS_PREFIX, (*argv, f'--config={config.expanduser()}'))

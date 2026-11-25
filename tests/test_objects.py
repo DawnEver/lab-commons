@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from lab_commons import home
 from lab_commons.compute.store import (
     RECORD,
     REF_SUFFIX,
@@ -23,11 +24,15 @@ from lab_commons.compute.store import (
 )
 from lab_commons.objects import (
     OBJECTS_PREFIX,
+    RCLONE_CONFIG,
+    ConfigUnrendered,
     NotLocked,
     ObjectRefused,
+    RcloneAbsent,
     RcloneObjects,
     UploadUnverified,
     declared_objects,
+    rclone_exe,
 )
 from lab_commons.storage import Storage, declared
 
@@ -236,17 +241,78 @@ def _family(*, runs: str | None = 'bucket:vault') -> Storage:
     return declared({}, {'storage': {'remotes': {'bucket': remote}, **({'runs': runs} if runs else {})}})
 
 
-def test_the_declared_run_store_reads_the_rendered_config(tmp_path: Path) -> None:
-    conf = tmp_path / 'rclone.conf'
-    objects = declared_objects(_family(), rclone=('rclone',), config=conf)
+@pytest.fixture
+def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A user home of its own: the pinned bin directory and the rendered config both resolve under *tmp_path*."""
+    for name in ('HOME', 'USERPROFILE'):
+        monkeypatch.setenv(name, str(tmp_path / 'user'))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'local'))
+    return tmp_path
+
+
+def _placed(*, rclone: bool = True, config: bool = True) -> tuple[Path, Path]:
+    exe = home.pinned_bin() / ('rclone.exe' if sys.platform == 'win32' else 'rclone')
+    conf = RCLONE_CONFIG.expanduser()
+    for there, wanted in ((exe, rclone), (conf, config)):
+        if wanted:
+            there.parent.mkdir(parents=True, exist_ok=True)
+            there.write_bytes(b'')
+    return exe, conf
+
+
+@pytest.mark.parametrize(
+    ('windows', 'environ', 'expected'),
+    [(False, {'HOME': '/h/u'}, Path('/h/u/.local/bin')), (True, {'LOCALAPPDATA': 'C:/L'}, Path('C:/L/dev-lab/bin'))],
+)
+def test_the_pinned_bin_is_user_space_per_os(windows: bool, environ: dict[str, str], expected: Path) -> None:  # noqa: FBT001
+    assert home.pinned_bin(windows=windows, environ=environ) == expected
+
+
+def test_the_declared_run_store_resolves_the_pinned_rclone_and_the_rendered_config(machine: Path) -> None:
+    """No argument: the product reads both from the machine, never from dev-lab and never from PATH."""
+    exe, conf = _placed()
+    objects = declared_objects(_family())
     assert objects is not None
     assert (objects.remote, objects.prefix) == ('bucket:vault', OBJECTS_PREFIX)
-    assert objects.rclone == ('rclone', f'--config={conf}'), 'every call reads the rendered config, never a default'
+    assert objects.rclone == (str(exe), f'--config={conf}'), 'every call reads the rendered config, never a default'
+    assert conf.is_relative_to(machine)
 
 
-def test_an_undeclared_run_store_is_none() -> None:
-    """PLANTED CONTROL: no ``[storage] runs`` -- no store (an oversize result stays local, TooLarge)."""
-    assert declared_objects(_family(runs=None), rclone=('rclone',), config=Path('c.conf')) is None
+def test_an_absent_pinned_rclone_is_refused_with_its_door_even_on_path(
+    machine: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PLANTED CONTROL: an rclone on PATH is not the pinned one, so it is still refused by name."""
+    _placed(rclone=False)
+    stray = machine / 'path'
+    stray.mkdir()
+    (stray / ('rclone.exe' if sys.platform == 'win32' else 'rclone')).write_bytes(b'')
+    monkeypatch.setenv('PATH', str(stray))
+    with pytest.raises(RcloneAbsent, match=r'toolrelease install rclone'):
+        declared_objects(_family())
+    with pytest.raises(RcloneAbsent):
+        rclone_exe()
+
+
+def test_an_unrendered_config_is_refused_with_its_door(machine: Path) -> None:
+    """PLANTED CONTROL: the pinned rclone is there, the rendered config is not."""
+    del machine
+    _placed(config=False)
+    with pytest.raises(ConfigUnrendered, match=r'storage render'):
+        declared_objects(_family())
+
+
+def test_explicit_rclone_and_config_are_the_caller_s(tmp_path: Path) -> None:
+    """dev-lab's reach door renders to its own ``--to`` and names its rclone: both pass through unchecked."""
+    conf = tmp_path / 'c.conf'
+    objects = declared_objects(_family(), rclone=('fake',), config=conf)
+    assert objects is not None
+    assert objects.rclone == ('fake', f'--config={conf}')
+
+
+def test_an_undeclared_run_store_is_none_and_resolves_nothing(machine: Path) -> None:
+    """PLANTED CONTROL: no ``[storage] runs`` -- ``None`` with no rclone and no config placed (no refusal)."""
+    del machine
+    assert declared_objects(_family(runs=None)) is None
 
 
 class Shared:
