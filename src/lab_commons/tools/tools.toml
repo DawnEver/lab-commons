@@ -1,0 +1,63 @@
+# THE FAMILY'S TOOL CATALOGUE: how each external tool reaches a machine, and for a managed tool what each release IS.
+# Read by `python -m lab_commons.tools` (lab_commons.tools.catalogue), which refuses any other key by name.
+#
+# WHICH version a repo needs is NOT stated here: that is the serving repo's [tool.lab_commons.tools] floor or one
+# release (lab_commons.compute.presence). Every tool here is verified by its lab-commons probe
+# (lab_commons.compute.toolchecks.CHECKS).
+#
+# [<tool>]
+#   mode     managed         -- the door downloads, verifies the sha256 and installs under <home>/tools/<tool>/<version>/
+#            user-installed  -- licensed and installed by its own vendor installer; the door reads the install home
+#                               this machine declares (hosts-config hosts/<host>.toml [dev.vendors.<vendor>] home) and
+#                               probes it; it never downloads it
+#   vendor   user-installed only: the [dev.vendors.<vendor>] holding its home, when not the tool's own name
+#
+# [<tool>.releases."<version>".<os>]   managed only; os: windows | linux | macos
+#   kind          inno | msi | zip | source-build
+#   url           the https source (downloaded kinds only)
+#   sha256        the vendor's published SHA-256, verified BEFORE anything runs (downloaded kinds only)
+#   binary        the executable the probe reads, relative to <home>/tools/<tool>/<version>/
+#   builder       source-build only: the deploy step that builds and installs into <home>/tools/<tool>/<version>/
+#   dir_property  msi only: the MSI property naming the install directory (default INSTALLDIR)
+
+# FEMM 5 (femm-qt): the one release the family allows (user ruling 2026-11-25). sha256: femm.info's published hash,
+# re-measured on the downloaded installer 2026-11-25.
+[femm]
+mode = "managed"
+
+[femm.releases."5.0.20261112".windows]
+kind = "inno"
+url = "https://www.femm.info/doku/lib/exe/fetch.php?media=femm-qt:dist:femm-5.0.20261112-1157.exe"
+sha256 = "540ba8e45fd56dba61be696a43fd1a80989969d50562a9a46f9aab9b152085d4"
+binary = "bin/femm_headlessw.exe"
+
+# Linux has no published binary: femm_headless is built from source by the account deploy step, installed with the
+# femm-qt build stamp (generated/version.env) beside the binary; this door then verifies and records it.
+[femm.releases."5.0.20261112".linux]
+kind = "source-build"
+builder = "the femm step of `python -m dev_lab.dev.hpcaccount deploy`"
+binary = "bin/femm_headless"
+
+# Commercial tools, licensed and installed by their vendors' own installers (v1 review L5, 2026-11-25).
+[jmag]
+mode = "user-installed"
+
+[matlab]
+mode = "user-installed"
+
+# One Ansys install home holds every engine's v<NNN> release directories.
+[aedt]
+mode = "user-installed"
+vendor = "ansys"
+
+[fluent]
+mode = "user-installed"
+vendor = "ansys"
+
+[mapdl]
+mode = "user-installed"
+vendor = "ansys"
+
+[lsdyna]
+mode = "user-installed"
+vendor = "ansys"

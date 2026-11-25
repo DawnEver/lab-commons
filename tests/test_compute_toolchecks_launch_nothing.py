@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.compute.toolchecks import CHECKS, LSDYNA_SOLVERS, VersionUnreadable
+from lab_commons.compute.toolchecks import CHECKS, LSDYNA_SOLVERS, Unmanaged, VersionUnreadable
 
 #: Every way Python starts another program; each is replaced by the recorder.
 _STARTERS = ('Popen', 'startfile', 'system', 'spawnv', 'spawnve', 'spawnl', 'execv', 'execve', 'posix_spawn')
@@ -69,7 +69,8 @@ def test_the_recorder_catches_a_check_that_launches(launched: list[object], tmp_
 def test_a_check_launches_nothing(launched: list[object], tmp_path: Path, tool: str) -> None:
     check = CHECKS[tool]
     exe = _fake_install(tmp_path, tool)
-    check.find()
+    with contextlib.suppress(Unmanaged):  # this host's own hand install is a refused reading, not a launch
+        check.find()
     with contextlib.suppress(VersionUnreadable):  # a refused reading is a reading: what counts is no launch
         check.version(exe)
     passed, detail = check.smoke(exe)
