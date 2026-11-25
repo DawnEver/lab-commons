@@ -104,9 +104,10 @@ hosted = { linux = { setup = "sudo apt-get update -q && sudo apt-get install -y 
 resources = ["linux", "macos", "windows"]
 produce = ["-m", "dev_lab.dev.verify", "--part", "{part}"]
 
-# The tool FLOORS this repo's parts need (D21): `<tool> = {floor = "<version>", reason = "<why>"}`. A
-# declaration is a floor with its reason, never a pin (user ruling 2026-10-17); a tool needing no floor --
-# node, here -- is not declared, is present at any version whose smoke passes, and its version is recorded.
+# The tool versions this repo's parts need (D21): a floor, `<tool> = {floor = "<version>", reason = "<why>"}`,
+# or one release, `<tool> = {exact = "<version>", reason = "<why only it serves>"}` -- never a pin without its
+# reason (user rulings 2026-10-17, 2026-11-25); a tool needing neither -- node, here -- is not declared, is
+# present at any version whose smoke passes, and its version is recorded (lab_commons.compute.presence).
 [tool.lab_commons.tools]
 
 # The family branch flow: integrate/main coordinates; main moves only by `integrate promote` (fast-forward)

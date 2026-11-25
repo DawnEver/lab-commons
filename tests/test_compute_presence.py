@@ -137,10 +137,51 @@ def test_the_family_floor_is_declared_once_in_the_serving_repo_with_its_reason(t
     }
 
 
+def test_one_release_is_declared_with_the_reason_only_it_serves(tmp_path: Path) -> None:
+    """User ruling 2026-11-25: the family runs only the newest FEMM 5 release -- one exact version, as data."""
+    (tmp_path / 'pyproject.toml').write_text(
+        '[tool.lab_commons.tools]\nfemm = {exact = "5.0.20261112", reason = "only the newest FEMM 5"}\n', 'utf-8'
+    )
+    assert declared_versions(tmp_path) == {'femm': Requirement('5.0.20261112', 'only the newest FEMM 5', exact=True)}
+
+
+def test_the_one_release_admits_itself_and_refuses_older_and_newer_naming_each_door() -> None:
+    newest = Requirement('5.0.20261112', 'only the newest FEMM 5', exact=True)
+    assert probe('femm', Fake(version='5.0.20261112').check(), newest, now=NOW).present  # PLANTED CONTROL
+    older = probe('femm', Fake(version='5.0.20261021').check(), newest, now=NOW)
+    assert not older.present
+    assert older.evidence[-1].value == (
+        'older than 5.0.20261112, the one release allowed (only the newest FEMM 5): upgrade to 5.0.20261112'
+    )
+    newer = probe('femm', Fake(version='5.0.20261201').check(), newest, now=NOW)
+    assert not newer.present, 'a newer release is refused too, so the declaration moves deliberately'
+    assert newer.evidence[-1].value == (
+        'newer than 5.0.20261112, the one release allowed (only the newest FEMM 5): '
+        'move the [tool.lab_commons.tools] declaration to it once it is measured'
+    )
+    unread = probe('femm', Fake(version='unread').check(), newest, now=NOW)
+    assert not unread.present, 'an unordered reading is never the one release'
+
+
+def test_a_reading_against_one_release_survives_the_cache_round_trip(tmp_path: Path) -> None:
+    state, fake = tmp_path / 'presence.json', Fake(version='5.0.20261112')
+    newest = {'femm': Requirement('5.0.20261112', 'only the newest FEMM 5', exact=True)}
+    assert refresh(newest, checks={'femm': fake.check()}, state=state, now=NOW)['femm'].present
+    assert json.loads(state.read_text('utf-8'))['femm']['required'] == '==5.0.20261112'
+    assert renew('femm', checks={'femm': fake.check()}, state=state, now=NOW + TTL).present
+    fake.version = '5.0.20261201'
+    assert not renew('femm', checks={'femm': fake.check()}, state=state, now=NOW + 2 * TTL).present, (
+        'PLANTED CONTROL: renewed against the stored exact release, a newer build is refused'
+    )
+
+
 @pytest.mark.parametrize(
     'row',
     [
-        'femm = "5.0"',  # an exact pin, retired 2026-10-17
+        'femm = "5.0"',  # a bare version: a pin with no reason
+        'femm = {exact = "5.0.20261112"}',  # one release with no reason
+        'femm = {exact = "5.0.20261112", floor = "5.0", reason = "r"}',  # one release AND a floor
+        'femm = {exact = "5.0.20261112", reason = "r", below = "6", incompatible = "x"}',  # one release AND a bound
         'femm = {floor = "5.0"}',  # a floor with no reason
         'femm = {floor = "5.0", reason = "-run", below = "6"}',  # an upper bound with no incompatibility
         'femm = {floor = 5, reason = "-run"}',
@@ -148,8 +189,9 @@ def test_the_family_floor_is_declared_once_in_the_serving_repo_with_its_reason(t
 )
 def test_a_pin_or_an_unreasoned_bound_is_refused_naming_the_shape(tmp_path: Path, row: str) -> None:
     (tmp_path / 'pyproject.toml').write_text(f'[tool.lab_commons.tools]\n{row}\n', 'utf-8')
-    with pytest.raises(ValueError, match='floor with its reason'):
+    with pytest.raises(ValueError, match='floor with its reason') as refused:
         declared_versions(tmp_path)
+    assert 'exact = "' in str(refused.value), 'the refusal quotes the one-release shape too'
 
 
 def test_a_later_build_meets_the_floor_and_an_earlier_one_is_refused_naming_it() -> None:

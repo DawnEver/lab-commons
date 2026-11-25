@@ -4,12 +4,16 @@ A tool is PRESENT on a host only when all four agree:
 
 1. its executable is FOUND -- a declared path (an environment variable the tool's own docs name), a
    standard install directory, the registry or ``PATH``;
-2. its VERSION reads (``--version``, the executable's file version, its install path, its package
-   metadata) and meets the FLOOR the serving repo declares ONCE for the family, in its ``pyproject.toml``
-   ``[tool.lab_commons.tools]`` (``<tool> = {floor = "<version>", reason = "<why>"}``; ``below`` only with
-   its stated ``incompatible``). A declaration is a floor, never a pin (user ruling 2026-10-17: no pin
-   unless a reason requires it -- record, don't pin): a tool with no declaration is present at any version
-   that reads, and the version read is RECORDED in every run record (:func:`measured`);
+2. its VERSION reads (the executable's file version, an install's version file, its install path, its
+   package metadata) and meets what the serving repo declares ONCE for the family, in its ``pyproject.toml``
+   ``[tool.lab_commons.tools]``: a FLOOR (``<tool> = {floor = "<version>", reason = "<why>"}``; ``below``
+   only with its stated ``incompatible``), or ONE RELEASE with the reason only it serves
+   (``<tool> = {exact = "<version>", reason = "<why>"}``), which refuses an older reading with its upgrade
+   door and a newer one too, so the declaration moves deliberately. No pin unless a reason requires it
+   (user ruling 2026-10-17 -- record, don't pin); the family's FEMM is such a reason (2026-11-25: only the
+   newest FEMM 5). A tool with no declaration is present at any version that reads, and the version read is
+   RECORDED in every run record (:func:`measured`). An install that states no version is absent, its
+   refusal naming the door (:class:`~lab_commons.compute.toolchecks.VersionUnreadable`);
 3. a SMOKE check passes -- the install is there and whole, read without launching it
    (:data:`~lab_commons.compute.toolchecks.CHECKS`);
 4. no real unit on that tool has failed on this host since that smoke (:func:`demote`).
@@ -43,9 +47,10 @@ from typing import Any, Final
 
 from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
-from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed
+from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed, VersionUnreadable
 
 __all__ = [
+    'EXACT_SHAPE',
     'TTL',
     'Evidence',
     'Presence',
@@ -63,8 +68,9 @@ __all__ = [
 #: How long one probe's reading holds before :func:`refresh` runs it again and :func:`cached` reads it absent.
 TTL: Final = timedelta(hours=6)
 
-#: What a declaration looks like, quoted by the refusal of any other shape.
+#: What a declaration looks like, quoted by the refusal of any other shape: a floor, or one release.
 SHAPE: Final = 'femm = {floor = "5.0", reason = "<why no lower version serves>"}'
+EXACT_SHAPE: Final = 'femm = {exact = "5.0.20261112", reason = "<why only this release serves>"}'
 
 
 @dataclass(frozen=True)
@@ -123,18 +129,28 @@ def _key(text: str) -> tuple[tuple[int, int | str], ...] | None:
 
 @dataclass(frozen=True)
 class Requirement:
-    """A declared FLOOR with its reason; an upper bound (*below*) only with its stated *incompatible*."""
+    """A declared FLOOR with its reason; an upper bound (*below*) only with its stated *incompatible*.
+
+    *exact*: the floor is the ONE release allowed -- an older and a newer reading are both refused.
+    """
 
     floor: str
     reason: str
     below: str | None = None
     incompatible: str = ''
+    exact: bool = False
 
     def refusal(self, read: str) -> str | None:
-        """Why *read* misses this requirement, naming the bound and its reason; ``None`` when it meets it."""
+        """Why *read* misses this requirement, naming the bound, its reason and its door; ``None`` when it meets it."""
         version, floor = _key(read), _key(self.floor)
         if version is None or floor is None:
-            return f'unordered: {read!r} against the floor {self.floor} ({self.reason})'
+            bound = 'the one release' if self.exact else 'the floor'
+            return f'unordered: {read!r} against {bound} {self.floor} ({self.reason})'
+        if self.exact and version != floor:
+            allowed = f'{self.floor}, the one release allowed ({self.reason})'
+            if version < floor:
+                return f'older than {allowed}: upgrade to {self.floor}'
+            return f'newer than {allowed}: move the [tool.lab_commons.tools] declaration to it once it is measured'
         if version < floor:
             return f'below the floor {self.floor} ({self.reason})'
         below = _key(self.below) if self.below is not None else None
@@ -144,13 +160,17 @@ class Requirement:
 
     def text(self) -> str:
         """One line naming the bounds: what a cached reading was taken against."""
+        if self.exact:
+            return f'=={self.floor}'
         return f'>={self.floor}' + (f',<{self.below}' if self.below is not None else '')
 
 
 def _well_formed(row: object) -> bool:
-    if not isinstance(row, dict) or not set(row) <= {'floor', 'reason', 'below', 'incompatible'}:
+    if not isinstance(row, dict) or not all(isinstance(value, str) for value in row.values()):
         return False
-    if not all(isinstance(value, str) for value in row.values()):
+    if 'exact' in row:
+        return set(row) == {'exact', 'reason'} and bool(row['exact']) and bool(row['reason'])
+    if not set(row) <= {'floor', 'reason', 'below', 'incompatible'}:
         return False
     return (
         bool(row.get('floor')) and bool(row.get('reason')) and bool(row.get('below')) == bool(row.get('incompatible'))
@@ -158,11 +178,11 @@ def _well_formed(row: object) -> bool:
 
 
 def declared_versions(root: Path) -> dict[str, Requirement]:
-    """The serving repo's ``[tool.lab_commons.tools]``: ``{tool: its floor}``.
+    """The serving repo's ``[tool.lab_commons.tools]``: ``{tool: its floor, or its one release}``.
 
     Raises:
-        ValueError: a bare version string (an exact pin), a floor without its reason, or an upper bound
-            without its stated incompatibility.
+        ValueError: a bare version string (a pin with no reason), a floor or one release without its
+            reason, one release beside a floor or bound, or an upper bound without its stated incompatibility.
 
     """
     manifest = root / 'pyproject.toml'
@@ -171,13 +191,15 @@ def declared_versions(root: Path) -> dict[str, Requirement]:
     table = tomllib.loads(manifest.read_text(encoding='utf-8')).get('tool', {}).get('lab_commons', {}).get('tools', {})
     if bad := sorted(name for name, row in table.items() if not _well_formed(row)):
         msg = (
-            f'{manifest} [tool.lab_commons.tools]: {bad} must each be a floor with its reason, {SHAPE}, and '
-            '`below` only with `incompatible`; a bare version string would pin, and a tool needing no floor '
-            'is not declared'
+            f'{manifest} [tool.lab_commons.tools]: {bad} must each be a floor with its reason, {SHAPE} '
+            f'(`below` only with `incompatible`), or one release with the reason only it serves, {EXACT_SHAPE}; '
+            'a bare version string would pin with no reason, and a tool needing no floor is not declared'
         )
         raise ValueError(msg)
     return {
-        name: Requirement(row['floor'], row['reason'], row.get('below'), row.get('incompatible', ''))
+        name: Requirement(row['exact'], row['reason'], exact=True)
+        if 'exact' in row
+        else Requirement(row['floor'], row['reason'], row.get('below'), row.get('incompatible', ''))
         for name, row in table.items()
     }
 
@@ -193,7 +215,10 @@ def probe(tool: str, check: Check, declared: Requirement | None, *, now: datetim
         return Presence(tool, present=False, evidence=(Evidence('find', 'not found', at),))
     source, path = found
     seen = [Evidence(f'find: {source}', str(path), at)]
-    version = check.version(path)
+    try:
+        version = check.version(path)
+    except VersionUnreadable as refused:
+        return Presence(tool, present=False, evidence=(*seen, Evidence('version', str(refused), at)))
     if version is None:
         return Presence(tool, present=False, evidence=(*seen, Evidence('version', 'unreadable', at)))
     seen.append(Evidence(f'version: {version[0]}', version[1], at))
@@ -298,7 +323,9 @@ _RENEWING: Final = threading.Lock()
 
 
 def _requirement(required: str) -> Requirement | None:
-    """The inverse of :meth:`Requirement.text` (``any``: none); a stored floor carries no reason, so it says so."""
+    """The inverse of :meth:`Requirement.text` (``any``: none); a stored bound carries no reason, so it says so."""
+    if required.startswith('=='):
+        return Requirement(required.removeprefix('=='), 'as cached', exact=True)
     if not required.startswith('>='):
         return None
     floor, _, below = required.removeprefix('>=').partition(',<')
