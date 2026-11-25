@@ -1,0 +1,9 @@
+/* Packaged with lab_commons.html.data_table; embedded by html_document(data_tables=True). */
+.lab-table-wrap{overflow:auto;max-height:80vh}
+.lab-table{border-collapse:collapse;margin:4px 0;font-size:13px}
+.lab-table th,.lab-table td{border:1px solid #ccc;padding:2px 6px;vertical-align:top;text-align:left}
+.lab-table thead th{background:#f2f2f2;position:sticky;top:0;cursor:pointer;user-select:none}
+.lab-table th[aria-sort=ascending]::after{content:" \25B2"}
+.lab-table th[aria-sort=descending]::after{content:" \25BC"}
+.lab-table caption{text-align:left;font-weight:bold;padding:4px 0}
+.lab-table-filter{margin:4px 0;width:24em;max-width:100%}
