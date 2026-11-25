@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons import home, repostate
+from lab_commons import hostenv, repostate
 
 _GIT = shutil.which('git') or 'git'
 
@@ -27,7 +27,7 @@ def _repo(path: Path) -> Path:
 @pytest.fixture
 def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / 'motronics-home'
-    monkeypatch.setenv(home.HOME_ENV, str(root))
+    monkeypatch.setenv(hostenv.HOME_ENV, str(root))
     return root
 
 
