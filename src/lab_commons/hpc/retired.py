@@ -240,6 +240,11 @@ RETIRED: Final[dict[str, str]] = {
     'read_reasons': 'dev_lab.dev.test_outcomes.read_cells (a reason travels in its cell)',
     'OutcomeRecorder': 'dev_lab.dev.test_outcomes.CellRecorder',
     'outcome_of(': 'lab_commons.hpc.pytest_item.judged (the one pytest mapping, to a plain test cell)',
+    # One object-store client for the family, product code included (D112 F1, 2026-11-25): it moved here whole.
+    'dev_lab.dev.largeobjects': (
+        'lab_commons.objects (RcloneObjects, declared_objects); '
+        'the reach-proving door is dev_lab.dev.storage.run_objects'
+    ),
     **{
         f'[tool.lab_commons.{table}]': f'[tool.dev_lab.{table}] (plan A3: a table only dev-lab reads)'
         for table in MOVED_TABLES
