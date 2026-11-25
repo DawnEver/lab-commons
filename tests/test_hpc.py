@@ -9,6 +9,7 @@ printed, so a parser that drifts from Slurm's real format reds here.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -265,12 +266,15 @@ def test_submit_binds_run_dir_in_every_item_string_and_leaves_the_rest(tmp_path:
 def test_config_round_trip_and_typos_are_refused(tmp_path: Path) -> None:
     path = tmp_path / 'hpc.toml'
     path.write_text(
-        '[cost]\ncpus = 2\nmem_gb = 4\n[job]\nitems = "items.json"\n[policy]\nshard_minutes_max = 30\n',
+        '[cost]\ncpus = 2\nmem = "4 GiB"\nwall = "90 s"\n[job]\nitems = "items.json"\n'
+        '[policy]\nlongest_shard = "30 min"\nstall = "1 h"\npoll = "2 min"\n',
         encoding='utf-8',
     )
     config = load_config(path)
-    assert config.policy.shard_minutes_max == 30
-    assert config.cost == Cost(cpus=2, mem_gb=4)
+    assert config.policy.shard_minutes_max == pytest.approx(30.0, abs=1e-9)
+    assert config.policy.stall_minutes == pytest.approx(60.0, abs=1e-9)
+    assert config.policy.poll_seconds == pytest.approx(120.0, abs=1e-9)
+    assert config.cost == Cost(cpus=2, mem_gb=4, seconds=90)
     assert config.items_path() == tmp_path / 'items.json'
     path.write_text('[cost]\ncpu = 2\n', encoding='utf-8')
     with pytest.raises(ValueError, match='unknown keys'):
@@ -334,3 +338,32 @@ def test_a_throttle_on_an_array_that_already_finished_is_a_no_op_and_any_other_r
 
     with pytest.raises(RuntimeError, match='permission denied'):
         throttle(refused, '1000003', 4)
+
+
+@pytest.mark.parametrize(
+    ('section', 'old', 'line'),
+    [
+        ('cost', 'mem_gb = 4', 'write mem = "4 GiB"'),
+        ('cost', 'seconds = 90', 'write wall = "90 s"'),
+        ('policy', 'shard_minutes_min = 5', 'write shortest_shard = "5 min"'),
+        ('policy', 'shard_minutes_max = 30', 'write longest_shard = "30 min"'),
+        ('policy', 'stall_minutes = 30', 'write stall = "30 min"'),
+        ('policy', 'poll_seconds = 120', 'write poll = "120 s"'),
+    ],
+)
+def test_a_unit_suffixed_job_key_is_refused_with_its_new_line(
+    tmp_path: Path, section: str, old: str, line: str
+) -> None:
+    """FORMATS-MIGRATE-ONCE (user ruling 2026-11-25): the old key is never read; its refusal is its migration."""
+    path = tmp_path / 'hpc.toml'
+    path.write_text(f'[{section}]\n{old}\n', encoding='utf-8')
+    with pytest.raises(ValueError, match=re.escape(line)):
+        load_config(path)
+
+
+def test_a_bare_job_quantity_is_refused_naming_its_key(tmp_path: Path) -> None:
+    """PLANTED: the defect the ruling names -- a number whose unit is nowhere."""
+    path = tmp_path / 'hpc.toml'
+    path.write_text('[cost]\nmem = 4\n', encoding='utf-8')
+    with pytest.raises(ValueError, match=r'\[cost\] mem = 4 is a bare number'):
+        load_config(path)

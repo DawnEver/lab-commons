@@ -13,7 +13,7 @@ only the chosen item indices; an item string holding ``{run_dir}`` is bound to t
 (``<root>/jobs/<sha>/<name>-<stamp>-<n>``), so a re-submission never writes over an earlier one. ``status -c a -c b``
 reads several jobs with ONE ``sacct`` per grant; ``--watch`` polls until any line changes, prints the change and
 exits 0 -- at once when every shard is already settled, and exit :data:`PENDING` after ``--watch-minutes``.
-``gather -c <job> -o <out> --wait`` polls as ``status`` does every ``[policy] poll_seconds``, prints each
+``gather -c <job> -o <out> --wait`` polls as ``status`` does every ``[policy] poll``, prints each
 change once (``pending: <why>`` while no login host answers), and gathers once no shard is queued or running.
 ``cancel -c a [-c b] [--pending-only]`` scancels each job's queued or running shards (only the queued ones with
 ``--pending-only``: started ones keep running) through the login host ``status`` reads by, and records them in
