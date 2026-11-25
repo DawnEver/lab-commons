@@ -7,6 +7,7 @@ an unattended probe then blocks until its timeout. One rule, one test, no per-to
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 from dataclasses import replace
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons.compute.toolchecks import CHECKS, LSDYNA_SOLVERS
+from lab_commons.compute.toolchecks import CHECKS, LSDYNA_SOLVERS, VersionUnreadable
 
 #: Every way Python starts another program; each is replaced by the recorder.
 _STARTERS = ('Popen', 'startfile', 'system', 'spawnv', 'spawnve', 'spawnl', 'execv', 'execve', 'posix_spawn')
@@ -69,7 +70,8 @@ def test_a_check_launches_nothing(launched: list[object], tmp_path: Path, tool: 
     check = CHECKS[tool]
     exe = _fake_install(tmp_path, tool)
     check.find()
-    check.version(exe)
+    with contextlib.suppress(VersionUnreadable):  # a refused reading is a reading: what counts is no launch
+        check.version(exe)
     passed, detail = check.smoke(exe)
     assert launched == []
     assert passed, f'{tool}: an installed executable passes its smoke: {detail}'

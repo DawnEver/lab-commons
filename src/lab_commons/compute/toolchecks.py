@@ -35,14 +35,18 @@ if sys.platform == 'win32':
 __all__ = [
     'ANSYS_ENGINES',
     'CHECKS',
+    'FEMM_VERSION_FILE',
     'LSDYNA_SOLVERS',
     'AnsysEngine',
     'Check',
     'ProbeCrashed',
+    'VersionUnreadable',
     'ansys_find',
     'ansys_release',
     'binary_version',
     'femm_find',
+    'femm_release',
+    'femm_version',
     'file_version',
     'installed_smoke',
     'jmag_find',
@@ -77,6 +81,14 @@ class Check:
 
 class ProbeCrashed(RuntimeError):
     """The PROBE failed to read (it measured nothing); not the tool's answer, so it is never cached."""
+
+
+class VersionUnreadable(Exception):
+    """The tool is found but its install states no version; the message names what was read and the door.
+
+    A *version* reader raises it where a missing version is a defect of the install rather than of the
+    tool (FEMM). The probe records it as the reading, so the tool is absent with its cause on the card.
+    """
 
 
 def file_version(path: Path) -> str | None:
@@ -117,6 +129,66 @@ FEMM_HEADLESS: Final = {
     'linux': ('femm_headless', '~/.local/opt/femm-qt/bin'),
     'windows': ('femm_headlessw.exe', '~/.local/opt/femm-qt/bin'),
 }
+
+
+#: The FEMM 5 install's VERSION FILE, beside the binary: femm-qt's own build stamp, which its
+#: ``cmake/BuildInfo.cmake`` writes to ``<build>/generated/version.env`` -- ``#`` comment lines and
+#: ``KEY=VALUE`` lines, ``FEMM_VERSION=5.0.YYYYMMDD`` among them, femm-qt's ONE version number (its
+#: ``project(VERSION)``, the RELEASE date). Installing femm_headless copies it beside the binary. Read where the
+#: binary carries no file version (Linux), so the version is measured there too (user ruling 2026-11-25).
+FEMM_VERSION_FILE: Final = 'version.env'
+
+#: The version file's key holding the version, and the shape its value must have.
+_FEMM_VERSION_KEY: Final = 'FEMM_VERSION'
+_DOTTED: Final = re.compile(r'\d+(\.\d+)+')
+
+
+def _femm_door(file: Path) -> str:
+    """The door out of a missing or unreadable version file: what the install must carry."""
+    return (
+        f'reinstall femm_headless so its install carries {file} '
+        f'(the femm-qt build stamp generated/{FEMM_VERSION_FILE}, copied beside the binary)'
+    )
+
+
+def femm_release(fixed: str) -> str:
+    """femm-qt's one version number from a Windows file version: ``5.0.2026.1112`` -> ``5.0.20261112``.
+
+    femm-qt's ``cmake/WinVersion.cmake`` fits ``5.0.YYYYMMDD`` into four 16-bit fields by splitting the
+    8-digit patch into ``YYYY`` and ``MMDD``; any other patch sits in field three with field four ``0``.
+    """
+    major, minor, high, low = fixed.split('.')
+    return f'{major}.{minor}.{high}{int(low):04d}' if int(low) else f'{major}.{minor}.{high}'
+
+
+def femm_version(path: Path, *, platform: str = sys.platform) -> tuple[str, str]:
+    """FEMM 5's version, MEASURED: the binary's file version on Windows, else the install's version file.
+
+    Raises:
+        VersionUnreadable: no file version (Windows), or no version file or no ``FEMM_VERSION`` in it.
+
+    """
+    if _SYSTEMS.get(platform) == 'windows':
+        found = file_version(path)
+        if found is None:
+            msg = f'{path} carries no file version: reinstall femm_headless from the FEMM 5 installer'
+            raise VersionUnreadable(msg)
+        return 'file version', femm_release(found)
+    file = path.parent / FEMM_VERSION_FILE
+    try:
+        text = file.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        msg = f'{file} is missing: {_femm_door(file)}'
+        raise VersionUnreadable(msg) from None
+    except (OSError, UnicodeDecodeError) as exc:
+        msg = f'{file} is unreadable ({exc}): {_femm_door(file)}'
+        raise VersionUnreadable(msg) from None
+    rows = (line.partition('=') for line in text.splitlines() if not line.lstrip().startswith('#'))
+    value = next((v.strip() for k, _eq, v in rows if k.strip() == _FEMM_VERSION_KEY), '')
+    if not _DOTTED.fullmatch(value):
+        msg = f'{file} states no {_FEMM_VERSION_KEY}=<a.b.c>: {_femm_door(file)}'
+        raise VersionUnreadable(msg)
+    return 'version file', value
 
 
 def femm_find(
@@ -376,7 +448,7 @@ def lsdyna_smoke(path: Path) -> tuple[bool, str]:
 
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
-    'femm': Check(femm_find, binary_version, installed_smoke, heavy=True),
+    'femm': Check(femm_find, femm_version, installed_smoke, heavy=True),
     'jmag': Check(jmag_find, jmag_version, installed_smoke, heavy=True),
     'matlab': Check(matlab_find, matlab_version, installed_smoke, heavy=True),
     'simba': Check(simba_find, simba_version, simba_smoke, heavy=True),
