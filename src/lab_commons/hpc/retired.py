@@ -245,6 +245,8 @@ RETIRED: Final[dict[str, str]] = {
         'lab_commons.objects (RcloneObjects, declared_objects); '
         'the reach-proving door is dev_lab.dev.storage.run_objects'
     ),
+    # The rendered rclone config's place is a fact a product reads too (D112 F1): it lives in lab_commons.objects.
+    'DEFAULT_RCLONE': 'lab_commons.objects.RCLONE_CONFIG',
     **{
         f'[tool.lab_commons.{table}]': f'[tool.dev_lab.{table}] (plan A3: a table only dev-lab reads)'
         for table in MOVED_TABLES
