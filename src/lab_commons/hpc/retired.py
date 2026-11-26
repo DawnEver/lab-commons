@@ -142,6 +142,7 @@ CLASSIFIED: Final[dict[str, tuple[str, str, str]]] = {
         'box.Outcome': 'lab_commons.box.ProcessEnd (its .status maps a kill onto lab_commons.outcomes.Status)',
         'deploy.Outcome': 'dev_lab.supervise.deploy.PhaseResult (its .status reads OK or ERROR)',
         'execute.Outcome': 'lab_commons.compute.execute.Settled',
+        'tools.install.Outcome': 'lab_commons.tools.install.ToolReport',
         'verdict.Outcome': 'lab_commons.outcomes.Conclusion (same tokens: pass, fail, inconclusive)',
         'forgestatus.Status': 'dev_lab.dev.forgestatus.CommitStatus (a forge commit-status record, not a task result)',
         'forgestatus import Status': 'from dev_lab.dev.forgestatus import CommitStatus',
@@ -386,7 +387,7 @@ RETIRED: Final = {spelling: row[0] for spelling, row in CLASSIFIED.items()}
 #: THE RETIRED PER-TEST WORDS, and only for LIVE state -- a cluster run's ``state.json`` and the stream of a
 #: round in flight across the change (OLD-SHAPE-READER): each word -> ``(status word, reason kind)`` it
 #: now reads as (:func:`lab_commons.hpc.testcells.upgraded`; a status word is ``TestCell.word``'s spelling).
-#: ``None``: a handed id, which is no cell. A regenerable artefact in these words is refused, never upgraded.
+#: ``None``: a handed id, which is no cell. A regenerable artifact in these words is refused, never upgraded.
 TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {
     'passed': ('ok', ''),
     'failed': ('rejected', 'assertion'),

@@ -372,7 +372,7 @@ def test_a_tree_inside_a_claim_does_not_claim_again_but_a_vendor_or_a_seat_does(
     with hold(*_demand(cpu=1), 'vendor', queue_s=1, outside=True, **_ON):
         assert [row.what for row in holdings()] == ['vendor'], 'PLANTED CONTROL: outside the tree books'
     with hold(*_demand(seats={'jmag': 1}), 'seat', queue_s=1, **_ON):
-        assert [row.what for row in holdings()] == ['seat'], 'a licence is not a share of a tree'
+        assert [row.what for row in holdings()] == ['seat'], 'a license is not a share of a tree'
 
 
 @pytest.mark.usefixtures('box')
@@ -589,3 +589,10 @@ def test_a_liveness_probe_runs_outside_the_write_lock(box: Path, tmp_path: Path)
         pass
     assert not locked.exists(), 'the probe ran while the reaper held the write lock'
     assert 'study' in [r.what for r in holdings()], 'PLANTED CONTROL: an alive probe keeps the claim'
+
+
+def test_a_child_process_is_not_decided_by_the_hosts_free_space() -> None:
+    """A child never sees the conftest monkeypatch: the floor it reads is the test machine file's, not 50 GiB."""
+    probe = 'from lab_commons.storage import free_floor; print(free_floor().bytes)'
+    done = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, encoding='utf-8', check=True)
+    assert int(done.stdout) == 1

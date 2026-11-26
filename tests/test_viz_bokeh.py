@@ -72,7 +72,7 @@ def test_a_panel_grid_is_arranged_by_the_rects_it_named() -> None:
     ``gridplot`` keeps its cells flat as ``(plot, row, column)`` triples, which is the reading this
     takes: the top row is the TOP of the picture (a row index counts down from the highest bottom
     edge), and the columns run left to right. Sharing here is a shared RANGE object, because that is
-    what links two bokeh figures — the same one-limit behaviour, in this library's own spelling.
+    what links two bokeh figures — the same one-limit behavior, in this library's own spelling.
     """
     renderer = BokehRenderer()
     draw_panels(renderer)
@@ -120,7 +120,7 @@ def test_a_twin_axis_is_a_second_y_range_inside_one_figure() -> None:
 
 
 def test_an_arrowed_segment_on_a_twin_is_refused_by_name() -> None:
-    """THE ONE PLACEMENT THIS LIBRARY CANNOT HONOUR, pinned as a refusal rather than left to a caller.
+    """THE ONE PLACEMENT THIS LIBRARY CANNOT HONOR, pinned as a refusal rather than left to a caller.
 
     An arrowed segment is an ``Arrow`` annotation here, positioned in the figure's DEFAULT ranges —
     on a twin frame the head would land on the other scale. There is no range binding on an
@@ -216,11 +216,11 @@ def test_the_new_verbs_land_on_the_page_they_describe() -> None:
     assert frame.figure.xaxis.ticker.ticks == [0.0, 1.0]
     assert frame.figure.xaxis.major_label_overrides == {0.0: 'a', 1.0: 'b'}
     assert frame.figure.yaxis.major_label_text_alpha == 0, 'an empty label list must silence, not drop, the ticks'
-    assert len(frame.figure.right) == 1, 'the colour bar is a layout item on the right'
+    assert len(frame.figure.right) == 1, 'the color bar is a layout item on the right'
     renderer.close()
 
 
-def test_an_unpinned_colour_range_is_refused_rather_than_drawn() -> None:
+def test_an_unpinned_color_range_is_refused_rather_than_drawn() -> None:
     """The same refusal as the other adapter's, for the same reason, on the same field."""
     with pytest.raises(ValueError, match='vmin'):
         BokehRenderer().frame().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
@@ -241,7 +241,7 @@ def test_a_continuum_is_refused_by_name() -> None:
     """THE OTHER ONE, AND THE SPLIT'S CONSEQUENCE: a ``Field`` is not drawn here AT ALL any more.
 
     This library has no filled-contour glyph over a point set (the same limitation the contour
-    refusal names, one step further out), and the colour-mapped scatter this verb used to draw is
+    refusal names, one step further out), and the color-mapped scatter this verb used to draw is
     now the ``Samples`` shape. Keeping the substitution would leave :class:`Field` and
     :class:`Samples` indistinguishable on this adapter -- exactly the conflation the split removed --
     and a producer asking for a contour map would get a cloud that reads as one at a glance. The
@@ -256,11 +256,11 @@ def test_a_continuum_is_refused_by_name() -> None:
 
 
 def test_a_grid_is_an_image_with_TRANSPARENT_voids() -> None:
-    """The masked cells reach the mapper's nan colour, and the geometry is the grid's rectangle.
+    """The masked cells reach the mapper's nan color, and the geometry is the grid's rectangle.
 
     THE VOID IS THE SUBJECT: a grid drawn without its mask shows a value it never had. Measured on
     the two halves that make it happen -- the array that reaches the glyph carries a NaN where the
-    mask was, and the mapper paints a NaN in the fully transparent colour -- plus the geometry, in
+    mask was, and the mapper paints a NaN in the fully transparent color -- plus the geometry, in
     DATA units, of the extent the primitive resolved.
     """
     renderer = BokehRenderer()
@@ -271,16 +271,16 @@ def test_a_grid_is_an_image_with_TRANSPARENT_voids() -> None:
     assert isinstance(glyph, Image), 'a grid is a raster here, not a cloud of marks'
     assert (glyph.x, glyph.y, glyph.dw, glyph.dh) == (0.0, 0.0, 3.0, 2.0), 'the image lost the extent'
     assert glyph.origin == 'bottom_left', 'row 0 must be the smallest y, whatever the default is'
-    assert glyph.color_mapper.nan_color == '#00000000', 'a void drawn as a colour is a value invented'
+    assert glyph.color_mapper.nan_color == '#00000000', 'a void drawn as a color is a value invented'
     image = np.asarray(plotted.data_source.data['image'][0])
     assert np.isnan(image[1, 1]), 'the void did not reach the glyph'
     assert image[0, 0] == 0.0, 'a cell with a value was voided'
-    assert len(frame.figure.right) == 1, 'the map owes a colour bar'
+    assert len(frame.figure.right) == 1, 'the map owes a color bar'
     renderer.close()
 
 
-def test_a_point_cloud_is_a_scatter_over_one_colour_mapper() -> None:
-    """The values ride on a colour transform, the size may be per sample, and the scale is drawn.
+def test_a_point_cloud_is_a_scatter_over_one_color_mapper() -> None:
+    """The values ride on a color transform, the size may be per sample, and the scale is drawn.
 
     A PER-SAMPLE SIZE IS A COLUMN HERE rather than a property, because this library refuses a
     sequence handed to a glyph that has a source -- so the scalar and the per-sample cases are two
@@ -290,10 +290,10 @@ def test_a_point_cloud_is_a_scatter_over_one_colour_mapper() -> None:
     frame = renderer.frame()
     frame.draw_samples(_SAMPLES)
     plotted = frame.figure.renderers[0]
-    assert plotted.glyph.fill_color['field'] == 'value', 'the colour is not the values'
+    assert plotted.glyph.fill_color['field'] == 'value', 'the color is not the values'
     assert plotted.glyph.size == 6.0, 'the stated mark size did not reach the glyph'
     assert list(plotted.data_source.data['value']) == [0.0, 1.0, 2.0, 3.0]
-    assert len(frame.figure.right) == 1, 'the cloud owes a colour bar'
+    assert len(frame.figure.right) == 1, 'the cloud owes a color bar'
 
     bubbles = BokehRenderer().frame()
     bubbles.draw_samples(Samples(x=[0.0, 1.0], y=[0.0, 1.0], values=[0.0, 1.0], size=[3.0, 9.0], marker='s'))
@@ -318,7 +318,7 @@ def test_a_marker_this_adapter_cannot_draw_is_refused_by_name() -> None:
 
 
 def test_a_colormap_this_adapter_cannot_draw_is_refused_by_name() -> None:
-    """No silent fallback to a default: a substitution would draw a different colour scale.
+    """No silent fallback to a default: a substitution would draw a different color scale.
 
     Measured on the POINT CLOUD, which is the verb here that maps values through a palette -- the
     field map this used to be measured on is refused before it ever reaches the mapper.

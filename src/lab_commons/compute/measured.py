@@ -26,7 +26,7 @@ so every retry was sized shorter than the wall the last one died at, and 325 ids
 rounds.
 
 A PEAK READ AT A KILL IS THE LIMIT, NOT THE NEED, AND IT IS NO FILE'S PEAK. Measured 2026-10-13 (Ada):
-children OOM-killed at 1 GB read ~1120 MB. A signalled LONE id's need is more than that read: it is FLOORED at
+children OOM-killed at 1 GB read ~1120 MB. A signaled LONE id's need is more than that read: it is FLOORED at
 :func:`killed_need_mb` on the id (``id_peaks_mb``) and its file, never lowering a peak already known -- the read
 (or the limit, if larger) times :data:`MEASURED_GROWTH`, or the limit times :data:`OOM_GROWTH` when nothing was read.
 ISOLATE BEFORE GROWING: a kill several ids shared is no id's measurement -- which held the memory is unknown --
@@ -167,9 +167,9 @@ class Measured:
 
         An item may span several files and pays ONE wall; its overhead is SHARED equally among its files,
         so :meth:`estimate`, which sums the shares, gives the same item back what it measured. Its peak is
-        recorded for every file, an upper bound for the file alone; a SIGNALLED item's peak grown by
+        recorded for every file, an upper bound for the file alone; a SIGNALED item's peak grown by
         :data:`OOM_GROWTH` is a floor of its id and file when it holds ONE id, and of nothing when it holds
-        several: its retry splits it (the module docstring). *allowed_mb* is the peak a SIGNALLED item's limit
+        several: its retry splits it (the module docstring). *allowed_mb* is the peak a SIGNALED item's limit
         allowed (the limit over the safety) when Slurm said OUT_OF_MEMORY: its need exceeds it, so the floor grows
         from the larger of the read and that peak.
         """
@@ -183,12 +183,12 @@ class Measured:
         tests = sum(folded['seconds'].values())
         files = list(dict.fromkeys(file_of(n) for n in ids))
         peak = done.get('peak_mb')
-        signalled = int(done.get('done', 0)) < 0
-        if not signalled:  # a killed wall holds the cut id's run, not the files' overhead (the module docstring)
+        signaled = int(done.get('done', 0)) < 0
+        if not signaled:  # a killed wall holds the cut id's run, not the files' overhead (the module docstring)
             overhead = round(max(0.0, float(done['wall']) - tests) / len(files), 3)
             for name in files:
                 self.overheads[name] = overhead
-        if signalled:
+        if signaled:
             need = killed_need_mb(float(peak or 0.0), float(allowed_mb or 0.0))
             if need > 0.0 and len(ids) == 1:  # a kill several ids shared is split, never learned
                 self._killed_peak(ids[0], need)
@@ -240,8 +240,8 @@ class Measured:
             return
         files = dict.fromkeys(file_of(n) for n in ids)
         explained = sum(folded['seconds'].values()) + sum(self.overheads.get(f, 0.0) for f in files)
-        signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
-        floor = round((spent - explained) * (TIMEOUT_GROWTH if timed_out or signalled else 1), 3)
+        signaled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
+        floor = round((spent - explained) * (TIMEOUT_GROWTH if timed_out or signaled else 1), 3)
         floor = floor if top is None else min(floor, top)
         if floor > 0:
             self.floors[rest[0]] = max(self.floors.get(rest[0], 0.0), floor)

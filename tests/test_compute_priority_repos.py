@@ -1,4 +1,4 @@
-"""A host may favour a REPOSITORY: its deploy-row name orders that repo's work first on that host."""
+"""A host may favor a REPOSITORY: its deploy-row name orders that repo's work first on that host."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ def _cand(repo: str) -> Candidate:
 
 
 def test_a_named_repo_matches_by_its_deploy_row_name() -> None:
-    favoured = Priority.of({'repos': ['motronics-studio']})
-    assert favoured.matches(_cand('Tianjie-Zou-Team/motronics-studio'))
-    assert not favoured.matches(_cand('Tianjie-Zou-Team/wdg-lab'))  # PLANTED CONTROL
+    favored = Priority.of({'repos': ['motronics-studio']})
+    assert favored.matches(_cand('Tianjie-Zou-Team/motronics-studio'))
+    assert not favored.matches(_cand('Tianjie-Zou-Team/wdg-lab'))  # PLANTED CONTROL
 
 
 def test_a_repo_name_is_whole_never_a_suffix() -> None:
@@ -38,8 +38,8 @@ def test_an_empty_repo_entry_never_matches_a_repo_with_no_name() -> None:
 
 def test_a_repo_matches_by_name_whatever_its_owner() -> None:
     """The rule is the NAME (the deploy row), never owner/name: one repo lives under different owners per forge."""
-    favoured = Priority.of({'repos': ['motronics-studio']})
-    assert favoured.matches(_cand('another-owner/motronics-studio'))
+    favored = Priority.of({'repos': ['motronics-studio']})
+    assert favored.matches(_cand('another-owner/motronics-studio'))
 
 
 def test_the_card_row_carries_every_declared_key() -> None:
@@ -47,9 +47,9 @@ def test_the_card_row_carries_every_declared_key() -> None:
 
 
 def test_a_repo_declaration_is_carried_and_read() -> None:
-    favoured = Priority.of({'repos': ['wdg-lab']})
-    assert favoured.row()['repos'] == ['wdg-lab']
-    assert favoured.text() == 'repos wdg-lab'
+    favored = Priority.of({'repos': ['wdg-lab']})
+    assert favored.row()['repos'] == ['wdg-lab']
+    assert favored.text() == 'repos wdg-lab'
 
 
 def test_an_unknown_key_is_still_refused() -> None:

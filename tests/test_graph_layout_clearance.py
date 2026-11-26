@@ -88,7 +88,7 @@ def test_wire_contact_is_perpendicular_or_a_shared_end_never_a_collinear_overlap
     assert wire_contact(horizontal, _seg((-10, 1), (10, 1))) is None
 
 
-def test_a_box_boundary_is_where_the_centre_ray_leaves_it() -> None:
+def test_a_box_boundary_is_where_the_center_ray_leaves_it() -> None:
     box = Box('n', 0, 0, 20, 10)
     assert box_boundary(box, Point(100, 0)) == Point(10, 0)
     assert box_boundary(box, Point(0, -100)) == Point(0, -5)

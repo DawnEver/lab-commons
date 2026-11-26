@@ -200,7 +200,7 @@ def _parsed(path: Path) -> dict[str, Any]:
 def learned(repo: str) -> dict[str, Any]:
     """Everything learned for *repo* (the per-test keys of :class:`Measured`, and ``runs``); none yet is ``{}``.
 
-    The table is ADVISORY: an unparseable one (a writer from before whole-file writes, a torn disk) is
+    The table is ADVISORY: an unparsable one (a writer from before whole-file writes, a torn disk) is
     retried for :data:`READ_RETRY_S`, then quarantined and read as ``{}`` -- the caller's prior -- never raised
     through a run (:func:`~lab_commons.compute.durable.read_table`).
     """

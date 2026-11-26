@@ -231,7 +231,7 @@ class BokehRenderer:
         """A frame on a figure of its own, sharing the ranges of the frames it named.
 
         SHARING A RANGE IS THIS LIBRARY'S ``sharex``/``sharey``: two figures handed the same
-        ``Range1d`` zoom, pan and autoscale together, which is the same one-limit behaviour
+        ``Range1d`` zoom, pan and autoscale together, which is the same one-limit behavior
         matplotlib's shared axes have. Handing over a COPY would be a picture that looks linked and
         is not.
         """

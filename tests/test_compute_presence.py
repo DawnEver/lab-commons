@@ -88,7 +88,7 @@ def test_any_one_disagreeing_source_makes_it_absent_and_names_why(
 def test_a_failed_step_runs_no_later_step() -> None:
     fake = Fake(version='4.2')
     probe('femm', fake.check(), FEMM5, now=NOW)
-    assert fake.smokes == 0, 'a version below the floor never spends a licence on a smoke'
+    assert fake.smokes == 0, 'a version below the floor never spends a license on a smoke'
 
 
 def test_a_reading_is_cached_for_its_ttl_and_retaken_after(tmp_path: Path) -> None:

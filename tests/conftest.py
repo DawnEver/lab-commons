@@ -9,6 +9,7 @@ machine home are the test's own for the same reason: a finished run LEARNS into 
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Final
 
@@ -22,9 +23,12 @@ from lab_commons.hostenv import HOME_ENV
 
 
 @pytest.fixture(autouse=True)
-def _a_box_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _a_box_of_its_own(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv(BOX_ENV, str(tmp_path / 'lab-commons-box' / 'box.sqlite'))
-    monkeypatch.setenv(CONFIG_ENV, str(tmp_path / 'lab-commons-machine' / 'config.toml'))
+    # The machine file lives beside tmp_path, never in it: a test that lists its tmp_path sees only its own files.
+    monkeypatch.setenv(CONFIG_ENV, str(tmp_path_factory.mktemp('lab-commons-machine') / 'config.toml'))
     monkeypatch.setenv(HOME_ENV, str(tmp_path / 'machine-home'))
     monkeypatch.delenv(INSIDE_ENV, raising=False)  # the verify running these tests is boxed; a test is not
     monkeypatch.delenv(CPU_ENV, raising=False)
@@ -39,8 +43,15 @@ def _a_box_without_devices(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _a_box_without_a_disk_floor(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No test is decided by the free space of the host it runs on: a disk test plants its own floor and volume."""
+    """No test is decided by the free space of the host it runs on: a disk test plants its own floor and volume.
+
+    A process the test starts (``subprocess``, a spawned ``multiprocessing`` worker) never sees the monkeypatch,
+    so the test's own machine file -- the one :data:`CONFIG_ENV` names, inherited by every child -- declares
+    the smallest floor too. Without it a child on a hosted runner with under 50 GiB free was refused at once.
+    """
     monkeypatch.setattr('lab_commons.box.ledger.free_floor', lambda: Floor(bytes=0))
+    machine = Path(os.environ[CONFIG_ENV])
+    machine.write_text('[storage]\nfree_floor = "1 B"\n', encoding='utf-8')
 
 
 #: Git and Git Credential Manager never ask a person: a fake forge host once popped a GCM dialog on a

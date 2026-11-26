@@ -6,7 +6,7 @@ BOX LEDGER is the only bound: a unit whose declared demand the ledger cannot adm
 by reservation, `box.order`), so a vendor's seats, not a pool size, cap how many of its units overlap. Settled
 units come back in graph order. For each unit:
 
-1. an upstream that did not produce a result -> the unit is SKIPPED, naming it (a failure stops its dependants);
+1. an upstream that did not produce a result -> the unit is SKIPPED, naming it (a failure stops its dependents);
 2. its inputs resolve (a file, or an upstream result's output) and give the unit hash;
 3. a stored result for that hash -> CACHED, nothing runs (the store also asks the shared tier);
 4. else :data:`PLACEMENT` decides from ``--where`` and whether this box can run it -- its engine and
@@ -75,7 +75,7 @@ FAILED: Final = 'failed'
 SKIPPED: Final = 'skipped'
 OFFERED: Final = 'offered'
 REFUSED: Final = 'refused'
-#: The states that carry a result a dependant can read.
+#: The states that carry a result a dependent can read.
 _PRODUCED: Final = frozenset({CACHED, RAN})
 
 #: What runs the unit here, what offers it elsewhere, what refuses it.

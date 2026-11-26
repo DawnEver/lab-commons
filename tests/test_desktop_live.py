@@ -1,7 +1,7 @@
 """``lab_commons.desktop`` on the real Windows desktop: a modal dialog is listed, captured, read, pressed, closed.
 
 The child is a tkinter window that raises a NATIVE Win32 message box (``askokcancel``) -- the shape of every
-recorded vendor block: a main window disabled by a modal whose labelled buttons decide. The answer is written
+recorded vendor block: a main window disabled by a modal whose labeled buttons decide. The answer is written
 to a file, so a press is observed by its effect. The window's pid is read from the window (a venv
 ``python.exe`` is a launcher whose child owns it); every act names it, and the planted control names a pid
 we do not own and must leave the dialog untouched. Produced by a Windows host (the ``windows`` part).

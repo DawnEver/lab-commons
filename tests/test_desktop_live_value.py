@@ -102,7 +102,7 @@ def _read(path: Path) -> str:
         return ''
 
 
-def test_the_labelled_edit_is_listed_with_its_value_and_settable(form: tuple[desktop.Window, Path]) -> None:
+def test_the_labeled_edit_is_listed_with_its_value_and_settable(form: tuple[desktop.Window, Path]) -> None:
     window, _ = form
     found = desktop.controls(window)
     edits = [c for c in found if c.name == 'Run name:' and c.role == 'edit']

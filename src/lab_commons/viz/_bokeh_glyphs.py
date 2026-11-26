@@ -4,14 +4,14 @@ WHY THESE AND NOT THE OTHER VERBS. Every other verb of a :class:`~lab_commons.vi
 is a call with properties: a line, a scatter, bars, a circle, a segment, a text. These are not — each
 ASSEMBLES something this library has no primitive for and passes it as data:
 
-* a **patch set** becomes a ``ColumnDataSource`` of vertex lists, colour-mapped through a
-  ``LinearColorMapper`` when the patches carry values, or drawn one by one when they carry a colour;
-* a **grid** becomes an ``image`` glyph over a colour mapper whose voids are painted transparent —
+* a **patch set** becomes a ``ColumnDataSource`` of vertex lists, color-mapped through a
+  ``LinearColorMapper`` when the patches carry values, or drawn one by one when they carry a color;
+* a **grid** becomes an ``image`` glyph over a color mapper whose voids are painted transparent —
   this library's raster, and the reason a masked 2-D array needs no reshape to be drawn here;
-* a **point cloud** is a colour-mapped scatter over a mapper whose range comes from the values;
+* a **point cloud** is a color-mapped scatter over a mapper whose range comes from the values;
 * a **quiver** is TWO glyphs — the shaft as one vectorized segment renderer and the head as one
   marker renderer, the ``|(u, v)| / scale`` arithmetic done here because this library has none;
-* a **colour bar** is a mapper, a quantised palette and a fixed ticker, added as a layout item.
+* a **color bar** is a mapper, a quantized palette and a fixed ticker, added as a layout item.
 
 That is the seam, and it is the same one :mod:`lab_commons.viz._bokeh_names` is drawn on: the frame
 is the VERB TABLE and this is the machinery behind its rows. It is also what the module-size band
@@ -19,7 +19,7 @@ asked for — the frame crossed it on these, and splitting them out is a repair 
 
 THE MEASURED NUMBERS LIVE HERE TOO, beside the only code that reads them: the pixel size of a vector
 head (screen-sized in this library), the hatch pair that was measured to make the two adapters' fills
-read alike, and the one colour this library will not accept a NAME for.
+read alike, and the one color this library will not accept a NAME for.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from lab_commons.viz._bokeh_names import given, marked, palette_for, quantized
 #: this library's shape rather than a choice made here.
 _VECTOR_HEAD_SIZE: Final = 7
 
-#: WHAT A VOID IS PAINTED WITH: a fully transparent colour, in the RGBA-hex spelling this library's
+#: WHAT A VOID IS PAINTED WITH: a fully transparent color, in the RGBA-hex spelling this library's
 #: Color property accepts. ``'transparent'`` and ``None`` both look like the right spelling and both
 #: are REFUSED by it (measured on bokeh 3.10) -- and the first one would be an error only on the
 #: figures that HAVE a void, which is the half a test without one never reaches.
@@ -69,14 +69,14 @@ def _mark_size(size: ArrayLike | None) -> float | np.ndarray | None:
 
 
 def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_range_name: str | None) -> None:
-    """Draw filled regions; *scale* colours them by value when the patches carry one.
+    """Draw filled regions; *scale* colors them by value when the patches carry one.
 
-    VALUE-COLOURED AND NAME-COLOURED ARE DIFFERENT FIGURES, not two spellings of one: a region
-    carrying a ``value`` goes through a colour mapper as ONE patch collection with a colour bar
+    VALUE-COLORED AND NAME-COLORED ARE DIFFERENT FIGURES, not two spellings of one: a region
+    carrying a ``value`` goes through a color mapper as ONE patch collection with a color bar
     beside it (the region map), and a region carrying a ``color`` is drawn as it is.
 
-    A COLOUR IS NOT A PROPERTY ``None`` MAY BE DROPPED FROM: bokeh reads ``None`` as "no fill" and
-    "no outline", which is exactly what an unset colour means, while an OMITTED colour would take
+    A COLOR IS NOT A PROPERTY ``None`` MAY BE DROPPED FROM: bokeh reads ``None`` as "no fill" and
+    "no outline", which is exactly what an unset color means, while an OMITTED color would take
     bokeh's own grey default instead -- a different picture from the one the matplotlib adapter
     draws for the same description.
     """
@@ -87,7 +87,7 @@ def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_rang
     if scale is not None and any(value is not None for value in values):
         alphas = {part.alpha for part in parts}
         if len(alphas) != 1:
-            msg = f'a value-coloured region map carries one transparency for its regions, not {sorted(alphas)}'
+            msg = f'a value-colored region map carries one transparency for its regions, not {sorted(alphas)}'
             raise ValueError(msg)
         present = [value for value in values if value is not None]
         mapper = LinearColorMapper(
@@ -132,15 +132,15 @@ def patches(figure: Plot, parts: Sequence[Patch], scale: Scale | None, *, y_rang
 
 
 def grid(figure: Plot, cells: Grid, *, y_range_name: str | None) -> None:
-    """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
+    """Draw a scalar on a rectilinear grid and its color scale — the maskable map.
 
     AN IMAGE, NOT A SCATTER, and that is what makes this a different picture from a
     :class:`~lab_commons.viz.Samples`: the grid's rectangle becomes the glyph's geometry in DATA
     units — ``x``/``y`` are its lower-left corner, ``dw``/``dh`` its width and height — and the array
     is resampled across it, where a cloud's marks are drawn one per sample at their own coordinates.
 
-    THE VOIDS ARE TRANSPARENT. This library paints a NaN through the colour mapper's ``nan_color``,
-    so a masked cell is filled with NaN here and that colour is the fully transparent one; a masked
+    THE VOIDS ARE TRANSPARENT. This library paints a NaN through the color mapper's ``nan_color``,
+    so a masked cell is filled with NaN here and that color is the fully transparent one; a masked
     cell drawn as a value would be the defect the shape exists to prevent.
 
     ``origin='bottom_left'`` IS STATED RATHER THAN INHERITED: it is the convention
@@ -170,11 +170,11 @@ def grid(figure: Plot, cells: Grid, *, y_range_name: str | None) -> None:
 
 
 def samples(figure: Plot, cloud: Samples, *, y_range_name: str | None) -> None:
-    """Draw points coloured by the values they carry — the colour-mapped point cloud.
+    """Draw points colored by the values they carry — the color-mapped point cloud.
 
-    A SCATTER OVER A MAPPER, which is what this library has for marks whose colour is a third
+    A SCATTER OVER A MAPPER, which is what this library has for marks whose color is a third
     quantity per point: the mapper's range comes from the values unless the scale pins it, and the
-    colour bar beside the panel is what makes those colours mean something.
+    color bar beside the panel is what makes those colors mean something.
 
     THE MARKER IS TRANSLATED, NOT DEFAULTED — :func:`~lab_commons.viz._bokeh_names.marked` refuses a
     name this library has no glyph for, so a description drawn as squares by one adapter cannot
@@ -265,7 +265,7 @@ def colorbar(figure: Plot, bar: Colorbar) -> None:
     gives: a bar over nothing has no samples to derive one from, and the alternative to the refusal
     is a legend of unknown extent drawn as if it had one.
 
-    A DISCRETE BAR QUANTISES ITS PALETTE the same way the other adapter samples its colormap, and
+    A DISCRETE BAR QUANTIZES ITS PALETTE the same way the other adapter samples its colormap, and
     the band geometry is the PRIMITIVE's (:meth:`~lab_commons.viz.Colorbar.bands`), so the two
     libraries cannot draw two different bars for one description.
     """

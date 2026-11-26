@@ -1,4 +1,4 @@
-"""Behaviour of the packaged data-table script's pure core, run on the family's declared JS engine.
+"""Behavior of the packaged data-table script's pure core, run on the family's declared JS engine.
 
 Same engine policy as ``test_html_navigation_js.py``: strict xfails until ``dev_lab.dev.jsrun`` is in
 this lock, never a host ``node``.

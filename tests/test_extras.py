@@ -70,5 +70,5 @@ def test_no_install_must_be_a_list_of_package_names() -> None:
 
 
 def test_an_unknown_key_is_refused_by_name() -> None:
-    with pytest.raises(ValueError, match="'no_instal'"):
-        declared(manifest({'extras': ['dev'], 'no_instal': ['x']}))
+    with pytest.raises(ValueError, match="'not_an_extra_key'"):
+        declared(manifest({'extras': ['dev'], 'not_an_extra_key': ['x']}))

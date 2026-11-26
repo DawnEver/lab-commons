@@ -220,7 +220,7 @@ def test_the_child_is_told_the_cores_it_was_admitted_at(monkeypatch: pytest.Monk
     assert (seen[0][CPU_ENV], seen[0]['KEEP']) == ('3', '1')
 
 
-def test_the_childs_thread_pools_are_sized_to_the_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_the_child_thread_pools_are_sized_to_the_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Every BLAS/OpenMP pool in the tree is sized to the claim's cores, never the box's.
 
     THE INCIDENT (lab-commons 57cafb9d5f, tests/base on a 32-thread Windows host): ``import numpy`` with no

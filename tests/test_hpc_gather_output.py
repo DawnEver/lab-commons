@@ -1,4 +1,4 @@
-"""``hpc gather`` never prints a bare success line with no artefact (dev-lab #483)."""
+"""``hpc gather`` never prints a bare success line with no artifact (dev-lab #483)."""
 
 from __future__ import annotations
 

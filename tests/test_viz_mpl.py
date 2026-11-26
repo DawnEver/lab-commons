@@ -64,7 +64,7 @@ def test_the_shared_description_reaches_the_canvas() -> None:
 
     ``images`` AND ``collections`` ARE TWO DIFFERENT DRAWINGS, which is the split this tier now
     carries: the grid map is a RASTER (one image over the array's rectangle) and the point cloud is a
-    COLLECTION of marks at their own coordinates — and each draws its own colour bar, so the canvas
+    COLLECTION of marks at their own coordinates — and each draws its own color bar, so the canvas
     below holds the frame plus four bars rather than the frame plus two.
     """
     renderer = viz_mpl.MplRenderer()
@@ -77,7 +77,7 @@ def test_the_shared_description_reaches_the_canvas() -> None:
     assert len(axes.images) == 1, 'the masked grid map is a raster, not a pile of marks'
     assert axes.collections, 'the point cloud is a collection of marks'
     assert axes.quiver, 'the vector field is its own artist, not a pile of annotations'
-    assert len(renderer.figure.axes) == 5, 'the grid and the cloud each owe a colour bar'
+    assert len(renderer.figure.axes) == 5, 'the grid and the cloud each owe a color bar'
     renderer.close()
 
 
@@ -190,7 +190,7 @@ def test_a_3d_frame_is_built_as_an_axes3d() -> None:
     assert frame.axes.get_zlabel() == 'z (mm)', 'the third axis lost its label'
     assert frame.axes.get_zlim() == (0.0, 2.0), 'the z limit the description stated is not the drawn one'
     assert (frame.axes.elev, frame.axes.azim) == (22.0, 35.0), 'the camera did not move'
-    # THE BOX ASPECT IS READ AS THE RATIO, because this library normalises it to the figure's own
+    # THE BOX ASPECT IS READ AS THE RATIO, because this library normalizes it to the figure's own
     # shape on the way in: the statement that survives is "z is drawn 0.7 as long as x", not the triple.
     _x, _y, z = frame.axes.get_box_aspect()
     assert z / frame.axes.get_box_aspect()[0] == pytest.approx(0.7, abs=1e-9)
@@ -259,12 +259,12 @@ def test_one_collection_is_one_legend_row() -> None:
 
 
 def test_the_palette_cursor_is_the_canvas_of_BOTH_frame_classes() -> None:
-    """A trace in space takes the colour AFTER a trace in the plane, on one canvas.
+    """A trace in space takes the color AFTER a trace in the plane, on one canvas.
 
     This is what makes the shared cursor a rule rather than a coincidence: the two frame classes of
     this adapter are two readers of ONE ``_next_color``, so the n-th artist's palette position is a
     property of the FIGURE whichever arity drew it -- and a second copy of that arithmetic in the 3D
-    frame would hand the first trace in space the colour the plane frame already used.
+    frame would hand the first trace in space the color the plane frame already used.
     """
     renderer = viz_mpl.MplRenderer()
     flat, space = renderer.frame(), renderer.frame_3d()
@@ -272,17 +272,17 @@ def test_the_palette_cursor_is_the_canvas_of_BOTH_frame_classes() -> None:
     space.draw_lines((Series(x=[0.0, 1.0], y=[0.0, 1.0], z=[0.0, 1.0]),))
 
     assert flat.axes.lines[0].get_color() == Style().palette[0]
-    # THE FLOOR IS AN RGBA CHANNEL, so 1e-9 is a share of full scale: far below any colour difference
+    # THE FLOOR IS AN RGBA CHANNEL, so 1e-9 is a share of full scale: far below any color difference
     # the eye or the palette could mean, and far above the error of one hex-to-floats conversion.
     assert space.axes.collections[0].get_colors()[0] == pytest.approx(mpl.colors.to_rgba(Style().palette[1]), abs=1e-9)
     renderer.close()
 
 
 def test_the_palette_cursor_belongs_to_the_canvas_and_not_to_a_frame() -> None:
-    """Two frames of one canvas take DIFFERENT colours, which is what a twin axis needs.
+    """Two frames of one canvas take DIFFERENT colors, which is what a twin axis needs.
 
     On a twin the two frames draw over the same pixels, so a per-frame cursor would give the second
-    series the first one's colour -- not a repeated colour, an unreadable one. The cursor is the
+    series the first one's color -- not a repeated color, an unreadable one. The cursor is the
     canvas's, so the n-th artist of the figure takes the n-th palette entry whichever frame drew it.
     """
     renderer = viz_mpl.MplRenderer()
@@ -331,12 +331,12 @@ def test_a_grid_map_is_an_image_that_KEEPS_its_voids() -> None:
     mask = np.ma.getmaskarray(image.get_array())
     assert mask[1, 1], 'the void was drawn as a value'
     assert not mask[0, 0], 'a cell with a value was drawn as a void'
-    assert image.get_clim() == (0.0, 2.5), 'the pinned scale was not honoured'
-    assert len(renderer.figure.axes) == 2, 'the map owes a colour bar'
+    assert image.get_clim() == (0.0, 2.5), 'the pinned scale was not honored'
+    assert len(renderer.figure.axes) == 2, 'the map owes a color bar'
     renderer.close()
 
 
-def test_a_point_cloud_is_a_coloured_collection_with_its_scale() -> None:
+def test_a_point_cloud_is_a_colored_collection_with_its_scale() -> None:
     """The values ride on the collection, its size is the vocabulary's length SQUARED, and it scales.
 
     The square is the one unit conversion in this adapter: the vocabulary states a mark's size as a
@@ -348,15 +348,15 @@ def test_a_point_cloud_is_a_coloured_collection_with_its_scale() -> None:
     frame = renderer.frame()
     frame.draw_samples(_SAMPLES)
     cloud = frame.axes.collections[0]
-    assert list(cloud.get_array()) == [0.0, 1.0, 2.0, 3.0], 'the values are not what the colour means'
-    assert cloud.get_clim() == (0.0, 3.0), 'the pinned scale was not honoured'
+    assert list(cloud.get_array()) == [0.0, 1.0, 2.0, 3.0], 'the values are not what the color means'
+    assert cloud.get_clim() == (0.0, 3.0), 'the pinned scale was not honored'
     assert list(cloud.get_sizes()) == [36.0], 'the mark size reached the marker as an AREA of 6'
     np.testing.assert_allclose(cloud.get_offsets(), [(0.0, 0.0), (1.0, 1.0), (2.0, 0.5), (3.0, 1.5)])
-    assert len(renderer.figure.axes) == 2, 'the cloud owes a colour bar'
+    assert len(renderer.figure.axes) == 2, 'the cloud owes a color bar'
     renderer.close()
 
 
-def test_one_size_per_sample_is_honoured_as_each_mark_its_own() -> None:
+def test_one_size_per_sample_is_honored_as_each_mark_its_own() -> None:
     """A bubble map: the size carries a second quantity, so the marks are not all alike."""
     renderer = viz_mpl.MplRenderer()
     frame = renderer.frame()
@@ -377,11 +377,11 @@ def test_a_field_map_is_drawn_as_a_surface_through_its_samples() -> None:
     frame = renderer.frames[0]
     assert frame.axes.collections, 'a filled contour is a collection'
     assert not frame.axes.images, 'a continuum is not a raster'
-    assert len(renderer.figure.axes) == 2, 'the surface owes a colour bar'
+    assert len(renderer.figure.axes) == 2, 'the surface owes a color bar'
     renderer.close()
 
 
-def test_an_unpinned_colour_range_is_refused_rather_than_drawn() -> None:
+def test_an_unpinned_color_range_is_refused_rather_than_drawn() -> None:
     """A bar over nothing has no samples to derive a range from, and says so by name."""
     with pytest.raises(ValueError, match='vmin'):
         viz_mpl.MplRenderer().frame().draw_colorbar(Colorbar(scale=Scale(cmap='viridis', label='L')))
@@ -409,7 +409,7 @@ def test_every_frame_of_a_canvas_reaches_the_saved_file(tmp_path: Path) -> None:
     assert len(renderer.figure.axes) == 4, 'the saved figure lost the panels it was asked for'
 
 
-def test_one_description_takes_the_same_colours_every_time() -> None:
+def test_one_description_takes_the_same_colors_every_time() -> None:
     """The palette position is a function of one figure, not of what an earlier figure did."""
     first, second = viz_mpl.MplRenderer(), viz_mpl.MplRenderer()
     for renderer in (first, second):

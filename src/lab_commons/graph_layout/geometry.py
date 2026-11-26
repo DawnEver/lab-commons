@@ -35,7 +35,7 @@ class Segment:
 
 @dataclass(frozen=True)
 class Box:
-    """A node's envelope: CENTRE ``(x, y)`` and full ``width`` x ``height``; its interior is open."""
+    """A node's envelope: CENTER ``(x, y)`` and full ``width`` x ``height``; its interior is open."""
 
     key: str
     x: float
@@ -79,7 +79,7 @@ def wire_contact(left: Segment, right: Segment) -> tuple[float, float] | None:
 
 
 def box_boundary(box: Box, toward: Point) -> Point:
-    """Where the centre-to-``toward`` ray leaves ``box``: an attachment point for a port-less link."""
+    """Where the center-to-``toward`` ray leaves ``box``: an attachment point for a port-less link."""
     dx, dy = toward.x - box.x, toward.y - box.y
     if dx == 0.0 and dy == 0.0:
         return Point(box.x, box.y)

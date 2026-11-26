@@ -1,7 +1,7 @@
 """``lab_commons.dimensions`` -- the resource DIMENSIONS as data, and the guard over their table.
 
 The per-box broker that once lived beside this table is folded into the one box ledger (D2 2026-10-16);
-its behaviour -- seats, a dead holder, a job outliving its client, a bounded wait -- is pinned by
+its behavior -- seats, a dead holder, a job outliving its client, a bounded wait -- is pinned by
 ``test_box.py`` and ``test_box_supply.py`` against :mod:`lab_commons.box`.
 """
 

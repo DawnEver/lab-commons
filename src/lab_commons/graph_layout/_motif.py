@@ -1,4 +1,4 @@
-"""The leg-pair motif: two ``leg`` nodes stacked between a source's two rails, recognised from nets alone.
+"""The leg-pair motif: two ``leg`` nodes stacked between a source's two rails, recognized from nets alone.
 
 A ``leg`` node has exactly two physical nets. A midpoint net joins two legs whose other rails share one
 source, exactly one rail being a declared reference. Every leg pair of one source packs as ONE envelope:

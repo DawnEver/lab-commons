@@ -1,6 +1,6 @@
 """Cut items into SHARDS -- consecutive ranges an array task runs back to back -- and size the wave. Pure.
 
-A shard holds enough padded time to amortise start-up (``shard_minutes_min``) without passing
+A shard holds enough padded time to amortize start-up (``shard_minutes_min``) without passing
 ``shard_minutes_max``; both bounds grow until the array fits what runs at once, so one wave is the
 makespan (:func:`one_wave`). :func:`balance` refills the same number of shards longest-processing-time first.
 The plan that carries them is :func:`lab_commons.hpc.plan.make_plan`.

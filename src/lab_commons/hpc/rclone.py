@@ -1,11 +1,11 @@
 """IS THIS ACCOUNT'S RCLONE REMOTE USABLE -- one cheap, read-only probe, and the recipe that makes it so.
 
-Several HPC accounts write the one shared artefact library, each through its OWN rclone remote
-(:mod:`dev_lab.dev.artefacts`). :func:`probe` runs ``rclone lsd <name>: --max-depth 1`` and returns why
+Several HPC accounts write the one shared artifact library, each through its OWN rclone remote
+(:mod:`dev_lab.dev.artifacts`). :func:`probe` runs ``rclone lsd <name>: --max-depth 1`` and returns why
 the remote is missing or unusable, ``''`` when it answers. :func:`declared_remote` reads the remote a repo
 declares for ``backend = "rclone"``. Both are account facts, so they live with the account here; the dev-lab
-deploy (:mod:`dev_lab.dev.hpcaccount.deploy`) asks them, and the artefact store's own validation stays in
-:mod:`dev_lab.dev.artefacts`.
+deploy (:mod:`dev_lab.dev.hpcaccount.deploy`) asks them, and the artifact store's own validation stays in
+:mod:`dev_lab.dev.artifacts`.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def declared_remote(root: Path) -> str:
     """The ``remote`` of *root*'s ``[tool.lab_commons.artefacts]`` when its backend is rclone, else ``''``."""
     pyproject = root / 'pyproject.toml'
     raw = tomllib.loads(pyproject.read_text(encoding='utf-8')) if pyproject.is_file() else {}
-    table = raw.get('tool', {}).get('lab_commons', {}).get('artefacts', {})
+    table = raw.get('tool', {}).get('lab_commons', {}).get('artefacts', {})  # spelling-ignore-line
     return str(table.get('remote', '')) if table.get('backend') == 'rclone' else ''
 
 

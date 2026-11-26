@@ -47,14 +47,14 @@ RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
 
 _WHERE: Final = 'the machine file'
 
-#: The tools whose seats are VENDOR seats -- a licence or a measured concurrency, never a guess: an undeclared
+#: The tools whose seats are VENDOR seats -- a license or a measured concurrency, never a guess: an undeclared
 #: one is WITHHELD (:func:`withheld`, user ruling 2026-11-18), never lent 1. Every
 #: :data:`~lab_commons.compute.toolchecks.CHECKS` row is here or in :data:`NON_VENDOR_CHECKS`.
 VENDOR_TOOLS: Final = frozenset(
     {'aedt', 'femm', 'fluent', 'jmag', 'lsdyna', 'mapdl', 'matlab', 'maxwell', 'ngspice', 'plecs', 'simba'}
 )
 
-#: Checked tools that are not vendor seats: a runtime on a path, not a counted licence.
+#: Checked tools that are not vendor seats: a runtime on a path, not a counted license.
 NON_VENDOR_CHECKS: Final = frozenset({'node'})
 
 

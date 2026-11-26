@@ -83,7 +83,7 @@ def _fetch(payload: bytes = PAYLOAD) -> Callable[[str, Path], None]:
     return fetch
 
 
-def _install(release: Release, run: FakeInstaller, payload: bytes = PAYLOAD) -> door.Outcome:
+def _install(release: Release, run: FakeInstaller, payload: bytes = PAYLOAD) -> door.ToolReport:
     return door.install(release, mode='silent', fetch=_fetch(payload), run=run)
 
 

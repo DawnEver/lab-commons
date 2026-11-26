@@ -52,7 +52,7 @@ _GIT: Final = shutil.which('git') or 'git'
 
 #: Every ``[tool.lab_commons.<table>]`` this kit reads. dev-lab's own tables live under ``[tool.dev_lab]``
 #: (plan A3 2026-10-27) and are refused here by name (:data:`lab_commons.hpc.retired.MOVED_TABLES`).
-KNOWN_TABLES: Final = frozenset({'artefacts', 'hpc', 'schedule', 'tests', 'tools'})
+KNOWN_TABLES: Final = frozenset({'artefacts', 'hpc', 'schedule', 'tests', 'tools'})  # spelling-ignore-line
 
 
 class OutdatedKit(ValueError):
@@ -76,11 +76,11 @@ class KitAheadOfItsServer(InvalidDeclaration):
     """
 
 
-#: The ``[project] name`` of the SERVING kit, PEP 503-normalised: dev-lab, whose forge every host serves.
+#: The ``[project] name`` of the SERVING kit, PEP 503-normalized: dev-lab, whose forge every host serves.
 _KIT: Final = 'dev-lab'
 
 
-def _normalised(name: str) -> str:
+def _normalized(name: str) -> str:
     return re.sub(r'[-_.]+', '-', name).lower()
 
 
@@ -104,7 +104,7 @@ def kit_tables(text: str) -> dict[str, Any]:
         raise RetiredTable('; '.join(f'{table} is retired: {RETIRED[table]}' for table in retired))
     if unknown := sorted(set(declared) - KNOWN_TABLES):
         tables = ', '.join(f'[tool.lab_commons.{name}]' for name in unknown)
-        if _normalised(str(data.get('project', {}).get('name', ''))) == _KIT:
+        if _normalized(str(data.get('project', {}).get('name', ''))) == _KIT:
             msg = f'drop {tables} until the kit merges: no host serving dev-lab knows it before then'
             raise KitAheadOfItsServer(msg)
         msg = (
