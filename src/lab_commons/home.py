@@ -5,7 +5,8 @@
 * ``config/motronics.toml`` -- THE per-machine file (:mod:`lab_commons.config` reads it);
 * ``state/`` -- what must outlive any one checkout (forge runs, alarms, ledgers, learned asks);
 * ``cache/`` -- disposable;
-* ``tools/`` -- external tools the toolchain installs;
+* ``tools/`` -- external tools, installed only through the door :mod:`lab_commons.tools` (its layout:
+  :mod:`lab_commons.tools.managed`);
 * ``repos/`` -- the checkouts a serving host clones;
 * ``backups/`` -- copies of the machine file taken before an edit.
 

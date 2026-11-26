@@ -8,7 +8,6 @@ naming the file and its door -- never ``unread`` as a pass.
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -93,7 +92,7 @@ def test_the_windows_file_version_decodes_to_femm_qts_one_version_number(fixed: 
     assert femm_release(fixed) == release
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='the file-version reader exists only on Windows')
+@pytest.mark.windows  # the file-version reader exists only on Windows: its part is produced by a Windows host
 def test_a_windows_binary_without_a_file_version_is_refused_naming_its_door(tmp_path: Path) -> None:
     exe = tmp_path / 'femm_headlessw.exe'
     exe.write_bytes(b'MZ fake')

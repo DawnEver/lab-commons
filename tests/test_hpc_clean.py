@@ -62,7 +62,7 @@ class FakeCluster:
             if not left:
                 return 'gone\n'
             foreign = [f'{o}\t{p}' for p, o in sorted(left.items()) if o != 'me']
-            return '\n'.join(foreign) + '\n'
+            return ''.join(f'{line}\n' for line in [*foreign, 'present'])
         raise AssertionError(command)
 
 
@@ -200,3 +200,69 @@ def test_a_delete_that_outruns_the_timeout_says_rerun_not_a_traceback(capsys: py
     assert 're-run' in err
     assert '--timeout' in err
     assert 'Traceback' not in err
+
+
+def test_a_success_says_what_it_deleted_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    """REPRODUCED 2026-11-25: a clean of 18 directories deleted every one and still gave no account of it."""
+    names = [f'e{n}' for n in range(18)]
+    cluster = FakeCluster({f'{ROOT}/{name}': 'me' for name in names})
+    assert _clean(['--root', ROOT, *names], cluster) == 0
+    assert not cluster.tree
+    out = capsys.readouterr().out
+    assert f'clean: deleted 18 of 18 under {ROOT}' in out
+    assert all(name in out.splitlines()[-1] for name in names), 'the summary names every deleted directory'
+
+
+def test_a_remote_command_failing_after_its_delete_is_verified_not_raised(capsys: pytest.CaptureFixture[str]) -> None:
+    """REPRODUCED: the delete ran, then its remote command exited 1 (the tree vanished under ``stat``).
+
+    The old door raised out of main -- exit 1, no account of what was deleted. The target's existence, re-read
+    through the probe, is the verdict.
+    """
+    cluster = FakeCluster({f'{ROOT}/a': 'me', f'{ROOT}/b': 'me'})
+
+    def flaky(command: str, stdin: str | None = None) -> str:
+        out = cluster(command, stdin)
+        if clean.DELETE in command:
+            msg = f"ssh exited 1: stat: cannot statx '{ROOT}/a': No such file or directory"
+            raise RuntimeError(msg)
+        return out
+
+    assert clean.main(['--root', ROOT, 'a', 'b'], machine=_machine(), reach=lambda _g, _t: flaky) == 0
+    out = capsys.readouterr().out
+    assert f'clean: deleted 2 of 2 under {ROOT}' in out
+    assert 'verified absent' in out, 'the failed command is still named'
+
+
+def test_a_target_still_there_with_no_foreign_owner_says_why(capsys: pytest.CaptureFixture[str]) -> None:
+    """PLANTED CONTROL: a target still there after the delete is a failure, and the failure states its cause."""
+    cluster = FakeCluster({f'{ROOT}/a': 'me', f'{ROOT}/b': 'me'})
+
+    def stuck(command: str, stdin: str | None = None) -> str:
+        if clean.DELETE in command and command.endswith(f'{clean.MARK}{ROOT}/a'):
+            return 'present\n'  # every file this account's, yet the tree is still there
+        return cluster(command, stdin)
+
+    assert clean.main(['--root', ROOT, 'a', 'b'], machine=_machine(), reach=lambda _g, _t: stuck) == 1
+    err = capsys.readouterr().err
+    assert f'NOT REMOVED: {ROOT}/a' in err
+    assert 'still exists' in err
+    assert f'clean: deleted 1 of 2 under {ROOT}; NOT removed: a' in err
+
+
+def test_a_failing_remote_command_with_the_target_still_there_names_the_cause(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cluster = FakeCluster({f'{ROOT}/a': 'me'})
+
+    def refused(command: str, stdin: str | None = None) -> str:
+        if clean.DELETE in command:
+            msg = 'ssh exited 1: bash: rm: Permission denied'
+            raise RuntimeError(msg)
+        return cluster(command, stdin)
+
+    assert clean.main(['--root', ROOT, 'a'], machine=_machine(), reach=lambda _g, _t: refused) == 1
+    err = capsys.readouterr().err
+    assert 'Permission denied' in err
+    assert 'Traceback' not in err
+    assert cluster.tree, 'nothing was deleted'

@@ -2,8 +2,11 @@
 
 A tool is PRESENT on a host only when all four agree:
 
-1. its executable is FOUND -- a declared path (an environment variable the tool's own docs name), a
-   standard install directory, the registry or ``PATH``;
+1. its executable is FOUND -- the managed tool root first, where the install door puts it
+   (:mod:`lab_commons.tools`), a declared path (an environment variable the tool's own docs name), a
+   standard install directory, the registry or ``PATH``. A tool the family installs through the door is
+   absent when found only outside the managed root, its refusal naming the door
+   (:class:`~lab_commons.compute.toolchecks.Unmanaged`);
 2. its VERSION reads (the executable's file version, an install's version file, its install path, its
    package metadata) and meets what the serving repo declares ONCE for the family, in its ``pyproject.toml``
    ``[tool.lab_commons.tools]``: a FLOOR (``<tool> = {floor = "<version>", reason = "<why>"}``; ``below``
@@ -47,7 +50,7 @@ from typing import Any, Final
 
 from lab_commons import home
 from lab_commons.compute.durable import durable_text, read_table
-from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed, VersionUnreadable
+from lab_commons.compute.toolchecks import CHECKS, Check, ProbeCrashed, Unmanaged, VersionUnreadable
 
 __all__ = [
     'EXACT_SHAPE',
@@ -63,6 +66,7 @@ __all__ = [
     'refresh',
     'renew',
     'stale',
+    'version_key',
 ]
 
 #: How long one probe's reading holds before :func:`refresh` runs it again and :func:`cached` reads it absent.
@@ -114,7 +118,7 @@ def measured(presence: Mapping[str, Presence]) -> dict[str, str]:
 # --- the requirement -----------------------------------------------------------------------------------
 
 
-def _key(text: str) -> tuple[tuple[int, int | str], ...] | None:
+def version_key(text: str) -> tuple[tuple[int, int | str], ...] | None:
     """A printed version's ordering key, over its first token carrying a digit (``FEMM 5.0 (b7)`` -> ``5.0``).
 
     Digit runs compare as numbers and letter runs as text, so ``25.2.01zp`` >= ``25.2`` and ``R2025b`` >
@@ -142,7 +146,7 @@ class Requirement:
 
     def refusal(self, read: str) -> str | None:
         """Why *read* misses this requirement, naming the bound, its reason and its door; ``None`` when it meets it."""
-        version, floor = _key(read), _key(self.floor)
+        version, floor = version_key(read), version_key(self.floor)
         if version is None or floor is None:
             bound = 'the one release' if self.exact else 'the floor'
             return f'unordered: {read!r} against {bound} {self.floor} ({self.reason})'
@@ -153,7 +157,7 @@ class Requirement:
             return f'newer than {allowed}: move the [tool.lab_commons.tools] declaration to it once it is measured'
         if version < floor:
             return f'below the floor {self.floor} ({self.reason})'
-        below = _key(self.below) if self.below is not None else None
+        below = version_key(self.below) if self.below is not None else None
         if below is not None and not version < below:
             return f'not below {self.below} ({self.incompatible})'
         return None
@@ -210,7 +214,10 @@ def declared_versions(root: Path) -> dict[str, Requirement]:
 def probe(tool: str, check: Check, declared: Requirement | None, *, now: datetime) -> Presence:
     """Steps 1-3 for one tool, stopping at the first that fails; every reading becomes evidence."""
     at = now.isoformat()
-    found = check.find()
+    try:
+        found = check.find()
+    except Unmanaged as refused:
+        return Presence(tool, present=False, evidence=(Evidence('find', str(refused), at),))
     if found is None:
         return Presence(tool, present=False, evidence=(Evidence('find', 'not found', at),))
     source, path = found
