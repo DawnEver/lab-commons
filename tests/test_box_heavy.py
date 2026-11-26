@@ -95,3 +95,13 @@ def test_the_module_door_runs_as_a_process(tmp_path: Path, monkeypatch: pytest.M
     )  # fmt: skip
     assert done.returncode == EXIT_REFUSED
     assert RULE in done.stderr
+
+
+def test_the_refusal_fits_a_refusals_budget() -> None:
+    """Two lines of at most 320 characters (a refusal's budget, with the guard's details line the third)."""
+    long_entry = 'python -m pkg.driver ' + 'x' * 400
+    why = refusal(long_entry, capabilities=_WORKSTATION, host=Host(), hostname='a-long-host-name-01')
+    assert why is not None
+    lines = why.split('\n')
+    assert len(lines) == 2
+    assert max(map(len, lines)) <= 320, [len(line) for line in lines]

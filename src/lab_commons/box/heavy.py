@@ -43,11 +43,11 @@ WORKSTATION: Final = 'workstation'
 EXIT_REFUSED: Final = 2
 #: Where a heavy entry runs instead.
 DOOR: Final = (
-    'Door: run it where heavy compute is declared -- request it on the forge from the main session '
-    '(`python -m dev_lab.dev.forge request ...`), submit it to an HPC executor '
-    '(`python -m lab_commons.hpc submit -c <job.toml>`), or on a compute host whose machine file declares '
-    f'[capabilities.{CAPABILITY}].'
+    'Door: a forge request from the main session (`python -m dev_lab.dev.forge request ...`), an HPC submit '
+    f'(`python -m lab_commons.hpc submit -c <job.toml>`), or a host declaring [capabilities.{CAPABILITY}].'
 )
+#: The most of an entry's spelling a refusal quotes, so its first line stays inside a refusal's line budget.
+_ENTRY_CHARS: Final = 80
 
 
 class HeavyRefused(SystemExit):
@@ -72,6 +72,7 @@ def refusal(
 ) -> str | None:
     """Why *entry* may not start on this host, or ``None`` when it may.
 
+    Two lines, each inside a refusal's budget: the cause naming the host, then the door and the user's override.
     *capabilities* defaults to the machine file's ``[capabilities]`` (validated, :func:`provided`), *host* to the
     process's host context, *hostname* to this computer's name; each is injectable so a test plants both answers.
     """
@@ -81,10 +82,11 @@ def refusal(
     if (hostenv.context() if host is None else host).heavy_approved.strip():
         return None
     name = socket.gethostname() if hostname is None else hostname
+    shown = entry if len(entry) <= _ENTRY_CHARS else entry[: _ENTRY_CHARS - 3] + '...'
     return (
-        f'{RULE}: {entry} is a heavy compute entry, and this host ({name}) is a declared workstation without '
-        f'[capabilities.{CAPABILITY}] -- started here it freezes the whole box (user ruling 2026-11-26). {DOOR} '
-        f'Only the user may override it for one run: {hostenv.HEAVY_APPROVED_ENV}="<the user`s own words>".'
+        f'{RULE}: {shown} is heavy compute; this host ({name}) is a declared workstation without '
+        f'[capabilities.{CAPABILITY}], where one froze the whole box (user ruling 2026-11-26).\n'
+        f'{DOOR} Only the user overrides one run: {hostenv.HEAVY_APPROVED_ENV}="<their own words>".'
     )
 
 
