@@ -22,16 +22,21 @@ Example::
 
     [cost]                                # ONE item
     cpus = 1
-    mem_gb = 2
-    seconds = 90
+    mem = "2 GiB"                         # Slurm memory
+    wall = "90 s"
 
     [policy]                              # optional: how the work is cut
-    shard_minutes_max = 30
+    longest_shard = "30 min"              # also shortest_shard, stall, poll: each a duration
     grants = ["ada-alice"]                # optional: only these grants (user or <cluster>-<user>) may run it
 
     [task]                                # optional: what ONE array task holds (default: one item, shared node)
     lane_domains = 2                      # a WHOLE node in lanes of 2 L3 domains, one item each (no [cost] cpus)
     # or: exclusive = true                # one item on the whole node (``--exclusive``), charged the whole node
+
+A QUANTITY CARRIES ITS UNIT (user ruling 2026-11-25): ``mem``, ``wall`` and the policy's durations are quantity
+strings read once by :func:`lab_commons.quantity.parse` into the unit each field computes in (GiB, seconds,
+minutes); the unit-suffixed spellings (``mem_gb``, ``seconds``, ``shard_minutes_min``, ...) are refused with the
+line that replaces them.
 """
 
 from __future__ import annotations
@@ -42,8 +47,9 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.dimensions import CPU, GPU, MEMORY
+from lab_commons.quantity import Renamed, parse, refuse_renamed
 
-#: Bytes per GiB -- the config speaks GB for humans, :data:`~lab_commons.dimensions.MEMORY` counts bytes.
+#: Bytes per GiB -- a :class:`Cost` holds GiB (Slurm memory), :data:`~lab_commons.dimensions.MEMORY` counts bytes.
 GIB: Final = 1024**3
 
 #: The shortest ``status``/``gather --wait`` poll: each poll is an ssh to a login host (user ruling 2026-11-11).
@@ -209,16 +215,53 @@ _SECTIONS: dict[str, type] = {
 }
 
 
+#: A section's QUANTITY keys: the declared key -> the field it fills, its dimension, and the base units (bytes,
+#: seconds) in one unit of that field. The fields keep the units the planner computes in (GiB, s, min).
+_QUANTITIES: Final[dict[str, dict[str, tuple[str, str, float]]]] = {
+    'cost': {'mem': ('mem_gb', 'size', GIB), 'wall': ('seconds', 'duration', 1.0)},
+    'policy': {
+        'shortest_shard': ('shard_minutes_min', 'duration', 60.0),
+        'longest_shard': ('shard_minutes_max', 'duration', 60.0),
+        'stall': ('stall_minutes', 'duration', 60.0),
+        'poll': ('poll_seconds', 'duration', 1.0),
+    },
+}
+#: The unit-suffixed spellings the 2026-11-25 ruling retired, refused with their new line; never read.
+_RENAMED: Final[dict[str, dict[str, Renamed]]] = {
+    'cost': {'mem_gb': Renamed('mem', 'GiB'), 'seconds': Renamed('wall', 's')},
+    'policy': {
+        'shard_minutes_min': Renamed('shortest_shard', 'min'),
+        'shard_minutes_max': Renamed('longest_shard', 'min'),
+        'stall_minutes': Renamed('stall', 'min'),
+        'poll_seconds': Renamed('poll', 's'),
+    },
+}
+
+
+def _keys(name: str) -> set[str]:
+    """The keys section *name* declares: its dataclass fields, each quantity field under its declared key."""
+    quantities = _QUANTITIES.get(name, {})
+    filled = {field_name for field_name, _, _ in quantities.values()}
+    return (set(_SECTIONS[name].__dataclass_fields__) - filled) | set(quantities)
+
+
 def _section(name: str, raw: dict[str, Any]) -> Any:  # noqa: ANN401 -- one of the section types
-    """Build one section, refusing a key the dataclass does not declare -- a typo is not a default."""
-    kind = _SECTIONS[name]
-    known = set(kind.__dataclass_fields__)
+    """Build one section, refusing a key it does not declare -- a typo is not a default -- or a retired one."""
+    refuse_renamed(f'[{name}]', raw, _RENAMED.get(name, {}))
+    known = _keys(name)
     unknown = set(raw) - known
     if unknown:
         msg = f'[{name}] has unknown keys {sorted(unknown)}; known: {sorted(known)}'
         raise ValueError(msg)
-    values = {key: tuple(value) if isinstance(value, list) else value for key, value in raw.items()}
-    return kind(**values)
+    quantities = _QUANTITIES.get(name, {})
+    values: dict[str, Any] = {}
+    for key, value in raw.items():
+        if key in quantities:
+            filled, dimension, per = quantities[key]
+            values[filled] = parse(f'[{name}] {key}', value, dimension, positive=True) / per
+        else:
+            values[key] = tuple(value) if isinstance(value, list) else value
+    return _SECTIONS[name](**values)
 
 
 def load_config(path: Path | str) -> Config:

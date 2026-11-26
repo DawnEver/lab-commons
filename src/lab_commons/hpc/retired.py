@@ -38,6 +38,9 @@ RETIRED: Final[dict[str, str]] = {
     '_forge_journal import durable_write': 'from lab_commons.compute.durable import durable_write',
     '_forge_journal.durable_write': 'lab_commons.compute.durable.durable_write',
     'lab_commons.multiprocess': 'nothing: deleted 2026-10-22, it had no importer',
+    # ENV-IS-READ-ONCE (family policy 2026-11-25): the machine-home override is read in the host entry alone.
+    'home.HOME_ENV': 'lab_commons.hostenv.HOME_ENV (the host entry reads it; home() takes the record)',
+    'lab_commons.home import HOME_ENV': 'from lab_commons.hostenv import HOME_ENV',
     # Scratch is tracked by git but never committed (user ruling 2026-10-22): a one-off is promoted into src/
     # with tests or deleted; the archive-to-memory exit is gone with no compatibility path.
     'SCRATCH-ARCHIVED-OR-PROMOTED': 'SCRATCH-IS-NEVER-COMMITTED (dev_lab.dev.scratch)',
@@ -240,6 +243,13 @@ RETIRED: Final[dict[str, str]] = {
     'read_reasons': 'dev_lab.dev.test_outcomes.read_cells (a reason travels in its cell)',
     'OutcomeRecorder': 'dev_lab.dev.test_outcomes.CellRecorder',
     'outcome_of(': 'lab_commons.hpc.pytest_item.judged (the one pytest mapping, to a plain test cell)',
+    # One object-store client for the family, product code included (D112 F1, 2026-11-25): it moved here whole.
+    'dev_lab.dev.largeobjects': (
+        'lab_commons.objects (RcloneObjects, declared_objects); '
+        'the reach-proving door is dev_lab.dev.storage.run_objects'
+    ),
+    # The rendered rclone config's place is a fact a product reads too (D112 F1): it lives in lab_commons.objects.
+    'DEFAULT_RCLONE': 'lab_commons.objects.RCLONE_CONFIG',
     **{
         f'[tool.lab_commons.{table}]': f'[tool.dev_lab.{table}] (plan A3: a table only dev-lab reads)'
         for table in MOVED_TABLES

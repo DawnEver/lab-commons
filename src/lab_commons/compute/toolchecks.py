@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Final
 
 from lab_commons.compute.probe import OS_NAMES
+from lab_commons.tools.managed import installed
 
 if sys.platform == 'win32':
     import ctypes
@@ -35,14 +36,20 @@ if sys.platform == 'win32':
 __all__ = [
     'ANSYS_ENGINES',
     'CHECKS',
+    'FEMM_HEADLESS',
+    'FEMM_LEGACY_HOMES',
     'FEMM_VERSION_FILE',
+    'INSTALL_DOOR',
     'LSDYNA_SOLVERS',
+    'VERSION_FILES',
     'AnsysEngine',
     'Check',
     'ProbeCrashed',
+    'Unmanaged',
     'VersionUnreadable',
     'ansys_find',
     'ansys_release',
+    'ansys_within',
     'binary_version',
     'femm_find',
     'femm_release',
@@ -50,11 +57,15 @@ __all__ = [
     'file_version',
     'installed_smoke',
     'jmag_find',
+    'jmag_within',
     'lsdyna_smoke',
+    'managed_find',
     'matlab_find',
     'matlab_version',
+    'matlab_within',
     'plain_find',
     'simba_find',
+    'unmanaged',
 ]
 
 _SYSTEMS: Final = OS_NAMES
@@ -67,13 +78,16 @@ class Check:
     *find* returns ``(source, path)`` or ``None``; *version* ``(source, value)`` or ``None``; *smoke*
     ``(passed, detail)``, read off the install, never by running it (the module docstring). *heavy*: a vendor
     solver and its licence seat -- HEAVY COMPUTE, which a light workstation withholds; a plain tool
-    (ngspice, node) is not heavy merely because it is probed.
+    (ngspice, node) is not heavy merely because it is probed. *within*: the executable under an install home a
+    machine DECLARES (a user-installed tool's ``[dev.vendors.<vendor>] home``, :mod:`lab_commons.tools.vendor`),
+    ``(source, path)`` or ``None`` -- the same layout *find* searches, rooted where the machine says.
     """
 
     find: Callable[[], tuple[str, Path] | None]
     version: Callable[[Path], tuple[str, str] | None]
     smoke: Callable[[Path], tuple[bool, str]]
     heavy: bool
+    within: Callable[[Path], tuple[str, Path] | None] | None = None
 
 
 # --- the readers ---------------------------------------------------------------------------------------
@@ -123,11 +137,50 @@ def installed_smoke(path: Path) -> tuple[bool, str]:
     return False, f'no executable {path}'
 
 
-#: The FEMM 5 headless engine per OS: its binary and the install directory used when ``FEMM_DIR`` is unset --
-#: the one tool root ``~/.local/opt/<tool>`` on every OS (user ruling 2026-11-06).
-FEMM_HEADLESS: Final = {
-    'linux': ('femm_headless', '~/.local/opt/femm-qt/bin'),
-    'windows': ('femm_headlessw.exe', '~/.local/opt/femm-qt/bin'),
+class Unmanaged(Exception):
+    """The tool is installed OUTSIDE the managed tool root (:mod:`lab_commons.tools`); the message names the door.
+
+    A *find* reader raises it for an install it may not accept (user ruling 2026-11-25: every tool goes under the
+    family-managed root, never a hand install). The probe records it as the reading: absent, with its cause.
+    """
+
+
+#: The door every tool is installed through: ``<INSTALL_DOOR> <tool>`` (:mod:`lab_commons.tools`).
+INSTALL_DOOR: Final = 'python -m lab_commons.tools install'
+
+
+def managed_find(tool: str) -> tuple[str, Path] | None:
+    """*tool*'s binary as the managed root records it (``<home>/tools/<tool>/<version>/...``), when it is there.
+
+    Raises:
+        Unmanaged: the record is unreadable as one; the message names the door that rewrites it.
+
+    """
+    try:
+        one = installed(tool)
+    except ValueError as unread:
+        msg = f'{unread}: reinstall through the door: {INSTALL_DOOR} {tool}'
+        raise Unmanaged(msg) from None
+    return ('managed', one.binary) if one is not None and one.binary.is_file() else None
+
+
+def unmanaged(tool: str, path: Path, where: str) -> Unmanaged:
+    """The refusal of an install found by hand at *path* (*where*: how it was found), naming the door."""
+    door = f'{INSTALL_DOOR} {tool}'
+    return Unmanaged(
+        f'unmanaged: {path} ({where}) is outside the managed tool root; reinstall through the door: {door}'
+    )
+
+
+#: The FEMM 5 headless engine's binary per OS.
+FEMM_HEADLESS: Final = {'linux': 'femm_headless', 'windows': 'femm_headlessw.exe'}
+
+#: Where FEMM 5 was put by hand before the managed root (user ruling 2026-11-25): the old one tool root
+#: ``~/.local/opt/femm-qt`` (ruling 2026-11-06) and the Windows installer's ``C:/femm-qt``. An install found
+#: there is UNMANAGED -- reported with the door, never accepted.
+FEMM_LEGACY_HOMES: Final = {
+    'linux': ('~/.local/opt/femm-qt/bin',),
+    'windows': ('~/.local/opt/femm-qt/bin', 'C:/femm-qt/bin'),
 }
 
 
@@ -142,12 +195,16 @@ FEMM_VERSION_FILE: Final = 'version.env'
 _FEMM_VERSION_KEY: Final = 'FEMM_VERSION'
 _DOTTED: Final = re.compile(r'\d+(\.\d+)+')
 
+#: Tool -> the version file its install carries beside its binary, and the key holding the version: what the
+#: install door writes where an installer ships none (:mod:`lab_commons.tools.install`).
+VERSION_FILES: Final = {'femm': (FEMM_VERSION_FILE, _FEMM_VERSION_KEY)}
+
 
 def _femm_door(file: Path) -> str:
     """The door out of a missing or unreadable version file: what the install must carry."""
     return (
-        f'reinstall femm_headless so its install carries {file} '
-        f'(the femm-qt build stamp generated/{FEMM_VERSION_FILE}, copied beside the binary)'
+        f'reinstall femm_headless through `{INSTALL_DOOR} femm` so its install carries {file} '
+        f'(the femm-qt build stamp generated/{FEMM_VERSION_FILE}, beside the binary)'
     )
 
 
@@ -171,7 +228,7 @@ def femm_version(path: Path, *, platform: str = sys.platform) -> tuple[str, str]
     if _SYSTEMS.get(platform) == 'windows':
         found = file_version(path)
         if found is None:
-            msg = f'{path} carries no file version: reinstall femm_headless from the FEMM 5 installer'
+            msg = f'{path} carries no file version: reinstall femm_headless through `{INSTALL_DOOR} femm`'
             raise VersionUnreadable(msg)
         return 'file version', femm_release(found)
     file = path.parent / FEMM_VERSION_FILE
@@ -197,20 +254,32 @@ def femm_find(
     environ: Mapping[str, str] = os.environ,
     which: Callable[[str], str | None] = shutil.which,
 ) -> tuple[str, Path] | None:
-    """The FEMM 5 headless binary: in ``FEMM_DIR`` (or its ``bin``), else the standard install, else ``PATH``."""
+    """The FEMM 5 headless binary: the MANAGED install first, else ``FEMM_DIR`` (or its ``bin``).
+
+    ``FEMM_DIR`` is an explicit declaration (a person's, or a job file's setup line), so it is read as given.
+    A binary found anywhere else -- a legacy home (:data:`FEMM_LEGACY_HOMES`) or ``PATH`` -- is a hand install.
+
+    Raises:
+        Unmanaged: FEMM is found only in a legacy home or on ``PATH``; the message names the install door.
+
+    """
     system = _SYSTEMS.get(platform)
     if system not in FEMM_HEADLESS:
         return None
-    binary, default = FEMM_HEADLESS[system]
+    tool = 'femm'
+    if found := managed_find(tool):
+        return found
+    binary = FEMM_HEADLESS[system]
     if root := environ.get('FEMM_DIR'):
-        places = [('FEMM_DIR', Path(root)), ('FEMM_DIR', Path(root) / 'bin')]
-    else:
-        places = [('install dir', Path(default).expanduser())]
-    for source, place in places:
-        if (place / binary).is_file():
-            return source, place / binary
-    on_path = which(binary)
-    return ('PATH', Path(on_path)) if on_path else None
+        for place in (Path(root), Path(root) / 'bin'):
+            if (place / binary).is_file():
+                return 'FEMM_DIR', place / binary
+    for home in FEMM_LEGACY_HOMES[system]:
+        if (exe := Path(home).expanduser() / binary).is_file():
+            raise unmanaged(tool, exe, 'a legacy home')
+    if on_path := which(binary):
+        raise unmanaged(tool, Path(on_path), 'on PATH')
+    return None
 
 
 #: Where MATLAB's standard installer puts its launcher, per OS: ``(directory, glob)``; ``R*`` is the release.
@@ -236,6 +305,18 @@ def matlab_find(
         if found := sorted(Path(root).glob(pattern)):
             return 'install dir', found[-1]
     return None
+
+
+def matlab_within(*, platform: str = sys.platform) -> Callable[[Path], tuple[str, Path] | None]:
+    """MATLAB's launcher under a declared release home (``.../R2024b``): the standard layout below its ``R*``."""
+
+    def within(home: Path) -> tuple[str, Path] | None:
+        for _root, pattern in MATLAB_INSTALLS.get(_SYSTEMS.get(platform, ''), ()):
+            if (exe := home / pattern.split('/', 1)[1]).is_file():
+                return 'declared home', exe
+        return None
+
+    return within
 
 
 def matlab_version(path: Path) -> tuple[str, str] | None:
@@ -288,6 +369,12 @@ def jmag_find() -> tuple[str, Path] | None:
         return None
     exe = command.strip().split('"')[1] if command.strip().startswith('"') else command.split(' /')[0].strip()
     return ('registry', Path(exe)) if Path(exe).is_file() else None
+
+
+def jmag_within(home: Path) -> tuple[str, Path] | None:
+    """The designer's executable in a declared JMAG-Designer home."""
+    exe = home / 'designer.exe'
+    return ('declared home', exe) if exe.is_file() else None
 
 
 def jmag_version(path: Path) -> tuple[str, str] | None:
@@ -418,6 +505,26 @@ def ansys_find(
     return find
 
 
+def ansys_within(engine: str, *, platform: str = sys.platform) -> Callable[[Path], tuple[str, Path] | None]:
+    """One Ansys engine under a declared home: a release directory ``v<NNN>``, else the newest one under it."""
+    spec = ANSYS_ENGINES[engine]
+
+    def within(home: Path) -> tuple[str, Path] | None:
+        system = _SYSTEMS.get(platform, '')
+        if _RELEASE_DIR.match(home.name):
+            roots = [home]
+        else:
+            found = [d for d in home.glob('v*') if _RELEASE_DIR.match(d.name) and d.is_dir()]
+            roots = sorted(found, key=lambda d: d.name, reverse=True)
+        for root in roots:
+            for pattern in spec.in_release.get(system, ()):
+                if hits := sorted(p for p in root.glob(pattern) if p.is_file()):
+                    return 'declared home', hits[-1]
+        return None
+
+    return within
+
+
 def ansys_release(path: Path) -> tuple[str, str] | None:
     """The release the path names: ``v<NNN>`` (``v251`` -> ``2025 R1``, innermost wins), else a Suite's ``R16.1``."""
     found = [m for part in Path(path).parts if (m := _RELEASE_DIR.match(part))]
@@ -449,13 +556,17 @@ def lsdyna_smoke(path: Path) -> tuple[bool, str]:
 #: Tool -> how it is read. A tool without a check is present where the machine file declares it.
 CHECKS: Final[Mapping[str, Check]] = {
     'femm': Check(femm_find, femm_version, installed_smoke, heavy=True),
-    'jmag': Check(jmag_find, jmag_version, installed_smoke, heavy=True),
-    'matlab': Check(matlab_find, matlab_version, installed_smoke, heavy=True),
+    'jmag': Check(jmag_find, jmag_version, installed_smoke, heavy=True, within=jmag_within),
+    'matlab': Check(matlab_find, matlab_version, installed_smoke, heavy=True, within=matlab_within()),
     'simba': Check(simba_find, simba_version, simba_smoke, heavy=True),
     'ngspice': Check(plain_find('ngspice'), binary_version, installed_smoke, heavy=False),
     **{
         engine: Check(
-            ansys_find(engine), ansys_release, lsdyna_smoke if engine == 'lsdyna' else installed_smoke, heavy=True
+            ansys_find(engine),
+            ansys_release,
+            lsdyna_smoke if engine == 'lsdyna' else installed_smoke,
+            heavy=True,
+            within=ansys_within(engine),
         )
         for engine in ANSYS_ENGINES
     },

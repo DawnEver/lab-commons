@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons import config, home
+from lab_commons import config, home, hostenv
 
 
 @pytest.fixture
 def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / 'motronics-home'
-    monkeypatch.setenv(home.HOME_ENV, str(root))
+    monkeypatch.setenv(hostenv.HOME_ENV, str(root))
     monkeypatch.delenv('LAB_COMMONS_CONFIG', raising=False)
     return root
 
@@ -35,7 +35,7 @@ def test_an_unknown_part_is_refused() -> None:
 
 
 def test_the_default_home_is_dot_motronics(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv(home.HOME_ENV, raising=False)
+    monkeypatch.delenv(hostenv.HOME_ENV, raising=False)
     monkeypatch.setattr(Path, 'home', classmethod(lambda _cls: tmp_path))
     assert home.home() == tmp_path / '.motronics'
 
@@ -139,15 +139,15 @@ def test_the_managed_tool_root_is_one_function(machine: Path) -> None:
 @pytest.mark.usefixtures('machine')
 def test_the_tools_table_reads_its_two_keys_and_its_install_root_is_a_write_root(tmp_path: Path) -> None:
     target = tmp_path / 'Program Files'
-    _declare(f'[tools]\ninstall_root = "{target.as_posix()}"\nmin_free_gb = 5\n')
-    assert home.tools_table() == home.Tools(install_root=target, min_free_gb=5.0)
+    _declare(f'[tools]\ninstall_root = "{target.as_posix()}"\nmin_free = "5 GiB"\n')
+    assert home.tools_table() == home.Tools(install_root=target, min_free=5 * 1024**3)
     assert target in home.write_roots()
     assert home.allowed(target / 'femm' / 'femm.exe')
 
 
 @pytest.mark.usefixtures('machine')
 def test_an_undeclared_tools_table_has_no_install_root() -> None:
-    assert home.tools_table() == home.Tools(install_root=None, min_free_gb=None)
+    assert home.tools_table() == home.Tools(install_root=None, min_free=None)
     assert not home.allowed(Path('C:/Program Files/femm/femm.exe'))  # planted: no install root declared
 
 
@@ -157,7 +157,9 @@ def test_an_undeclared_tools_table_has_no_install_root() -> None:
     [
         ('[tools]\nroot = "C:/x"\n', 'unknown key'),
         ('[tools]\ninstall_root = "relative"\n', 'absolute'),
-        ('[tools]\nmin_free_gb = "five"\n', 'number'),
+        ('[tools]\nmin_free = "five"\n', 'carries no number'),
+        ('[tools]\nmin_free = 5\n', 'bare number'),
+        ('[tools]\nmin_free_gb = 5\n', r'min_free_gb = 5 is retired.*write min_free = "5 GiB"'),
     ],
 )
 def test_a_malformed_tools_table_is_refused_by_name(body: str, match: str) -> None:

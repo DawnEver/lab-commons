@@ -43,7 +43,7 @@ The ``[hpc]`` table (:mod:`lab_commons.config`; the declarations usually come fr
 
     [hpc.clusters.<name>.slurm_accounts.<slurm account>]
     billed = false                       # true: every job here spends money
-    budget = { core_hours = 1000, since = 2026-01-01, until = 2028-01-01 }   # TOTAL, until exclusive
+    budget = { core_time = "1000 h", since = 2026-01-01, until = 2028-01-01 }   # TOTAL core time, until exclusive
 
     [[hpc.grant]]
     user = "me"
@@ -55,12 +55,12 @@ The ``[hpc]`` table (:mod:`lab_commons.config`; the declarations usually come fr
 
     [hpc.paging]                         # optional; undeclared, placement ignores size and region
     page_cpus = 8                        # one page: a SMALL task fits it
-    page_mem_gb = 20
+    page_mem = "20 GiB"
     large_pages = 4                      # more pages than this is LARGE; between, MEDIUM
-    movable_minutes = 30                 # a rerun-safe task this short may borrow the large-job region
+    movable = "30 min"                   # a rerun-safe task this short may borrow the large-job region
 
 A BILLED ACCOUNT IS CHARGED AGAINST ITS BUDGET BEFORE EVERY ``sbatch`` (:mod:`lab_commons.hpc.budget`): what it
-has spent in ``[since, until)`` plus what its queued work may still spend plus this ask must fit ``core_hours``, or the
+has spent in ``[since, until)`` plus what its queued work may still spend plus this ask must fit ``core_time``, or the
 submission is refused; a billed account with no budget is refused. A free account is never budget-checked.
 
 PAGING IS OS MEMORY MANAGEMENT OVER THE POOL (user design 2026-10-17). Tasks are page-sized so free memory
@@ -92,6 +92,7 @@ from typing import Any, Final
 from lab_commons.config import config_path, section
 from lab_commons.hpc.config import Cluster, Cost
 from lab_commons.hpc.retired import RETIRED
+from lab_commons.quantity import Renamed, parse, refuse_renamed
 
 __all__ = [
     'ACCESS_RULE', 'COMMENT_PREFIX', 'SESSION_ENV', 'AccessRefused', 'Budget', 'Grant', 'Machine', 'Paging', 'Session',
@@ -149,19 +150,19 @@ class Paging:
     """The page every task is sized in, where LARGE begins, and the wall under which a rerun-safe task is movable."""
 
     page_cpus: int
-    page_mem_gb: float
+    page_mem: float  # bytes
     large_pages: int
-    movable_minutes: float
+    movable: float  # seconds
 
     def __post_init__(self) -> None:
         """Every bound is positive."""
-        if min(self.page_cpus, self.page_mem_gb, self.large_pages, self.movable_minutes) <= 0:
+        if min(self.page_cpus, self.page_mem, self.large_pages, self.movable) <= 0:
             msg = f'every paging bound is positive, got {self}'
             raise ValueError(msg)
 
     def pages(self, cpus: float, mem_gb: float) -> int:
-        """Pages a task of *cpus* and *mem_gb* occupies -- the larger of its two dimensions."""
-        return max(1, math.ceil(cpus / self.page_cpus), math.ceil(mem_gb / self.page_mem_gb))
+        """Pages a task of *cpus* and *mem_gb* (GiB, a :class:`Cost`'s unit) occupies -- the larger of the two."""
+        return max(1, math.ceil(cpus / self.page_cpus), math.ceil(mem_gb * _GIB / self.page_mem))
 
     def size(self, cost: Cost) -> str:
         """``small`` (one page), ``large`` (more than ``large_pages``) or ``medium``."""
@@ -170,14 +171,21 @@ class Paging:
 
 
 def _paging(raw: dict[str, Any] | None, source: str) -> Paging | None:
-    """``[hpc.paging]``, every key required; ``None`` when undeclared."""
+    """``[hpc.paging]``, every key required (``page_mem`` a size, ``movable`` a duration); ``None`` when undeclared."""
     if raw is None:
         return None
+    where = f'{source}: [hpc.paging]'
+    refuse_renamed(where, raw, _PAGING_RENAMED)
     known = set(Paging.__dataclass_fields__)
     if set(raw) != known:
-        msg = f'{source}: [hpc.paging] declares exactly {sorted(known)}, got {sorted(raw)}'
+        msg = f'{where} declares exactly {sorted(known)}, got {sorted(raw)}'
         raise ValueError(msg)
-    return Paging(**raw)
+    return Paging(
+        page_cpus=raw['page_cpus'],
+        page_mem=parse(f'{where} page_mem', raw['page_mem'], 'size', positive=True),
+        large_pages=raw['large_pages'],
+        movable=parse(f'{where} movable', raw['movable'], 'duration', positive=True),
+    )
 
 
 def _session(source: str) -> Session | None:
@@ -196,22 +204,28 @@ _ISO_DATE: Final = re.compile(r'\d{4}-\d{2}-\d{2}')
 
 @dataclass(frozen=True)
 class Budget:
-    """A billed Slurm account's TOTAL allocation: *core_hours* over the window ``[since, until)``.
+    """A billed Slurm account's TOTAL allocation: *core_time* (seconds of one core) over ``[since, until)``.
 
-    Both ends are ISO dates (a TOML date or its string); *until* is EXCLUSIVE -- the first day the allocation is over.
+    Declared ``core_time = "20000 h"``. Both ends are ISO dates (a TOML date or its string); *until* is EXCLUSIVE --
+    the first day the allocation is over.
     """
 
-    core_hours: float
+    core_time: float
     since: str
     until: str
+
+    @property
+    def core_hours(self) -> float:
+        """The budget in core-hours, the unit the ``sacct`` ledger is summed in (:mod:`lab_commons.hpc.budget`)."""
+        return self.core_time / 3600
 
     def __post_init__(self) -> None:
         """A budget is positive and spans a non-empty window of dates; both ends are kept as ISO strings."""
         object.__setattr__(self, 'since', str(self.since))
         object.__setattr__(self, 'until', str(self.until))
         dated = _ISO_DATE.fullmatch(self.since) and _ISO_DATE.fullmatch(self.until)
-        if not self.core_hours > 0 or not dated or self.until <= self.since:
-            msg = f'a budget is positive core_hours over ISO dates since < until (YYYY-MM-DD), got {self}'
+        if not self.core_time > 0 or not dated or self.until <= self.since:
+            msg = f'a budget is positive core_time over ISO dates since < until (YYYY-MM-DD), got {self}'
             raise ValueError(msg)
 
 
@@ -350,6 +364,10 @@ _GRANT_KEYS: Final = frozenset({'user', 'cluster', 'slurm_account', 'role', 'own
 _CLUSTER_KEYS: Final = frozenset({'hosts', 'partitions', 'qos', 'setup', 'architecture', 'root', 'slurm_accounts'})
 #: The keys of one ``[hpc.clusters.<name>.slurm_accounts.<account>]``.
 _ACCOUNT_KEYS: Final = frozenset({'billed', 'budget'})
+#: Unit-suffixed keys retired by the 2026-11-25 ruling, refused with the line that replaces them; never read.
+_BUDGET_RENAMED: Final = {'core_hours': Renamed('core_time', 'h')}
+_PAGING_RENAMED: Final = {'page_mem_gb': Renamed('page_mem', 'GiB'), 'movable_minutes': Renamed('movable', 'min')}
+_GIB: Final = 1024**3
 #: The keys of ``[hpc]``.
 _HPC_KEYS: Final = frozenset(
     {'reach', 'session_reach', 'session_verifier', 'clusters', 'grant', 'paging', 'roles', 'ssh'}
@@ -375,7 +393,14 @@ def _account(facts: object, where: str, source: str) -> tuple[bool, Budget | Non
     if budget is not None and not facts['billed']:
         msg = f'{source}: {where} is free: a budget belongs to a billed account'
         raise ValueError(msg)
-    return facts['billed'], None if budget is None else Budget(**budget)
+    if budget is None:
+        return facts['billed'], None
+    if not isinstance(budget, dict):
+        msg = f'{source}: {where} budget is a table {{ core_time = "<n> h", since = <date>, until = <date> }}'
+        raise ValueError(msg)  # noqa: TRY004 -- a declaration defect, refused like every other
+    refuse_renamed(f'{source}: {where} budget', budget, _BUDGET_RENAMED)
+    core_time = parse(f'{source}: {where} budget.core_time', budget.get('core_time'), 'duration', positive=True)
+    return facts['billed'], Budget(**{**budget, 'core_time': core_time})
 
 
 def _clusters(raw: object, source: str) -> dict[str, dict[str, Any]]:

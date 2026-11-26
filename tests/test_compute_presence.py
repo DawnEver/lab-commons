@@ -31,7 +31,7 @@ from lab_commons.compute.presence import (
     renew,
 )
 from lab_commons.compute.probe import OS_NAMES
-from lab_commons.compute.toolchecks import CHECKS, Check, femm_find, matlab_find, matlab_version, simba_find
+from lab_commons.compute.toolchecks import CHECKS, Check, matlab_find, matlab_version, simba_find
 
 NOW = datetime(2026, 10, 16, 12, tzinfo=UTC)
 EXE = Path('/opt/tool/bin/tool')
@@ -248,30 +248,6 @@ def test_a_reading_taken_against_an_exact_pin_is_upgraded_on_read_and_re_probed(
 @pytest.mark.parametrize('tool', ['femm', 'jmag', 'matlab', 'simba'])
 def test_every_vendor_tool_has_a_check(tool: str) -> None:
     assert tool in CHECKS
-
-
-@pytest.mark.parametrize(('platform', 'binary'), [('linux', 'femm_headless'), ('win32', 'femm_headlessw.exe')])
-def test_femm_is_found_under_femm_dir_else_on_path(tmp_path: Path, platform: str, binary: str) -> None:
-    env, nowhere = {'FEMM_DIR': str(tmp_path)}, lambda _b: None
-    assert femm_find(platform=platform, environ=env, which=nowhere) is None
-    (tmp_path / 'bin').mkdir()
-    (tmp_path / 'bin' / binary).write_bytes(b'')
-    assert femm_find(platform=platform, environ=env, which=nowhere) == ('FEMM_DIR', tmp_path / 'bin' / binary)
-    (tmp_path / 'bin' / binary).unlink()
-    assert femm_find(platform=platform, environ=env, which=lambda b: f'/p/{b}') == ('PATH', Path(f'/p/{binary}'))
-    assert femm_find(platform='darwin', environ=env, which=nowhere) is None, 'no FEMM 5 build is known there'
-
-
-@pytest.mark.parametrize(('platform', 'binary'), [('linux', 'femm_headless'), ('win32', 'femm_headlessw.exe')])
-def test_femm_without_femm_dir_is_found_under_the_one_tool_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, binary: str
-) -> None:
-    for home in ('HOME', 'USERPROFILE'):
-        monkeypatch.setenv(home, str(tmp_path))
-    bin_dir = tmp_path / '.local' / 'opt' / 'femm-qt' / 'bin'
-    bin_dir.mkdir(parents=True)
-    (bin_dir / binary).write_bytes(b'')
-    assert femm_find(platform=platform, environ={}, which=lambda _b: None) == ('install dir', bin_dir / binary)
 
 
 @pytest.mark.parametrize(

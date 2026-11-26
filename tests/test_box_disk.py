@@ -32,7 +32,7 @@ def test_a_near_full_volume_is_refused_by_name(monkeypatch: pytest.MonkeyPatch, 
     assert refusal is not None
     assert '0.9 GiB free' in refusal
     assert 'floor 50.0 GiB' in refusal
-    assert 'free_floor_gb' in refusal
+    assert '[storage] free_floor in the machine file' in refusal
 
 
 def test_under_the_watermark_warns_but_admits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

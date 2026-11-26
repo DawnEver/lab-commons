@@ -37,7 +37,7 @@ install :func:`lab_commons.compute.floor.keep` evicts the least recently hit res
 until the volume keeps the floor free -- and if it cannot, the install is undone and refused
 (:class:`~lab_commons.compute.floor.BelowFloor`). Eviction removes a live copy only (renamed out of place first, so
 a crash never leaves half a result): an evicted unit is a miss here and a shareable one comes back from the shared
-tier; graves are never evicted. The floor is the caller's -- the machine's ``[storage] free_floor_gb``
+tier; graves are never evicted. The floor is the caller's -- the machine's ``[storage] free_floor``
 (:func:`lab_commons.storage.free_floor`, quota included) -- never a value in this module. ``cap_bytes`` is retired.
 """
 

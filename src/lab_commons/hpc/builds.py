@@ -8,9 +8,12 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     source_roots = ["src"]                                  # put on PYTHONPATH from each sha's tree
     artifact_paths = ["cases"]                              # what a job reads beside them (lab_commons.hpc.artifact)
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
-    timeout_s = { incremental = 300, full = 3000 }          # pytest --timeout per run scope (absent: the repo's own)
-    item_wall = { multiple = 10, floor_s = 300, unmeasured_s = 3600 }  # per-test kill bound (these are the defaults)
+    timeout = { incremental = "5 min", full = "50 min" }    # pytest --timeout per run scope (absent: the repo's own)
+    item_wall = { multiple = 10, floor = "5 min", unmeasured = "1 h", ceiling = "2 h" }  # per-test kill (defaults)
     priced = "tests/priced.toml"                            # measured peaks/walls, no margin (read_priced)
+
+Every duration is a quantity string (user ruling 2026-11-25, :mod:`lab_commons.quantity`); the unit-suffixed
+spellings ``timeout_s`` and ``item_wall``'s ``floor_s``/``unmeasured_s``/``ceiling_s`` are refused with their new line.
 
 THE VENV'S BUILD COMMAND IS DERIVED, never declared: ``uv sync --frozen`` of the extras the repo's
 ``[tool.dev_lab.dep]`` selects for the run's NEED-SET (:func:`lab_commons.extras.sync_command`), so a part or job
@@ -46,6 +49,7 @@ from typing import TYPE_CHECKING, Final
 import lab_commons.launch as _door
 from lab_commons.extras import sync_command
 from lab_commons.hpc.declared import InvalidDeclaration, kit_tables
+from lab_commons.quantity import QuantityRefused, Renamed, form, parse, refuse_renamed
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -127,32 +131,80 @@ class Builds:
     item_wall: ItemWall = field(default_factory=ItemWall)
 
 
-_ITEM_WALL_KEYS: Final = frozenset({'multiple', 'floor_s', 'unmeasured_s', 'ceiling_s'})
+_TABLE: Final = '[tool.lab_commons.hpc]'
+#: ``item_wall``'s duration keys and the :class:`ItemWall` field (whole seconds) each fills; ``multiple`` is a number.
+_ITEM_WALL_DURATIONS: Final = {'floor': 'floor_s', 'unmeasured': 'unmeasured_s', 'ceiling': 'ceiling_s'}
+_ITEM_WALL_KEYS: Final = frozenset({'multiple', *_ITEM_WALL_DURATIONS})
+#: The unit-suffixed spellings the 2026-11-25 ruling retired, refused with their new line; never read.
+_ITEM_WALL_RENAMED: Final = {old: Renamed(new, 's') for new, old in _ITEM_WALL_DURATIONS.items()}
+
+
+def _seconds(key: str, value: object) -> int:
+    """*value* (declared as *key*) as positive whole seconds, rounded up; refused as a declaration."""
+    try:
+        return math.ceil(parse(f'{_TABLE} {key}', value, 'duration', positive=True))
+    except QuantityRefused as bad:
+        raise InvalidDeclaration(str(bad)) from bad
 
 
 def _item_wall(raw: dict[str, object]) -> ItemWall:
-    """The ``item_wall`` table; an unknown key, a non-positive number or a floor past the ceiling is refused."""
-    bad = set(raw) - _ITEM_WALL_KEYS or any(
-        isinstance(v, bool) or not isinstance(v, int | float) or v <= 0 for v in raw.values()
-    )
-    if bad:
-        msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: keys {sorted(_ITEM_WALL_KEYS)}, values positive numbers'
+    """The ``item_wall`` table; a retired or unknown key, a bad value or a floor past the ceiling is refused."""
+    try:
+        refuse_renamed(f'{_TABLE} item_wall', raw, _ITEM_WALL_RENAMED)
+    except QuantityRefused as retired:
+        raise InvalidDeclaration(str(retired)) from retired
+    multiple = raw.get('multiple', ItemWall.multiple)
+    if (
+        set(raw) - _ITEM_WALL_KEYS
+        or isinstance(multiple, bool)
+        or not isinstance(multiple, int | float)
+        or multiple <= 0
+    ):
+        msg = (
+            f'{_TABLE} item_wall {raw!r}: keys {sorted(_ITEM_WALL_KEYS)}, multiple a positive number, '
+            'the rest durations'
+        )
         raise InvalidDeclaration(msg)
-    wall = ItemWall(**raw)  # type: ignore[arg-type]
+    walls = {
+        field_name: _seconds(f'item_wall.{key}', raw[key])
+        for key, field_name in _ITEM_WALL_DURATIONS.items()
+        if key in raw
+    }
+    wall = ItemWall(multiple=float(multiple), **walls)
     if wall.floor_s > wall.ceiling_s:
-        msg = f'[tool.lab_commons.hpc] item_wall {raw!r}: floor_s may not pass ceiling_s'
+        msg = f'{_TABLE} item_wall {raw!r}: floor may not pass ceiling'
         raise InvalidDeclaration(msg)
     return wall
 
 
-_PRICE_KEYS: Final = frozenset({'mem_gb', 'wall_s'})
+def _timeout(raw: dict[str, object]) -> dict[str, int]:
+    """``timeout``: run scope -> pytest's ``--timeout`` in whole seconds; the retired ``timeout_s`` is refused."""
+    if 'timeout_s' in raw:
+        old = raw['timeout_s']
+        scopes = ', '.join(f'{k} = {form(v, "s")}' for k, v in old.items()) if isinstance(old, dict) else '...'
+        msg = (
+            f'{_TABLE} timeout_s = {old!r} is retired (user ruling 2026-11-25: a value carries its unit, parsed '
+            f'once by lab_commons.quantity): write timeout = {{ {scopes} }}'
+        )
+        raise InvalidDeclaration(msg)
+    declared = raw.get('timeout', {})
+    if not isinstance(declared, dict) or set(declared) - set(SCOPES):
+        msg = f'{_TABLE} timeout {declared!r}: keys are scopes {SCOPES}, values durations such as "5 min"'
+        raise InvalidDeclaration(msg)
+    return {scope: _seconds(f'timeout.{scope}', value) for scope, value in declared.items()}
+
+
+#: A price's declared keys -> the floor key it fills (the measured record's: GiB and seconds), its dimension and
+#: the base units (bytes, seconds) in one unit of that floor.
+_PRICE_KEYS: Final = {'mem': ('mem_gb', 'size', 1024.0**3), 'wall': ('wall_s', 'duration', 1.0)}
+_PRICE_RENAMED: Final = {'mem_gb': Renamed('mem', 'GiB'), 'wall_s': Renamed('wall', 's')}
 
 
 def read_priced(text: str, path: str) -> dict[str, dict[str, float]]:
     """A repo's PRICED FLOORS, the TOML at *path* (``[tool.lab_commons.hpc] priced``), refused by name if malformed.
 
-    Each key is a test node id or a test file, each value ``{ mem_gb = .., wall_s = .. }`` (either or both): the
-    RAW MEASURED peak GB and wall seconds, from a measurement the file's comments cite, with NO margin. A plan
+    Each key is a test node id or a test file, each value ``{ mem = "9.6 GiB", wall = "750 s" }`` (either or both):
+    the RAW MEASURED peak memory and wall, from a measurement the file's comments cite, with NO margin. A plan
     reads them as floors (:meth:`lab_commons.compute.measured.Measured.floored`), exactly as it reads a learned
     peak, and applies its ONE safety factor (:attr:`lab_commons.hpc.config.Policy.safety`) -- a declared margin
     on top is the same fact in two places and asks ~2.25x (user ruling 2026-10-31). Round 0 thus asks what a
@@ -166,16 +218,22 @@ def read_priced(text: str, path: str) -> dict[str, dict[str, float]]:
     floors: dict[str, dict[str, float]] = {}
     for key, price in data.items():
         if '.py' not in key.split('::', maxsplit=1)[0] or not isinstance(price, dict) or not price:
-            msg = f'{path}: {key!r} must be a test file or node id priced as {{ mem_gb = .., wall_s = .. }}'
+            msg = f'{path}: {key!r} must be a test file or node id priced as {{ mem = "<n> GiB", wall = "<n> s" }}'
             raise InvalidDeclaration(msg)
-        if unknown := sorted(set(price) - _PRICE_KEYS):
+        try:
+            refuse_renamed(f'{path}: {key!r}', price, _PRICE_RENAMED)
+        except QuantityRefused as retired:
+            raise InvalidDeclaration(str(retired)) from retired
+        if unknown := sorted(set(price) - set(_PRICE_KEYS)):
             msg = f'{path}: {key!r} has unknown key(s) {unknown}; a price is {sorted(_PRICE_KEYS)}'
             raise InvalidDeclaration(msg)
-        bad = sorted(k for k, v in price.items() if isinstance(v, bool) or not isinstance(v, int | float) or v <= 0)
-        if bad:
-            msg = f'{path}: {key!r} {bad} must be positive numbers'
-            raise InvalidDeclaration(msg)
-        floors[key] = {k: float(v) for k, v in price.items()}
+        floors[key] = {}
+        for name, value in price.items():
+            floor, dimension, per = _PRICE_KEYS[name]
+            try:
+                floors[key][floor] = parse(f'{path}: {key!r} {name}', value, dimension, positive=True) / per
+            except QuantityRefused as bad:
+                raise InvalidDeclaration(str(bad)) from bad
     return floors
 
 
@@ -203,14 +261,10 @@ def read_builds(text: str, needs: Iterable[str] = ()) -> Builds:
         artifact_paths=tuple(raw.get('artifact_paths', ())),
         native_inputs=tuple(native.get('inputs', ())),
         native_build=str(native.get('build', '')),
-        timeout_s=dict(raw.get('timeout_s', {})),
+        timeout_s=_timeout(raw),
         item_wall=_item_wall(dict(raw.get('item_wall', {}))),
         priced=str(raw.get('priced', '')),
     )
-    bad = {k: v for k, v in builds.timeout_s.items() if k not in SCOPES or not isinstance(v, int) or v <= 0}
-    if bad:
-        msg = f'[tool.lab_commons.hpc] timeout_s {bad!r}: keys are scopes {SCOPES}, values positive whole seconds'
-        raise InvalidDeclaration(msg)
     if builds.dependency_inputs and not builds.source_roots:
         msg = '[tool.lab_commons.hpc] dependency_inputs needs source_roots: a shared venv holds no sha source'
         raise InvalidDeclaration(msg)

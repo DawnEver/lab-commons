@@ -24,10 +24,10 @@ def test_every_family_file_is_current_against_its_delta() -> None:
 
 
 def test_the_agent_auto_mode_file_is_ignored() -> None:
-    """`.claude/automode.json` is per-machine agent state; PLANTED CONTROL: `.claude/rules/x.md` is not ignored."""
+    """`.claude/automode.json` is per-machine agent state; PLANTED CONTROL: `src/lab_commons/x.py` is not ignored."""
 
     def ignored(path: str) -> bool:
         return subprocess.run([_GIT, 'check-ignore', '-q', path], cwd=ROOT, check=False).returncode == 0
 
     assert ignored('.claude/automode.json')
-    assert not ignored('.claude/rules/x.md')
+    assert not ignored('src/lab_commons/x.py')

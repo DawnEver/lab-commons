@@ -1,11 +1,13 @@
 """THE MACHINE HOME: one root per machine for everything the toolchain keeps outside a repo (user ruling 2026-11-03).
 
-``~/.motronics/`` (or ``$MOTRONICS_HOME``) holds the toolchain's per-machine facts, in fixed parts (:data:`PARTS`):
+``~/.motronics/`` (or where the host context's ``machine_home`` relocates it: :data:`lab_commons.hostenv.HOME_ENV`,
+read there and passed down) holds the toolchain's per-machine facts, in fixed parts (:data:`PARTS`):
 
 * ``config/motronics.toml`` -- THE per-machine file (:mod:`lab_commons.config` reads it);
 * ``state/`` -- what must outlive any one checkout (forge runs, alarms, ledgers, learned asks);
 * ``cache/`` -- disposable;
-* ``tools/`` -- external tools the toolchain installs;
+* ``tools/`` -- external tools, installed only through the door :mod:`lab_commons.tools` (its layout:
+  :mod:`lab_commons.tools.managed`);
 * ``repos/`` -- the checkouts a serving host clones;
 * ``backups/`` -- copies of the machine file taken before an edit.
 
@@ -20,8 +22,8 @@ a writer with no configured repo is refused, never given a fallback directory.
 
 THE TOOLS TABLE (:func:`tools_table`). ``[tools]`` has exactly two keys: ``install_root`` (the absolute directory
 the user confirmed an external tool may be installed into, e.g. ``<X>:/Program Files/``; it joins the write roots)
-and ``min_free_gb`` (the free space an install needs there). Any other key is refused by name. The toolchain's
-own managed tool root is :func:`tools`.
+and ``min_free`` (the free space an install needs there, a size such as ``"5 GiB"``). Any other key is refused by
+name. The toolchain's own managed tool root is :func:`tools`.
 
 OUTSIDE THE POLICY (:func:`exempt`): the agent hosts' own configuration (:data:`AGENT_HOMES` under the user's
 home -- Claude Code, Codex and Antigravity -- never touched by the toolchain) and the AGENT repos of
@@ -29,7 +31,7 @@ home -- Claude Code, Codex and Antigravity -- never touched by the toolchain) an
 repos. And git's credential store (:func:`git_credential_stores`; user ruling 2026-11-07): ``credential.helper
 store`` rewrites it after every authenticated fetch, so it is the user's own store written by git, never by the
 toolchain. Exactly those FILES are exempt -- ``~/.git-credentials`` and ``$XDG_CONFIG_HOME/git/credentials`` --
-never their directory nor any other dotfile.
+never their directory nor any other dotfile. This module reads no environment: :mod:`lab_commons.hostenv` does.
 
 SYNCED FOLDERS (:func:`sync_roots`): ``[sync] roots`` lists the globs of the folders a sync client shares with a
 live human session (OneDrive); a write there needs the user's consent for that write. Undeclared, the platform's
@@ -50,9 +52,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from lab_commons import hostenv
+from lab_commons.quantity import Renamed, parse, refuse_renamed
+
 __all__ = [
     'AGENT_HOMES',
-    'HOME_ENV',
     'PARTS',
     'TEMP_NAMES',
     'Tools',
@@ -64,6 +68,7 @@ __all__ = [
     'git_credential_stores',
     'home',
     'part',
+    'pinned_bin',
     'repo_of',
     'repos',
     'sync_defaults',
@@ -76,9 +81,6 @@ __all__ = [
     'within_text',
     'write_roots',
 ]
-
-#: Environment override of the machine home.
-HOME_ENV: Final = 'MOTRONICS_HOME'
 
 #: The fixed parts of the home, each a directory directly under it.
 PARTS: Final = ('config', 'state', 'cache', 'tools', 'repos', 'backups')
@@ -106,9 +108,13 @@ _SYNC_DEFAULTS: Final = {
 _SYNC_KEYS: Final = frozenset({'roots'})
 
 
-def home() -> Path:
-    """``$MOTRONICS_HOME``, else ``~/.motronics``."""
-    override = os.environ.get(HOME_ENV)
+def home(host: hostenv.Host | None = None) -> Path:
+    """*host*'s ``machine_home``, else ``~/.motronics``; *host* defaults to this process's :func:`hostenv.context`.
+
+    An explicit record is the layout it describes whatever this process's environment says: ``home(Host())`` is
+    the default layout, the one another account sees with no override set.
+    """
+    override = (hostenv.context() if host is None else host).machine_home
     return Path(override).expanduser() if override else Path.home() / '.motronics'
 
 
@@ -123,6 +129,19 @@ def part(name: str) -> Path:
 def tools() -> Path:
     """The toolchain's managed tool root, ``<home>/tools``."""
     return part('tools')
+
+
+def pinned_bin(*, windows: bool | None = None, host: hostenv.Host | None = None) -> Path:
+    """Where a pinned-release tool's binary is placed (rclone, uv): user-space and removable.
+
+    ``~/.local/bin`` on POSIX (already on a cluster tick's ``PATH``), ``%LOCALAPPDATA%/dev-lab/bin`` on Windows.
+    dev-lab's install door writes here; a product resolves a pinned tool here and nowhere else.
+    """
+    facts = hostenv.context() if host is None else host
+    if os.name == 'nt' if windows is None else windows:
+        base = facts.local_appdata or str(Path(facts.user_profile or str(Path.home())) / 'AppData' / 'Local')
+        return Path(base) / 'dev-lab' / 'bin'
+    return Path(facts.user_home or str(Path.home())) / '.local' / 'bin'
 
 
 def config_path() -> Path:
@@ -160,10 +179,12 @@ class Tools:
     """The ``[tools]`` table: where the user lets an external tool install, and the free space it needs."""
 
     install_root: Path | None
-    min_free_gb: float | None
+    min_free: int | None  # bytes
 
 
-_TOOLS_KEYS: Final = frozenset({'install_root', 'min_free_gb'})
+_TOOLS_KEYS: Final = frozenset({'install_root', 'min_free'})
+#: Unit-suffixed keys retired by the 2026-11-25 ruling, refused with the line that replaces them; never read.
+_TOOLS_RENAMED: Final = {'min_free_gb': Renamed('min_free', 'GiB')}
 
 
 def _table(name: str) -> object:
@@ -177,19 +198,17 @@ def tools_table() -> Tools:
     if not isinstance(table, dict):
         msg = f'{path}: [tools] must be a table'
         raise TypeError(msg)
+    refuse_renamed(f'{path}: [tools]', table, _TOOLS_RENAMED)
     if unknown := sorted(set(table) - _TOOLS_KEYS):
         msg = f'{path}: [tools] has unknown key(s) {unknown}; the keys are {sorted(_TOOLS_KEYS)}'
         raise ValueError(msg)
-    root, size = table.get('install_root'), table.get('min_free_gb')
+    root, size = table.get('install_root'), table.get('min_free')
     if root is not None and (not isinstance(root, str) or not Path(root).expanduser().is_absolute()):
         msg = f'{path}: [tools] install_root = {root!r} must be an absolute path'
         raise ValueError(msg)
-    if size is not None and (isinstance(size, bool) or not isinstance(size, int | float)):
-        msg = f'{path}: [tools] min_free_gb = {size!r} must be a number'
-        raise ValueError(msg)
     return Tools(
         install_root=None if root is None else Path(root).expanduser(),
-        min_free_gb=None if size is None else float(size),
+        min_free=None if size is None else int(parse(f'{path}: [tools] min_free', size, 'size', positive=True)),
     )
 
 
@@ -249,7 +268,7 @@ def allowed(path: Path) -> bool:
 
 def git_credential_stores() -> tuple[Path, ...]:
     """The files git's ``store`` helper writes: ``~/.git-credentials`` and ``$XDG_CONFIG_HOME/git/credentials``."""
-    xdg = os.environ.get('XDG_CONFIG_HOME')
+    xdg = hostenv.context().xdg_config_home
     config = Path(xdg).expanduser() if xdg else Path.home() / '.config'
     return (Path.home() / '.git-credentials', config / 'git' / 'credentials')
 

@@ -80,6 +80,29 @@ pruned_paths = ['.claude/worktrees']
 scratch = 'scratch/'
 max_age_days = 3.0
 
+# ENV-IS-READ-ONCE (family policy 2026-11-25, dev_lab.dev.envreads): host facts are read in the one entry and passed
+# down as a typed record. `pending` is the census at adoption; it only shrinks.
+[tool.dev_lab.env]
+entry = ["src/lab_commons/hostenv.py"]
+pending = [
+    "src/lab_commons/_proc_darwin.py",
+    "src/lab_commons/box/_linux.py",
+    "src/lab_commons/box/_store.py",
+    "src/lab_commons/box/ledger.py",
+    "src/lab_commons/box/run.py",
+    "src/lab_commons/compute/toolchecks.py",
+    "src/lab_commons/config.py",
+    "src/lab_commons/credentials.py",
+    "src/lab_commons/desktop/_x11.py",
+    "src/lab_commons/hpc/collect.py",
+    "src/lab_commons/hpc/grants.py",
+    "src/lab_commons/hpc/homedoor.py",
+    "src/lab_commons/hpc/layout.py",
+    "src/lab_commons/hpc/pytest_item.py",
+    "src/lab_commons/paths.py",
+    "src/lab_commons/viz/mpl.py",
+]
+
 # Every environment of this repo carries every capability extra: its own tests exercise each one
 # (lab_commons.extras derives each sync from this; there is no install-everything switch).
 [tool.dev_lab.dep]
@@ -292,7 +315,7 @@ judge_app = 5619495
 # clone, worktree, exported tree, bundle or patch, whatever a row says. Formats (R3): TOML declarations, JSONL
 # machine records, CSV tables, NPZ arrays, Markdown reports, PNG figures; vendor-native only at an adapter boundary.
 [tool.dev_lab.placement.layout]
-'.' = ['.md', '.toml', '.lock', '.gitattributes', '.gitignore', '.rgignore', 'license', 'makefile']
+'.' = ['.md', '.toml', '.lock', '.gitattributes', '.gitignore', 'license', 'makefile']
 '.claude' = ['.json']
 '.claude/hooks' = ['.js', '.json']
 '.claude/memory' = ['.md']

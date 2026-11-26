@@ -18,7 +18,7 @@ from lab_commons.box import BOX_ENV, CPU_ENV, INSIDE_ENV
 from lab_commons.box.devices import Devices
 from lab_commons.config import CONFIG_ENV
 from lab_commons.headroom import Floor
-from lab_commons.home import HOME_ENV
+from lab_commons.hostenv import HOME_ENV
 
 
 @pytest.fixture(autouse=True)
