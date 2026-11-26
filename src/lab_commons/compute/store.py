@@ -39,6 +39,15 @@ until the volume keeps the floor free -- and if it cannot, the install is undone
 a crash never leaves half a result): an evicted unit is a miss here and a shareable one comes back from the shared
 tier; graves are never evicted. The floor is the caller's -- the machine's ``[storage] free_floor``
 (:func:`lab_commons.storage.free_floor`, quota included) -- never a value in this module. ``cap_bytes`` is retired.
+
+EVERY LOOKUP IS LOGGED, AND A MISS SAYS WHY (v1 ruling D125 F3). :meth:`ResultStore.lookup` asks for a UNIT, not a
+bare hash, so the store learns the unit's facts (its Identity's encoding, kept under ``<root>/.facts/``). Each lookup
+appends one JSONL line to ``<root>/`` :data:`LOOKUPS` with OpenTelemetry-style names (``event.name``,
+``cache.result``, ``cache.key``, ``cache.tier``, ``code.function``); a miss carries ``cache.miss.reason`` -- ``new``
+(no unit of this engine and entry seen), ``changed`` with ``cache.miss.changed`` (the facts that differ from the
+nearest seen unit of the same engine and entry: ``version``, ``files.<name>``, ``params.<name>``), ``invalidated``
+with the tombstone's reason as ``cache.miss.detail``, or ``absent`` (this unit was seen, but no result is here: never
+stored, or evicted). A hit rate is then a count over this file, never a second ledger.
 """
 
 from __future__ import annotations
@@ -53,16 +62,17 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 from lab_commons.compute import floor
 from lab_commons.compute.durable import durable_write
-from lab_commons.compute.unit import content_hash
+from lab_commons.compute.unit import Unit, content_hash
 from lab_commons.headroom import Floor
 from lab_commons.outcomes.identity import canonical
 
 __all__ = [
     'INSTALL_BACKOFF_S',
+    'LOOKUPS',
     'RECORD',
     'REF_SUFFIX',
     'TOMBSTONE',
@@ -78,6 +88,11 @@ __all__ = [
     'TooLarge',
     'result_hash',
 ]
+
+#: The lookup log's file name under the store root: one JSONL line per :meth:`ResultStore.lookup`.
+LOOKUPS: Final = 'lookups.jsonl'
+#: Where the store keeps each looked-up unit's facts, by engine-and-entry lineage, to name what a miss changed.
+_FACTS: Final = '.facts'
 
 #: The record's file name inside a result directory; never an output name.
 RECORD: Final = 'record.json'
@@ -342,6 +357,57 @@ class ResultStore:
             shutil.rmtree(dest, ignore_errors=True)
         return self.history(unit_hash)[-1][0] if generation else None
 
+    def lookup(self, unit: Unit, files: Mapping[str, Path]) -> Result | Tombstone | None:
+        """:meth:`get` for *unit* over its resolved input *files*, logged to :data:`LOOKUPS` with a miss's reason.
+
+        Raises:
+            ArrivalMismatch: the shared tier's outputs do not hash to their record.
+
+        """
+        identity = unit.identity(files)
+        facts = json.loads(identity.canonical)
+        local = self._local(identity.key) is not None
+        found = self.get(identity.key)
+        line: dict[str, object] = {
+            'timestamp': datetime.now(UTC).isoformat(timespec='milliseconds'),
+            'event.name': 'cache.lookup',
+            'cache.key': identity.key,
+            'code.function': unit.entry,
+            'engine.name': unit.engine.name,
+            'engine.version': unit.version,
+        }
+        if isinstance(found, Result):
+            line |= {'cache.result': 'hit', 'cache.tier': 'local' if local else 'shared'}
+        else:
+            line |= {'cache.result': 'miss', **self._why(identity.key, facts, found)}
+        self._remember(identity.key, facts)
+        with (self.root / LOOKUPS).open('a', encoding='utf-8') as log:
+            log.write(json.dumps(line, sort_keys=True) + '\n')
+        return found
+
+    def _lineage(self, facts: Mapping[str, object]) -> Path:
+        digest = hashlib.sha256(canonical([facts['engine'], facts['entry']])).hexdigest()
+        return self.root / _FACTS / digest[:32]
+
+    def _remember(self, unit_hash: str, facts: Mapping[str, object]) -> None:
+        held = self._lineage(facts) / f'{unit_hash}.json'
+        if not held.is_file():
+            held.parent.mkdir(parents=True, exist_ok=True)
+            durable_write(held, canonical(facts))
+
+    def _why(self, unit_hash: str, facts: Mapping[str, object], found: Tombstone | None) -> dict[str, object]:
+        """A miss's reason: invalidated, absent (seen before), changed (against the nearest seen unit), or new."""
+        if isinstance(found, Tombstone):
+            return {'cache.miss.reason': 'invalidated', 'cache.miss.detail': found.reason}
+        lineage = self._lineage(facts)
+        if (lineage / f'{unit_hash}.json').is_file():
+            return {'cache.miss.reason': 'absent'}
+        seen = [json.loads(p.read_text(encoding='utf-8')) for p in sorted(lineage.glob('*.json'))]
+        if not seen:
+            return {'cache.miss.reason': 'new'}
+        changed = min((_changed(facts, other) for other in seen), key=len)
+        return {'cache.miss.reason': 'changed', 'cache.miss.changed': changed}
+
     def _resolve(self, unit_hash: str, staged: Path) -> None:
         """Replace each Ref in *staged* by its bytes from the large-object store, sha256-checked; else refuse."""
         for held in sorted(staged.glob(f'*{REF_SUFFIX}')):
@@ -530,3 +596,12 @@ class ResultStore:
             )
             raise Nondeterministic(msg) from None
         return held
+
+
+def _changed(facts: Mapping[str, Any], other: Mapping[str, Any]) -> list[str]:
+    """The fact paths in which two units of one lineage differ: ``version``, ``files.<name>``, ``params.<name>``."""
+    out = ['version'] if facts.get('version') != other.get('version') else []
+    for group in ('files', 'params'):
+        mine, theirs = facts.get(group) or {}, other.get(group) or {}
+        out += [f'{group}.{name}' for name in sorted(set(mine) | set(theirs)) if mine.get(name) != theirs.get(name)]
+    return out
