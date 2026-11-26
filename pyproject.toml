@@ -177,7 +177,7 @@ ephemeral = ['pr/*']
 prune_merged = true
 # Branch limits (user ruling 2026-11-20): land or retire a head past them (dev_lab.dev.branchpolicy).
 max_ahead = 10
-max_idle_hours = 12
+max_idle = "12 h"
 
 [tool.dev_lab.doors]
 # This repo's exits, keyed by deny-rule ID. The agent guard runs from whichever project a session
