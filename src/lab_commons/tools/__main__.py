@@ -3,7 +3,8 @@
 * ``install <tool> [--version V] [--repo DIR] ...`` -- by the tool's mode in ``tools.toml``:
 
   - MANAGED (``[--installer FILE] [--mode silent|interactive]``): installs the release of this OS that
-    ``--version`` names, else the newest the repo's ``[tool.lab_commons.tools]`` admits, under the managed root;
+    ``--version`` names, else the NEWEST the family floor and the repo's ``[tool.lab_commons.tools]`` admit, under
+    the managed root;
     ``--installer`` uses a local copy, hash-verified like a download (:mod:`lab_commons.tools.install`);
   - USER-INSTALLED (``[--home DIR]``): probes the install home this machine declares (or ``--home``, to verify one
     before it is recorded) at the version the repo requires, and never downloads it (:mod:`lab_commons.tools.vendor`).
@@ -24,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from lab_commons import home
-from lab_commons.compute.presence import Requirement, declared_versions, probe
+from lab_commons.compute.presence import Requirement, probe
 from lab_commons.compute.probe import os_name
 from lab_commons.compute.toolchecks import CHECKS
 from lab_commons.log import emit
@@ -59,10 +60,12 @@ def _repo(given: Path | None) -> Path | None:
 
 
 def _requirements(given: Path | None) -> tuple[dict[str, Requirement], str]:
+    """The repo's declarations inside the family floors of ``tools.toml`` (:func:`catalogue.requirements`)."""
     repo = _repo(given)
+    family = f'the family floors in {catalogue.CATALOGUE.name}'
     if repo is None:
-        return {}, 'no repo: no pyproject.toml at or above the current directory'
-    return declared_versions(repo), str(repo / 'pyproject.toml')
+        return catalogue.requirements(None, _table()), f'{family}; no repo: no pyproject.toml at or above here'
+    return catalogue.requirements(repo, _table()), f'{family} and {repo / "pyproject.toml"}'
 
 
 def _table() -> dict[str, catalogue.Tool]:

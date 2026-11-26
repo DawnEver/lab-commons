@@ -21,7 +21,7 @@ from lab_commons.compute.toolchecks import FEMM_VERSION_FILE
 from lab_commons.tools import install as door
 from lab_commons.tools import managed
 from lab_commons.tools.__main__ import main
-from lab_commons.tools.catalogue import CATALOGUE, Release, choose, load
+from lab_commons.tools.catalogue import CATALOGUE, Release, choose, compose, load, requirements
 
 NEW, OLD = '5.0.20261112', '5.0.20261021'
 PAYLOAD = b'MZ a fake installer'
@@ -303,3 +303,83 @@ def test_the_cli_installs_lists_and_checks(machine: Path, monkeypatch: pytest.Mo
     assert main(['check', 'femm', '--repo', str(repo)]) == 0
     record = json.loads((machine / 'tools' / 'femm' / managed.RECORD).read_text(encoding='utf-8'))
     assert record['version'] == NEW
+
+
+# --- the family floor (user ruling 2026-11-26: FEMM >= 5.0.20261112, the newest installed) ----------------------
+
+NEWER = '5.0.20270301'
+
+_FLOORED = f"""
+[femm]
+mode = "managed"
+floor = "{NEW}"
+reason = "only FEMM 5 at {NEW} or newer"
+
+[femm.releases."{NEW}".windows]
+kind = "inno"
+url = "https://example.invalid/new.exe"
+sha256 = "{'a' * 64}"
+binary = "bin/femm_headlessw.exe"
+
+[femm.releases."{NEWER}".windows]
+kind = "inno"
+url = "https://example.invalid/newer.exe"
+sha256 = "{'c' * 64}"
+binary = "bin/femm_headlessw.exe"
+"""
+
+
+def test_the_family_catalogue_states_the_femm_floor_and_no_release_below_it() -> None:
+    floor = load(CATALOGUE.read_text(encoding='utf-8'))['femm'].floor
+    assert floor is not None
+    assert (floor.floor, floor.exact) == (NEW, False), 'a FLOOR, never one pinned release'
+    assert floor.refusal(OLD) is not None, 'planted control: an older FEMM is refused'
+    assert floor.refusal(NEWER) is None, 'planted control: a newer FEMM is accepted'
+
+
+def test_the_floor_refuses_an_older_reading_by_name_and_admits_a_newer_one() -> None:
+    tool = load(_FLOORED)['femm']
+    required = requirements(None, {'femm': tool})['femm']
+    assert required.refusal(OLD) == f'below the floor {NEW} (only FEMM 5 at {NEW} or newer)'
+    assert required.refusal(NEW) is None
+    assert required.refusal(NEWER) is None
+
+
+def test_the_door_installs_the_newest_release_at_or_above_the_floor() -> None:
+    table = load(_FLOORED)
+    required = requirements(None, table)['femm']
+    assert choose(table, 'femm', 'windows', required).version == NEWER
+    with pytest.raises(LookupError, match='not in'):
+        choose(table, 'femm', 'windows', required, version=OLD)
+
+
+def test_a_release_row_below_the_floor_is_refused_by_name() -> None:
+    old_row = _CATALOGUE.replace('mode = "managed"', f'mode = "managed"\nfloor = "{NEW}"\nreason = "r"')
+    with pytest.raises(ValueError, match=rf"\['{OLD}'\] are below the floor {NEW}"):
+        load(old_row)
+
+
+@pytest.mark.parametrize(
+    ('extra', 'refusal'),
+    [('floor = "5.0"', 'floor and reason come together'), ('floor = "new"\nreason = "r"', 'must be a version')],
+)
+def test_a_malformed_floor_is_refused_by_name(extra: str, refusal: str) -> None:
+    with pytest.raises(ValueError, match=refusal):
+        load(
+            f'[femm]\nmode = "managed"\n{extra}\n[femm.releases."{NEW}".windows]\nkind = "zip"\nbinary = "b"\n'
+            f'url = "https://x/y.zip"\nsha256 = "{"a" * 64}"\n'
+        )
+
+
+def test_a_repo_may_narrow_the_family_floor_never_lower_it(tmp_path: Path) -> None:
+    tool = load(_FLOORED)['femm']
+    assert compose(tool, None) == tool.floor
+    assert compose(tool, Requirement('5.0', 'FEMM 5')) == tool.floor, 'a lower repo floor yields to the family'
+    assert compose(tool, Requirement(NEWER, 'needs the newer')).floor == NEWER, 'a higher repo floor narrows'
+    assert compose(tool, Requirement(NEWER, 'one', exact=True)).exact
+    with pytest.raises(ValueError, match=rf'{OLD} is below the floor {NEW}'):
+        compose(tool, Requirement(OLD, 'pinned old', exact=True))
+    with pytest.raises(ValueError, match='admits nothing'):
+        compose(tool, Requirement('5.0', 'FEMM 5', below=NEW, incompatible='x'))
+    (tmp_path / 'pyproject.toml').write_text('[tool.lab_commons.tools]\nfemm = {floor = "5.0", reason = "r"}\n')
+    assert requirements(tmp_path, {'femm': tool})['femm'] == tool.floor

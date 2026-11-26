@@ -11,6 +11,11 @@ fact about the REPO (its ``[tool.lab_commons.tools]``, :mod:`lab_commons.compute
 requirement, the one hash would be copied into every serving repo that declares the tool, and the per-machine door
 would have to pick a repo to learn where FEMM comes from. So the catalogue lives once, with the door that reads it
 and the probe that verifies what it installs; the requirement chooses among its rows (:func:`choose`).
+
+THE FAMILY FLOOR. A tool whose older releases the family forbids states ``floor`` with its ``reason`` here (FEMM:
+user ruling 2026-11-26, nothing older than 5.0.20261112). It is a fact about the TOOL, so it binds every repo: a
+repo's own declaration composes with it (:func:`compose`, :func:`requirements`) and may only narrow it. A release
+row below the floor is refused by name. The door installs the NEWEST release the composed requirement admits.
 """
 
 from __future__ import annotations
@@ -22,12 +27,24 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Final
 
-from lab_commons.compute.presence import Requirement, version_key
+from lab_commons.compute.presence import Requirement, declared_versions, version_key
 from lab_commons.compute.probe import OS_NAMES
 from lab_commons.compute.toolchecks import CHECKS
 from lab_commons.tools.managed import NAME
 
-__all__ = ['CATALOGUE', 'KINDS', 'MANAGED', 'MODES', 'USER_INSTALLED', 'Release', 'Tool', 'choose', 'load']
+__all__ = [
+    'CATALOGUE',
+    'KINDS',
+    'MANAGED',
+    'MODES',
+    'USER_INSTALLED',
+    'Release',
+    'Tool',
+    'choose',
+    'compose',
+    'load',
+    'requirements',
+]
 
 #: The catalogue file, shipped beside this module.
 CATALOGUE: Final = Path(__file__).with_name('tools.toml')
@@ -43,7 +60,7 @@ KINDS: Final = ('inno', 'msi', 'zip', 'source-build')
 
 _DOWNLOADED: Final = frozenset({'inno', 'msi', 'zip'})
 _SHA256: Final = re.compile(r'^[0-9a-f]{64}$')
-_TOOL_KEYS: Final = frozenset({'mode', 'vendor', 'releases'})
+_TOOL_KEYS: Final = frozenset({'mode', 'vendor', 'releases', 'floor', 'reason'})
 _KEYS: Final = frozenset({'kind', 'url', 'sha256', 'binary', 'builder', 'dir_property'})
 
 
@@ -64,12 +81,16 @@ class Release:
 
 @dataclass(frozen=True)
 class Tool:
-    """One catalogued tool: its *mode*, the ``[dev.vendors.<vendor>]`` holding a user-installed home, its releases."""
+    """One catalogued tool: its *mode*, the ``[dev.vendors.<vendor>]`` holding a user-installed home, its releases.
+
+    *floor*: the family's lowest allowed version with its reason, binding every repo; ``None`` when none is stated.
+    """
 
     name: str
     mode: str
     vendor: str
     releases: Mapping[str, Mapping[str, Release]] = field(default_factory=dict)
+    floor: Requirement | None = None
 
 
 def _defect(row: Mapping[str, str]) -> str | None:
@@ -149,12 +170,22 @@ def _tool(name: str, row: object, where: str) -> Tool:
             'a user-installed tool has no releases: its vendor installer puts it where this machine declares',
         ),
         (not (isinstance(vendor, str) and NAME.fullmatch(vendor)), f'vendor = {vendor!r} must be one plain name'),
+        (('floor' in row) != ('reason' in row), 'floor and reason come together: no floor without the reason for it'),
+        (
+            'floor' in row and not (isinstance(row['floor'], str) and version_key(row['floor']) is not None),
+            f'floor = {row.get("floor")!r} must be a version',
+        ),
+        ('reason' in row and not (isinstance(row['reason'], str) and row['reason']), 'reason must say why'),
     )
     if (why := next((why for broken, why in rules if broken), None)) is not None:
         msg = f'{where} [{name}]: {why}'
         raise ValueError(msg)
     releases = _releases(name, row.get('releases'), where) if mode == MANAGED else {}
-    return Tool(name, mode, vendor, releases)
+    floor = Requirement(row['floor'], row['reason']) if 'floor' in row else None
+    if floor is not None and (below := sorted(v for v in releases if floor.refusal(v))):
+        msg = f'{where} [{name}]: releases {below} are below the floor {floor.floor} ({floor.reason}): delete them'
+        raise ValueError(msg)
+    return Tool(name, mode, vendor, releases, floor)
 
 
 def load(text: str, *, where: str = CATALOGUE.name) -> dict[str, Tool]:
@@ -204,3 +235,49 @@ def choose(
         )
         raise LookupError(msg)
     return offered[max(admitted, key=lambda v: version_key(v) or ())]
+
+
+def compose(tool: Tool, declared: Requirement | None) -> Requirement | None:
+    """The requirement on *tool*: the repo's *declared* one inside the family floor; either alone when one is absent.
+
+    A repo may only NARROW the family floor: a higher floor, an upper bound, or one release at or above it.
+
+    Raises:
+        ValueError: *declared* admits nothing at or above the family floor -- naming both and the floor's reason.
+
+    """
+    floor = tool.floor
+    if floor is None or declared is None:
+        return declared or floor
+    if declared.exact:
+        if why := floor.refusal(declared.floor):
+            msg = f'{tool.name}: the declared one release {declared.floor} is {why}; declare {floor.floor} or newer'
+            raise ValueError(msg)
+        return declared
+    if floor.refusal(declared.floor) is None:
+        return declared
+    composed = Requirement(floor.floor, floor.reason, declared.below, declared.incompatible)
+    if declared.below is not None and composed.refusal(floor.floor):
+        msg = (
+            f'{tool.name}: the declared bound <{declared.below} ({declared.incompatible}) admits nothing at or above '
+            f'the family floor {floor.floor} ({floor.reason})'
+        )
+        raise ValueError(msg)
+    return composed
+
+
+def requirements(root: Path | None, table: Mapping[str, Tool] | None = None) -> dict[str, Requirement]:
+    """``{tool: requirement}`` for the repo at *root* (``None``: no repo): its declarations inside the family floors.
+
+    The one reader of "which version is required" for every consumer: the door, ``tools check`` and the forge.
+
+    Raises:
+        ValueError: a malformed declaration (:func:`~lab_commons.compute.presence.declared_versions`) or one the
+            family floor leaves empty (:func:`compose`).
+
+    """
+    tools = table if table is not None else load(CATALOGUE.read_text(encoding='utf-8'))
+    declared = declared_versions(root) if root is not None else {}
+    names = sorted(set(declared) | {name for name, tool in tools.items() if tool.floor is not None})
+    composed = {name: compose(tools[name], declared.get(name)) if name in tools else declared[name] for name in names}
+    return {name: one for name, one in composed.items() if one is not None}

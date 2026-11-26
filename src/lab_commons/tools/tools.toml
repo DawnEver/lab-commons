@@ -1,8 +1,9 @@
 # THE FAMILY'S TOOL CATALOGUE: how each external tool reaches a machine, and for a managed tool what each release IS.
 # Read by `python -m lab_commons.tools` (lab_commons.tools.catalogue), which refuses any other key by name.
 #
-# WHICH version a repo needs is NOT stated here: that is the serving repo's [tool.lab_commons.tools] floor or one
-# release (lab_commons.compute.presence). Every tool here is verified by its lab-commons probe
+# WHICH version a repo needs is the serving repo's [tool.lab_commons.tools] floor or one release
+# (lab_commons.compute.presence), inside the family FLOOR a tool states here: the lowest version the family allows,
+# binding every repo (lab_commons.tools.catalogue.requirements). Every tool here is verified by its lab-commons probe
 # (lab_commons.compute.toolchecks.CHECKS).
 #
 # [<tool>]
@@ -11,6 +12,8 @@
 #                               this machine declares (hosts-config hosts/<host>.toml [dev.vendors.<vendor>] home) and
 #                               probes it; it never downloads it
 #   vendor   user-installed only: the [dev.vendors.<vendor>] holding its home, when not the tool's own name
+#   floor    the lowest version the family allows, with its reason; an older reading or release row is refused
+#   reason   why nothing older serves (required with floor)
 #
 # [<tool>.releases."<version>".<os>]   managed only; os: windows | linux | macos
 #   kind          inno | msi | zip | source-build
@@ -20,10 +23,12 @@
 #   builder       source-build only: the deploy step that builds and installs into <home>/tools/<tool>/<version>/
 #   dir_property  msi only: the MSI property naming the install directory (default INSTALLDIR)
 
-# FEMM 5 (femm-qt): the one release the family allows (user ruling 2026-11-25). sha256: femm.info's published hash,
-# re-measured on the downloaded installer 2026-11-25.
+# FEMM 5 (femm-qt): nothing older than 5.0.20261112, and the door installs the NEWEST catalogued release at or above
+# it (user ruling 2026-11-26). sha256: femm.info's published hash, re-measured on the downloaded installer 2026-11-25.
 [femm]
 mode = "managed"
+floor = "5.0.20261112"
+reason = "user ruling 2026-11-26: only FEMM 5 at 5.0.20261112 or newer; every older release is forbidden"
 
 [femm.releases."5.0.20261112".windows]
 kind = "inno"
