@@ -165,8 +165,8 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """
     out: dict[str, dict[str, Any]] = {}
     for name, facts in table.items():
-        if (remedy := COMPUTE.get(f'capabilities.{name}')) is not None:
-            msg = f'{_WHERE}: [capabilities.{name}] is retired: {remedy} -- delete the table'
+        if (row := COMPUTE.get(f'capabilities.{name}')) is not None:
+            msg = f'{_WHERE}: [capabilities.{name}] is retired: {row[0]} -- delete the table'
             raise ValueError(msg)
         seats = facts.get('seats', 1) if isinstance(facts, dict) else None
         if not RESOURCE_NAME.match(name) or not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
