@@ -6,6 +6,7 @@ The entries are this module's own functions, named ``<module>:<function>`` exact
 from __future__ import annotations
 
 import importlib
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -264,8 +265,22 @@ def nap(inputs: Mapping[str, Any], work: Path) -> None:
     (work / 'out').write_text(inputs['tag'], encoding='utf-8')
 
 
+#: The interrupt's handshake with its sibling: no sleep decides who is running when run() returns.
+SIBLING_HOLDS = threading.Event()
+SIBLING_MAY_END = threading.Event()
+
+
+def held(inputs: Mapping[str, Any], work: Path) -> None:
+    """Holds its claim until the test lets it end, recording when it ran."""
+    start = time.monotonic()
+    SIBLING_HOLDS.set()
+    SIBLING_MAY_END.wait(timeout=120)
+    SPANS[inputs['tag']] = (start, time.monotonic())
+    (work / 'out').write_text(inputs['tag'], encoding='utf-8')
+
+
 def interrupted(_inputs: Mapping[str, Any], _work: Path) -> None:
-    time.sleep(0.2)  # long enough for the napping sibling to hold its claim
+    SIBLING_HOLDS.wait(timeout=120)  # the sibling holds its claim before the interrupt lands
     raise KeyboardInterrupt
 
 
@@ -330,11 +345,16 @@ def test_two_units_of_one_hash_run_once(tmp_path: Path) -> None:
 
 def test_an_interrupt_releases_every_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     SPANS.clear()
+    SIBLING_HOLDS.clear()
+    SIBLING_MAY_END.clear()
     ex = ledger_executor(tmp_path, monkeypatch, {})
-    with pytest.raises(KeyboardInterrupt):
-        ex.run(Graph({'i': unit('interrupted'), 'n': unit('nap', tag='n')}))
-    assert 'n' not in SPANS  # PLANTED: the sibling was still running when run() returned
-    assert holdings() == []  # THE CHECK: its claim is released anyway
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            ex.run(Graph({'i': unit('interrupted'), 'n': unit('held', tag='n')}))
+        assert 'n' not in SPANS  # PLANTED: the sibling was still running when run() returned
+        assert holdings() == []  # THE CHECK: its claim is released anyway
+    finally:
+        SIBLING_MAY_END.set()
 
 
 def test_what_became_of_a_unit_is_named_settled_and_the_generic_name_is_gone() -> None:
