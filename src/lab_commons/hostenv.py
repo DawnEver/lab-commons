@@ -36,9 +36,18 @@ class Host:
 
     machine_home: str = ''
     xdg_config_home: str = ''
+    local_appdata: str = ''
+    user_profile: str = ''
+    user_home: str = ''
 
 
 def context(env: Mapping[str, str] | None = None) -> Host:
     """The :class:`Host` record of *env* (default: this process's environment, read now)."""
     env = os.environ if env is None else env
-    return Host(machine_home=env.get(HOME_ENV, ''), xdg_config_home=env.get(XDG_CONFIG_ENV, ''))
+    return Host(
+        machine_home=env.get(HOME_ENV, ''),
+        xdg_config_home=env.get(XDG_CONFIG_ENV, ''),
+        local_appdata=env.get('LOCALAPPDATA', ''),
+        user_profile=env.get('USERPROFILE', ''),
+        user_home=env.get('HOME', ''),
+    )

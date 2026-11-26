@@ -48,7 +48,6 @@ import glob
 import os
 import sys
 import tomllib
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -132,17 +131,17 @@ def tools() -> Path:
     return part('tools')
 
 
-def pinned_bin(*, windows: bool | None = None, environ: Mapping[str, str] | None = None) -> Path:
+def pinned_bin(*, windows: bool | None = None, host: hostenv.Host | None = None) -> Path:
     """Where a pinned-release tool's binary is placed (rclone, uv): user-space and removable.
 
     ``~/.local/bin`` on POSIX (already on a cluster tick's ``PATH``), ``%LOCALAPPDATA%/dev-lab/bin`` on Windows.
     dev-lab's install door writes here; a product resolves a pinned tool here and nowhere else.
     """
-    env = os.environ if environ is None else environ
+    facts = hostenv.context() if host is None else host
     if os.name == 'nt' if windows is None else windows:
-        base = env.get('LOCALAPPDATA') or str(Path(env.get('USERPROFILE', str(Path.home()))) / 'AppData' / 'Local')
+        base = facts.local_appdata or str(Path(facts.user_profile or str(Path.home())) / 'AppData' / 'Local')
         return Path(base) / 'dev-lab' / 'bin'
-    return Path(env.get('HOME', str(Path.home()))) / '.local' / 'bin'
+    return Path(facts.user_home or str(Path.home())) / '.local' / 'bin'
 
 
 def config_path() -> Path:

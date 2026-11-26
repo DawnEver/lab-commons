@@ -28,7 +28,11 @@ def test_the_context_types_the_host_facts_read_by_name() -> None:
 def test_the_context_reads_this_process_when_given_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(HOME_ENV, '/relocated')
     monkeypatch.delenv(XDG_CONFIG_ENV, raising=False)
-    assert hostenv.context() == Host(machine_home='/relocated')
+    for name in ('LOCALAPPDATA', 'USERPROFILE', 'HOME'):
+        monkeypatch.setenv(name, f'/{name.lower()}')
+    assert hostenv.context() == Host(
+        machine_home='/relocated', local_appdata='/localappdata', user_profile='/userprofile', user_home='/home'
+    )
 
 
 def test_a_record_passed_down_decides_the_home_over_the_process(

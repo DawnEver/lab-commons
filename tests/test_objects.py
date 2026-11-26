@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons import home
+from lab_commons import home, hostenv
 from lab_commons.compute.store import (
     RECORD,
     REF_SUFFIX,
@@ -265,7 +265,7 @@ def _placed(*, rclone: bool = True, config: bool = True) -> tuple[Path, Path]:
     [(False, {'HOME': '/h/u'}, Path('/h/u/.local/bin')), (True, {'LOCALAPPDATA': 'C:/L'}, Path('C:/L/dev-lab/bin'))],
 )
 def test_the_pinned_bin_is_user_space_per_os(windows: bool, environ: dict[str, str], expected: Path) -> None:  # noqa: FBT001
-    assert home.pinned_bin(windows=windows, environ=environ) == expected
+    assert home.pinned_bin(windows=windows, host=hostenv.context(environ)) == expected
 
 
 def test_the_declared_run_store_resolves_the_pinned_rclone_and_the_rendered_config(machine: Path) -> None:
