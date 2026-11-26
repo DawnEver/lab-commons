@@ -37,7 +37,7 @@ class BelowFloor(OSError):
         msg = (
             f'{volume}: the cache keeps a free-space floor {floor} bytes but has free {free} bytes{counted} with '
             'every other cache entry evicted -- free space there (volume or quota), or lower [storage] '
-            'free_floor_gb / free_floor_files in the machine file (lab_commons.storage)'
+            'free_floor / free_floor_files in the machine file (lab_commons.storage)'
         )
         super().__init__(msg)
 

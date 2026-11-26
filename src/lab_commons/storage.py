@@ -9,7 +9,7 @@ The machine file (:mod:`lab_commons.config`) may declare::
 
     [storage]
     roots = { output = "E:/work/{repo}/output", venvs = "E:/work/{repo}/venvs" }
-    free_floor_gb = 50                  # the free space every regenerable cache leaves on its volume
+    free_floor = "50 GiB"               # the free space every regenerable cache leaves on its volume
     quota = { probe = ["mmlsquota", "--block-size", "1"], format = "mmlsquota" }  # only where a quota binds
     free_floor_files = 20000            # only with a file-limited quota (default: 1% of its file limit)
 
@@ -30,12 +30,14 @@ and the FAMILY file declares the remotes every machine shares, once and without 
 ``{repo}`` in a root is the repo's name. A bound root is absolute. Layer placement is refused by
 name: ``roots``, ``reach`` and the floor keys belong to one machine, ``remotes`` to the family; a machine file that
 declares no family layer is a render of family + host and carries the family's ``remotes`` inline. A cache is
-bounded by ``free_floor_gb`` (default :data:`FREE_FLOOR_GB_DEFAULT`; the door is :mod:`lab_commons.compute.floor`),
+bounded by ``free_floor`` (a size, :mod:`lab_commons.quantity`; default :data:`FREE_FLOOR_DEFAULT`; the door is
+:mod:`lab_commons.compute.floor`),
 never a fixed size. Where an account QUOTA binds below the volume (a shared filesystem), ``quota`` names its probe
 and format (:mod:`lab_commons.headroom`) and the floor holds against the smaller of the two. A kind outside
 :data:`KINDS`, a remote the family does not declare, and a reached remote with no ``credentials_file`` are
 refused by name; so are the retired spellings -- a ``secrets`` directory, a list-form ``reach`` (user ruling
-2026-11-19: one declared file per secret, the family's ``credentials_file`` key) and a fixed cap key (D54).
+2026-11-19: one declared file per secret, the family's ``credentials_file`` key), a fixed cap key (D54) and the
+unit-suffixed ``free_floor_gb`` (user ruling 2026-11-25: the value carries its unit; refused with its new line).
 A remote's options are handed to the transport (rclone) verbatim; this module names
 no provider and no host. The family's ``runs`` names the store every run's oversize files use (``<remote>:<path>``,
 the remote one the family declares); undeclared, no run has one and an oversize result stays local
@@ -53,9 +55,10 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.headroom import FORMATS, Floor, Quota
+from lab_commons.quantity import QuantityRefused, Renamed, parse, refuse_renamed
 
 __all__ = [
-    'FREE_FLOOR_GB_DEFAULT',
+    'FREE_FLOOR_DEFAULT',
     'KINDS',
     'TABLE',
     'Remote',
@@ -69,9 +72,9 @@ __all__ = [
 #: The table both layers use.
 TABLE: Final = 'storage'
 
-#: The free space (GiB) every regenerable cache leaves on its volume when the machine declares none (D54).
-FREE_FLOOR_GB_DEFAULT: Final = 50
 GIB: Final = 1024**3
+#: The free space (bytes) every regenerable cache leaves on its volume when the machine declares none (D54): 50 GiB.
+FREE_FLOOR_DEFAULT: Final = 50 * GIB
 
 #: Every kind, with its in-tree default relative to the checkout (``None``: the tool's own default,
 #: outside the checkout -- a package cache).
@@ -85,7 +88,9 @@ KINDS: Final[Mapping[str, str | None]] = {
     'uv_cache': None,
 }
 
-_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'free_floor_gb', 'free_floor_files', 'quota'})
+_MACHINE_KEYS: Final = frozenset({'roots', 'reach', 'free_floor', 'free_floor_files', 'quota'})
+#: Unit-suffixed keys retired by the 2026-11-25 ruling, refused with the line that replaces them; never read.
+_RENAMED: Final = {'free_floor_gb': Renamed('free_floor', 'GiB')}
 
 #: Retired machine spellings (2026-11-19), refused by name with the shape that replaced them; never read.
 _RETIRED_SHAPE: Final = (
@@ -94,7 +99,7 @@ _RETIRED_SHAPE: Final = (
 #: Fixed cache caps, retired by D54 for the free-space floor; refused by name, never read.
 _CAP_REMEDY: Final = (
     'a cache is bounded by the free space its volume keeps, not a fixed size (D54) -- declare [storage] '
-    f'free_floor_gb in the machine file (default {FREE_FLOOR_GB_DEFAULT})'
+    'free_floor in the machine file (default "50 GiB")'
 )
 _RETIRED_KEYS: Final = {
     'secrets': f'a secrets directory is retired: declare {_RETIRED_SHAPE}',
@@ -134,7 +139,7 @@ class Storage:
 
     roots: Mapping[str, str] = field(default_factory=dict)
     reach: tuple[Remote, ...] = ()
-    free_floor_gb: float = FREE_FLOOR_GB_DEFAULT
+    free_floor: int = FREE_FLOOR_DEFAULT  # bytes
     free_floor_files: int | None = None
     quota: Quota | None = None
     #: The family's ``runs``: the ``<remote>:<path>`` every run's oversize files go to; ``None``: undeclared.
@@ -146,7 +151,7 @@ class Storage:
 def free_floor(storage: Storage | None = None) -> Floor:
     """What every regenerable cache on this machine leaves free -- bytes, files, and the quota they hold in (D54)."""
     held = storage if storage is not None else declared()
-    return Floor(int(held.free_floor_gb * GIB), held.free_floor_files, held.quota)
+    return Floor(held.free_floor, held.free_floor_files, held.quota)
 
 
 def _table(layer: Mapping[str, Any], where: str) -> dict[str, Any]:
@@ -227,20 +232,23 @@ def _quota(value: object) -> Quota | None:
     return Quota(tuple(probe), fmt)
 
 
-def _floor(local: Mapping[str, Any]) -> float:
-    """The machine's ``free_floor_gb``: a positive number of GiB, :data:`FREE_FLOOR_GB_DEFAULT` when undeclared."""
-    value = local.get('free_floor_gb', FREE_FLOOR_GB_DEFAULT)
-    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
-        msg = (
-            f'the machine file: [{TABLE}] free_floor_gb = {value!r} must be a positive number of GiB '
-            f'(the free space every cache leaves on its volume; default {FREE_FLOOR_GB_DEFAULT})'
-        )
-        raise StorageError(msg)
-    return float(value)
+def _floor(local: Mapping[str, Any]) -> int:
+    """The machine's ``free_floor`` in bytes: a positive size, :data:`FREE_FLOOR_DEFAULT` when undeclared."""
+    if 'free_floor' not in local:
+        return FREE_FLOOR_DEFAULT
+    try:
+        return int(parse(f'the machine file: [{TABLE}] free_floor', local['free_floor'], 'size', positive=True))
+    except QuantityRefused as bad:
+        raise StorageError(str(bad)) from bad
 
 
 def _check_layers(local: Mapping[str, Any], shared: Mapping[str, Any]) -> None:
     """Refuse a retired key, a key in the wrong layer, or no storage key at all."""
+    try:
+        refuse_renamed(f'the machine file: [{TABLE}]', local, _RENAMED)
+        refuse_renamed(f'the family file: [{TABLE}]', shared, _RENAMED)
+    except QuantityRefused as retired:
+        raise StorageError(str(retired)) from retired
     for key, remedy in _RETIRED_KEYS.items():
         if key in local or key in shared:
             msg = f'[{TABLE}] {key} is retired: {remedy}'

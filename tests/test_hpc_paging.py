@@ -22,7 +22,7 @@ from lab_commons.hpc.span import span
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
 IDLE = FIXTURE.split('@@@ running')[0] + '@@@ running\n'
-PAGING = Paging(page_cpus=8, page_mem_gb=20, large_pages=4, movable_minutes=30)
+PAGING = Paging(page_cpus=8, page_mem=20 * 1024**3, large_pages=4, movable=30 * 60.0)
 POOL = tuple(Grant(user='me', hosts=('ada',), slurm_account=f'acct-{i}') for i in range(5))
 SMALL = Cost(cpus=8, mem_gb=16, seconds=600)
 LARGE = Cost(cpus=8, mem_gb=300, seconds=3600)
@@ -63,11 +63,15 @@ def test_paging_is_declared_in_the_hpc_table() -> None:
         'clusters': {'c': {'hosts': ['h'], 'slurm_accounts': {'a': {'billed': False}}}},
         'grant': [{'user': 'me', 'cluster': 'c', 'slurm_account': 'a', 'role': 'r'}],
     }
-    paging = {'page_cpus': 8, 'page_mem_gb': 20, 'large_pages': 4, 'movable_minutes': 30}
+    paging = {'page_cpus': 8, 'page_mem': '20 GiB', 'large_pages': 4, 'movable': '30 min'}
     assert load_grants({**declared, 'paging': paging}).paging == PAGING
     assert load_grants(declared).paging is None, 'undeclared: no region, placement as before'
     with pytest.raises(ValueError, match='paging'):
         load_grants({**declared, 'paging': {'page_cpus': 8}})
+    with pytest.raises(ValueError, match=r'page_mem_gb = 20 is retired.*write page_mem = "20 GiB"'):
+        load_grants({**declared, 'paging': {**paging, 'page_mem': None, 'page_mem_gb': 20}})
+    with pytest.raises(ValueError, match=r'movable = 30 is a bare number'):
+        load_grants({**declared, 'paging': {**paging, 'movable': 30}})
 
 
 def test_the_region_is_the_emptiest_account_and_it_rotates() -> None:
@@ -148,7 +152,7 @@ def test_fragmented_memory_drains_one_region_for_a_large_job_within_one_movable_
             elsewhere += i != pending_large
             running[i].append((SMALL.cpus, SMALL.mem_gb, minute + 15.0))
     assert started_at is not None
-    assert started_at <= PAGING.movable_minutes, f'the region drained in {started_at} min'
+    assert started_at * 60 <= PAGING.movable, f'the region drained in {started_at} min'
     assert elsewhere > 0, 'small tasks kept flowing on the other accounts'
 
 
@@ -156,7 +160,7 @@ def test_a_job_declares_itself_rerun_safe_and_its_placement_reads_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / 'job.toml'
-    path.write_text('[job]\nrerun_safe = true\n[cost]\ncpus = 8\nmem_gb = 16\nseconds = 600\n', encoding='utf-8')
+    path.write_text('[job]\nrerun_safe = true\n[cost]\ncpus = 8\nmem = "16 GiB"\nwall = "10 min"\n', encoding='utf-8')
     config = load_config(path)
     assert config.job.rerun_safe
     pool = {g.slurm_account: snapshot for g, snapshot in _pool([350, 350, 350, 350, 0])}  # only the region has room

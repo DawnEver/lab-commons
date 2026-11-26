@@ -133,10 +133,14 @@ def test_the_ssh_runner_carries_the_gate(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_the_machine_file_overrides_the_limits_and_refuses_unknown_keys() -> None:
-    assert limits_of({'ssh': {'min_interval_s': 9}}) == Limits(min_interval_s=9)
+    assert limits_of({'ssh': {'min_interval': '9 s', 'window': '5 min'}}) == Limits(min_interval_s=9, window_s=300)
     assert limits_of({}) == LIMITS
     with pytest.raises(ValueError, match='unknown keys'):
         limits_of({'ssh': {'burst': 3}})
+    with pytest.raises(ValueError, match=r'\[hpc.ssh\] min_interval_s = 9 is retired.*write min_interval = "9 s"'):
+        limits_of({'ssh': {'min_interval_s': 9}})
+    with pytest.raises(ValueError, match=r'\[hpc.ssh\] window = 600 is a bare number'):
+        limits_of({'ssh': {'window': 600}})
 
 
 def test_a_poll_below_the_floor_is_refused() -> None:
