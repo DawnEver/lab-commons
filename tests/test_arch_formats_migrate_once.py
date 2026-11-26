@@ -37,7 +37,6 @@ MARKER: Final = 'OLD-SHAPE-READER'
 #: Each marked module -> why its migration is still owed. Delete a row in the change that migrates and
 #: deletes the reader; never add one to dodge the table check (a table is red whatever this says).
 _OWED: Final[dict[str, str]] = {
-    'lab_commons/box/_store.py': 'box ledger files written before a column existed gain it on open (ALTER TABLE)',
     'lab_commons/compute/presence.py': 'presence entries written before floors carry no `required`',
     'lab_commons/hpc/cluster.py': 'per-shard results/<n>.json and pre-Cell `item` lines of an earlier worker',
     'lab_commons/hpc/jobs.py': 'run directories an earlier worker wrote one results file per shard',
