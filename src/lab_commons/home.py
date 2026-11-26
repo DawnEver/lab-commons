@@ -1,6 +1,7 @@
 """THE MACHINE HOME: one root per machine for everything the toolchain keeps outside a repo (user ruling 2026-11-03).
 
-``~/.motronics/`` (or ``$MOTRONICS_HOME``) holds the toolchain's per-machine facts, in fixed parts (:data:`PARTS`):
+``~/.motronics/`` (or where the host context's ``machine_home`` relocates it: :data:`lab_commons.hostenv.HOME_ENV`,
+read there and passed down) holds the toolchain's per-machine facts, in fixed parts (:data:`PARTS`):
 
 * ``config/motronics.toml`` -- THE per-machine file (:mod:`lab_commons.config` reads it);
 * ``state/`` -- what must outlive any one checkout (forge runs, alarms, ledgers, learned asks);
@@ -30,7 +31,7 @@ home -- Claude Code, Codex and Antigravity -- never touched by the toolchain) an
 repos. And git's credential store (:func:`git_credential_stores`; user ruling 2026-11-07): ``credential.helper
 store`` rewrites it after every authenticated fetch, so it is the user's own store written by git, never by the
 toolchain. Exactly those FILES are exempt -- ``~/.git-credentials`` and ``$XDG_CONFIG_HOME/git/credentials`` --
-never their directory nor any other dotfile.
+never their directory nor any other dotfile. This module reads no environment: :mod:`lab_commons.hostenv` does.
 
 SYNCED FOLDERS (:func:`sync_roots`): ``[sync] roots`` lists the globs of the folders a sync client shares with a
 live human session (OneDrive); a write there needs the user's consent for that write. Undeclared, the platform's
@@ -52,11 +53,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from lab_commons import hostenv
 from lab_commons.quantity import Renamed, parse, refuse_renamed
 
 __all__ = [
     'AGENT_HOMES',
-    'HOME_ENV',
     'PARTS',
     'TEMP_NAMES',
     'Tools',
@@ -81,9 +82,6 @@ __all__ = [
     'within_text',
     'write_roots',
 ]
-
-#: Environment override of the machine home.
-HOME_ENV: Final = 'MOTRONICS_HOME'
 
 #: The fixed parts of the home, each a directory directly under it.
 PARTS: Final = ('config', 'state', 'cache', 'tools', 'repos', 'backups')
@@ -111,9 +109,13 @@ _SYNC_DEFAULTS: Final = {
 _SYNC_KEYS: Final = frozenset({'roots'})
 
 
-def home() -> Path:
-    """``$MOTRONICS_HOME``, else ``~/.motronics``."""
-    override = os.environ.get(HOME_ENV)
+def home(host: hostenv.Host | None = None) -> Path:
+    """*host*'s ``machine_home``, else ``~/.motronics``; *host* defaults to this process's :func:`hostenv.context`.
+
+    An explicit record is the layout it describes whatever this process's environment says: ``home(Host())`` is
+    the default layout, the one another account sees with no override set.
+    """
+    override = (hostenv.context() if host is None else host).machine_home
     return Path(override).expanduser() if override else Path.home() / '.motronics'
 
 
@@ -130,17 +132,17 @@ def tools() -> Path:
     return part('tools')
 
 
-def pinned_bin(*, windows: bool | None = None, environ: Mapping[str, str] | None = None) -> Path:
+def pinned_bin(*, windows: bool | None = None, host: hostenv.Host | None = None) -> Path:
     """Where a pinned-release tool's binary is placed (rclone, uv): user-space and removable.
 
     ``~/.local/bin`` on POSIX (already on a cluster tick's ``PATH``), ``%LOCALAPPDATA%/dev-lab/bin`` on Windows.
     dev-lab's install door writes here; a product resolves a pinned tool here and nowhere else.
     """
-    env = os.environ if environ is None else environ
+    facts = hostenv.context() if host is None else host
     if os.name == 'nt' if windows is None else windows:
-        base = env.get('LOCALAPPDATA') or str(Path(env.get('USERPROFILE', str(Path.home()))) / 'AppData' / 'Local')
+        base = facts.local_appdata or str(Path(facts.user_profile or str(Path.home())) / 'AppData' / 'Local')
         return Path(base) / 'dev-lab' / 'bin'
-    return Path(env.get('HOME', str(Path.home()))) / '.local' / 'bin'
+    return Path(facts.user_home or str(Path.home())) / '.local' / 'bin'
 
 
 def config_path() -> Path:
@@ -267,7 +269,7 @@ def allowed(path: Path) -> bool:
 
 def git_credential_stores() -> tuple[Path, ...]:
     """The files git's ``store`` helper writes: ``~/.git-credentials`` and ``$XDG_CONFIG_HOME/git/credentials``."""
-    xdg = os.environ.get('XDG_CONFIG_HOME')
+    xdg = hostenv.context().xdg_config_home
     config = Path(xdg).expanduser() if xdg else Path.home() / '.config'
     return (Path.home() / '.git-credentials', config / 'git' / 'credentials')
 

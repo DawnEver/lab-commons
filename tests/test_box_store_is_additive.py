@@ -22,7 +22,7 @@ import pytest
 
 from lab_commons.box import BOX_ENV
 from lab_commons.box._store import _ADDED, _SCHEMA, box_path
-from lab_commons.home import HOME_ENV
+from lab_commons.hostenv import HOME_ENV
 
 SRC: Final = Path(__file__).resolve().parents[1] / 'src' / 'lab_commons'
 

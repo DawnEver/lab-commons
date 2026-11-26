@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from lab_commons import config, home
+from lab_commons import config, home, hostenv
 
 
 @pytest.fixture
 def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / 'motronics-home'
-    monkeypatch.setenv(home.HOME_ENV, str(root))
+    monkeypatch.setenv(hostenv.HOME_ENV, str(root))
     monkeypatch.delenv('LAB_COMMONS_CONFIG', raising=False)
     return root
 
@@ -35,7 +35,7 @@ def test_an_unknown_part_is_refused() -> None:
 
 
 def test_the_default_home_is_dot_motronics(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv(home.HOME_ENV, raising=False)
+    monkeypatch.delenv(hostenv.HOME_ENV, raising=False)
     monkeypatch.setattr(Path, 'home', classmethod(lambda _cls: tmp_path))
     assert home.home() == tmp_path / '.motronics'
 
