@@ -102,6 +102,10 @@ COMPUTE: Final[dict[str, str]] = {
     'mark.node': 'pytest.mark.workstation (dev_lab.dev.workstation.WORKSTATION)',
     'mark.codex': 'pytest.mark.workstation (dev_lab.dev.workstation.WORKSTATION)',
     'capabilities.dev_checkout': '[capabilities.workstation] (dev_lab.dev.workstation.WORKSTATION)',
+    'capabilities.node': '[capabilities.workstation] (dev_lab.dev.workstation.WORKSTATION)',
+    # A capability is a resource a part NEEDS; where a runtime lives is not a resource (2026-10-28), and the ai-lab
+    # runtime is built from dev-lab's pin, never declared (dev_lab.dev.forgereview_runtimes.DERIVED_RUNTIMES).
+    'capabilities.ai_lab': 'nothing: the ai-lab runtime is built from the pin (dev_lab.dev.reviewruntime)',
     'tests/dev_checkout': 'tests/workstation (the one part of the workstation resource)',
     'tests/codex': 'tests/workstation (the one part of the workstation resource)',
     'tests/node': 'tests/workstation (the one part of the workstation resource)',

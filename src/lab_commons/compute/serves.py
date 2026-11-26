@@ -9,8 +9,9 @@ A part IS its need-set (:mod:`lab_commons.hpc.needsets`), so the rule is decided
 ``base`` -- the empty need-set -- is the one part EVERY host can produce, and a host declaring
 ``needs-a-resource`` leaves it to the hosts that do not (user ruling 2026-10-18: the Windows box produces only
 what needs it). "No other platform can produce it" is NOT decidable from the declarations -- a resource names
-a tool, never the OS it runs on -- so the rule is the one the need-set does decide. A request is not a part
-and is never restricted. Absent, a host claims every part it admits, as before.
+a tool, never the OS it runs on -- so the rule is the one the need-set does decide. A request is not a part,
+so ``parts`` never restricts it; a ``withhold`` does (user ruling 2026-10-28: a withheld resource is never the
+host's forge work, part or request -- ``dev_lab.dev.forgetake.skips``). Absent, a host claims every part it admits.
 """
 
 from __future__ import annotations
