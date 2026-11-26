@@ -45,13 +45,11 @@ CREATE TABLE IF NOT EXISTS tickets (
 """
 
 
-def box_path(*, platform: str = os.name) -> Path:
-    """The ledger file on *platform* (an ``os.name``); see the module docstring for why it lives there."""
+def box_path() -> Path:
+    """The ledger file: ``$LAB_COMMONS_BOX``, else the machine home's ``state/box.sqlite`` on every platform."""
     override = os.environ.get(BOX_ENV)
     if override:
         return Path(override).expanduser()
-    if platform == 'nt':
-        return Path(os.environ.get('PROGRAMDATA', r'C:\ProgramData')) / 'lab-commons' / 'box.sqlite'
     return part('state') / 'box.sqlite'
 
 
