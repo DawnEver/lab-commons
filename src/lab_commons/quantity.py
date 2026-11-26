@@ -17,10 +17,22 @@ THE OLD KEYS MIGRATE ONCE (`FORMATS-MIGRATE-ONCE`): a reader keeps only the new 
 unit-suffixed key by name through :func:`refuse_renamed`, which writes the replacement line from the old value --
 ``memory_gb = 32`` -> ``memory = "32 GiB"`` -- so the refusal is its own migration instruction.
 
-WHERE PINT COMES FROM. The registry is pint's application registry, the one :mod:`lab_commons.units` binds as
-``ureg``, so a quantity parsed here and one built there agree. It is imported inside :func:`parse`, never at module
-load: hooks and CLIs import readers whose keys are often undeclared, and pint costs seconds to import. A machine
-without pint (lab-commons installed without its ``units`` extra) is refused by name with the install that fixes it.
+THE FAMILY UNIT DOOR (v1 ruling D126 F1). Beyond config, this module is where EVERY unit crosses, in both
+directions, so everything below it holds absolute, linear SI:
+
+- :func:`parse_si` reads ``"<number> <unit>"`` of ANY dimension pint knows into a named SI unit (``"0.5 mm"`` ->
+  ``5e-4`` for ``"m"``), refusing a bare number and a unit that does not convert, by key;
+- :func:`to_si` / :func:`from_si` are the IR codec's boundary contract (``dev_lab.dev.irpython``: ``boundary =
+  "lab_commons.quantity"``): affine units (``degC``) through pint; GAUGE when *reference* is a float -- the
+  absolute SI reference the gauge value is relative to; DECIBELS (``dB``, ``dBA``) when *reference* is the pair
+  ``(level, scale)`` -- ``level * 10**(dB / scale)``, scale 20 for a field quantity and 10 for a power;
+- :func:`display` writes an SI value back in the unit a reader chose.
+
+WHERE PINT COMES FROM. The registry is pint's application registry (:func:`registry`), one per process, so every
+quantity in the family agrees; pint's own definitions are the vocabulary (``rpm`` included). Pint is imported inside
+:func:`registry`, never at module load -- the heavy-optional exception: hooks and CLIs import readers whose keys are
+often undeclared, and pint costs seconds to import (measured 1.6 s cold, 2026-11-26). A machine without pint
+(lab-commons installed without its ``units`` extra) is refused by name with the install that fixes it.
 """
 
 from __future__ import annotations
@@ -31,7 +43,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-__all__ = ['DIMENSIONS', 'Dimension', 'QuantityRefused', 'Renamed', 'form', 'parse', 'refuse_renamed']
+__all__ = [
+    'DECIBELS',
+    'DIMENSIONS',
+    'Dimension',
+    'QuantityRefused',
+    'Renamed',
+    'display',
+    'form',
+    'from_si',
+    'parse',
+    'parse_si',
+    'refuse_renamed',
+    'registry',
+    'to_si',
+]
 
 
 #: A quantity's text opens with its number: pint alone reads ``"h"`` as one hour, which no one declared.
@@ -80,7 +106,12 @@ def form(number: float, unit: str) -> str:
     return f'"{number:g} {unit}"'
 
 
-def _registry():  # noqa: ANN202 -- pint's registry type is pint's, imported only here
+#: The logarithmic units: converted against a ``(level, scale)`` reference here, never by pint.
+DECIBELS: Final = frozenset({'dB', 'dBA'})
+
+
+def registry():  # noqa: ANN201 -- pint's registry type is pint's, imported only here
+    """The family's one unit registry: pint's application registry (module docstring)."""
     try:
         import pint  # noqa: PLC0415 -- paid by a parse, never by an import (module docstring)
     except ModuleNotFoundError as missing:
@@ -117,7 +148,7 @@ def parse(key: str, value: object, dimension: str, *, positive: bool = False) ->
         raise QuantityRefused(msg)
     if dimension == 'fraction':
         return _fraction(shown, value, want, positive=positive)
-    ureg = _registry()
+    ureg = registry()
     try:
         quantity = ureg.Quantity(value)
     except Exception as bad:  # pint raises from several unrelated hierarchies; each is the same refusal
@@ -178,3 +209,83 @@ def refuse_renamed(where: str, table: Mapping[str, object], renamed: Mapping[str
 
 def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _converted(magnitude: object, unit: str, target: str) -> object:
+    ureg = registry()
+    try:
+        return ureg.Quantity(magnitude, unit).to(target).magnitude
+    except Exception as bad:  # pint raises from several unrelated hierarchies; each is the same refusal
+        msg = f'"{unit}" does not convert to {target}'
+        raise QuantityRefused(msg) from bad
+
+
+def _decibel_pair(unit: str, si_unit: str, reference: object) -> tuple[float, float]:
+    if not (isinstance(reference, tuple) and len(reference) == 2):  # noqa: PLR2004 -- the pair (level, scale)
+        msg = f'{unit} of {si_unit} needs its (level, scale) reference: {si_unit} declares no dB reference'
+        raise QuantityRefused(msg)
+    level, scale = reference
+    return float(level), float(scale)
+
+
+def to_si(magnitude: object, unit: str, si_unit: str, *, reference: object = None) -> object:
+    """*magnitude* in *unit* as an absolute *si_unit* magnitude (scalar, complex or array alike).
+
+    *reference*: ``None``; a float, the absolute SI value a GAUGE magnitude is relative to; or ``(level, scale)``
+    for a magnitude in :data:`DECIBELS`.
+
+    Raises:
+        QuantityRefused: *unit* does not convert to *si_unit*, or a dB magnitude has no ``(level, scale)``.
+
+    """
+    if unit in DECIBELS:
+        import numpy as np  # noqa: PLC0415 -- the units extra's, paid only by a dB conversion
+
+        level, scale = _decibel_pair(unit, si_unit, reference)
+        return level * np.power(10.0, np.asarray(magnitude) / scale)
+    absolute = _converted(magnitude, unit, si_unit)
+    return absolute + reference if isinstance(reference, float) else absolute
+
+
+def from_si(magnitude: object, si_unit: str, unit: str, *, reference: object = None) -> object:
+    """An absolute *si_unit* *magnitude* in *unit*: gauge above a float *reference*, dB against ``(level, scale)``.
+
+    Raises:
+        QuantityRefused: *si_unit* does not convert to *unit*, or a dB unit has no ``(level, scale)``.
+
+    """
+    if unit in DECIBELS:
+        import numpy as np  # noqa: PLC0415 -- the units extra's, paid only by a dB conversion
+
+        level, scale = _decibel_pair(unit, si_unit, reference)
+        return scale * np.log10(np.asarray(magnitude) / level)
+    gauge = magnitude - reference if isinstance(reference, float) else magnitude  # type: ignore[operator]
+    return _converted(gauge, si_unit, unit)
+
+
+def parse_si(key: str, value: object, si_unit: str, *, reference: object = None) -> float:
+    """*value* (declared as *key*), ``"<number> <unit>"`` of any dimension, as a float in *si_unit*.
+
+    Raises:
+        QuantityRefused: *value* is a bare number, carries no number, or its unit does not convert to *si_unit*;
+            the message names *key* and a value to copy.
+
+    """
+    shown = f'{key} = {_shown(value)}'
+    match = _NUMBER.match(value) if isinstance(value, str) else None
+    if match is None or not value[match.end() :].strip():  # type: ignore[index]
+        number = f'{value:g}' if _is_number(value) else '<n>'
+        msg = f'{shown} is a bare number: write it with its unit, such as "{number} {si_unit}"'
+        raise QuantityRefused(msg)
+    unit = value[match.end() :].strip()  # type: ignore[index]
+    try:
+        return float(to_si(float(match.group(0)), unit, si_unit, reference=reference))  # type: ignore[arg-type]
+    except QuantityRefused as refused:
+        msg = f'{shown} does not convert to {si_unit}: {refused}'
+        raise QuantityRefused(msg) from refused
+
+
+def display(value_si: object, si_unit: str, unit: str, precision: int, *, reference: object = None) -> str:
+    """*value_si* written in *unit* to *precision* significant digits: ``display(5e-4, 'm', 'mm', 3) == '0.5 mm'``."""
+    shown = float(from_si(value_si, si_unit, unit, reference=reference))  # type: ignore[arg-type]
+    return f'{shown:.{precision}g} {unit}'
