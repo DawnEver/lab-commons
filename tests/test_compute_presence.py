@@ -25,6 +25,7 @@ from lab_commons.compute.presence import (
     cached,
     declared_versions,
     demote,
+    located,
     measured,
     probe,
     refresh,
@@ -220,6 +221,29 @@ def test_measured_names_only_present_tools_at_the_version_read() -> None:
     gone = probe('femm', Fake(smoke=False).check(), None, now=NOW)
     here = probe('jmag', Fake(version='25.2.01zp').check(), None, now=NOW)
     assert measured({'femm': gone, 'jmag': here}) == {'jmag': '25.2.01zp'}
+
+
+def test_a_present_tool_is_located_where_the_probe_found_it(tmp_path: Path) -> None:
+    """PLANTED CONTROL for the absences below: present, its location survives the cache round trip."""
+    one = probe('femm', Fake().check(), FEMM5, now=NOW)
+    assert one.location == EXE
+    assert located({'femm': one}) == {'femm': EXE}
+    state = tmp_path / 'presence.json'
+    refresh(FLOORS, checks={'femm': Fake().check()}, state=state, now=NOW)
+    assert located(cached(checks={'femm': Fake().check()}, state=state, now=NOW)) == {'femm': EXE}
+
+
+@pytest.mark.parametrize('fake', [Fake(found=False), Fake(version='4.2'), Fake(smoke=False)])
+def test_an_absent_tool_has_no_location_even_when_it_was_found(fake: Fake) -> None:
+    one = probe('femm', fake.check(), FEMM5, now=NOW)
+    assert not one.present
+    assert one.location is None
+    assert located({'femm': one}) == {}
+
+
+def test_a_tool_never_probed_on_this_host_has_no_location(tmp_path: Path) -> None:
+    one = cached(checks={'femm': Fake().check()}, state=tmp_path / 'none.json', now=NOW)['femm']
+    assert (one.present, one.location) == (False, None)
 
 
 def test_a_printed_version_is_ordered_by_its_first_numbered_token() -> None:
