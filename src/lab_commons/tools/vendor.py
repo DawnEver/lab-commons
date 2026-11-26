@@ -29,7 +29,7 @@ from lab_commons.compute.presence import Requirement, probe
 from lab_commons.compute.toolchecks import CHECKS, Check
 from lab_commons.home import canonical
 from lab_commons.tools.catalogue import Tool
-from lab_commons.tools.install import Outcome
+from lab_commons.tools.install import ToolReport
 
 __all__ = ['HOST_TABLE', 'UNFILLED', 'Declared', 'declared_home', 'record']
 
@@ -82,7 +82,7 @@ def record(
     checks: Mapping[str, Check] = CHECKS,
     now: datetime,
     machine: Mapping[str, Any] | None = None,
-) -> Outcome:
+) -> ToolReport:
     """Probe user-installed *tool* at *home*, else at its declared home; ``recorded`` only when both agree.
 
     The outcome is ``refused`` -- naming the door -- when no home is declared or given, the probe finds no binary
@@ -98,15 +98,15 @@ def record(
             f'{line} in the host file through its pull request (`python -m dev_lab.dev.devhost detect` proposes it), '
             'or pass --home <install dir> to verify one first'
         )
-        return Outcome('refused', msg)
+        return ToolReport('refused', msg)
     check = checks[tool.name]
     found = check.within(target) if check.within is not None else None
     if found is None:
-        return Outcome('refused', f'no {tool.name} under {target}: {door}')
+        return ToolReport('refused', f'no {tool.name} under {target}: {door}')
     reading = probe(tool.name, replace(check, find=lambda: found), requirement, now=now)
     if not reading.present:
         evidence = '; '.join(f'{one.source}: {one.value}' for one in reading.evidence)
-        return Outcome('refused', f'{tool.name} at {found[1]} is refused by its probe ({evidence}): {door}')
+        return ToolReport('refused', f'{tool.name} at {found[1]} is refused by its probe ({evidence}): {door}')
     version = reading.version or 'its version'
     if declared.home is None or canonical(declared.home) != canonical(target):
         msg = (
@@ -114,5 +114,5 @@ def record(
             f'{declared.home or "no home"} ({declared.where}): record it -- set [dev.vendors.{tool.vendor}] '
             f'home = "{target.as_posix()}" in the host file through its pull request, then render the machine file'
         )
-        return Outcome('refused', msg)
-    return Outcome('recorded', f'{tool.name} {version} at {found[1]} verifies; recorded in {declared.where} home')
+        return ToolReport('refused', msg)
+    return ToolReport('recorded', f'{tool.name} {version} at {found[1]} verifies; recorded in {declared.where} home')

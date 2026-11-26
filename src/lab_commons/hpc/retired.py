@@ -142,6 +142,7 @@ CLASSIFIED: Final[dict[str, tuple[str, str, str]]] = {
         'box.Outcome': 'lab_commons.box.ProcessEnd (its .status maps a kill onto lab_commons.outcomes.Status)',
         'deploy.Outcome': 'dev_lab.supervise.deploy.PhaseResult (its .status reads OK or ERROR)',
         'execute.Outcome': 'lab_commons.compute.execute.Settled',
+        'tools.install.Outcome': 'lab_commons.tools.install.ToolReport',
         'verdict.Outcome': 'lab_commons.outcomes.Conclusion (same tokens: pass, fail, inconclusive)',
         'forgestatus.Status': 'dev_lab.dev.forgestatus.CommitStatus (a forge commit-status record, not a task result)',
         'forgestatus import Status': 'from dev_lab.dev.forgestatus import CommitStatus',
