@@ -13,7 +13,7 @@ before a claim showed its load never lends what a declaration already owns.
 
 A TOOL SEAT IS SUPPLY LIKE A CORE (2026-10-25). Its size is its tool's supply as its own probe measures it
 (:func:`lab_commons.box.providers.seat_sizes`; the declared ``[capabilities]`` count when there is no probe,
-1 for an undeclared exclusion seat, REFUSED for an undeclared vendor tool --
+1 for an undeclared exclusion seat, WITHHELD (0, naming why) for an undeclared vendor tool --
 :func:`~lab_commons.box.machine.seat_size`). A seat whose row declares ``in_use = { process = [images] }`` is
 also OBSERVED:
 the running processes of those images are its seats in use now, so a solve a person starts outside the ledger

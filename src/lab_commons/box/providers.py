@@ -27,7 +27,7 @@ import lab_commons.launch as _door
 from lab_commons.box._store import connect
 from lab_commons.box._store import read as read_ledger
 from lab_commons.box.demand import GB, Capacity, Holding
-from lab_commons.box.machine import NON_VENDOR_CHECKS, provided, seat_size
+from lab_commons.box.machine import NON_VENDOR_CHECKS, provided, seat_size, withheld
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.model import Resources, Supply
 from lab_commons.compute.presence import Evidence, Presence
@@ -55,16 +55,20 @@ def seat_sizes() -> tuple[dict[str, int], dict[str, str]]:
     A ``supply`` argv prints the TOTAL seats this box may lend (a vendor's licence count, say) as one integer;
     the ledger subtracts what its claims hold. No probe: the declared ``seats`` are the size. A probe that fails,
     times out or prints no count CANNOT SAY: its tool keeps its declared size but is *blind* -- ``{tool: why}``
-    -- and lends none of it (a vacuous green is the family's worst defect).
+    -- and lends none of it (a vacuous green is the family's worst defect). A vendor row with no declared count
+    is :func:`~lab_commons.box.machine.withheld`: no size, blind with that reason; every other tool still sizes.
     """
     sizes: dict[str, int] = {}
     blind: dict[str, str] = {}
     for name, facts in provided(section('capabilities')).items():
+        if (why := withheld(name, declared='seats' in facts)) is not None:
+            blind[name] = why
+            continue
         probe = facts.get('supply')
         count = _counted(probe)
         if probe and count is None:
             blind[name] = f'its supply probe {probe[0]!r} failed, timed out or printed no count'
-        sizes[name] = count if count is not None else int(facts.get('seats', 1))  # provided() refused a vendor's
+        sizes[name] = count if count is not None else int(facts.get('seats', 1))
     return sizes, blind
 
 

@@ -72,7 +72,7 @@ import os
 import sqlite3
 import subprocess
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -101,6 +101,7 @@ from lab_commons.box.demand import (
 )
 from lab_commons.box.devices import KINDS, NAMES, assign, oversized
 from lab_commons.box.disk import verdict as disk_verdict
+from lab_commons.box.machine import withheld
 from lab_commons.box.order import blocks
 from lab_commons.box.providers import Read, measured, size
 from lab_commons.box.supply import Reading
@@ -295,10 +296,18 @@ def _decide(capacity: Capacity, held: Sequence[Holding], reading: Reading, deman
         for h in held
         if (amount := _vector_of(h)[name])
     ]
-    why_blind = {**reading.unread, **capacity.blind}
-    blind = [f'{name} is not measured: {why_blind[name]}' for name in verdict.lacking if name in why_blind]
+    blind = _unmeasured(capacity, verdict.lacking, reading.unread)
     outside = 'held by nobody on the ledger -- the rest is in use outside it'
     return f'{verdict.why}; ' + ', '.join([*holders, *blind] or [outside])
+
+
+def _unmeasured(capacity: Capacity, lacking: Collection[str], unread: Mapping[str, str] | None = None) -> list[str]:
+    """Each *lacking* name that lends none because it is not measured, and why: blind, unread or withheld."""
+    why = {**(unread or {}), **capacity.blind}
+    for name in lacking:
+        if name not in why and (reason := withheld(name, declared=name in capacity.seats)) is not None:
+            why[name] = reason
+    return [f'{name} is not measured: {why[name]}' for name in lacking if name in why]
 
 
 def _vector_of(held: Holding) -> Resources:
@@ -416,7 +425,7 @@ def hold(
         msg = f'{what}: larger than this box, refused at once -- {device_never}'
         raise Refused(msg)
     if not never:
-        blind = [f'{name} is not measured: {capacity.blind[name]}' for name in never.lacking if name in capacity.blind]
+        blind = _unmeasured(capacity, never.lacking)
         msg = f'{what}: larger than this box, refused at once -- {"; ".join([never.why, *blind])}'
         raise Refused(msg)
     low, near = disk_verdict((box_path(), Path.cwd()), free_floor())

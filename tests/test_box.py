@@ -36,7 +36,7 @@ from lab_commons.box import (
 from lab_commons.box._store import LedgerVersionRefused, migrate
 from lab_commons.box.demand import checked, cores, mem_bytes, seats
 from lab_commons.box.ledger import _decide
-from lab_commons.box.machine import UndeclaredSeat, own_reserve, reserve_table
+from lab_commons.box.machine import own_reserve, reserve_table
 from lab_commons.box.supply import Reading
 from lab_commons.compute.model import Demand
 
@@ -137,7 +137,10 @@ def test_an_undeclared_exclusion_seat_counts_one_and_an_undeclared_vendor_is_ref
         hold(*_demand(seats={'env-m': 1}), 'n', queue_s=0.2, **_ON),
     ):
         pass
-    with pytest.raises(UndeclaredSeat, match='matlab'), hold(*_demand(seats={'matlab': 1}), 'm', queue_s=1, **_ON):
+    with (
+        pytest.raises(Refused, match=r'matlab.*\[dev\.vendors\.matlab\] seats'),
+        hold(*_demand(seats={'matlab': 1}), 'm', queue_s=1, **_ON),
+    ):
         pass
 
 
