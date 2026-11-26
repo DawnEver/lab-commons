@@ -152,11 +152,10 @@ def test_a_failed_install_keeps_the_old_version(machine: Path) -> None:
     assert not (machine / 'tools' / 'femm' / NEW).exists(), 'the failed attempt is removed'
 
 
+@pytest.mark.windows  # on Linux the version is the version file the door writes; the stamp is a Windows reading
 def test_an_install_the_probe_refuses_keeps_the_old_version(machine: Path) -> None:
     """The installer exits 0 but its binary states another release: the probe, not the exit code, decides."""
     assert _install(_release(OLD), FakeInstaller()).state == 'installed'
-    if sys.platform != 'win32':
-        pytest.skip('on Linux the version is the version file the door writes; the stamp is a Windows reading')
     outcome = _install(_release(NEW), FakeInstaller(stamp='5.0.20260101'))
     assert outcome.state == 'refused'
     assert 'probe' in outcome.message
