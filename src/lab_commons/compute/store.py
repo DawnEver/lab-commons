@@ -57,8 +57,9 @@ from typing import Final, Protocol
 
 from lab_commons.compute import floor
 from lab_commons.compute.durable import durable_write
-from lab_commons.compute.unit import canonical, content_hash
+from lab_commons.compute.unit import content_hash
 from lab_commons.headroom import Floor
+from lab_commons.outcomes.identity import canonical
 
 __all__ = [
     'INSTALL_BACKOFF_S',
