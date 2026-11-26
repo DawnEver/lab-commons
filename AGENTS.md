@@ -4,8 +4,9 @@ The family's shared runtime and execution layer. Python package `lab_commons`:
 
 - Runtime: `units`, `paths`, `file_io`, `log`, `structured`, `config`, `credentials`, `outcomes`, `viz`,
   `graph_layout` (domain-free box placement and orthogonal wire routing; the domain is the caller's adapter).
-- Execution: `box` (one machine ledger), `compute` (units, results, executors), `hpc` (cluster tier),
-  `supervise` (process supervision), and their helpers (`proc`, `liveness`, `resources`, `envkey`, ...).
+- Execution: `box` (one machine ledger), `compute` (units, results, executors), `hpc` (cluster tier), and their
+  helpers (`proc`, `liveness`, `resources`, `envkey`, ...). Process supervision is not here: it is dev-lab's
+  `dev_lab.supervise`.
 - Desktop: `desktop` -- see and act on a host's GUI windows (`python -m lab_commons.desktop ... --json`).
 - Tools: `tools` -- the one door through which an external tool reaches a machine, managed (installed under the
   managed root) or user-installed (its declared home probed): `python -m lab_commons.tools install|list|check`.

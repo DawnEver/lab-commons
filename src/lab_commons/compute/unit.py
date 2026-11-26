@@ -2,8 +2,9 @@
 
 THE UNIT HASH IS THE CACHE KEY, AND IT IS EVERY FACT THE RESULT DEPENDS ON: the engine's name and version, the
 entry it calls, every input FILE by the sha256 of its content (never its path or mtime) and every PARAMETER as
-canonical JSON. Two units with one hash are the same computation wherever and whenever they run, so a result
-computed once answers both; a unit reads no undeclared host state, which is what makes that true.
+canonical JSON (:func:`lab_commons.outcomes.identity.canonical`, the family's one encoder). Two units with one hash
+are the same computation wherever and whenever they run, so a result computed once answers both; a unit reads no
+undeclared host state, which is what makes that true.
 
 WHAT A VERSION IS. A vendor engine's version is PROBED on the host (:mod:`lab_commons.compute.presence`), never
 declared there. Ours is an :class:`Environment` -- our code at a commit plus the key of the environment that
@@ -19,7 +20,6 @@ files RESOLVED.
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,6 +30,7 @@ import lab_commons.launch as _door
 from lab_commons.compute.model import Demand
 from lab_commons.compute.presence import Presence
 from lab_commons.hpc.builds import builds_at
+from lab_commons.outcomes.identity import Identity, canonical
 
 __all__ = [
     'Engine',
@@ -37,7 +38,6 @@ __all__ = [
     'Environment',
     'Output',
     'Unit',
-    'canonical',
     'content_hash',
     'environment_here',
 ]
@@ -48,11 +48,6 @@ _BLOCK: Final = 1 << 20
 
 class EngineAbsent(LookupError):
     """A vendor engine this host has no PRESENT reading for: the message names the tool and the evidence."""
-
-
-def canonical(value: object) -> bytes:
-    """*value* as canonical JSON: sorted keys, no whitespace, no NaN -- one spelling per value."""
-    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()
 
 
 def content_hash(path: Path) -> str:
@@ -185,6 +180,10 @@ class Unit:
 
     def unit_hash(self, files: Mapping[str, Path]) -> str:
         """The cache key, over the input *files* resolved (every file input named, each hashed by content)."""
+        return self.identity(files).key
+
+    def identity(self, files: Mapping[str, Path]) -> Identity:
+        """The unit as an outcomes Identity: its facts, encoded once; its key IS :meth:`unit_hash` (D125 F2)."""
         wanted = {k for k, v in self.inputs.items() if isinstance(v, Path | Output)}
         if set(files) != wanted:
             msg = f'unit hash needs exactly the file inputs {sorted(wanted)}, got {sorted(files)}'
@@ -196,4 +195,4 @@ class Unit:
             'files': {name: content_hash(path) for name, path in files.items()},
             'params': self.params,
         }
-        return hashlib.sha256(canonical(facts)).hexdigest()
+        return Identity.of_value(facts)

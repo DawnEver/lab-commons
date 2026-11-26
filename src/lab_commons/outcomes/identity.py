@@ -1,5 +1,9 @@
 """What a task IS: a canonical encoding of its subject and context, and the SHA-256 of it.
 
+THE ONE ENCODER OF THE FAMILY (v1 ruling D125 F2): :func:`canonical` is the only canonical JSON a key is computed
+over -- an outcomes Identity, a compute unit hash (:meth:`lab_commons.compute.unit.Unit.identity`, so a computed
+task's Identity IS its unit hash) and the result store's records all read it.
+
 The encoding is JSON with keys sorted and no whitespace. Floats are written by ``repr`` -- the shortest
 string that round-trips exactly -- so ``0.1 + 0.2`` and ``0.3`` are two identities, and ``1`` and
 ``1.0`` are two identities. Nothing is rounded: rounding would merge two different tasks into one
@@ -15,7 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
-__all__ = ['INACTIVE', 'Identity']
+__all__ = ['INACTIVE', 'Identity', 'canonical']
 
 
 class _Inactive:
@@ -48,8 +52,16 @@ def _prune(value: object) -> object:
     raise TypeError(msg)
 
 
-def _canonical(value: object) -> str:
-    return json.dumps(_prune(value), sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
+def canonical(value: object) -> bytes:
+    """*value* as canonical JSON bytes: sorted keys, no whitespace, exact floats, no NaN, :data:`INACTIVE` dropped.
+
+    Raises:
+        TypeError: a key that is not a string, or a value with no exact encoding.
+        ValueError: a NaN or an infinity.
+
+    """
+    text = json.dumps(_prune(value), sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
+    return text.encode('utf-8')
 
 
 @dataclass(frozen=True)
@@ -62,5 +74,10 @@ class Identity:
     @classmethod
     def of(cls, subject: Mapping[str, Any], context: Mapping[str, Any] | None = None) -> Identity:
         """The identity of *subject* under *context*; key order is irrelevant, floats are exact."""
-        canonical = _canonical({'subject': subject, 'context': context or {}})
-        return cls(canonical, hashlib.sha256(canonical.encode('utf-8')).hexdigest())
+        return cls.of_value({'subject': subject, 'context': context or {}})
+
+    @classmethod
+    def of_value(cls, value: object) -> Identity:
+        """The identity of *value* as it stands, encoded by :func:`canonical` -- a unit's facts, for one."""
+        encoded = canonical(value)
+        return cls(encoded.decode('utf-8'), hashlib.sha256(encoded).hexdigest())

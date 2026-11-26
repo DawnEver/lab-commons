@@ -8,18 +8,19 @@ execution of a test set on one platform at one sha; its record is ``run-<sha>-<p
 a PART (a platform's result for a sha, composed of runs) and an ADMISSION (computed, never stored).
 No alias survives: a command line still using a retired word is REFUSED BY NAME with the remedy
 (:func:`refusal`), and ``tests/test_hpc_retired.py`` reds on any retired spelling anywhere else in
-the tracked tree, prose included.
+the tracked tree, prose included. Matching and the refusal sentence are the family mechanism's,
+:class:`lab_commons.retired.Registry` (:data:`REGISTRY`).
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from typing import Final
 
 from lab_commons.hpc._retired_compute import COMPUTE
+from lab_commons.retired import Registry, Retired
 
-__all__ = ['MOVED_TABLES', 'RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys', 'retired_in']
+__all__ = ['MOVED_TABLES', 'REGISTRY', 'RETIRED', 'TEST_WORDS', 'refusal', 'refuse_retired_keys', 'retired_in']
 
 _BRANCHSET_ROW: Final = 'the base pre-push row `branchset-push` (dev_lab/dev/githooks/base.toml)'
 
@@ -272,24 +273,19 @@ TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {
 }
 
 
-def _pattern(spelling: str) -> re.Pattern[str]:
-    """A FLAG spelling (leading ``-``) matches as a whole token, so ``--mode`` is not in ``--model``."""
-    escaped = re.escape(spelling)
-    return re.compile(rf'(?<![\w-]){escaped}(?![\w-])' if spelling.startswith('-') else escaped)
-
-
-_PATTERNS: Final = {spelling: _pattern(spelling) for spelling in RETIRED}
+#: :data:`RETIRED` as the family mechanism's registry: one matcher, one refusal sentence.
+REGISTRY: Final = Registry(Retired(spelling, remedy) for spelling, remedy in RETIRED.items())
 
 
 def retired_in(text: str) -> list[str]:
     """Every retired spelling *text* carries, in registry order (flags as whole tokens)."""
-    return [spelling for spelling, pattern in _PATTERNS.items() if pattern.search(text)]
+    return [row.name for row in REGISTRY.found_in(text)]
 
 
 def refusal(prog: str, word: str) -> str | None:
     """The refusal for *word* used as a verb of *prog*, naming its replacement; ``None`` when it is not retired."""
-    remedy = RETIRED.get(f'{prog} {word}') or RETIRED.get(word)
-    return None if remedy is None else f'`{prog} {word}` is retired: use {remedy}'
+    row = REGISTRY.get(f'{prog} {word}') or REGISTRY.get(word)
+    return None if row is None else Retired(f'{prog} {word}', row.replacement).door()
 
 
 def refuse_retired_keys(table: str, keys: Iterable[str]) -> None:
