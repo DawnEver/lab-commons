@@ -838,7 +838,7 @@ def test_a_first_round_the_headroom_cannot_hold_is_not_submitted_and_nothing_is_
     Ada 2026-11-08: asks recorded on contention ratcheted the base row to 240 GB, x1.5 the whole 360 GB
     ceiling, so a base fitted only an idle account.
     """
-    learned.learn_peaks('https://g/r.git', {'tests/a.py': 240438.4})
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 240438.4}, ended='exit')
     fake = FakeRunCluster(held=OTHER_CAMPAIGNS)
     with pytest.raises(NoRoom, match=r'no headroom now for one task of 1 CPU and 352\.2 GB'):
         _submit(fake, history=learned.learned('https://g/r.git'))
@@ -848,7 +848,7 @@ def test_a_first_round_the_headroom_cannot_hold_is_not_submitted_and_nothing_is_
 
 def test_a_first_round_with_headroom_is_throttled_to_it_not_to_the_ceiling() -> None:
     """PLANTED CONTROL: the same 232 GB held, an 8 GB task: 128 GB of headroom runs 16 at once, not 45."""
-    learned.learn_peaks('https://g/r.git', {'tests/a.py': 8 * 1024 / 1.5})
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 8 * 1024 / 1.5}, ended='exit')
     fake = FakeRunCluster(held=OTHER_CAMPAIGNS)
     state = _submit(fake, history=learned.learned('https://g/r.git'))
     plan = state['rounds'][0]
@@ -876,7 +876,7 @@ def test_each_memory_class_is_its_own_array_at_its_own_files_peak() -> None:
 
     PLANTED PEAKS. The light file asks the floor, never the heavy file's 30 GB; the two never share an item.
     """
-    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0}, ended='exit')
     fake = FakeRunCluster()
     state = _submit(fake, history=learned.learned('https://g/r.git'))
     heavy, light = _sbatched(fake)
@@ -936,7 +936,7 @@ def test_the_live_throttle_is_the_ceilings_free_room_bounded_by_the_tasks_and_th
 
 def test_a_gather_raises_the_throttle_when_the_accounts_other_jobs_end() -> None:
     """Submitted ``%1`` beside 352 GB held; the held jobs end while the array pends: the next gather lifts it."""
-    learned.learn_peaks('https://g/r.git', {'tests/a.py': 8 * 1024 / 1.5, 'tests/b.py': 8 * 1024 / 1.5})
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 8 * 1024 / 1.5, 'tests/b.py': 8 * 1024 / 1.5}, ended='exit')
     fake = FakeRunCluster(held='acct-free|1|1|8G|N/A\n' * 44, active=1)
     state = _submit(fake, history=learned.learned('https://g/r.git'))
     assert state['current']['bands'][0]['throttle'] == 1
@@ -955,7 +955,7 @@ def test_an_oom_splits_the_multi_id_item_at_its_ask_and_an_id_that_finished_drop
     before growing) -- t2 is re-asked at the ask its item died at, never below it. When t2 then finishes, its
     held ask is dropped.
     """
-    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0}, ended='exit')
     fake = FakeRunCluster(oom=True, dies=frozenset({'tests/a.py'}))
     _submit(fake, history=learned.learned('https://g/r.git'))
     assert _gather(fake) is None
@@ -2171,7 +2171,7 @@ def test_a_first_round_refused_on_the_qos_submit_limit_is_no_room_and_its_queued
     round holds no submit slot. PLANTED CONTROL: :func:`test_each_memory_class_is_its_own_array_at_its_own_files_peak`
     -- the same two bands with room submit both.
     """
-    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0}, ended='exit')
     fake = _QosFull()
     with pytest.raises(NoRoom, match=SUBMIT_LIMIT):
         _submit(fake, history=learned.learned('https://g/r.git'))
@@ -2185,7 +2185,7 @@ def test_the_bands_of_a_round_share_one_qos_submit_room() -> None:
     Planted: 99 of the ``free`` QOS's 100 submits queued, two bands of one shard each. One fits, two do not:
     the round is NoRoom before any ``sbatch``. PLANTED CONTROL: the same bands at 98 queued submit both.
     """
-    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0})
+    learned.learn_peaks('https://g/r.git', {'tests/a.py': 20480.0, 'tests/b.py': 512.0}, ended='exit')
     full = FakeRunCluster(held='@@@ queued\n' + 'free\n' * 99)
     with pytest.raises(NoRoom):
         _submit(full, history=learned.learned('https://g/r.git'))

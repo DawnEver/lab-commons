@@ -82,7 +82,7 @@ def test_per_test_facts_and_per_job_runs_share_one_file_without_erasing_each_oth
     learned.record_run(REPO, 'linux', (), Run(peak_mem_gb=2.0, cpu_s=1.0, wall_s=1.0), ended='exit')
     learned.learn_round(REPO, {}, {'durations': {'a.py::x': 3.0}, 'peaks_mb': {'a.py': 512.0}})
     assert learned.run_of(REPO, 'linux', ()) is not None, 'learning test facts kept the job runs'
-    learned.learn_peaks(REPO, {'b.py': 2048.0})
+    learned.learn_peaks(REPO, {'b.py': 2048.0}, ended='exit')
     table = learned.learned(REPO)
     assert table['durations'] == {'a.py::x': 3.0}
     assert table['peaks_mb'] == {'a.py': 512.0, 'b.py': 2048.0}
@@ -90,7 +90,7 @@ def test_per_test_facts_and_per_job_runs_share_one_file_without_erasing_each_oth
 
 
 def test_one_worker_rule_prices_a_box_worker_and_a_slurm_task_alike() -> None:
-    learned.learn_peaks(REPO, {'tests/a.py': 1024.0, 'tests/b.py': 3072.0})
+    learned.learn_peaks(REPO, {'tests/a.py': 1024.0, 'tests/b.py': 3072.0}, ended='exit')
     assert learned.worker_gb(REPO, ['tests/a.py'], prior_gb=0.5, safety=1.5) == 1.5
     assert learned.worker_gb(REPO, ['tests/a.py::t', 'tests/b.py::u'], prior_gb=0.5, safety=1.5) == 4.5
     assert learned.worker_gb(REPO, ['tests/new.py'], prior_gb=0.5, safety=1.5) == 3.0, 'its siblings median, 2 GB'
@@ -486,14 +486,14 @@ def test_a_table_is_parsed_once_per_version_and_a_rewrite_is_never_served_stale(
 
     PLANTED CONTROL: a write in between (a new file version) is read, never the parse held from before.
     """
-    learned.learn_peaks(REPO, {'a.py': 1.0})
+    learned.learn_peaks(REPO, {'a.py': 1.0}, ended='exit')
     parses = []
     real = learned.json.loads
     monkeypatch.setattr(learned.json, 'loads', lambda text: parses.append(1) or real(text))
     assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
     assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
     assert len(parses) == 1, 'an unchanged table was parsed twice'
-    learned.learn_peaks(REPO, {'a.py': 2.0})
+    learned.learn_peaks(REPO, {'a.py': 2.0}, ended='exit')
     assert learned.learned(REPO)['peaks_mb'] == {'a.py': 2.0}, 'a rewritten table was served stale'
 
 
@@ -502,7 +502,7 @@ def test_a_settled_unchanged_table_is_not_even_read_again(monkeypatch: pytest.Mo
 
     PLANTED CONTROL: a whole-file rewrite (a new file: other id, size or mtime) is read again, never served stale.
     """
-    learned.learn_peaks(REPO, {'a.py': 1.0})
+    learned.learn_peaks(REPO, {'a.py': 1.0}, ended='exit')
     path = learned._path(REPO)
     settled = path.stat().st_mtime - 2 * learned.SETTLED_S
     os.utime(path, (settled, settled))
@@ -512,5 +512,19 @@ def test_a_settled_unchanged_table_is_not_even_read_again(monkeypatch: pytest.Mo
     for _ in range(5):
         assert learned.learned(REPO)['peaks_mb'] == {'a.py': 1.0}
     assert len([p for p in reads if p == path]) <= 1, 'a settled, unchanged table was read again'
-    learned.learn_peaks(REPO, {'a.py': 2.0})
+    learned.learn_peaks(REPO, {'a.py': 2.0}, ended='exit')
     assert learned.learned(REPO)['peaks_mb'] == {'a.py': 2.0}, 'a rewritten table was served stale'
+
+
+@pytest.mark.parametrize('ended', ['wall', 'crash', ''])
+def test_a_peak_of_a_run_that_did_not_end_by_itself_is_refused_not_learned(ended: str) -> None:
+    """lab-commons #167: a worker that dies mid-file while pytest exits 1 measured a LOWER bound, not a price.
+
+    PLANTED CONTROL: the same peaks of a run that exited by itself are learned.
+    """
+    learned.learn_peaks(REPO, {'tests/a.py': 512.0}, ended='exit')
+    with pytest.raises(ValueError, match=r'learn_peaks refused .* not a price. .*PRICED_ENDINGS'):
+        learned.learn_peaks(REPO, {'tests/a.py': 64.0, 'tests/b.py': 8.0}, ended=ended)
+    assert learned.learned(REPO)['peaks_mb'] == {'tests/a.py': 512.0}, 'an unpriced peak was folded in'
+    learned.learn_peaks(REPO, {'tests/a.py': 64.0, 'tests/b.py': 8.0}, ended='exit')
+    assert learned.learned(REPO)['peaks_mb'] == {'tests/a.py': 64.0, 'tests/b.py': 8.0}
