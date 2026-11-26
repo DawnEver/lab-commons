@@ -110,7 +110,7 @@ def _stall(
     here: list[str] = []
     elsewhere: list[str] = []
     for grant in machine.grants:
-        snapshot = probe(runners[grant.account], grant.slurm_account)
+        snapshot = probe(runners[grant.account], grant.slurm_account, exclude=grant.exclude_nodes)
         for name in grant.partitions or tuple(snapshot.partitions):
             if free := free_slots(snapshot, (name,), cost):
                 (here if shares_home(grant, home) else elsewhere).append(f'{name} on {grant.name}: {free} free')

@@ -19,8 +19,9 @@ from lab_commons.hpc.builds import Builds
 from lab_commons.hpc.cluster import Unreachable, failover_runner, render_script
 from lab_commons.hpc.config import Config, Cost, JobSpec, Limits, Policy
 from lab_commons.hpc.grants import Grant, Machine, Session, load_grants
+from lab_commons.hpc.jobs import plan_job
 from lab_commons.hpc.needsets import Vocabulary
-from lab_commons.hpc.plan import allocate, headroom, make_plan
+from lab_commons.hpc.plan import allocate, free_slots, headroom, make_plan
 from lab_commons.hpc.shell import (
     RunSpec,
     build_script,
@@ -120,6 +121,11 @@ def _grant(**extra: object) -> str:
         (_grant().replace('{ s = {', '{ t = {'), 'names slurm_account'),
         (_grant().replace('billed = false', _BUDGETED), 'a budget belongs to a billed account'),
         (_grant().replace('reach = ["r"]\n', ''), 'reach must list the roles'),
+        (_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nexclude_nodes = "comp047"'), r'\] exclude_nodes lists'),
+        (_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nexclude_nodes = [""]'), r'\] exclude_nodes lists'),
+        (_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nexclude_nodes = [47]'), r'\] exclude_nodes lists'),
+        (_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nexclude_nodes = ["a,b"]'), r'\] exclude_nodes lists'),
+        (_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nexclude_nodes = ["c[1-2]"]'), r'\] exclude_nodes lists'),
         ({'grant': [], 'reach': []}, r'no \[\[hpc\.grant\]\]'),
     ],
 )
@@ -301,6 +307,49 @@ def test_a_grants_setup_runs_first_in_every_task(tmp_path: Path) -> None:
 def test_the_grant_table_reads_setup() -> None:
     table = tomllib.loads(_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nsetup = ["module load git"]'))
     assert load_grants(table).grants[0].setup == ('module load git',), "the cluster's set-up reaches its grants"
+
+
+def test_the_grant_table_reads_the_clusters_excluded_nodes() -> None:
+    table = tomllib.loads(_grant().replace('hosts = ["h"]', 'hosts = ["h"]\nexclude_nodes = ["comp047", "comp049"]'))
+    grant = load_grants(table).grants[0]
+    assert grant.exclude_nodes == ('comp047', 'comp049'), "the cluster's slow nodes reach its grants"
+    assert grant.cluster().exclude_nodes == ('comp047', 'comp049'), 'and the planner sees them'
+    assert load_grants(tomllib.loads(_grant())).grants[0].exclude_nodes == (), 'PLANTED CONTROL: undeclared is none'
+
+
+def test_the_script_excludes_exactly_the_clusters_declared_nodes(tmp_path: Path) -> None:
+    """Ada 2026-11-26: comp047/comp049 read GPFS small files at ~15 KB/s; a gate job stalled 56 min there."""
+    config = Config(job=JobSpec(name='j'), source=tmp_path / 'h.toml')
+    slow = replace(GRANT, exclude_nodes=('comp047', 'comp049'))
+    _, plan = allocate(10, Cost(seconds=60), [(slow, _snap())], session=WIDE, policy=Policy())
+    assert plan.exclude_nodes == ('comp047', 'comp049')
+    assert '#SBATCH --exclude=comp047,comp049\n' in render_script(plan, config, '~/r')
+    _, plain = allocate(10, Cost(seconds=60), [(GRANT, _snap())], session=WIDE, policy=Policy())
+    assert '--exclude' not in render_script(plain, config, '~/r'), 'PLANTED CONTROL: no declaration, no directive'
+
+
+def test_a_grants_snapshot_never_counts_an_excluded_node() -> None:
+    """A plan never counts capacity it cannot use: the probe of a grant drops the nodes its jobs exclude."""
+    text = IDLE + '@@@ shared\n'
+    whole = cluster_module.probe(lambda _command, _stdin=None: text, 'acct-free')
+    assert free_slots(whole, ('shortq',), Cost()) == 2 * 96, 'PLANTED CONTROL: cpu001 and cpu002 idle, 96 CPU each'
+    seen = cluster_module.probe(lambda _command, _stdin=None: text, 'acct-free', exclude=('cpu001',))
+    assert 'cpu001' not in {node.name for node in seen.nodes}
+    assert free_slots(seen, ('shortq',), Cost()) == 96
+
+
+def test_a_placement_plans_on_the_grants_view_without_its_excluded_nodes() -> None:
+    config = Config(job=JobSpec(name='j'), cost=Cost(seconds=60))
+    text = IDLE + '@@@ shared\n'
+
+    def placed(grant: Grant) -> object:
+        machine = Machine(session=None, grants=(grant,))
+        (placement,) = plan_job(config, 10, machine, reach=lambda _g: lambda _command, _stdin=None: text)
+        return placement.plan
+
+    whole, slow = placed(GRANT), placed(replace(GRANT, exclude_nodes=('cpu001', 'cpu002')))
+    assert slow.free_slots == whole.free_slots - 2 * 96, 'the two idle 96-CPU shortq nodes are not its capacity'
+    assert slow.exclude_nodes == ('cpu001', 'cpu002')
 
 
 def test_an_untagged_plan_carries_no_comment(tmp_path: Path) -> None:

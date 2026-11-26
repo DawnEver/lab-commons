@@ -164,7 +164,7 @@ def test_a_job_declares_itself_rerun_safe_and_its_placement_reads_it(
     config = load_config(path)
     assert config.job.rerun_safe
     pool = {g.slurm_account: snapshot for g, snapshot in _pool([350, 350, 350, 350, 0])}  # only the region has room
-    monkeypatch.setattr(jobs, 'probe', lambda _runner, account: pool[account])
+    monkeypatch.setattr(jobs, 'probe', lambda _runner, account, **_k: pool[account])
     machine = Machine(session=None, grants=POOL, paging=PAGING)
     assert plan_job(config, 1, machine, reach=lambda _g: None)[0].grant is POOL[4]
     # Planted control: the same job undeclared never borrows the region.
