@@ -46,7 +46,7 @@ def may_place(
 ) -> bool:
     """Whether a plan of wall *minutes* may run on account *index*: large only in the region, else not large.
 
-    The region takes a SMALL task that is MOVABLE -- rerun-safe and its wall within ``movable_minutes`` -- and
+    The region takes a SMALL task that is MOVABLE -- rerun-safe and its wall within ``movable`` -- and
     only while no large task waits there: drain, never kill.
     """
     where = region(snapshots, paging)
@@ -57,5 +57,5 @@ def may_place(
         return index == where
     if index != where:
         return True
-    movable = rerun_safe and minutes <= paging.movable_minutes
+    movable = rerun_safe and minutes * 60 <= paging.movable
     return size == 'small' and movable and not _waits_large(snapshots[where], paging)
