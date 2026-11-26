@@ -14,13 +14,14 @@ from pathlib import Path
 import pytest
 from _box_fake import quiet
 
-from lab_commons.box import GB, Capacity, hold
+from lab_commons.box import GB, Capacity, demand, hold
+from lab_commons.box.devices import NAMES, Devices, parse_nvidia
 from lab_commons.box.providers import Lent, account_seats, box_engine
 from lab_commons.compute.presence import Presence
 from lab_commons.compute.probe import os_name
 from lab_commons.hpc.provider import SlurmAccount, unmeasured
 from lab_commons.hpc.slurm import Held, Node, Quota, Snapshot
-from lab_commons.resources import Claim, Engine, admits
+from lab_commons.resources import KINDS, Claim, Engine, Kind, admits, kind_of
 
 
 def _have(**found: bool) -> dict[str, Presence]:
@@ -151,3 +152,18 @@ def test_an_account_counts_its_pending_tasks_memory_as_held_like_their_cpus() ->
     assert supply.resources['mem_gb'] == pytest.approx(3.0, abs=1e-12), (
         'a pending task is a claim the scheduler honours before a new submission -- its memory as well as its cpus'
     )
+
+
+def test_a_gpu_box_read_whole_builds_its_engine_and_every_device_name_has_a_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Capacity.read()`` seats the device names; each is a declared kind, so the box's engine builds on a GPU box."""
+    gpu = parse_nvidia('0, GPU-a, 0, 10, 24576\n', '')
+    monkeypatch.setattr(demand, 'read_devices', lambda: Devices(gpu))
+    capacity = Capacity.read()
+    assert {'gpu', 'vram_gb', 'f64'} <= set(capacity.seats), 'the fake GPU box seats its devices'
+    box_engine(capacity=capacity, read=quiet(capacity), presence={}).available('box')
+    assert dict.fromkeys(NAMES, Kind.OCCUPANCY) == {name: kind_of(name) for name in NAMES}
+    assert set(KINDS) >= NAMES
+    with pytest.raises(ValueError, match='no kind'):
+        kind_of('tpu')

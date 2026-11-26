@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import Final, Protocol
 
 from lab_commons.box.demand import LENT_NAME, WALL_CEILING_S
+from lab_commons.box.devices import NAMES as DEVICE_NAMES
 from lab_commons.box.machine import provided
 from lab_commons.compute.model import Demand, Resources, Supply
 from lab_commons.compute.probe import OS_NAMES
@@ -36,9 +37,11 @@ class Kind(StrEnum):
 
 
 #: Every fixed resource name and its kind. Tool seats are not listed: they are the machine's ``[capabilities]``.
+#: The box's device names (:data:`~lab_commons.box.devices.NAMES`: counted devices, the GPU memory share, the
+#: precisions and ``exclusive``) are OCCUPANCY: held while the run lives and returned at its end, like ``mem_gb``.
 KINDS: Final[Mapping[str, Kind]] = MappingProxyType(
     {
-        **dict.fromkeys(('cpu', 'mem_gb', *OS_NAMES.values()), Kind.OCCUPANCY),
+        **dict.fromkeys(('cpu', 'mem_gb', *OS_NAMES.values(), *sorted(DEVICE_NAMES)), Kind.OCCUPANCY),
         **dict.fromkeys(('tokens', 'core_h', 'forge_requests', 'submits', 'wall_h', 'money'), Kind.CONSUMABLE),
         **dict.fromkeys(('disk_gb', 'files', 'venvs', 'worktrees'), Kind.PERSISTENT),
     }
