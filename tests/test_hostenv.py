@@ -15,7 +15,7 @@ import pytest
 import lab_commons.home as home_module
 from lab_commons import hostenv
 from lab_commons.home import git_credential_stores, home
-from lab_commons.hostenv import HOME_ENV, XDG_CONFIG_ENV, Host
+from lab_commons.hostenv import HEAVY_APPROVED_ENV, HOME_ENV, XDG_CONFIG_ENV, Host
 from lab_commons.hpc.retired import RETIRED
 
 
@@ -23,11 +23,13 @@ def test_the_context_types_the_host_facts_read_by_name() -> None:
     env = {HOME_ENV: '/m', XDG_CONFIG_ENV: '/x', 'UNRELATED': '1'}
     assert hostenv.context(env) == Host(machine_home='/m', xdg_config_home='/x')
     assert hostenv.context({}) == Host()
+    assert hostenv.context({HEAVY_APPROVED_ENV: 'the user said go'}).heavy_approved == 'the user said go'
 
 
 def test_the_context_reads_this_process_when_given_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(HOME_ENV, '/relocated')
     monkeypatch.delenv(XDG_CONFIG_ENV, raising=False)
+    monkeypatch.delenv(HEAVY_APPROVED_ENV, raising=False)
     for name in ('LOCALAPPDATA', 'USERPROFILE', 'HOME'):
         monkeypatch.setenv(name, f'/{name.lower()}')
     assert hostenv.context() == Host(

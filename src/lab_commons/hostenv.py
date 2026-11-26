@@ -22,12 +22,15 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ['HOME_ENV', 'XDG_CONFIG_ENV', 'Host', 'context']
+__all__ = ['HEAVY_APPROVED_ENV', 'HOME_ENV', 'XDG_CONFIG_ENV', 'Host', 'context']
 
 #: Relocates the machine home (``~/.motronics``): a test's own, or a copy the operator points a run at.
 HOME_ENV: Final = 'MOTRONICS_HOME'
 #: The XDG base directory for user configuration, where git's ``store`` helper keeps its second file.
 XDG_CONFIG_ENV: Final = 'XDG_CONFIG_HOME'
+#: The user's own words approving ONE heavy run on a workstation (:mod:`lab_commons.box.heavy`): a consent, typed by
+#: the user and passed by whoever starts the run, never a setting a file holds.
+HEAVY_APPROVED_ENV: Final = 'LAB_COMMONS_HEAVY_APPROVED'
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,7 @@ class Host:
     local_appdata: str = ''
     user_profile: str = ''
     user_home: str = ''
+    heavy_approved: str = ''
 
 
 def context(env: Mapping[str, str] | None = None) -> Host:
@@ -50,4 +54,5 @@ def context(env: Mapping[str, str] | None = None) -> Host:
         local_appdata=env.get('LOCALAPPDATA', ''),
         user_profile=env.get('USERPROFILE', ''),
         user_home=env.get('HOME', ''),
+        heavy_approved=env.get(HEAVY_APPROVED_ENV, ''),
     )
