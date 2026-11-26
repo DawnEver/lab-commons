@@ -315,7 +315,7 @@ judge_app = 5619495
 # clone, worktree, exported tree, bundle or patch, whatever a row says. Formats (R3): TOML declarations, JSONL
 # machine records, CSV tables, NPZ arrays, Markdown reports, PNG figures; vendor-native only at an adapter boundary.
 [tool.dev_lab.placement.layout]
-'.' = ['.md', '.toml', '.lock', '.gitattributes', '.gitignore', '.rgignore', 'license', 'makefile']
+'.' = ['.md', '.toml', '.lock', '.gitattributes', '.gitignore', 'license', 'makefile']
 '.claude' = ['.json']
 '.claude/hooks' = ['.js', '.json']
 '.claude/memory' = ['.md']
