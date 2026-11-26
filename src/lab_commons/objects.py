@@ -42,6 +42,7 @@ from lab_commons import home as _home
 from lab_commons import launch as _door
 from lab_commons import storage as _storage
 from lab_commons.compute.store import ArrivalMismatch, Ref
+from lab_commons.temp import TEMP_PREFIX
 
 __all__ = [
     'MANIFEST',
@@ -239,7 +240,7 @@ class RcloneObjects:
 
     def verify(self, ref: Ref) -> None:
         """Re-hash the stored bytes of *ref*; other bytes raise :class:`ArrivalMismatch`."""
-        with tempfile.TemporaryDirectory(prefix='lab-commons-objects-') as scratch:
+        with tempfile.TemporaryDirectory(prefix=f'{TEMP_PREFIX}objects-') as scratch:
             self._arrived(ref.ref, ref.sha256, Path(scratch) / 'object')
 
     def get(self, ref: Ref, dest: Path) -> Path:
