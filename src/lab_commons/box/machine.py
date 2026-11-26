@@ -29,6 +29,7 @@ __all__ = [
     'reserve_table',
     'seat_size',
     'watched',
+    'withheld',
 ]
 
 #: Cores kept free above what the box's own user is using now (measured, :mod:`lab_commons.box.supply`).
@@ -47,7 +48,7 @@ RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
 _WHERE: Final = 'the machine file'
 
 #: The tools whose seats are VENDOR seats -- a licence or a measured concurrency, never a guess: an undeclared
-#: one is REFUSED (:class:`UndeclaredSeat`, user ruling 2026-11-18), never lent 1. Every
+#: one is WITHHELD (:func:`withheld`, user ruling 2026-11-18), never lent 1. Every
 #: :data:`~lab_commons.compute.toolchecks.CHECKS` row is here or in :data:`NON_VENDOR_CHECKS`.
 VENDOR_TOOLS: Final = frozenset(
     {'aedt', 'femm', 'fluent', 'jmag', 'lsdyna', 'mapdl', 'matlab', 'maxwell', 'ngspice', 'plecs', 'simba'}
@@ -58,7 +59,10 @@ NON_VENDOR_CHECKS: Final = frozenset({'node'})
 
 
 class UndeclaredSeat(LookupError):
-    """A vendor tool's seats were asked for and this machine declares no count: refused, never lent 1."""
+    """A vendor tool's seats were asked for and this machine declares no count: withheld, never lent 1.
+
+    Its text is the one reason :func:`withheld` gives; nothing in the seat path raises it.
+    """
 
     def __init__(self, tool: str) -> None:
         """Name *tool*, the machine file it is missing from, and the door that declares it."""
@@ -73,20 +77,26 @@ class UndeclaredSeat(LookupError):
         )
 
 
+def withheld(name: str, *, declared: bool) -> str | None:
+    """THE ONE RULE for an undeclared vendor seat: why tool *name* lends nothing, or ``None`` when it may lend.
+
+    A :data:`VENDOR_TOOLS` tool whose count is not *declared* is WITHHELD -- zero supply, the reason the
+    :class:`UndeclaredSeat` text naming the machine file and the door -- and it is THAT tool alone: every other
+    tool still sizes and supplies, so one undeclared row never aborts sizing, supply or admission. Every seat
+    reader (:func:`provided`, :func:`seat_size`, :func:`lab_commons.box.providers.seat_sizes`, the ledger's
+    refusal) asks this, and nothing else decides it.
+    """
+    return str(UndeclaredSeat(name)) if name in VENDOR_TOOLS and not declared else None
+
+
 def seat_size(seats: Mapping[str, int], name: str) -> int:
-    """The size of seat *name* in *seats*: its declared count; a vendor tool undeclared is REFUSED.
+    """The size of seat *name* in *seats*: its declared count; a vendor tool undeclared is 0 (:func:`withheld`).
 
     A name that is no vendor tool -- an exclusion seat such as an environment or an in-flight run -- is one seat.
-
-    Raises:
-        UndeclaredSeat: *name* is a :data:`VENDOR_TOOLS` tool *seats* does not size.
-
     """
     if name in seats:
         return seats[name]
-    if name in VENDOR_TOOLS:
-        raise UndeclaredSeat(name)
-    return 1
+    return 0 if withheld(name, declared=False) else 1
 
 
 @dataclass(frozen=True)
@@ -148,7 +158,7 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     A retired name (``capabilities.<name>`` in :mod:`lab_commons.hpc._retired_compute`) is never read as a resource:
     no alias, the refusal names what replaced it.
 
-    ``seats`` is the DECLARED count -- required of a :data:`VENDOR_TOOLS` row (:class:`UndeclaredSeat`), 1 for a
+    ``seats`` is the DECLARED count -- a :data:`VENDOR_TOOLS` row without one is kept but :func:`withheld`, 1 for a
     marker such as ``workstation``; ``supply``, when given, is the argv of the probe that MEASURES it
     (:func:`lab_commons.box.providers.seat_sizes`); ``in_use = { process = [images] }``, when given, names the process
     images whose running count is the seats in use NOW (:func:`watched`, :func:`lab_commons.box.supply.observe`).
@@ -158,8 +168,6 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         if (remedy := COMPUTE.get(f'capabilities.{name}')) is not None:
             msg = f'{_WHERE}: [capabilities.{name}] is retired: {remedy} -- delete the table'
             raise ValueError(msg)
-        if isinstance(facts, dict) and name in VENDOR_TOOLS and 'seats' not in facts:
-            raise UndeclaredSeat(name)
         seats = facts.get('seats', 1) if isinstance(facts, dict) else None
         if not RESOURCE_NAME.match(name) or not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
             msg = f'{_WHERE}: [capabilities.{name}] must be a table named {RESOURCE_NAME.pattern}, seats a positive int'
