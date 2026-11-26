@@ -119,7 +119,7 @@ def test_a_claims_row_written_before_kinds_existed_reads_as_box_occupancy() -> N
             'INSERT INTO claims (pid, cpu, mem_bytes, seats, deadline, started, what, key)'
             " VALUES (1, 2, 0, '{}', 1, 0, 'old', 'k');"
         )
-    with pytest.raises(LedgerVersionRefused, match='python -m lab_commons.box migrate'):
+    with pytest.raises(LedgerVersionRefused, match=r'python -m lab_commons\.box migrate'):
         connect()
     migrate()
     with closing(connect()) as con:
