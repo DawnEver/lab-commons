@@ -1,10 +1,12 @@
-"""One task's outcome: a :class:`Cell` -- status, values, reason, evidence, cost.
+"""One task's outcome: a :class:`Cell` -- status, values, reason, evidence, cost, artifacts.
 
 The invariants are enforced at construction, so a cell that exists is a cell that is true:
 
 - only ``OK`` and ``PARTIAL`` carry values -- a killed or rejected run has nothing to report;
 - every status except ``OK`` and ``PENDING`` carries a :class:`Reason`;
-- NaN is never a status: a value is a real number, never a failure marker.
+- NaN is never a status: a value is a real number, never a failure marker;
+- an artifact is a named, non-empty reference (a path or a store ref) to what the task produced; any status
+  may carry them, since a failed run still leaves its logs.
 """
 
 from __future__ import annotations
@@ -74,6 +76,16 @@ def _number(name: str, value: object) -> float | int:
     return value
 
 
+def _reference(name: str, value: object) -> str:
+    if not isinstance(value, str):
+        msg = f'artifact {name!r}={value!r} is not a reference string'
+        raise TypeError(msg)
+    if not value:
+        msg = f'artifact {name!r} has an empty reference'
+        raise ValueError(msg)
+    return value
+
+
 class Cell:
     """One task's outcome. See the module docstring for the invariants it enforces.
 
@@ -81,7 +93,7 @@ class Cell:
     every part, and the hash agrees with it.
     """
 
-    __slots__ = ('_cost', '_evidence', '_reason', '_status', '_values')
+    __slots__ = ('_artifacts', '_cost', '_evidence', '_reason', '_status', '_values')
 
     def __init__(
         self,
@@ -90,6 +102,8 @@ class Cell:
         reason: Reason | None = None,
         evidence: Evidence = Evidence.OBSERVED,
         cost: Cost | None = None,
+        *,
+        artifacts: Mapping[str, str] | None = None,
     ) -> None:
         """Enforce the invariants and freeze the values."""
         if not isinstance(status, Status):
@@ -107,6 +121,9 @@ class Cell:
         self._reason = reason
         self._evidence = Evidence(evidence)
         self._cost = cost
+        self._artifacts: Mapping[str, str] = MappingProxyType(
+            {str(k): _reference(str(k), v) for k, v in dict(artifacts or {}).items()}
+        )
 
     @property
     def status(self) -> Status:
@@ -133,8 +150,20 @@ class Cell:
         """What the task consumed, or ``None``."""
         return self._cost
 
+    @property
+    def artifacts(self) -> Mapping[str, str]:
+        """What the task produced, name -> reference (a path or a store ref), read-only; empty if none."""
+        return self._artifacts
+
     def _parts(self) -> tuple[object, ...]:
-        return (self._status, frozenset(self._values.items()), self._reason, self._evidence, self._cost)
+        return (
+            self._status,
+            frozenset(self._values.items()),
+            self._reason,
+            self._evidence,
+            self._cost,
+            frozenset(self._artifacts.items()),
+        )
 
     def __eq__(self, other: object) -> bool:
         """Equal on every part; values compare as plain mappings."""
@@ -150,7 +179,7 @@ class Cell:
         """Every part, by name."""
         return (
             f'Cell({self._status!r}, values={dict(self._values)!r}, reason={self._reason!r}, '
-            f'evidence={self._evidence!r}, cost={self._cost!r})'
+            f'evidence={self._evidence!r}, cost={self._cost!r}, artifacts={dict(self._artifacts)!r})'
         )
 
     def to_plain(self) -> dict[str, Any]:
@@ -162,6 +191,8 @@ class Cell:
             plain['reason'] = {'kind': self.reason.kind, 'text': self.reason.text}
         if self.cost is not None:
             plain['cost'] = {k: v for k, v in asdict(self.cost).items() if v is not None}
+        if self.artifacts:
+            plain['artifacts'] = dict(self.artifacts)
         return plain
 
     @classmethod
@@ -175,4 +206,5 @@ class Cell:
             reason=None if reason is None else Reason(reason['kind'], reason.get('text', '')),
             evidence=Evidence.parse(plain.get('evidence', Evidence.OBSERVED.token)),
             cost=None if cost is None else Cost(**cost),
+            artifacts=plain.get('artifacts', {}),
         )
