@@ -259,8 +259,20 @@ def learn_round(repo: str, before: Mapping[str, Any], after: Mapping[str, Any]) 
     return _write(repo, {**table, **merged})
 
 
-def learn_peaks(repo: str, peaks_mb: Mapping[str, float]) -> Path:
-    """Fold per-FILE peaks a box run measured into *repo*'s table; a newer peak replaces an older one."""
+def learn_peaks(repo: str, peaks_mb: Mapping[str, float], ended: str) -> Path:
+    """Fold per-FILE peaks a box run measured into *repo*'s table; a newer peak replaces an older one.
+
+    *ended* is how the run that measured them ended (:attr:`lab_commons.box.ProcessEnd.reason`'s vocabulary) and
+    must be in :data:`PRICED_ENDINGS`: a worker that died mid-file (wall, crash -- while pytest exits 1) measured a
+    LOWER bound, and folding it in as completed under-prices the next run (lab-commons #167). Such an ending is
+    refused, never silently dropped: the caller decides not to learn it.
+    """
+    if ended not in PRICED_ENDINGS:
+        msg = (
+            f'learn_peaks refused ended={ended!r}: the peaks of a run that did not end by itself are a lower bound, '
+            f'not a price. Learn only an ending in PRICED_ENDINGS {sorted(PRICED_ENDINGS)}; skip the call otherwise.'
+        )
+        raise ValueError(msg)
     table = learned(repo)
     return _write(repo, {**table, 'peaks_mb': {**table.get('peaks_mb', {}), **peaks_mb}})
 
