@@ -11,9 +11,9 @@ near-identical, silently-diverging copies** across those repos (see
 optimizer, or vendor vocabulary belongs here. Generic ownership does not imply
 an eager package facade or a mandatory installation dependency.
 
-**Tier 2 ? shared-domain vocabulary.** `lab_commons.em` describes the family's EM
-quantities; it is imported explicitly and installed through the `units` extra.
-The plotting vocabulary is NumPy data, with separate renderer adapters.
+**Tier 2 ? shared-domain vocabulary.** The plotting vocabulary is NumPy data, with
+separate renderer adapters. A product's domain terms are its own; a value carries its unit
+and crosses once at `lab_commons.quantity`.
 
 The package root imports nothing. Use the defining module, such as
 `from lab_commons.log import get_logger`, rather than root symbol re-exports.
@@ -51,15 +51,15 @@ The base installation is the standard library alone. Select capabilities explici
   (`ParameterException`, `QuantityException`, `deprecated`, `not_implemented`).
   Project-specific exceptions (a vendor-solver name, an error-code catalog) stay in
   each consumer's own tree.
-- `lab_commons.units` (**tier 1**) — the generic pint <-> pydantic `Annotated` machinery:
-  `ureg` / `Q_`, `PydanticQuantity`, `get_quantity_type()`, `BaseModel_with_q`. No EM
-  vocabulary; importing this module never imports `lab_commons.em`.
-- `lab_commons.em` (**tier 2, opt-in**) — the family-shared EM/physical quantity
-  vocabulary built on `lab_commons.units`: every `*Type = NewType(...)` (`LengthType`,
-  `TorqueType`, `AngleSpeedType`, ...) and every `Q_*` constant (`Q_0mm`, `Q_360deg`,
-  `Q_0Nm`, ...), plus `Cartesian2DPoint`/`Polar2DPoint`, `Q_list2array`,
-  `array2list_2Dpoint`, `is_equal_2DPoint`, and `CONSTANTS` (`vacuum_permeability`).
-  Import explicitly: `from lab_commons.em import TorqueType`.
+- `lab_commons.quantity` (**tier 1**, the `units` extra) — the family unit door: a value carries
+  its unit (`"0.5 mm"`) and crosses here once -- `parse` (config dimensions), `parse_si` (any
+  dimension to SI), `to_si` / `from_si` (the IR codec boundary: affine, gauge, dB), `display`,
+  `registry()` (the one pint application registry). Pint is imported on first use only.
+- `lab_commons.overrides` — `--set SECTION.KEY=VALUE`, one grammar for every CLI.
+- `lab_commons.retired` — retired names as data rows, refused by name with their replacement.
+- `lab_commons.table` — csv and xlsx export from typed columns (standard library only).
+- `lab_commons.ccompile` — gated compilation of user C (trust, confined includes, scrubbed
+  environment, content-keyed cache) for gcc, clang and MSVC.
 - `lab_commons.viz` (**tier 2, opt-in**) — the family's ONE plotting vocabulary, and the two
   adapters that draw it. The vocabulary imports **no plotting library at all**: a figure is
   declared as data (`Series`, `Bars`, `Patch`, `Circle`, `Segment`, `Label`, `Contours`, `Vectors`,

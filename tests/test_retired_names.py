@@ -7,6 +7,8 @@ reimplements the refusal. ``lab_commons.hpc.retired`` is built on the same regis
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from lab_commons.hpc import retired as hpc_retired
@@ -51,3 +53,13 @@ def test_the_kits_own_registry_is_built_on_the_mechanism() -> None:
     spelling = next(iter(hpc_retired.RETIRED))
     assert spelling in hpc_retired.retired_in(f'x {spelling} y')
     assert hpc_retired.refusal('hpc', spelling) == f'`hpc {spelling}` is retired: use {hpc_retired.RETIRED[spelling]}'
+
+
+@pytest.mark.parametrize('module', ['units', 'em'])
+def test_the_pint_pydantic_modules_are_retired_to_the_unit_door(module: str) -> None:
+    """v1 rulings D125/D126: one unit door; the spelling is registered and the module is gone, with no alias."""
+    spelling = f'lab_commons.{module}'
+    assert spelling in hpc_retired.RETIRED
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(spelling)
+    assert 'lab_commons.quantity' in hpc_retired.RETIRED[spelling]

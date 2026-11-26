@@ -44,7 +44,7 @@ packages = ["src/lab_commons"]
 
 [project.optional-dependencies]
 # Each defining module has an explicit installation capability, not a root facade.
-units = ["numpy", "pint>=0.25.2", "pydantic>=2"]
+units = ["numpy", "pint>=0.25.2"]
 paths = ["platformdirs"]
 io = ["tomlkit"]
 structured = ["structlog", "colorama; sys_platform == 'win32'"]

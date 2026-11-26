@@ -39,6 +39,14 @@ RETIRED: Final[dict[str, str]] = {
     '_forge_journal import durable_write': 'from lab_commons.compute.durable import durable_write',
     '_forge_journal.durable_write': 'lab_commons.compute.durable.durable_write',
     'lab_commons.multiprocess': 'nothing: deleted 2026-10-22, it had no importer',
+    # v1 rulings D125/D126 (user 2026-11-26): one unit door; a domain vocabulary is the product's own.
+    'lab_commons.units': (
+        'lab_commons.quantity (parse_si / to_si / from_si / display / registry): a value carries its unit and '
+        'crosses once there; pint<->pydantic types are retired with pydantic'
+    ),
+    'lab_commons.em': (
+        "nothing: a domain vocabulary is the product's own; values carry units and cross at lab_commons.quantity"
+    ),
     # ENV-IS-READ-ONCE (family policy 2026-11-25): the machine-home override is read in the host entry alone.
     'home.HOME_ENV': 'lab_commons.hostenv.HOME_ENV (the host entry reads it; home() takes the record)',
     'lab_commons.home import HOME_ENV': 'from lab_commons.hostenv import HOME_ENV',
