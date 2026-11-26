@@ -8,6 +8,7 @@ reimplements the refusal. ``lab_commons.hpc.retired`` is built on the same regis
 from __future__ import annotations
 
 import pytest
+from dev_lab.dev.retirementclass import refusals
 
 from lab_commons.hpc import retired as hpc_retired
 from lab_commons.retired import Registry, Retired, RetiredName
@@ -51,3 +52,16 @@ def test_the_kits_own_registry_is_built_on_the_mechanism() -> None:
     spelling = next(iter(hpc_retired.RETIRED))
     assert spelling in hpc_retired.retired_in(f'x {spelling} y')
     assert hpc_retired.refusal('hpc', spelling) == f'`hpc {spelling}` is retired: use {hpc_retired.RETIRED[spelling]}'
+
+
+def test_every_retirement_of_the_kit_is_classified() -> None:
+    assert refusals(hpc_retired.CLASSIFIED) == []
+
+
+def test_a_retirement_is_classified_by_whether_it_names_a_successor() -> None:
+    rows = hpc_retired.classified('user ruling 2026-10-14', {'a': 'b', 'c': 'nothing: gone'}, lost='capability-dropped')
+    assert rows == {
+        'a': ('b', 'user ruling 2026-10-14', 'renamed'),
+        'c': ('nothing: gone', 'user ruling 2026-10-14', 'capability-dropped'),
+    }
+    assert refusals(hpc_retired.classified('it was old', {'c': 'nothing'}, lost='capability-dropped')) != []
