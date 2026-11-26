@@ -589,3 +589,10 @@ def test_a_liveness_probe_runs_outside_the_write_lock(box: Path, tmp_path: Path)
         pass
     assert not locked.exists(), 'the probe ran while the reaper held the write lock'
     assert 'study' in [r.what for r in holdings()], 'PLANTED CONTROL: an alive probe keeps the claim'
+
+
+def test_a_child_process_is_not_decided_by_the_hosts_free_space() -> None:
+    """A child never sees the conftest monkeypatch: the floor it reads is the test machine file's, not 50 GiB."""
+    probe = 'from lab_commons.storage import free_floor; print(free_floor().bytes)'
+    done = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, encoding='utf-8', check=True)
+    assert int(done.stdout) == 1
