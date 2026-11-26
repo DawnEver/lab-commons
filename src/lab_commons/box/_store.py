@@ -163,9 +163,16 @@ class LedgerVersionRefused(Refused):
 
 
 def _write_current(con: sqlite3.Connection) -> None:
-    """Write the current schema into *con* (inside its transaction) and stamp :data:`SCHEMA_VERSION`."""
+    """Write the current schema -- :data:`_SCHEMA` plus every :data:`_ADDED` column -- into *con* (inside its
+    transaction) and stamp :data:`SCHEMA_VERSION`. Adding only what is missing makes it :func:`migrate`'s step too.
+    """
     for statement in filter(str.strip, _SCHEMA.split(';')):
         con.execute(statement)
+    for table, added in _ADDED.items():
+        columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
+        for name, spelled in added:
+            if name not in columns:
+                con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
     con.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
 
 
@@ -184,14 +191,7 @@ def migrate(path: Path | None = None) -> int:
             found = con.execute('PRAGMA user_version').fetchone()[0]
             if found > SCHEMA_VERSION:
                 raise LedgerVersionRefused(path, found)
-            for statement in filter(str.strip, _SCHEMA.split(';')):
-                con.execute(statement)
-            for table, added in _ADDED.items():
-                columns = {row[1] for row in con.execute(f'PRAGMA table_info({table})')}
-                for name, spelled in added:
-                    if name not in columns:
-                        con.execute(f'ALTER TABLE {table} ADD COLUMN {spelled}')
-            con.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+            _write_current(con)
     finally:
         con.close()
     return found

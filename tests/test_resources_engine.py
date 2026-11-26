@@ -16,7 +16,7 @@ from contextlib import closing, contextmanager
 import pytest
 
 from lab_commons.box import GRACE_S, holdings
-from lab_commons.box._store import box_path, connect
+from lab_commons.box._store import LedgerVersionRefused, box_path, connect, migrate
 from lab_commons.compute.model import Resources, Supply
 from lab_commons.compute.probe import OS_NAMES
 from lab_commons.config import config_path
@@ -108,7 +108,7 @@ def test_engine_rows_of_another_scope_are_not_the_boxs() -> None:
 
 
 def test_a_claims_row_written_before_kinds_existed_reads_as_box_occupancy() -> None:
-    """OLD-SHAPE-READER: a pre-existing ``claims`` table gains scope/kind/window; its rows are box OCCUPANCY."""
+    """A pre-kinds ``claims`` table is refused until migrated once; migrated, its rows are box OCCUPANCY."""
     path = box_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as old:
@@ -119,6 +119,9 @@ def test_a_claims_row_written_before_kinds_existed_reads_as_box_occupancy() -> N
             'INSERT INTO claims (pid, cpu, mem_bytes, seats, deadline, started, what, key)'
             " VALUES (1, 2, 0, '{}', 1, 0, 'old', 'k');"
         )
+    with pytest.raises(LedgerVersionRefused, match='python -m lab_commons.box migrate'):
+        connect()
+    migrate()
     with closing(connect()) as con:
         assert con.execute('SELECT scope, kind, window FROM claims').fetchall() == [('box', 'occupancy', None)]
 
