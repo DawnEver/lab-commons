@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 
 #: What hpc may import from its own package: itself and the stdlib-only tier-1 modules -- never an opt-in tier.
+#: ``quantity`` (the family unit door) and ``retired`` (the retired-name registry) joined 2026-11-26: both are
+#: stdlib-only family layers hpc reads its config durations and retired names through.
 TIER_ONE = (
     'lab_commons.box.machine',
     'lab_commons.compute',
@@ -24,7 +26,9 @@ TIER_ONE = (
     'lab_commons.launch',
     'lab_commons.log',
     'lab_commons.outcomes',
+    'lab_commons.quantity',
     'lab_commons.resources',
+    'lab_commons.retired',
     'lab_commons.width',
 )
 
