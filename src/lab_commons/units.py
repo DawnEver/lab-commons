@@ -30,7 +30,7 @@ from lab_commons.exceptions import QuantityException
 
 # Whether a CLI string carries a unit is a SYNTACTIC question, never a dimensional one: pint reads
 # both `12.5` and `12.5 rad` as dimensionless, so asking `is_dimensionless()` would silently rewrite
-# an angle into millimetres. Strip the leading number -- exponent notation included, because `1e-3`
+# an angle into millimeters. Strip the leading number -- exponent notation included, because `1e-3`
 # has an `e` in it and is not a unit -- and ask whether anything alphabetic is left.
 _LEADING_NUMBER = re.compile(r'^\s*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?\s*')
 _HAS_ALPHA = re.compile(r'[A-Za-z]')
@@ -78,7 +78,7 @@ def _build_pydantic_quantity(quantity_exception: type[Exception]) -> type:
             return core_schema.no_info_after_validator_function(
                 cls.validate,
                 handler(Q_),
-                serialization=core_schema.to_string_ser_schema(),
+                serialization={'type': 'to-string'},
             )
 
         @classmethod

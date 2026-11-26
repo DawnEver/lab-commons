@@ -2,7 +2,7 @@
 
 Two bands: ``physical`` nodes (joined by undirected nets, ranked outward from ``source`` nodes) above
 ``causal`` nodes (joined by directed links, ranked along the links; back edges become ``feedback_edges``,
-never removed links). Disconnected islands are shelf-packed. Coordinates are box CENTRES in the caller's
+never removed links). Disconnected islands are shelf-packed. Coordinates are box CENTERS in the caller's
 drawing unit; ports, port geometry and what a node means stay with the caller's adapter.
 """
 
@@ -54,7 +54,7 @@ class Net:
 
 @dataclass(frozen=True)
 class Placement:
-    """Box centres, column ranks, the canvas, and the links set aside as feedback."""
+    """Box centers, column ranks, the canvas, and the links set aside as feedback."""
 
     positions: dict[str, tuple[float, float]]
     ranks: dict[str, int]
@@ -94,7 +94,7 @@ def _validate(
 
 
 def _adjacency(by_key: Mapping[str, Node], nets: Sequence[Net], links: Sequence[_Link]) -> dict[str, set[str]]:
-    """Same-band neighbours through every non-reference net and every link."""
+    """Same-band neighbors through every non-reference net and every link."""
     adjacency = {k: set() for k in by_key}
     for net in nets:
         if net.reference:

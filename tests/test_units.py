@@ -135,7 +135,7 @@ def test_a_refusal_says_what_was_wrong_with_the_input() -> None:
 def test_a_misspelled_default_unit_is_refused_at_construction_not_on_a_users_run() -> None:
     """A parser built with a typo must fail where it is WRITTEN, not the first time a user types."""
     with pytest.raises(pint_UndefinedUnitError):
-        quantity_parser('metres_typo')
+        quantity_parser('meters_typo')
     with pytest.raises(ValueError, match='no default unit'):
         quantity_parser('   ')
 

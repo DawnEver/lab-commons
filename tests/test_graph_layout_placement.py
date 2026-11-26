@@ -179,7 +179,7 @@ def test_a_stub_sits_off_the_port_it_serves() -> None:
     assert stub_center((10, 10), (0, 1), (6, 4), stub=2) == (10, 14)
 
 
-def test_islands_beside_ports_keep_port_order_without_overlap_centred_on_the_ports() -> None:
+def test_islands_beside_ports_keep_port_order_without_overlap_centered_on_the_ports() -> None:
     placed = stack_beside(
         [('p0', (100, 2), (-1, 0), (8, 6)), ('p2', (100, 6), (-1, 0), (8, 6)), ('p1', (100, 4), (-1, 0), (8, 6))],
         clearance=10,

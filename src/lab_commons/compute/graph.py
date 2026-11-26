@@ -45,7 +45,7 @@ class Graph:
             raise GraphRefused(msg)
         return Graph({**self.units, name: unit})
 
-    def dependants(self, name: str) -> frozenset[str]:
+    def dependents(self, name: str) -> frozenset[str]:
         """Every unit that reads *name*'s outputs, directly or through others."""
         found: set[str] = set()
         frontier = {name}

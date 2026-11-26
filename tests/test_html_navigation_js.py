@@ -1,4 +1,4 @@
-"""Behaviour of the packaged navigation script's pure core, run on the family's declared JS engine.
+"""Behavior of the packaged navigation script's pure core, run on the family's declared JS engine.
 
 WAITING ON dev-lab's ``dev_lab.dev.jsrun`` (branch pr/js-tests-run-on-a-declared-engine): until it is in
 this lock these are strict xfails; once it lands the condition turns false and they must pass. Never a

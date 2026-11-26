@@ -23,7 +23,7 @@ A tool is PRESENT on a host only when all four agree:
 
 Each step leaves :class:`Evidence` (source, value, time), and the host card shows it
 (:mod:`dev_lab.dev.forgehosts`): the card is the probe's reading, never a declaration. Seat counts
-are the one thing a person declares (:mod:`lab_commons.box.machine`), because no probe can read a licence.
+are the one thing a person declares (:mod:`lab_commons.box.machine`), because no probe can read a license.
 
 A reading is CACHED for :data:`TTL` in
 ``tool-presence.json`` beside the machine file, with the requirement it was taken against. :func:`refresh`

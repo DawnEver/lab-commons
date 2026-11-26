@@ -170,7 +170,7 @@ def _gather(record: dict[str, Any], machine: Machine, reach: Reach, output: Path
     if output is not None:
         output.write_text(json.dumps(got.results), encoding='utf-8')
         _out(f'written {output}')
-    else:  # a success line with no artefact reads as a result kept (dev-lab #483)
+    else:  # a success line with no artifact reads as a result kept (dev-lab #483)
         _out('nothing written: the merged results were read and dropped; pass -o <path> to keep them')
     return 1 if got.over else 0
 

@@ -48,7 +48,7 @@ job is unresolved is not submitted twice. Each :class:`~lab_commons.box.demand.H
 ``key`` and ``probe``, so ANY process can rebuild the claim (``holding.claim``) and :func:`release` it.
 
 A TREE ALREADY INSIDE A CLAIM DOES NOT CLAIM AGAIN (:data:`INSIDE_ENV`, set on every boxed child): its
-cores and memory are its enclosing claim's. Seats are still booked -- a licence is not a share of a tree --
+cores and memory are its enclosing claim's. Seats are still booked -- a license is not a share of a tree --
 and a claim for a process OUTSIDE the tree (``outside=True``, a vendor) always books.
 
 The file is SQLite in WAL mode, every decision inside ``BEGIN IMMEDIATE``: one writer at a time
@@ -125,7 +125,7 @@ CPU_ENV: Final = 'LAB_COMMONS_BOX_CPU'
 #: Seconds a liveness probe of an external claim may take before it counts as "cannot say" (kept).
 PROBE_S: Final = 10.0
 
-#: Seconds past its deadline a claim is still honoured: the enforcer's kill (phase 2) needs a
+#: Seconds past its deadline a claim is still honored: the enforcer's kill (phase 2) needs a
 #: moment to land before the room is lent again.
 GRACE_S: Final = 60.0
 

@@ -17,7 +17,7 @@ tool, and it never pulls ``lab_commons.em`` in. A lab doing chemistry could use 
 NOT ``psutil``, and the reason is a property rather than a preference: ``psutil`` is an optional
 extra in every consumer here, so a ``psutil``-only reader answers on the boxes that happen to have
 it and answers NOTHING on the ones that do not -- and a caller that reads "no reading" as "no
-constraint" has silently dropped the ceiling it was written to honour, on exactly the machines
+constraint" has silently dropped the ceiling it was written to honor, on exactly the machines
 that could not be checked. ``GlobalMemoryStatusEx`` is in ``kernel32`` and ``/proc`` is in the
 kernel, so on the platforms this family runs there is ALWAYS a reading. Adding ``psutil`` as a
 hard dependency of tier 1 would also make "install nothing heavier than this" false for a consumer
@@ -65,7 +65,7 @@ _KILL_SIGNAL = signal.SIGTERM if os.name == 'nt' else signal.SIGKILL
 
 _STILL_ACTIVE = 259
 
-#: How long :func:`kill_process_tree` waits for a signalled pid to be GONE before reporting it as a
+#: How long :func:`kill_process_tree` waits for a signaled pid to be GONE before reporting it as a
 #: survivor. A kill is ASYNCHRONOUS on POSIX: MEASURED 2026-10-19 on an Ada compute node, a SIGKILLed
 #: grandchild was still ``R (running)``, reparented to pid 1, right after the call returned, and
 #: gone by 0.5 s. Ten seconds is twenty times that and still bounded.
@@ -466,11 +466,11 @@ def kill_process_tree(pid: int, *, ceiling_s: float = KILL_EXIT_CEILING_S) -> fr
     how 39 of them accumulated over two days.
 
     A SIGNAL SENT IS NOT A PROCESS ENDED. On POSIX ``SIGKILL`` is delivered asynchronously (see
-    :data:`KILL_EXIT_CEILING_S`), and ``TerminateProcess`` is asynchronous too, so after signalling
-    this WAITS, bounded by *ceiling_s*, until :func:`pid_alive` says every signalled pid is gone.
+    :data:`KILL_EXIT_CEILING_S`), and ``TerminateProcess`` is asynchronous too, so after signaling
+    this WAITS, bounded by *ceiling_s*, until :func:`pid_alive` says every signaled pid is gone.
 
     Returns:
-        Only the pids :func:`kill_pid` signalled AND that were observed gone within *ceiling_s*. A
+        Only the pids :func:`kill_pid` signaled AND that were observed gone within *ceiling_s*. A
         survivor past the ceiling is OMITTED -- never raised, because every caller is a best-effort
         cleanup that must not raise into a verdict path -- so a caller detects one as a pid of
         :func:`process_tree` missing from this set. The set is an observation of a cleanup that
@@ -479,8 +479,8 @@ def kill_process_tree(pid: int, *, ceiling_s: float = KILL_EXIT_CEILING_S) -> fr
     """
     tree = process_tree(pid)
     ordered = sorted(tree - {pid}) + ([pid] if pid in tree else [])
-    signalled = frozenset(member for member in ordered if kill_pid(member))
-    return signalled - _survivors(signalled, ceiling_s)
+    signaled = frozenset(member for member in ordered if kill_pid(member))
+    return signaled - _survivors(signaled, ceiling_s)
 
 
 def _survivors(pids: frozenset[int], ceiling_s: float) -> frozenset[int]:

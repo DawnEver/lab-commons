@@ -27,7 +27,7 @@ convenience:
 
 Collapsing those two is what made a polar figure, a twin axis and a panel grid INEXPRESSIBLE here:
 there was one place to say which coordinate system a picture was in, and it was decided at
-construction. A verb that cannot be honoured is an error in the ADAPTER that cannot honour it, never
+construction. A verb that cannot be honored is an error in the ADAPTER that cannot honor it, never
 a silent omission here or there.
 
 A THIRD COORDINATE SYSTEM IS A SECOND PROTOCOL, NOT A THIRD PROJECTION. A 3D frame has verbs a plane
@@ -118,7 +118,7 @@ __all__ = [
 #: against names rather than a literal, and the refusal can say what a 2-D array is a grid OVER.
 _GRID_AXES: Final = ('rows', 'columns')
 
-#: The ten-colour categorical cycle both adapters start from, so a figure does not change colour
+#: The ten-color categorical cycle both adapters start from, so a figure does not change color
 #: when its backend changes. The values are the ones matplotlib's ``tab10`` and bokeh's
 #: ``Category10`` already agree on, which is the whole reason to freeze them here.
 _PALETTE: tuple[str, ...] = (
@@ -155,7 +155,7 @@ class Style:
         dpi: dots per inch for raster output.
         font_family: families in preference order — the first one the box actually has is used.
         font_size: the base type size every other size is derived from.
-        palette: the categorical colour cycle, index-stable so a series keeps its colour.
+        palette: the categorical color cycle, index-stable so a series keeps its color.
 
     """
 
@@ -166,23 +166,23 @@ class Style:
     palette: tuple[str, ...] = _PALETTE
 
     def color(self, index: int) -> str:
-        """The palette colour for series *index*, wrapping — deterministic, never a shared cursor."""
+        """The palette color for series *index*, wrapping — deterministic, never a shared cursor."""
         return self.palette[index % len(self.palette)]
 
 
 @dataclass(frozen=True)
 class Scale:
-    """What a colour MEANS: the colormap, its label, and the range it is read against.
+    """What a color MEANS: the colormap, its label, and the range it is read against.
 
     A SCALE IS DATA BECAUSE A FIGURE IS COMPARED AGAINST ANOTHER FIGURE. Two field maps drawn from
-    two runs are only comparable while the same value maps to the same colour, so the range is
+    two runs are only comparable while the same value maps to the same color, so the range is
     carried with the field rather than re-derived from whatever samples the second run happened to
     have. ``vmin``/``vmax`` left as ``None`` mean "derive from these values", which is the honest
     default for a single run and the wrong choice for a sweep.
 
     Attributes:
         cmap: a colormap name the adapter's library knows.
-        label: the colour bar's text — the quantity's name, and its unit when it has one.
+        label: the color bar's text — the quantity's name, and its unit when it has one.
         vmin: the value at the bottom of the scale, or ``None`` to derive it.
         vmax: the value at the top of the scale, or ``None`` to derive it.
 
@@ -196,13 +196,13 @@ class Scale:
 
 @dataclass(frozen=True)
 class Colorbar:
-    """A colour bar for a scale the FIGURE drew itself, rather than one a field drew for it.
+    """A color bar for a scale the FIGURE drew itself, rather than one a field drew for it.
 
     WHY THIS IS A PRIMITIVE AND NOT A FLAG ON A DRAWING VERB. A field map and a region map publish
-    their own colour bar as part of drawing, and that is right: the bar belongs to the map. But a
-    figure that colours its own glyphs — a region map assembled from per-element colours, a scatter
+    their own color bar as part of drawing, and that is right: the bar belongs to the map. But a
+    figure that colors its own glyphs — a region map assembled from per-element colors, a scatter
     whose palette was computed by hand — has no mappable to hang a bar on, and an axis with no scale
-    is a picture whose colours mean nothing. This is that bar: the figure says what its colours MEAN,
+    is a picture whose colors mean nothing. This is that bar: the figure says what its colors MEAN,
     in the same vocabulary it drew them with.
 
     ``vmin``/``vmax`` ARE REQUIRED HERE, and the reason is the one place this primitive differs from
@@ -210,14 +210,14 @@ class Colorbar:
     a bar over nothing has no samples, so an open range would be a bar of unknown extent that draws
     as if it had one. :meth:`Frame.draw_colorbar` refuses it instead.
 
-    ``ticks`` GIVEN IS WHAT MAKES THE BAR DISCRETE, with one colour band centred on each tick — the
+    ``ticks`` GIVEN IS WHAT MAKES THE BAR DISCRETE, with one color band centered on each tick — the
     spelling of a categorical legend, where the value between two bands does not exist (a layer
     index, a material, a phase). A bar with no ticks is continuous, and the library places its own.
     This is deliberately not a ``discrete: bool``: the ticks ARE the band edges, so a flag beside
     them could disagree with them.
 
     Attributes:
-        scale: what the colours mean — colormap, label and the range the bar spans.
+        scale: what the colors mean — colormap, label and the range the bar spans.
         ticks: the tick positions, or ``None`` for a continuous bar over ``scale``'s range.
         tick_labels: the text at each tick, or ``None`` to print the numbers; the two are read
             positionally, so a label list has one entry per tick.
@@ -229,13 +229,13 @@ class Colorbar:
     tick_labels: Sequence[str] | None = None
 
     def bands(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
-        """``(edges, centres)`` of a discrete bar — what ``ticks`` MEANS, read in ONE place.
+        """``(edges, centers)`` of a discrete bar — what ``ticks`` MEANS, read in ONE place.
 
         THIS IS ON THE PRIMITIVE BECAUSE IT IS PART OF THE DESCRIPTION, not a rendering choice. Two
         adapters each deciding where a band starts would be two pictures of one figure the moment
         either arithmetic drifted, which is the failure this whole tier exists to prevent; here both
         call the same method, and the rule is the one the family's own region maps already use — each
-        band is centred on its tick, the edges sit midway between neighbouring ticks, and the two
+        band is centered on its tick, the edges sit midway between neighboring ticks, and the two
         outer edges are half a step beyond the outermost ones (a lone tick gets a unit-wide band).
 
         Raises:
@@ -245,15 +245,15 @@ class Colorbar:
         if self.ticks is None:
             msg = 'a continuous Colorbar has no bands -- ticks is None, so no band edge exists to name'
             raise ValueError(msg)
-        centres = tuple(float(tick) for tick in self.ticks)
-        step = (centres[-1] - centres[0]) / (len(centres) - 1) if len(centres) > 1 else 1.0
-        middles = tuple((before + after) / 2.0 for before, after in pairwise(centres))
-        return (centres[0] - step / 2.0, *middles, centres[-1] + step / 2.0), centres
+        centers = tuple(float(tick) for tick in self.ticks)
+        step = (centers[-1] - centers[0]) / (len(centers) - 1) if len(centers) > 1 else 1.0
+        middles = tuple((before + after) / 2.0 for before, after in pairwise(centers))
+        return (centers[0] - step / 2.0, *middles, centers[-1] + step / 2.0), centers
 
 
 @dataclass(frozen=True)
 class Series:
-    """A labelled ``x``/``y`` trace: a chart line, a waveform, or a marker cloud.
+    """A labeled ``x``/``y`` trace: a chart line, a waveform, or a marker cloud.
 
     One type covers line and markers because a producer holds one pair of arrays; which of the two
     verbs it passes them to decides how they are drawn. A waveform is several of these sharing an
@@ -271,7 +271,7 @@ class Series:
         z: the third coordinate, the same length as *x*, for a trace drawn on a
             :class:`Frame3D` — ``None`` for a trace in the plane.
         label: the legend entry; a series with no label is not legended.
-        color: an explicit colour, or ``None`` to take the next palette colour.
+        color: an explicit color, or ``None`` to take the next palette color.
         style: the line style — ``'-'``, ``'--'``, ``':'``, ``'-.'``.
         width: the line width in points, or ``None`` for the library's own default.
         marker: the symbol :meth:`Frame.draw_markers` draws, e.g. ``'o'``, ``'s'``, ``'^'``.
@@ -304,11 +304,11 @@ class Bars:
     gap between bars either way.
 
     Attributes:
-        x: the position of each bar's centre.
+        x: the position of each bar's center.
         height: the bar's value at that position.
         width: the bar width, in the same units as *x*.
         label: the legend entry; a chart with no label is not legended.
-        color: an explicit colour, or ``None`` to take the next palette colour.
+        color: an explicit color, or ``None`` to take the next palette color.
         alpha: opacity, ``1.0`` for opaque.
 
     """
@@ -325,7 +325,7 @@ class Bars:
 class Patch:
     """A closed region given by its boundary — a slot's conductor, a magnet pocket, a cell.
 
-    ``value`` is how a region map is drawn: the region is coloured by a number rather than by a
+    ``value`` is how a region map is drawn: the region is colored by a number rather than by a
     name, through the :class:`Scale` its verb is given. ``color`` is the other half, for a figure
     where the region's identity is a category (a phase) rather than a magnitude.
 
@@ -333,9 +333,9 @@ class Patch:
         vertices: the boundary, shape ``(n, 2)``, closed implicitly (do not repeat the first point).
         holes: interior boundaries in the same coordinates, closed implicitly. Ring winding does
             not change which regions are empty; a separate patch may occupy a hole.
-        value: the scalar this region carries, or ``None`` when it is coloured by name.
-        color: the face colour, used when *value* is ``None``; ``None`` means unfilled.
-        edgecolor: the boundary colour, or ``None`` for no outline.
+        value: the scalar this region carries, or ``None`` when it is colored by name.
+        color: the face color, used when *value* is ``None``; ``None`` means unfilled.
+        edgecolor: the boundary color, or ``None`` for no outline.
         label: the legend entry; a patch with no label is not legended.
         alpha: opacity, ``1.0`` for opaque — a winding layout stacks conductors and reads through.
         hatch: ONE hatch character over the face, e.g. ``'/'``, or ``None`` for a flat fill. It is
@@ -385,11 +385,11 @@ class Circle:
     """A circle at a point — a coil side's symbol, a shaft, a node in a connection diagram.
 
     Attributes:
-        x: the centre's abscissa.
-        y: the centre's ordinate.
+        x: the center's abscissa.
+        y: the center's ordinate.
         radius: the radius, in the figure's own units.
-        color: the face colour, or ``None`` to leave it unfilled.
-        edgecolor: the boundary colour, or ``None`` for no outline.
+        color: the face color, or ``None`` to leave it unfilled.
+        edgecolor: the boundary color, or ``None`` for no outline.
         label: the legend entry; a circle with no label is not legended.
 
     """
@@ -412,7 +412,7 @@ class Segment:
         x1: the end's abscissa.
         y1: the end's ordinate.
         label: the legend entry; a segment with no label is not legended.
-        color: an explicit colour, or ``None`` to take the next palette colour.
+        color: an explicit color, or ``None`` to take the next palette color.
         width: the line width in points, or ``None`` for the library's own default.
         style: the line style — ``'-'``, ``'--'``, ``':'``, ``'-.'``.
         arrow: draw a head at the END point, which is what makes direction readable.
@@ -440,7 +440,7 @@ class Label:
         x: the abscissa the anchor is placed at.
         y: the ordinate the anchor is placed at.
         text: the text itself.
-        color: the text colour, or ``None`` for the library's own default.
+        color: the text color, or ``None`` for the library's own default.
         size: the type size in points, or ``None`` to inherit the style's.
         halign: the horizontal anchor — ``'left'``, ``'center'`` or ``'right'``.
         valign: the vertical anchor — ``'top'``, ``'center'`` or ``'bottom'``.
@@ -450,7 +450,7 @@ class Label:
     one unit symbol away from a quantity, and this vocabulary is data a producer reads without the
     plotting library's abbreviations in mind.
 
-    ``box`` EXISTS BECAUSE A LABEL IS OFTEN DRAWN ON TOP OF SOMETHING. A slot id over a coloured
+    ``box`` EXISTS BECAUSE A LABEL IS OFTEN DRAWN ON TOP OF SOMETHING. A slot id over a colored
     conductor, a value over a filled region map: the text and the picture are the same pixels, and
     the chip is what keeps the first readable. It defaults to OFF, because a label over white paper
     needs no chip and one silently added would be a box the description never asked for.
@@ -505,7 +505,7 @@ class Field:
 
     THE SURFACE IS THE DRAWING, and that is the whole of what this shape claims: the figure
     interpolates between the samples, so a reader takes a value anywhere the continuum covers. The
-    other drawing of the same data is a :class:`Samples` — marks whose colour is the value, where
+    other drawing of the same data is a :class:`Samples` — marks whose color is the value, where
     every mark is an observation and nothing is claimed between them — and the two were ONE shape
     here until the split, drawn as a surface by one adapter and as a cloud by the other, which left
     the producer unable to ask for either. A scalar on a rectangular grid is neither of these two;
@@ -515,7 +515,7 @@ class Field:
         x: the sample abscissae.
         y: the sample ordinates.
         values: one value per sample, the same length as *x*.
-        scale: what the colour means — colormap, label and range.
+        scale: what the color means — colormap, label and range.
 
     """
 
@@ -539,7 +539,7 @@ class Grid:
 
     THE VOIDS ARE PART OF THE SHAPE. A masked cell (or a NaN) is a cell that has NO VALUE — a shaft,
     an exterior, an infeasible combination — and it must be drawn as NOTHING rather than as zero or
-    as the bottom of the colour scale. ``values`` is read as a masked array for that reason, and a
+    as the bottom of the color scale. ``values`` is read as a masked array for that reason, and a
     grid rendered without its mask is the defect this shape exists to prevent.
 
     ROW 0 IS THE SMALLEST Y. The array's first row is drawn at the BOTTOM of the map, the convention
@@ -555,7 +555,7 @@ class Grid:
             mesh's bounding box. ``None`` means THE INDICES ARE THE COORDINATES: cell ``(row, col)``
             covers ``[col - 0.5, col + 0.5]`` by ``[row - 0.5, row + 0.5]``, which is the table case
             (a q-factor matrix, a heatmap of a DataFrame).
-        scale: what the colour means — colormap, label and range.
+        scale: what the color means — colormap, label and range.
 
     """
 
@@ -572,7 +572,7 @@ class Grid:
 
         Raises:
             ValueError: when ``values`` is not 2-D — a rectilinear grid of any other rank has no
-                rectangle to draw, and no adapter could honour it.
+                rectangle to draw, and no adapter could honor it.
 
         """
         array = np.ma.masked_invalid(np.ma.asarray(self.values, dtype=float))
@@ -587,7 +587,7 @@ class Grid:
     def span(self) -> tuple[float, float, float, float]:
         """The rectangle the grid covers in data coordinates — the stated extent, or the indices.
 
-        THE ONE PLACE THE DEFAULT IS COMPUTED, for the reason the discrete colour bar's band geometry
+        THE ONE PLACE THE DEFAULT IS COMPUTED, for the reason the discrete color bar's band geometry
         is on :meth:`Colorbar.bands`: two adapters each deciding what "no extent" means would be two
         pictures of one description the moment either arithmetic drifted, and a grid drawn half a
         cell off is still a grid — nothing about the figure would say which one moved.
@@ -601,24 +601,24 @@ class Grid:
 
 @dataclass(frozen=True)
 class Samples:
-    """Points that CARRY VALUES — the colour-mapped point cloud, drawn as marks.
+    """Points that CARRY VALUES — the color-mapped point cloud, drawn as marks.
 
     WHY THIS IS NOT A :class:`Field`, AND WHY IT IS NOT :meth:`Frame.draw_markers`. A field is a
     CONTINUUM: the adapter draws a surface through the samples and a reader takes values off the
-    colour BETWEEN the marks. This is DISCRETE: every mark IS an observation, and what a reader takes
+    color BETWEEN the marks. This is DISCRETE: every mark IS an observation, and what a reader takes
     off it is the cloud's own shape — a parameter sweep, a map of operating points, a residual plot.
     The two are different statements about data, and this vocabulary used to make one shape carry
     both, with each adapter choosing which to draw; the split is what lets a producer ask.
 
-    ``values`` IS REQUIRED AND THERE IS NO ``color``. A cloud drawn in one colour is a
+    ``values`` IS REQUIRED AND THERE IS NO ``color``. A cloud drawn in one color is a
     :class:`Series` handed to :meth:`Frame.draw_markers`, which already exists; what makes this shape
-    itself is the THIRD QUANTITY per point and the scale its colour means.
+    itself is the THIRD QUANTITY per point and the scale its color means.
 
     Attributes:
         x: the sample abscissae.
         y: the sample ordinates.
-        values: one value per sample, the same length as *x* — what the colour means.
-        scale: what the colour means — colormap, label and range. Two clouds from two runs are only
+        values: one value per sample, the same length as *x* — what the color means.
+        scale: what the color means — colormap, label and range. Two clouds from two runs are only
             comparable while both are read against the same scale, which is why the range travels
             with the description rather than being re-derived per cloud.
         marker: the symbol to draw, e.g. ``'o'``, ``'s'``, ``'^'`` — or ``None`` for the library's.
@@ -643,11 +643,11 @@ class Contours:
     """The ISOLINES of a scalar over a point set — a contour drawn as LINES, over something else.
 
     THIS IS NOT A :class:`Field` WITH A FLAG, which is why it is its own primitive. A field is a
-    surface that carries a scale and publishes a colour bar; a contour is a set of lines at stated
-    levels, drawn OVER a surface whose colours already mean something — a set of equipotentials
+    surface that carries a scale and publishes a color bar; a contour is a set of lines at stated
+    levels, drawn OVER a surface whose colors already mean something — a set of equipotentials
     over a flux-density map, a phase boundary over a region map. A field has no ``color`` because
-    its colour IS its value; a contour does, because its lines are an annotation of a scale that
-    lives elsewhere. Folding the two into one type would give every renderer a mode it must honour
+    its color IS its value; a contour does, because its lines are an annotation of a scale that
+    lives elsewhere. Folding the two into one type would give every renderer a mode it must honor
     in half its calls.
 
     Attributes:
@@ -655,7 +655,7 @@ class Contours:
         y: the sample ordinates.
         values: one value per sample, the same length as *x*.
         levels: how many contour levels to draw between the smallest and largest value.
-        color: the line colour, or ``None`` for the library's own cycle.
+        color: the line color, or ``None`` for the library's own cycle.
         width: the line width in points, or ``None`` for the library's own default.
         alpha: opacity, ``1.0`` for opaque — an overlay is usually drawn translucent.
 
@@ -692,7 +692,7 @@ class Vectors:
         u: the abscissa component of each sample's vector.
         v: the ordinate component of each sample's vector.
         scale: how long ``|(u, v)|`` is drawn — the arrow is ``|(u, v)| / scale`` data units long.
-        color: an explicit colour, or ``None`` to take the next palette colour.
+        color: an explicit color, or ``None`` to take the next palette color.
         width: the shaft width in points, or ``None`` for the library's own default.
         alpha: opacity, ``1.0`` for opaque.
 
@@ -714,7 +714,7 @@ class Frame(Protocol):
 
     THE DRAWING VERBS TAKE THE PRIMITIVES ABOVE AND NOTHING ELSE. A verb with a bag of keyword
     arguments would let a producer spell the same figure two ways and the two adapters disagree
-    about which spelling they honour; a primitive is the one spelling, and an extension is a field
+    about which spelling they honor; a primitive is the one spelling, and an extension is a field
     on a dataclass — visible to every renderer at once, which is the property this layer exists for.
 
     THE AXIS VERBS AND THE DRAW VERBS ARE BOTH HERE, and the split against :class:`Figure` is not
@@ -762,7 +762,7 @@ class Frame(Protocol):
         """Show or hide the grid."""
 
     def legend(self, *, on: bool = True) -> None:
-        """Show or hide the legend of everything labelled so far."""
+        """Show or hide the legend of everything labeled so far."""
 
     def draw_line(self, series: Series) -> None:
         """Draw *series* as a line.
@@ -778,7 +778,7 @@ class Frame(Protocol):
         """Draw *bars* as bars."""
 
     def draw_patches(self, parts: Sequence[Patch], scale: Scale | None = None) -> None:
-        """Draw filled regions; *scale* colours them by value when they carry one."""
+        """Draw filled regions; *scale* colors them by value when they carry one."""
 
     def draw_circles(self, circles: Sequence[Circle]) -> None:
         """Draw circles."""
@@ -790,7 +790,7 @@ class Frame(Protocol):
         """Draw text."""
 
     def draw_field(self, field: Field) -> None:
-        """Draw a scalar over a CONTINUUM and its colour scale — the field map.
+        """Draw a scalar over a CONTINUUM and its color scale — the field map.
 
         The drawing is a surface through the samples, and an adapter whose library has no such glyph
         over a point set REFUSES this by name rather than substituting one: see
@@ -799,23 +799,23 @@ class Frame(Protocol):
         """
 
     def draw_grid(self, grid: Grid) -> None:
-        """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
+        """Draw a scalar on a rectilinear grid and its color scale — the maskable map.
 
         THE VOIDS ARE THE SHAPE, so a cell the grid does not carry is drawn as NOTHING rather than as
-        a value: see :class:`Grid`. The colour bar is the grid's, as it is a field's.
+        a value: see :class:`Grid`. The color bar is the grid's, as it is a field's.
         """
 
     def draw_samples(self, samples: Samples) -> None:
-        """Draw points coloured by the values they carry — the point cloud and its colour scale."""
+        """Draw points colored by the values they carry — the point cloud and its color scale."""
 
     def draw_contours(self, contours: Contours) -> None:
-        """Draw *contours* as isolines, with no fill and no colour bar of their own."""
+        """Draw *contours* as isolines, with no fill and no color bar of their own."""
 
     def draw_vectors(self, vectors: Vectors) -> None:
         """Draw *vectors* as arrows — the quiver, one head per sample."""
 
     def draw_colorbar(self, bar: Colorbar) -> None:
-        """Draw *bar* as a colour bar for a scale the figure itself set.
+        """Draw *bar* as a color bar for a scale the figure itself set.
 
         THE RANGE MUST BE PINNED, and an adapter that cannot read a range from the bar REFUSES it
         rather than inventing one: see :class:`Colorbar`, where the alternative to a refusal is a
@@ -835,7 +835,7 @@ class Figure(Protocol):
 
     THE STYLE AND THE PALETTE CURSOR ARE THE CANVAS'S, NOT A FRAME'S. Two frames of one canvas draw
     in one typeface and from one palette sequence, so a series on a second panel — or on a twin
-    axis, where the two y scales share the same pixels — never takes the colour of the series it is
+    axis, where the two y scales share the same pixels — never takes the color of the series it is
     drawn beside.
     """
 
@@ -1082,7 +1082,7 @@ class NullRenderer:
         """
 
     def show(self, *, interactive: bool = True) -> None:
-        """Accepted and ignored — there is no window without a plotting library, and no pretence."""
+        """Accepted and ignored — there is no window without a plotting library, and no pretense."""
 
     def close(self) -> None:
         """Accepted and ignored, because nothing was opened."""

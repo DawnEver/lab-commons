@@ -150,7 +150,7 @@ def test_a_graph_runs_in_order_under_the_ledger_and_a_rerun_is_a_cache_hit(tmp_p
     assert changed['b'].result.output('out').read_text(encoding='utf-8') == '44'
 
 
-def test_a_failure_is_named_and_its_dependants_do_not_run(tmp_path: Path) -> None:
+def test_a_failure_is_named_and_its_dependents_do_not_run(tmp_path: Path) -> None:
     graph = Graph(
         {'a': unit('boom'), 'b': unit('double', x=Output('a', 'out')), 'c': unit('write', n=1), 'd': unit('nothing')}
     )
@@ -292,11 +292,11 @@ def test_ready_units_the_ledger_admits_run_at_once(tmp_path: Path, monkeypatch: 
     assert {o.state for o in got.values()} == {RAN}
     assert list(got) == ['a', 'b', 'c']  # outcomes in graph order, whatever order they finished in
     assert _overlap('a', 'b')  # THE CHECK: two independent admissible units overlap in time
-    assert SPANS['c'][0] >= SPANS['a'][1]  # PLANTED: a dependant waits for its input
+    assert SPANS['c'][0] >= SPANS['a'][1]  # PLANTED: a dependent waits for its input
     assert holdings() == []
 
 
-def test_one_seat_serialises_two_seat_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_one_seat_serializes_two_seat_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     SPANS.clear()
     seat = Demand({'jmag': 1, 'cpu': 1, 'mem_gb': 0.1})
     graph = Graph({'a': unit('nap', demand=seat, tag='a'), 'b': unit('nap', demand=seat, tag='b')})

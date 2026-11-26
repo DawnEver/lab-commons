@@ -180,7 +180,7 @@ class TestDarwin:
     def test_a_modal_dialog_is_visible(self) -> None:
         """A dialog sits at the modal-panel level (8); with ``layer == 0`` alone it never read visible."""
         rows = [
-            {'id': 9, 'pid': 4242, 'title': 'Licence', 'layer': 8, 'onscreen': True, 'x': 0, 'y': 0, 'w': 5, 'h': 5}
+            {'id': 9, 'pid': 4242, 'title': 'License', 'layer': 8, 'onscreen': True, 'x': 0, 'y': 0, 'w': 5, 'h': 5}
         ]
         recorder = _Recorder({'CGWindowListCopyWindowInfo': json.dumps(rows).encode()})
         assert self._mac(recorder).windows()[0].visible
@@ -199,13 +199,13 @@ class TestDarwin:
 
     def test_press_resolves_the_label_then_passes_every_value_as_argv(self) -> None:
         rows = [
-            _ax('0', None, 'AXGroup', 'Licence expired'),
+            _ax('0', None, 'AXGroup', 'License expired'),
             _ax('0.0', '0', 'AXButton', 'OK', actions=['AXPress'], identifier='ok-id'),
         ]
         recorder = _Recorder({'function walk': json.dumps(rows).encode(), "byName('AXPress')": b''})
         mac = self._mac(recorder)
         assert mac.controls(_WINDOW) == [
-            Control(role='group', name='Licence expired', value=None, enabled=True, id='0'),
+            Control(role='group', name='License expired', value=None, enabled=True, id='0'),
             Control(role='button', name='OK', value=None, enabled=True, actions=('press',), id='0.0', parent='0',
                     automation_id='ok-id'),
         ]  # fmt: skip

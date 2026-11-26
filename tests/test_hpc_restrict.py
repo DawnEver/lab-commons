@@ -1,4 +1,4 @@
-"""A job file's ``[policy] grants`` restricts its placement to named grants, refusing a name it cannot honour."""
+"""A job file's ``[policy] grants`` restricts its placement to named grants, refusing a name it cannot honor."""
 
 from __future__ import annotations
 

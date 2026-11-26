@@ -99,7 +99,7 @@ COMPUTE: Final[dict[str, tuple[str, str, str]]] = {
             'nothing: the own reserve (lab_commons.box.machine.own_reserve) keeps the [reserve] margins for the user '
             'of this box -- delete the key'
         ),
-        '--own-weight': 'nothing: the box keeps its [reserve] margins for its own user; favour work with [priority]',
+        '--own-weight': 'nothing: the box keeps its [reserve] margins for its own user; favor work with [priority]',
         '[[hpc.grant]] cpus': (
             'nothing: admission fits each job against what the account has free now -- delete the line'
         ),
@@ -203,8 +203,8 @@ COMPUTE: Final[dict[str, tuple[str, str, str]]] = {
         'Reservations, leases, lending and preemption are DELETED (user ruling 2026-10-14, "A"): a box\'s supply '
         'is what its one ledger can still admit (lab_commons.box), and priority is ordering only '
         '(lab_commons.compute.priority).', {
-        'forgereserve': 'nothing: nothing is reserved; favour work with the machine file [priority] (ordering only)',
-        'forge reserve': 'nothing: nothing is reserved; favour work with the machine file [priority] (ordering only)',
+        'forgereserve': 'nothing: nothing is reserved; favor work with the machine file [priority] (ordering only)',
+        'forge reserve': 'nothing: nothing is reserved; favor work with the machine file [priority] (ordering only)',
         'forge release': 'nothing: nothing is reserved, so there is no lease to release',
         'compute.ledger': 'dev_lab.dev.forgehosts.read_cards (the cards; no lease is stored)',
         'forgelend': 'nothing: nothing is lent; a box claim is enforced by the box (lab_commons.box.run)',

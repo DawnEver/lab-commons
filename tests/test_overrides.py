@@ -39,8 +39,8 @@ def test_overrides_resolve_over_the_defaults_last_one_wins() -> None:
 
 
 def test_an_undeclared_key_is_refused_naming_what_is_settable() -> None:
-    with pytest.raises(OverrideRefused, match=r'mesh\.ordr is not a setting: \[mesh\] declares only_mesh, order, size'):
-        apply(DEFAULTS, [parse_set('mesh.ordr=3')])
+    with pytest.raises(OverrideRefused, match=r'mesh\.deg is not a setting: \[mesh\] declares only_mesh, order, size'):
+        apply(DEFAULTS, [parse_set('mesh.deg=3')])
     with pytest.raises(OverrideRefused, match=r'nosuch is not a setting: the top level declares mesh, solve'):
         apply(DEFAULTS, [parse_set('nosuch.key=3')])
 

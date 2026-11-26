@@ -1,7 +1,7 @@
 """A USER-INSTALLED TOOL: licensed and installed by its vendor's own installer; the door RECORDS and PROBES it.
 
 JMAG, Ansys, MATLAB and the like cannot be downloaded or hashed by the family: a person installs them with the
-vendor installer and a licence. The door's job is to know WHERE this machine has it and to PROBE that install back
+vendor installer and a license. The door's job is to know WHERE this machine has it and to PROBE that install back
 through the same lab-commons probe (:data:`~lab_commons.compute.toolchecks.CHECKS`, its ``within`` reader rooted at
 the declared home), at the version the serving repo requires.
 

@@ -119,7 +119,7 @@ def test_nvidia_smi_is_parsed_per_device_and_its_apps_land_on_their_device_by_uu
     assert (device.utilization_pct, device.used_mib, device.total_mib, device.pids) == (100, 9570, 24467, (49244,))
     two = parse_nvidia('0, GPU-a, 0, 10, 1000\n1, GPU-b, [N/A], [N/A], 2000\n', 'GPU-b, 7, 300\n')
     assert [d.pids for d in two] == [(), (7,)]
-    assert two[1].utilization_pct is None, 'an unreadable utilisation is unknown, never 0'
+    assert two[1].utilization_pct is None, 'an unreadable utilization is unknown, never 0'
 
 
 def test_malformed_nvidia_output_is_refused_by_line() -> None:
@@ -191,7 +191,7 @@ def test_an_idle_box_serves_whole_shared_and_precise_demands() -> None:
     assert assign({NPU: 1, 'int8': 1}, idle, ()) == ('npu.intel.0',)
 
 
-def test_a_foreign_job_at_full_utilisation_refuses_an_exclusive_gpu() -> None:
+def test_a_foreign_job_at_full_utilization_refuses_an_exclusive_gpu() -> None:
     """THE CHECK, on WS5's own reading: 100 % on a job the box never admitted -- the GPU cannot be taken whole."""
     verdict = assign({GPU: 1, EXCLUSIVE: 1, 'f64': 1}, _ws5(), ())
     assert isinstance(verdict, str)
@@ -230,7 +230,7 @@ def test_a_device_lacking_the_demanded_precision_is_never_taken(demand: Mapping[
 @pytest.mark.parametrize(
     'busy',
     [_nvidia(0, util=BUSY_UTIL_PCT), _nvidia(0, pids=(4242,)), _nvidia(0, util=None)],
-    ids=['utilised', 'a-process-runs-on-it', 'utilisation-unknown'],
+    ids=['utilized', 'a-process-runs-on-it', 'utilization-unknown'],
 )
 def test_a_device_in_use_outside_the_ledger_is_not_taken_whole(busy: Device) -> None:
     assert assign({GPU: 1, EXCLUSIVE: 1}, Devices((busy, _nvidia(1))), ()) == ('gpu.nvidia.1',)

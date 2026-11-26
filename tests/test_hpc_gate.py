@@ -1,6 +1,6 @@
 """``lab_commons.hpc`` is an opt-in import and reaches nothing outside the standard library and tier 1.
 
-Two properties, asserted against the real artefacts: a fresh interpreter importing ``lab_commons`` does
+Two properties, asserted against the real artifacts: a fresh interpreter importing ``lab_commons`` does
 not load the tier, and no module in it imports a third-party root -- so it needs no extra, on a
 workstation or on a login node whose venv carries nothing but this package.
 """

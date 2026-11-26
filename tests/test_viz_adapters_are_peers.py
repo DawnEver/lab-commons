@@ -3,8 +3,8 @@
 NEITHER BACKEND IS THE SECOND-CLASS SPELLING OF THE OTHER, and that is a claim with a measurement
 behind it rather than a wording in a docstring: the SAME descriptions -- the six functions
 ``tests/_viz_figure.py`` shares -- have to come out of both wherever both can draw them, and the
-colour a series takes has to be the same in both. A layer where one backend silently drew less, or
-took a different colour, would still pass every per-adapter test.
+color a series takes has to be the same in both. A layer where one backend silently drew less, or
+took a different color, would still pass every per-adapter test.
 
 A SHAPE IS MEASURED BY WHAT BOTH ADAPTERS REPORT, not by the pictures, because that is the layer's
 own datum: the same description must resolve to the same rects, the same coordinate systems and the
@@ -117,7 +117,7 @@ def test_the_same_twin_axis_draws_through_both(tmp_path: Path) -> None:
     assert all(path is not None and path.is_file() for path in written)
 
 
-def test_a_series_takes_the_same_colour_through_either_adapter() -> None:
+def test_a_series_takes_the_same_color_through_either_adapter() -> None:
     """The palette is the vocabulary's, so which library drew the figure cannot change the picture."""
     series = Series(x=[0.0, 1.0], y=[0.0, 1.0], label='phase A')
     raster, page = viz_mpl.MplRenderer(), bokeh.BokehRenderer()
@@ -149,9 +149,9 @@ def test_the_same_grid_draws_over_the_same_rectangle_in_both() -> None:
 
 
 def test_the_same_point_cloud_carries_the_same_values_in_both() -> None:
-    """One SAMPLES description, two colour-mapped clouds: the values, the scale and the mark size.
+    """One SAMPLES description, two color-mapped clouds: the values, the scale and the mark size.
 
-    A cloud whose colour means a third quantity is only readable while both adapters map the same
+    A cloud whose color means a third quantity is only readable while both adapters map the same
     numbers through the same range, so the SAMPLE VALUES and the pinned limits are asserted on both
     sides rather than the presence of a scatter.
     """
@@ -172,7 +172,7 @@ def test_every_colormap_name_is_one_both_libraries_can_draw() -> None:
 
     Each side is read the way ITS library spells a palette: matplotlib by the name a ``Scale``
     carries, bokeh by the family and width its registry is keyed on. A name neither can draw is
-    worse than a refusal -- it is a field map that comes out a different colour per box.
+    worse than a refusal -- it is a field map that comes out a different color per box.
     """
     unknown_to_matplotlib = sorted(name for name in bokeh.PALETTES if name not in mpl.colormaps)
     unknown_to_bokeh = sorted(

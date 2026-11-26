@@ -7,7 +7,7 @@ A CHECK LAUNCHES NOTHING: every reader reads files, the registry or package meta
 tool. On Windows a vendor executable handed a flag may open a window instead of answering -- Electronics
 Desktop Student's ``ansysedtsv.exe -help`` shows a modal help dialog (2026-11-07), and Fluent and others pop
 up too -- so an unattended probe blocked until its timeout and read the tool as failed. A check therefore
-proves the install is there and whole, never that it runs or that a licence seat is free; seats are what
+proves the install is there and whole, never that it runs or that a license seat is free; seats are what
 the host declares. ``tests/test_compute_toolchecks_launch_nothing.py`` holds every :data:`CHECKS` row to it.
 """
 
@@ -77,7 +77,7 @@ class Check:
 
     *find* returns ``(source, path)`` or ``None``; *version* ``(source, value)`` or ``None``; *smoke*
     ``(passed, detail)``, read off the install, never by running it (the module docstring). *heavy*: a vendor
-    solver and its licence seat -- HEAVY COMPUTE, which a light workstation withholds; a plain tool
+    solver and its license seat -- HEAVY COMPUTE, which a light workstation withholds; a plain tool
     (ngspice, node) is not heavy merely because it is probed. *within*: the executable under an install home a
     machine DECLARES (a user-installed tool's ``[dev.vendors.<vendor>] home``, :mod:`lab_commons.tools.vendor`),
     ``(source, path)`` or ``None`` -- the same layout *find* searches, rooted where the machine says.
@@ -346,7 +346,7 @@ def simba_version(_path: Path) -> tuple[str, str] | None:
 
 
 def simba_smoke(path: Path) -> tuple[bool, str]:
-    """The ``aesim.simba`` package's files are installed -- never imported, so no licence is asked."""
+    """The ``aesim.simba`` package's files are installed -- never imported, so no license is asked."""
     if path.is_file():
         return True, f'aesim.simba installed at {path}'
     return False, f'no aesim.simba at {path}'
@@ -541,7 +541,7 @@ LSDYNA_SOLVERS: Final = ('lsdyna_sp.e', 'lsdyna_dp.e', 'lsdyna_sp.exe', 'lsdyna_
 def lsdyna_smoke(path: Path) -> tuple[bool, str]:
     """Passes when a solver binary the wrapper execs exists and is executable -- the install is whole.
 
-    The wrapper would answer no flag licence-free anyway: on Ada (2025R1) it exits 1 for ``-h``, ``-help``,
+    The wrapper would answer no flag license-free anyway: on Ada (2025R1) it exits 1 for ``-h``, ``-help``,
     ``--help``, ``-v``, ``-version`` and ``help`` alike, because it always execs the licensed
     ``lsdyna_sp.e``, which checks out a seat (MEASURED 2026-11-07). So this smoke proves the
     install is whole, never that a seat is free.

@@ -80,8 +80,8 @@ def search_orthogonal(
             distance = length + abs(a.x - b.x) + abs(a.y - b.y)
             turns = bends + int(axis not in {0, direction})
             first = int(prefer_vertical and direction == 1) if axis == 0 else penalty
-            cost, neighbour = (distance, turns, first), (u, v, direction)
-            if neighbour not in best or cost < best[neighbour]:
-                best[neighbour], parents[neighbour] = cost, state
-                heappush(queue, (distance + estimate(u, v), turns, first, distance, *neighbour))
+            cost, neighbor = (distance, turns, first), (u, v, direction)
+            if neighbor not in best or cost < best[neighbor]:
+                best[neighbor], parents[neighbor] = cost, state
+                heappush(queue, (distance + estimate(u, v), turns, first, distance, *neighbor))
     return None

@@ -106,7 +106,7 @@ def connect() -> sqlite3.Connection:
     return con
 
 
-#: Serialises this process's ledger set-up; a fresh file's WAL switch otherwise races itself.
+#: Serializes this process's ledger set-up; a fresh file's WAL switch otherwise races itself.
 _FIRST_OPEN: Final = threading.Lock()
 
 

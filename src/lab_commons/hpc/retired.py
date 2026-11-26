@@ -387,7 +387,7 @@ RETIRED: Final = {spelling: row[0] for spelling, row in CLASSIFIED.items()}
 #: THE RETIRED PER-TEST WORDS, and only for LIVE state -- a cluster run's ``state.json`` and the stream of a
 #: round in flight across the change (OLD-SHAPE-READER): each word -> ``(status word, reason kind)`` it
 #: now reads as (:func:`lab_commons.hpc.testcells.upgraded`; a status word is ``TestCell.word``'s spelling).
-#: ``None``: a handed id, which is no cell. A regenerable artefact in these words is refused, never upgraded.
+#: ``None``: a handed id, which is no cell. A regenerable artifact in these words is refused, never upgraded.
 TEST_WORDS: Final[dict[str, tuple[str, str] | None]] = {
     'passed': ('ok', ''),
     'failed': ('rejected', 'assertion'),

@@ -125,7 +125,7 @@ def test_the_frame_rules_are_the_vocabularys_and_both_adapters_read_them() -> No
 def test_a_figure_shape_that_cannot_be_expressed_is_refused_by_name() -> None:
     """THE UNSUPPORTED-RAISES ARM, and every message names what to do instead.
 
-    Each of these is a request a producer could plausibly write and that no adapter could honour
+    Each of these is a request a producer could plausibly write and that no adapter could honor
     honestly: an unknown coordinate system, an axis shared across two of them, a y-axis share that
     names no rect (placement by inheritance means "drawn over", which is an x relationship), a twin
     on the wrong side, and a rect that is not four numbers. Refused HERE, once, rather than three
@@ -209,7 +209,7 @@ def test_the_primitives_default_to_the_neutral_choice() -> None:
     assert Contours(x=[0.0], y=[0.0], values=[1.0]).levels == 10
     assert Contours(x=[0.0], y=[0.0], values=[1.0]).color is None
     assert Vectors(x=[0.0], y=[0.0], u=[1.0], v=[0.0]).scale == 1.0
-    assert Ticks(positions=[0.0]).labels is None, 'an unlabelled axis is numbered, not silenced'
+    assert Ticks(positions=[0.0]).labels is None, 'an unlabeled axis is numbered, not silenced'
     assert Mesh(vertices=[[0.0, 0.0, 0.0]], faces=[[0, 0, 0]]).color is None
     assert Mesh(vertices=[[0.0, 0.0, 0.0]], faces=[[0, 0, 0]]).alpha == 1.0
     # The ONE field that does not defer: the two libraries' own bar widths disagree, so a None here
@@ -268,7 +268,7 @@ def test_a_bar_bands_its_ticks_by_the_rule_both_adapters_read() -> None:
     """The discrete geometry is the PRIMITIVE's, so two adapters cannot draw two pictures of it."""
     edges, centers = Colorbar(scale=Scale(vmin=0.0, vmax=3.0), ticks=[0.0, 1.0, 2.0, 3.0]).bands()
     assert centers == (0.0, 1.0, 2.0, 3.0)
-    assert edges == (-0.5, 0.5, 1.5, 2.5, 3.5), 'each band is centred on its tick'
+    assert edges == (-0.5, 0.5, 1.5, 2.5, 3.5), 'each band is centered on its tick'
     lone = Colorbar(scale=Scale(vmin=0.0, vmax=1.0), ticks=[5.0]).bands()
     assert lone[0] == (4.5, 5.5), 'a lone tick gets a unit-wide band rather than a zero-width one'
 
@@ -288,15 +288,15 @@ def test_scale_is_what_makes_two_figures_comparable() -> None:
 
 
 def test_the_style_cycles_one_palette_for_every_adapter() -> None:
-    """One palette, index-stable: a series keeps its colour whatever drew it and however many ran."""
+    """One palette, index-stable: a series keeps its color whatever drew it and however many ran."""
     style = Style()
-    assert len(set(style.palette)) == len(style.palette), 'two series would share a colour'
+    assert len(set(style.palette)) == len(style.palette), 'two series would share a color'
     assert style.color(0) == style.palette[0]
     assert style.color(len(style.palette)) == style.palette[0], 'the cycle wraps rather than raising'
     assert Style(palette=('#000000', '#ffffff')).color(3) == '#ffffff'
 
 
-def test_the_style_defaults_are_this_librarys_decision() -> None:
+def test_the_style_defaults_are_decided_by_this_library() -> None:
     """The one place the family's figure size, resolution and type size are stated."""
     style = Style()
     assert style.figure_size == (8.0, 6.0)
@@ -364,7 +364,7 @@ def test_a_mesh_that_is_not_a_surface_in_space_is_refused_by_name() -> None:
 
 
 def test_the_panel_helper_refuses_a_grid_that_is_not_a_picture() -> None:
-    """Two requests no arithmetic can honour honestly, both refused BY NAME rather than drawn."""
+    """Two requests no arithmetic can honor honestly, both refused BY NAME rather than drawn."""
     with pytest.raises(ValueError, match='at least one row'):
         panel_rects(0, 2)
     with pytest.raises(ValueError, match='at least one row'):

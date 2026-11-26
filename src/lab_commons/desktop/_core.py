@@ -165,7 +165,7 @@ class Control:
 
 
 #: A framework type path standing in for a label (``Avalonia.Controls.StackPanel``): three or more dotted,
-#: capitalised identifiers and no space -- a file name (``run.jsimba``) or a sentence is never one.
+#: capitalized identifiers and no space -- a file name (``run.jsimba``) or a sentence is never one.
 _TYPE_PATH = re.compile(r'[A-Z]\w*(?:\.[A-Z]\w*){2,}')
 #: Markup a toolkit leaves in a Name (Qt rich text): a closing or self-closing tag.
 _MARKUP = re.compile(r'</[A-Za-z][\w-]*\s*>|<[A-Za-z][\w-]*[^<>]*/>')
@@ -183,7 +183,7 @@ def _text(name: str) -> str:
     return ' '.join(html.unescape(_TAG.sub(' ', name)).split())
 
 
-def labelled(controls: Sequence[Control]) -> list[Control]:
+def labeled(controls: Sequence[Control]) -> list[Control]:
     """*controls* (depth first, each with its ``parent`` id) with the label a user SEES as each ``name``.
 
     Rich-text markup is reduced to its text. A name that is the control's type (its ``class_name``, or a dotted
@@ -245,7 +245,7 @@ def pick[T](
     :class:`NotActionableError`.
     """
     where = f'window {window.handle:#x} ({window.title!r}, pid {window.pid})'
-    candidates = list(zip(labelled([c for c, _ in candidates]), [ref for _, ref in candidates], strict=True))
+    candidates = list(zip(labeled([c for c, _ in candidates]), [ref for _, ref in candidates], strict=True))
     if id is not None:
         named = [(c, ref) for c, ref in candidates if c.id == id]
         if not named:
@@ -258,10 +258,10 @@ def pick[T](
     else:
         named = [(c, ref) for c, ref in candidates if act in c.actions and c.name == label]
         if not named:
-            msg = f'no actionable control labelled exactly {label!r} in {where}; read `controls` for the labels it has'
+            msg = f'no actionable control labeled exactly {label!r} in {where}; read `controls` for the labels it has'
             raise LabelNotFoundError(msg)
         if len(named) > 1:
-            msg = f'{len(named)} controls labelled exactly {label!r} in {where}: refused rather than guessed'
+            msg = f'{len(named)} controls labeled exactly {label!r} in {where}: refused rather than guessed'
             raise LabelAmbiguousError(msg)
         what = f'label {label!r}'
     control, ref = named[0]

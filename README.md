@@ -91,7 +91,7 @@ The base installation is the standard library alone. Select capabilities explici
   is worse than no ceiling because it is believed. Unreadable is always distinct from zero.
 - `lab_commons.desktop` (**tier 1**) — one door to a host's GUI windows, for every tool driven through
   one: list them (pid, title, rect, enabled, responding), capture one as PNG, read its accessibility
-  tree (each control with an id and its parent's), and press / set / close an EXACTLY labelled control
+  tree (each control with an id and its parent's), and press / set / close an EXACTLY labeled control
   or one named by id, refused unless the window's pid is one the
   caller owns. Facts only (which window means a stall is the caller's), no coordinate clicks or keys;
   a host that cannot do a verb refuses it by name (`error.reason`). Win32 + UI Automation, X11, macOS;
@@ -105,7 +105,7 @@ The base installation is the standard library alone. Select capabilities explici
 - `lab_commons.box` (**tier 1**) — the ONE ledger per machine: a run DECLARES cores, memory, a wall and
   tool seats, is admitted by the one rule (`compute.admission.admit`) on the MEASURED room
   (`box.supply.room`: free now, less what held claims have not taken yet, less the `[reserve]` margin),
-  and runs inside a kernel limit sized to its claim. Seats (an environment, a licence) are claims too. GPUs and
+  and runs inside a kernel limit sized to its claim. Seats (an environment, a license) are claims too. GPUs and
   NPUs are lent by device on a measured reading and named to the child once: `docs-src/devices.md`.
 - `lab_commons.outcomes` (**tier 1**, standard library only, imports no other subpackage) -- the ONE
   task-outcome vocabulary: `Status` in two families (DECIDED / RETRYABLE), `Evidence`, `Cell`, `Identity`,

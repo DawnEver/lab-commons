@@ -8,7 +8,7 @@ itself parallel says so in ``cost.cpus``; nothing here invents a width.
 
 THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 
-1. **Shards** -- consecutive items are packed until a shard holds enough padded time to amortise start-up
+1. **Shards** -- consecutive items are packed until a shard holds enough padded time to amortize start-up
    (``shard_minutes_min``) without passing ``shard_minutes_max``; both bounds are then grown until the
    array fits ``max_array``, the QOS's per-user submit limit (each array task is one job to Slurm) and
    what the quota CEILING runs at once -- ONE WAVE, so the makespan is the wall and never longer; a

@@ -372,7 +372,7 @@ def test_a_tree_inside_a_claim_does_not_claim_again_but_a_vendor_or_a_seat_does(
     with hold(*_demand(cpu=1), 'vendor', queue_s=1, outside=True, **_ON):
         assert [row.what for row in holdings()] == ['vendor'], 'PLANTED CONTROL: outside the tree books'
     with hold(*_demand(seats={'jmag': 1}), 'seat', queue_s=1, **_ON):
-        assert [row.what for row in holdings()] == ['seat'], 'a licence is not a share of a tree'
+        assert [row.what for row in holdings()] == ['seat'], 'a license is not a share of a tree'
 
 
 @pytest.mark.usefixtures('box')

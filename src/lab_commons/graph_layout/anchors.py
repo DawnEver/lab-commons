@@ -14,7 +14,7 @@ _XY = tuple[float, float]
 
 
 def stub_center(pin: _XY, direction: tuple[int, int], size: _XY, *, stub: float) -> _XY:
-    """Centre of a box of ``size`` drawn as a short stub off ``pin``, outward along the pin's ``direction``.
+    """Center of a box of ``size`` drawn as a short stub off ``pin``, outward along the pin's ``direction``.
 
     A box serving exactly one port (a connector label) goes there -- never stacked as a graph node in its band.
     """
@@ -26,10 +26,10 @@ def stub_center(pin: _XY, direction: tuple[int, int], size: _XY, *, stub: float)
 def stack_beside(
     anchored: Iterable[tuple[str, _XY, tuple[int, int], _XY]], *, clearance: float, gap: float
 ) -> dict[str, _XY]:
-    """Islands placed beside the ports they hang off: ``(key, port, direction, size)`` -> centre.
+    """Islands placed beside the ports they hang off: ``(key, port, direction, size)`` -> center.
 
     Each sits ``clearance`` off its port along the port's outward direction. Islands sharing a face keep
-    their ports' order across it, stay ``gap`` apart, and the stack centres on its ports.
+    their ports' order across it, stay ``gap`` apart, and the stack centers on its ports.
     """
     faces = defaultdict(list)
     for key, port, direction, size in anchored:

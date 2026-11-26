@@ -11,7 +11,7 @@ that name as its remedy.
 
 WHAT IS REUSED RATHER THAN DUPLICATED. A trace in space is a :class:`~lab_commons.viz.Series`
 carrying a ``z``: matplotlib itself spells the two as one method (``plot(x, y)`` and
-``plot(x, y, z)``), the fields a curve carries (colour, width, dash, label, alpha) are the same
+``plot(x, y, z)``), the fields a curve carries (color, width, dash, label, alpha) are the same
 fields, and a second dataclass holding them would be one idea with two spellings — the duplication
 this whole tier exists to remove. The rank is not silent either way: a plane frame REFUSES a trace
 that carries a z, and a 3D frame refuses one that does not, so neither arity can quietly drop a
@@ -73,10 +73,10 @@ class Mesh:
         faces: the connectivity, shape ``(m, k)`` — one row per face, each row an index per corner
             (``k`` is 3 for a triangle, 4 for the quads a swept body makes). An index names a row of
             *vertices*, so a mesh is one vertex set however many faces touch each of them.
-        color: the face colour, or ``None`` for an UNFILLED surface — the same statement
-            :class:`~lab_commons.viz.Patch` makes with its own ``color``, so a mesh with no colour
-            and no edge colour is a wireframe with no wires and a producer states one of the two.
-        edgecolor: the colour of the face outlines, or ``None`` for none.
+        color: the face color, or ``None`` for an UNFILLED surface — the same statement
+            :class:`~lab_commons.viz.Patch` makes with its own ``color``, so a mesh with no color
+            and no edge color is a wireframe with no wires and a producer states one of the two.
+        edgecolor: the color of the face outlines, or ``None`` for none.
         label: the legend entry; a mesh with no label is not legended.
         alpha: opacity, ``1.0`` for opaque — a set of bodies is read through itself.
 
@@ -173,7 +173,7 @@ class Frame3D(Protocol):
         """Draw the axes in the ratio *aspect* — the length of one x, y and z unit on the page."""
 
     def legend(self, *, on: bool = True) -> None:
-        """Show or hide the legend of everything labelled so far."""
+        """Show or hide the legend of everything labeled so far."""
 
     def draw_lines(self, lines: Sequence[Series]) -> None:
         """Draw *lines* as ONE set of traces — each a :class:`~lab_commons.viz.Series` with a z.

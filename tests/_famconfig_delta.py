@@ -9,7 +9,7 @@ that made it cover this tree: `.verify/`, `**/__version__.py` (which reaches the
 `src/lab_commons/__version__.py`), `/build/`, `/dist/` and the ordered Claude project-state section, which
 covers `.claude/worktrees/` and `.claude/automode.json`. What stays is ONE line, `*.py[cod]` --
 a compiled file OUTSIDE a `__pycache__/`, which no consumer ignores and this repo always has.
-:data:`DELTAS` holds every artefact, so the completeness arm runs here too.
+:data:`DELTAS` holds every artifact, so the completeness arm runs here too.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ GITIGNORE_DELTA: Final = Delta(repo=REPO, added=('*.py[cod]',), dropped={}, ceil
 GITATTRIBUTES: Final = '.gitattributes'
 GITATTRIBUTES_DELTA: Final = Delta(repo=REPO, added=(), dropped={}, ceiling=0)
 
-#: Every artefact this repo declares a delta against -- every one of the kit's bases.
+#: Every artifact this repo declares a delta against -- every one of the kit's bases.
 DELTAS: Final[dict[str, Delta]] = {
     GITIGNORE: GITIGNORE_DELTA,
     GITATTRIBUTES: GITATTRIBUTES_DELTA,
