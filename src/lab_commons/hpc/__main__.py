@@ -146,11 +146,14 @@ def _ensure(config: Config, repo: Path) -> Ensure | None:
     if not job.sha:
         return None
     spec = RunSpec(
-        sha=job.sha, repo_url=job.repo_url, pack_from=repo, builds=builds_at(repo, job.sha, python='', needs=job.needs)
+        sha=job.sha,
+        repo_url=job.repo_url,
+        pack_from=repo,
+        builds=builds_at(repo, job.sha, python='', needs=job.needs, native=job.native),
     )
 
     def ensure(grant: Grant) -> None:
-        build_artifact(spec, runner_for(grant, BUILD_TIMEOUT), grant.name, job.artifact)
+        build_artifact(spec, runner_for(grant, BUILD_TIMEOUT), grant.name, job.artifact, grant=grant)
 
     return ensure
 

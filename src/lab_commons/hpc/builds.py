@@ -8,6 +8,9 @@ THE REPO DECLARES ITS INPUTS ONCE, in its pyproject (read at the commit being ju
     source_roots = ["src"]                                  # put on PYTHONPATH from each sha's tree
     artifact_paths = ["cases"]                              # what a job reads beside them (lab_commons.hpc.artifact)
     native = { inputs = ["rust"], build = "pip install --target $LAB_CI_NATIVE ./rust/pybind" }
+    # optional, beside the plain build: a TRAINED native (e.g. profile-guided) a job selects with [job] native,
+    # declared as the table [tool.lab_commons.hpc.native.trained]: prefetch, inputs, build, needs, cpus, mem, wall
+    # (class Trained)
     timeout = { incremental = "5 min", full = "50 min" }    # pytest --timeout per run scope (absent: the repo's own)
     item_wall = { multiple = 10, floor = "5 min", unmeasured = "1 h", ceiling = "2 h" }  # per-test kill (defaults)
     priced = "tests/priced.toml"                            # measured peaks/walls, no margin (read_priced)
@@ -24,6 +27,11 @@ A venv lives in ``<root>/envs/<env key>`` and a native build in ``<root>/native/
 only a ``git worktree`` whose ``source_roots`` reach the venv through ``PYTHONPATH`` -- no per-sha
 editable install. A fresh sha with unchanged inputs therefore builds NOTHING. The native build runs with
 ``$LAB_CI_NATIVE`` naming its output directory, which is put on ``PYTHONPATH`` after the source roots.
+
+A TRAINED native (:class:`Trained`) is the plain build's selectable alternative: its build runs the workload it is
+trained on, so it runs as a Slurm job of the grant (:mod:`lab_commons.hpc.artifact`), its key is its own (a
+profile is never served as the plain build, nor the reverse) and its env adds the ``needs`` its build declares.
+Design: ``.claude/memory/2026/11/27/a-trained-native-build-runs-as-a-slurm-job.md``.
 
 A key is a SHA-256 over the git object ids of the declared inputs AT THE COMMIT (``git rev-parse
 <sha>:<path>`` -- a read-only call; an absent path keys as absent) plus the build command and the
@@ -57,10 +65,14 @@ if TYPE_CHECKING:
 __all__ = [
     'FULL',
     'INCREMENTAL',
+    'NATIVES',
+    'PLAIN',
     'RETIRED_INSTALL',
     'SCOPES',
+    'TRAINED',
     'Builds',
     'ItemWall',
+    'Trained',
     'builds_at',
     'key_of',
     'read_builds',
@@ -76,6 +88,31 @@ _KEY_HEX: Final = 24
 FULL: Final = 'full'
 INCREMENTAL: Final = 'incremental'
 SCOPES: Final = (FULL, INCREMENTAL)
+
+#: Which native build a job runs (``[job] native``): the declared release build, or the declared trained one.
+PLAIN: Final = 'plain'
+TRAINED: Final = 'trained'
+NATIVES: Final = (PLAIN, TRAINED)
+
+
+@dataclass(frozen=True)
+class Trained:
+    """``native.trained``: a native build that runs its workload, so it runs in a Slurm job of the grant.
+
+    *prefetch* runs first on the login node, in the exported tree with the env active, and may use the network (e.g.
+    ``cargo fetch``); *build* then runs on a compute node with *cpus*/*mem_gb*/*wall_s*, writes the native into
+    ``$LAB_CI_NATIVE`` with a ``PROVENANCE`` file there, and must not need the network. *needs* is the need-set
+    (``[tool.dev_lab.dep] needs``) its env carries beside the job's own. *inputs* are the paths its training reads
+    beyond ``native.inputs`` (the workload's own source): they key the trained native, never the plain one.
+    """
+
+    build: str
+    cpus: int
+    mem_gb: float
+    wall_s: int
+    prefetch: str = ''
+    needs: tuple[str, ...] = ()
+    inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,6 +157,10 @@ class Builds:
     needs: tuple[str, ...] = ()
     env_key: str = ''
     native_key: str = ''
+    #: The declared trained native, ``None`` when the repo declares none.
+    trained: Trained | None = None
+    #: Which native :attr:`native_key` keys (:data:`NATIVES`) -- :func:`builds_at`'s selection.
+    native: str = PLAIN
     #: ``{scope: seconds}`` handed to pytest as ``--timeout``; a scope absent here keeps the repo's own default.
     timeout_s: dict[str, int] = field(default_factory=dict)
     #: Repository paths a job's artifact carries beside the source roots (:mod:`lab_commons.hpc.artifact`).
@@ -237,6 +278,43 @@ def read_priced(text: str, path: str) -> dict[str, dict[str, float]]:
     return floors
 
 
+_TRAINED_KEYS: Final = frozenset({'build', 'cpus', 'mem', 'wall', 'prefetch', 'needs', 'inputs'})
+_TRAINED_REQUIRED: Final = ('build', 'cpus', 'mem', 'wall')
+
+
+def _trained(raw: object) -> Trained | None:
+    """``native.trained`` as a :class:`Trained`; absent is ``None``, an unknown or missing key is refused by name."""
+    if raw is None:
+        return None
+    where = f'{_TABLE} native.trained'
+    if not isinstance(raw, dict):
+        msg = f'{where} must be a table such as {{ build = "...", cpus = 32, mem = "64 GiB", wall = "50 min" }}'
+        raise InvalidDeclaration(msg)
+    if unknown := sorted(set(raw) - _TRAINED_KEYS):
+        msg = f'{where} has unknown keys {unknown}; it holds only {sorted(_TRAINED_KEYS)}'
+        raise InvalidDeclaration(msg)
+    if missing := [key for key in _TRAINED_REQUIRED if key not in raw]:
+        msg = f'{where} misses {missing}: a trained build names its command and the cpus, mem and wall of its job'
+        raise InvalidDeclaration(msg)
+    cpus = raw['cpus']
+    if not isinstance(cpus, int) or isinstance(cpus, bool) or cpus < 1:
+        msg = f'{where} cpus = {cpus!r} must be a whole number of CPUs, at least 1'
+        raise InvalidDeclaration(msg)
+    try:
+        mem_gb = parse(f'{where} mem', raw['mem'], 'size', positive=True) / 1024.0**3
+    except QuantityRefused as bad:
+        raise InvalidDeclaration(str(bad)) from bad
+    return Trained(
+        build=str(raw['build']),
+        cpus=cpus,
+        mem_gb=mem_gb,
+        wall_s=_seconds('native.trained.wall', raw['wall']),
+        prefetch=str(raw.get('prefetch', '')),
+        needs=tuple(raw.get('needs', ())),
+        inputs=tuple(raw.get('inputs', ())),
+    )
+
+
 #: The key a declaration may no longer carry, with its door (FORMATS-MIGRATE-ONCE: refused, never read).
 RETIRED_INSTALL: Final = (
     '[tool.lab_commons.hpc] install is retired: the venv is `uv sync --frozen` of the extras [tool.dev_lab.dep] '
@@ -261,6 +339,7 @@ def read_builds(text: str, needs: Iterable[str] = ()) -> Builds:
         artifact_paths=tuple(raw.get('artifact_paths', ())),
         native_inputs=tuple(native.get('inputs', ())),
         native_build=str(native.get('build', '')),
+        trained=_trained(native.get('trained')),
         timeout_s=_timeout(raw),
         item_wall=_item_wall(dict(raw.get('item_wall', {}))),
         priced=str(raw.get('priced', '')),
@@ -276,6 +355,9 @@ def read_builds(text: str, needs: Iterable[str] = ()) -> Builds:
         builds = replace(builds, install=install)
     if bool(builds.native_inputs) != bool(builds.native_build):
         msg = '[tool.lab_commons.hpc] native needs both inputs and build'
+        raise InvalidDeclaration(msg)
+    if builds.trained is not None and not builds.native_inputs:
+        msg = f'{_TABLE} native.trained keys on native.inputs: declare them (and the plain native.build beside it)'
         raise InvalidDeclaration(msg)
     return builds
 
@@ -314,13 +396,20 @@ def _oids(repo: Path, sha: str, paths: tuple[str, ...]) -> dict[str, str]:
     return out
 
 
-def builds_at(repo: Path, sha: str, *, python: str, needs: Iterable[str] = ()) -> Builds:
+def builds_at(repo: Path, sha: str, *, python: str, needs: Iterable[str] = (), native: str = PLAIN) -> Builds:
     """The declaration commit *sha* of *repo* carries for *needs*, with its keys -- every git call here only READS.
 
+    *native* selects which native build the key is of (:data:`NATIVES`); the trained one adds its build's needs.
+
     Raises:
-        ValueError: the commit declares no ``[tool.lab_commons.hpc]`` table -- a venv with no build command.
+        ValueError: the commit declares no ``[tool.lab_commons.hpc]`` table -- a venv with no build command; or
+            *native* is not one of :data:`NATIVES`.
+        InvalidDeclaration: *native* is trained and the commit declares no ``native.trained``.
 
     """
+    if native not in NATIVES:
+        msg = f'native = {native!r} is not one of {NATIVES}'
+        raise ValueError(msg)
     text = _door.run(
         [_GIT, '-C', str(repo), 'show', f'{sha}:pyproject.toml'],
         capture_output=True,
@@ -329,6 +418,14 @@ def builds_at(repo: Path, sha: str, *, python: str, needs: Iterable[str] = ()) -
         check=True,
     ).stdout
     builds = read_builds(text, needs)
+    if native == TRAINED:
+        if builds.trained is None:
+            msg = (
+                f'{sha[:12]} declares no {_TABLE} native.trained, so a job cannot select native = "trained": declare '
+                'it beside native.build (lab_commons.hpc.builds.Trained) or run the plain build'
+            )
+            raise InvalidDeclaration(msg)
+        builds = replace(read_builds(text, (*needs, *builds.trained.needs)), native=TRAINED)
     if not builds.install:
         msg = f'{sha[:12]} declares no [tool.lab_commons.hpc] table: the cluster builds no venv for it'
         raise ValueError(msg)
@@ -348,5 +445,8 @@ def builds_at(repo: Path, sha: str, *, python: str, needs: Iterable[str] = ()) -
     env_key = key_of(oids, builds.install, python, *builds.needs)
     native_key = ''
     if builds.native_inputs:
-        native_key = key_of(_oids(repo, sha, builds.native_inputs), builds.native_build, python, env_key)
+        trained = builds.trained if native == TRAINED else None
+        recipe = (builds.native_build,) if trained is None else (TRAINED, trained.prefetch, trained.build)
+        inputs = builds.native_inputs if trained is None else (*builds.native_inputs, *trained.inputs)
+        native_key = key_of(_oids(repo, sha, inputs), *recipe, python, env_key)
     return replace(builds, env_key=env_key, native_key=native_key)

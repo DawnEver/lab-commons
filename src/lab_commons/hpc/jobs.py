@@ -95,7 +95,7 @@ def built_config(config: Config) -> Config:
     if job.workdir != '~':
         msg = f'[job] sha runs the job in its artifact; drop [job] workdir = {job.workdir!r}'
         raise ValueError(msg)
-    return replace(config, job=replace(job, setup=(*enter_lines(job.sha, job.artifact), *job.setup)))
+    return replace(config, job=replace(job, setup=(*enter_lines(job.sha, job.artifact, job.native), *job.setup)))
 
 
 def _answering(grants: tuple[Grant, ...], reach: Reach) -> list[tuple[Grant, Any]]:
