@@ -50,7 +50,7 @@ RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
 
 _WHERE: Final = 'the machine file'
 
-#: The one spelling of a seat count with NO CAP (``seats = "unlimited"``): a tool whose licence admits any number of
+#: The one spelling of a seat count with NO CAP (``seats = "unlimited"``): a tool whose license admits any number of
 #: concurrent solves (user ruling 2026-11-27: "Maxwell has no seat limit on any machine"). Sized as ``math.inf``, so
 #: no claim is ever refused for lack of its seat; every other string is refused by name.
 UNLIMITED: Final = 'unlimited'

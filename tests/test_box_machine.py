@@ -151,7 +151,7 @@ def test_an_unlimited_seat_count_is_no_cap_and_a_count_still_caps(
     assert free['jmag'] == 0
 
 
-@pytest.mark.parametrize('typo', ['unlimted', 'Unlimited', 'inf', ''])
+@pytest.mark.parametrize('typo', ['infinite', 'Unlimited', 'inf', ''])
 def test_a_seat_string_other_than_unlimited_is_refused_by_name(typo: str) -> None:
     with pytest.raises(
         ValueError, match=rf'\[capabilities\.maxwell\] seats = {typo!r}: declare a positive int or "unlimited"'
