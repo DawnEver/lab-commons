@@ -45,7 +45,8 @@ def test_a_silent_host_names_the_vpn_only_over_a_vpn(by: str, tmp_path: Path, mo
     monkeypatch.setattr(reach, 'section', lambda _name: _hpc(by))
 
     def silent(argv: list[str], _stdin: str | None, _timeout: float) -> str:
-        raise cluster.Unreachable(f'ssh could not reach {argv[-2]}: timed out')
+        msg = f'ssh could not reach {argv[-2]}: timed out'
+        raise cluster.Unreachable(msg)
 
     monkeypatch.setattr(cluster, '_completed', silent)
     with pytest.raises(cluster.Unreachable) as caught:
