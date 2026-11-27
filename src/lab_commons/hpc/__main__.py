@@ -86,6 +86,7 @@ from lab_commons.hpc.jobs import (
     submit_job,
 )
 from lab_commons.hpc.needsets import BASE, needs_of, vocabulary_at
+from lab_commons.hpc.reach import ReachRefused
 from lab_commons.hpc.restrict import restricted
 from lab_commons.hpc.retired import refusal
 from lab_commons.hpc.run import submit_run
@@ -525,11 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     """
     try:
         return _dispatch(argv)
-    except Unreachable as unreachable:
-        sys.stderr.write(
-            f'hpc refused: {unreachable} -- no login host is reachable from this network; join the site network '
-            '(or its VPN), then re-run\n'
-        )
+    except (Unreachable, ReachRefused) as unreachable:
+        sys.stderr.write(f'hpc refused: {unreachable}\n')  # over a VPN, it names the VPN door (lab_commons.hpc.reach)
         return UNREACHABLE_EXIT
 
 
