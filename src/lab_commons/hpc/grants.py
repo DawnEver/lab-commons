@@ -15,11 +15,12 @@ WAITS (:func:`lab_commons.hpc.plan.allocate` gives it no room); only a task past
 refused. No ``$LC_HPC_SESSION`` tags nothing and caps nothing.
 
 AN ACCOUNT IS ``(user, slurm_account)`` ON ONE DECLARED CLUSTER. A cluster's facts -- its login hosts, partitions,
-QOS, compute-node set-up, architecture, where an account's trees live, and which of its Slurm accounts are billed --
-are declared ONCE under ``[hpc.clusters.<name>]``; a grant names its cluster and inherits them, so no fact of a
-cluster is repeated per account. ``hosts`` is ordered: the runner (:func:`lab_commons.hpc.cluster.runner_for`)
-tries each with ``BatchMode`` ssh and a short connect timeout and uses the first that answers. Every host of one
-cluster shares Slurm and the home directory, so a run submitted through one is read back through another.
+QOS, compute-node set-up, the nodes no job may use, architecture, where an account's trees live, and which of its Slurm
+accounts are billed -- are declared ONCE under ``[hpc.clusters.<name>]``; a grant names its cluster and inherits them,
+so no fact of a cluster is repeated per account. ``hosts`` is ordered: the runner
+(:func:`lab_commons.hpc.cluster.runner_for`) tries each with ``BatchMode`` ssh and a short connect timeout and uses
+the first that answers. Every host of one cluster shares Slurm and the home directory, so a run submitted through one
+is read back through another.
 
 A MACHINE REACHES AN ACCOUNT BY ITS ROLE (HPC-ACCESS-BY-ROLE). Every grant declares a ``role``; the machine's
 ``[hpc] reach`` lists the roles it may use, and :func:`load_grants` keeps only the grants whose role it lists.
@@ -40,6 +41,7 @@ The ``[hpc]`` table (:mod:`lab_commons.config`; the declarations usually come fr
     setup = ["module load git/2.42.0"]   # optional: run first in every array task
     architecture = "site-arch"           # optional: its entry in the cluster catalog (lab_commons.hpc.topology)
     root = "/work/proj/{user}"           # optional: an account's trees, when compute nodes cannot see home
+    exclude_nodes = ["node047"]          # optional: nodes no job may use (--exclude), one node name each
 
     [hpc.clusters.<name>.slurm_accounts.<slurm account>]
     billed = false                       # true: every job here spends money
@@ -77,6 +79,11 @@ rather than billed (:func:`lab_commons.hpc.jobs.tiered`).
 compute nodes have no ``git`` until a module is loaded (measured 2026-10-09: 126 git-calling tests errored
 ``FileNotFoundError: 'git'`` there, while the login node has it) -- so it is declared once per cluster and
 prepended to every shard script its grants submit, before the job's own set-up.
+
+``exclude_nodes`` IS THE CLUSTER'S TOO. A node that is reachable but unfit -- measured 2026-11-26 (Ada): comp047 and
+comp049 read GPFS small files at ~15 KB/s and a gate job stalled 56 min on one -- is avoided by every job its grants
+submit (``#SBATCH --exclude``, :func:`lab_commons.hpc.cluster.render_script`), and a grant's probe drops it
+(:func:`lab_commons.hpc.cluster.probe`), so no plan counts capacity its jobs may not use.
 """
 
 from __future__ import annotations
@@ -233,8 +240,8 @@ class Budget:
 class Grant:
     """One Slurm account on one cluster, reached over ``ssh`` as ``user`` at the first answering host.
 
-    The cluster's facts (hosts, partitions, qos, setup, architecture, root, billed, budget) are copied from its
-    ``[hpc.clusters.<name>]`` by :func:`load_grants`; a grant table never states them.
+    The cluster's facts (hosts, partitions, qos, setup, exclude_nodes, architecture, root, billed, budget) are copied
+    from its ``[hpc.clusters.<name>]`` by :func:`load_grants`; a grant table never states them.
     """
 
     user: str
@@ -258,6 +265,8 @@ class Grant:
     root: str = ''
     #: Who holds the account; ``''``: undeclared.
     owner: str = ''
+    #: The cluster's nodes no job of this account may use (``#SBATCH --exclude``); ``()``: none.
+    exclude_nodes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """A grant names who, where and which account."""
@@ -285,8 +294,8 @@ class Grant:
         return not set(self.hosts).isdisjoint(other.hosts)
 
     def cluster(self) -> Cluster:
-        """The planner's view of this grant: which partitions it may ask for, and under which QOS."""
-        return Cluster(partitions=self.partitions, qos=self.qos)
+        """The planner's view of this grant: which partitions it may ask for, under which QOS, avoiding which nodes."""
+        return Cluster(partitions=self.partitions, qos=self.qos, exclude_nodes=self.exclude_nodes)
 
 
 @dataclass(frozen=True)
@@ -361,7 +370,11 @@ class Machine:
 #: The keys a ``[[hpc.grant]]`` table may carry: who, which cluster and account, its role. The rest is the cluster's.
 _GRANT_KEYS: Final = frozenset({'user', 'cluster', 'slurm_account', 'role', 'owner', 'priority'})
 #: The keys of one ``[hpc.clusters.<name>]``.
-_CLUSTER_KEYS: Final = frozenset({'hosts', 'partitions', 'qos', 'setup', 'architecture', 'root', 'slurm_accounts'})
+_CLUSTER_KEYS: Final = frozenset(
+    {'hosts', 'partitions', 'qos', 'setup', 'exclude_nodes', 'architecture', 'root', 'slurm_accounts'}
+)
+#: What a node name may not hold: ``--exclude`` is comma-joined, and a hostlist range would never match a probed name.
+_NOT_IN_A_NODE_NAME: Final = re.compile(r'[\s,\[\]]')
 #: The keys of one ``[hpc.clusters.<name>.slurm_accounts.<account>]``.
 _ACCOUNT_KEYS: Final = frozenset({'billed', 'budget'})
 #: Unit-suffixed keys retired by the 2026-11-25 ruling, refused with the line that replaces them; never read.
@@ -403,6 +416,18 @@ def _account(facts: object, where: str, source: str) -> tuple[bool, Budget | Non
     return facts['billed'], Budget(**{**budget, 'core_time': core_time})
 
 
+def _exclude_nodes(value: object, where: str, source: str) -> None:
+    """Refuse an ``exclude_nodes`` that is not a list of plain node names."""
+    if not isinstance(value, list) or not all(
+        isinstance(node, str) and node and not _NOT_IN_A_NODE_NAME.search(node) for node in value
+    ):
+        msg = (
+            f'{source}: {where} exclude_nodes lists node names, one per entry (["node047", "node049"]; no comma, '
+            f'space or hostlist range), got {value!r}'
+        )
+        raise ValueError(msg)
+
+
 def _clusters(raw: object, source: str) -> dict[str, dict[str, Any]]:
     """Each declared cluster's table, its Slurm accounts resolved to ``{account: (billed, budget)}``."""
     if not isinstance(raw, dict) or not all(isinstance(table, dict) for table in raw.values()):
@@ -416,6 +441,7 @@ def _clusters(raw: object, source: str) -> dict[str, dict[str, Any]]:
         if not table.get('hosts') or not isinstance(accounts, dict) or not accounts:
             msg = f'{source}: {where} declares its login hosts and at least one slurm_accounts.<account>'
             raise ValueError(msg)
+        _exclude_nodes(table.get('exclude_nodes', []), where, source)
         resolved = {acct: _account(facts, f'{where} slurm_accounts.{acct}', source) for acct, facts in accounts.items()}
         clusters[name] = {**table, 'slurm_accounts': resolved}
     return clusters
@@ -446,6 +472,7 @@ def _grant(raw: dict[str, Any], clusters: Mapping[str, Mapping[str, Any]], sourc
         partitions=tuple(cluster.get('partitions', ())),
         qos=dict(cluster.get('qos', {})),
         setup=tuple(cluster.get('setup', ())),
+        exclude_nodes=tuple(cluster.get('exclude_nodes', ())),
         billed=billed,
         budget=budget,
         architecture=cluster.get('architecture', ''),

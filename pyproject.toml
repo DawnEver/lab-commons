@@ -44,7 +44,7 @@ packages = ["src/lab_commons"]
 
 [project.optional-dependencies]
 # Each defining module has an explicit installation capability, not a root facade.
-units = ["numpy", "pint>=0.25.2", "pydantic>=2"]
+units = ["numpy", "pint>=0.25.2"]
 paths = ["platformdirs"]
 io = ["tomlkit"]
 structured = ["structlog", "colorama; sys_platform == 'win32'"]
@@ -177,7 +177,7 @@ ephemeral = ['pr/*']
 prune_merged = true
 # Branch limits (user ruling 2026-11-20): land or retire a head past them (dev_lab.dev.branchpolicy).
 max_ahead = 10
-max_idle_hours = 12
+max_idle = "12 h"
 
 [tool.dev_lab.doors]
 # This repo's exits, keyed by deny-rule ID. The agent guard runs from whichever project a session

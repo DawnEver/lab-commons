@@ -34,8 +34,8 @@ def _parser() -> argparse.ArgumentParser:
         'windows': 'list top-level windows with pid, title, rect, enabled, responding, cpu_s',
         'capture': 'write each window as a PNG into --out',
         'controls': "read each window's accessibility tree (role, name, value, enabled, actions)",
-        'press': 'press the ONE control labelled exactly --label (or with --id), once',
-        'set-value': 'set the ONE control labelled exactly --label (or with --id) to --value',
+        'press': 'press the ONE control labeled exactly --label (or with --id), once',
+        'set-value': 'set the ONE control labeled exactly --label (or with --id) to --value',
         'close': 'ask the window to close through its own close',
     }
     for verb, text in helps.items():
@@ -49,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
         if verb == 'windows':
             sub.add_argument('--hidden', action='store_true', help='include windows that are not visible')
         if verb == 'capture':
-            sub.add_argument('--out', type=Path, required=True, help='the directory the PNGs go to')
+            sub.add_argument('--out', type=Path, required=True, help='the directory the PNG images go to')
             sub.add_argument('--timeout-s', type=float, default=5.0, help='seconds before a window is busy')
         if verb in {'press', 'set-value'}:
             target = sub.add_mutually_exclusive_group(required=True)

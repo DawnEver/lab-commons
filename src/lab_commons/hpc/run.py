@@ -346,7 +346,7 @@ def submit_run(
     origin in ``carried`` and never submitted; when nothing is left the record is written at once.
     """
     runners = {g.account: connect(g) for g in machine.grants}
-    snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants]
+    snapshots = [(g, probe(runners[g.account], g.slurm_account, exclude=g.exclude_nodes)) for g in machine.grants]
     grant, _ = allocate(
         1, cost, snapshots, session=machine.session, policy=policy, paging=machine.paging, rerun_safe=True
     )

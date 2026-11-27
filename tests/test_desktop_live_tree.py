@@ -4,8 +4,8 @@ The child is a native Win32 window whose Edit and Button sit two panes deep. Pre
 the Edit's text to a file and REBUILDS the button, so the id it was pressed by is stale afterwards: the
 planted control presses that id again
 and must be refused (``desktop.control_gone``) without a second write. The capture test is the planted
-control of the DPI defect: a window drawn in one colour, made DPI-UNAWARE on a scaled display, must have
-that colour in its BOTTOM-RIGHT quadrant -- a "not black overall" check passed on the defect, whose
+control of the DPI defect: a window drawn in one color, made DPI-UNAWARE on a scaled display, must have
+that color in its BOTTOM-RIGHT quadrant -- a "not black overall" check passed on the defect, whose
 render filled only the top-left. Produced by a Windows host (the ``windows`` part).
 """
 
@@ -79,7 +79,7 @@ while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
     u.DispatchMessageW(ctypes.byref(msg))
 """
 
-#: argv: title, awareness context (-1 unaware, -4 per-monitor v2). One colour fills the whole client area.
+#: argv: title, awareness context (-1 unaware, -4 per-monitor v2). One color fills the whole client area.
 _FILL = """
 import ctypes, sys, tkinter
 ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(int(sys.argv[2])))

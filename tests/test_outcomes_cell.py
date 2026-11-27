@@ -84,3 +84,32 @@ def test_equal_cells_hash_equal() -> None:
     assert a == b
     assert hash(a) == hash(b)
     assert len({a, b, Cell(Status.OK, values={'a': 2.0})}) == 2
+
+
+def test_a_cell_carries_its_artifacts_through_its_plain_form() -> None:
+    cell = Cell(
+        Status.NONCONVERGED,
+        reason=Reason('nonconverged', 'diverged'),
+        artifacts={'log': 'runs/a/solve.log', 'mesh': 'runs/a/mesh.msh'},
+    )
+    plain = cell.to_plain()
+    assert plain['artifacts'] == {'log': 'runs/a/solve.log', 'mesh': 'runs/a/mesh.msh'}
+    assert Cell.from_plain(plain) == cell
+    # planted control: a cell whose artifacts were dropped is a different cell
+    assert Cell.from_plain({k: v for k, v in plain.items() if k != 'artifacts'}) != cell
+
+
+def test_a_cell_without_artifacts_omits_them() -> None:
+    cell = Cell(Status.OK, values={'torque': 1.0})
+    assert cell.artifacts == {}
+    assert 'artifacts' not in cell.to_plain()
+
+
+def test_artifacts_are_read_only_named_references() -> None:
+    cell = Cell(Status.OK, artifacts={'log': 'a.log'})
+    with pytest.raises(TypeError):
+        cell.artifacts['log'] = 'b.log'  # type: ignore[index]
+    with pytest.raises(TypeError, match='artifact'):
+        Cell(Status.OK, artifacts={'log': 3})  # type: ignore[dict-item]
+    with pytest.raises(ValueError, match='artifact'):
+        Cell(Status.OK, artifacts={'log': ''})

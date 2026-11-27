@@ -8,7 +8,7 @@ itself parallel says so in ``cost.cpus``; nothing here invents a width.
 
 THREE NUMBERS ARE DECIDED, IN THIS ORDER.
 
-1. **Shards** -- consecutive items are packed until a shard holds enough padded time to amortise start-up
+1. **Shards** -- consecutive items are packed until a shard holds enough padded time to amortize start-up
    (``shard_minutes_min``) without passing ``shard_minutes_max``; both bounds are then grown until the
    array fits ``max_array``, the QOS's per-user submit limit (each array task is one job to Slurm) and
    what the quota CEILING runs at once -- ONE WAVE, so the makespan is the wall and never longer; a
@@ -118,6 +118,8 @@ class Plan:
     #: ``()``: one unbound item a task. ``cpus``/``mem_mb``/``gpus`` are all lanes together.
     lane_cpus: tuple[str, ...] = ()
     lane_mems: tuple[str, ...] = ()
+    #: The cluster's nodes no task may start on -- ``--exclude=a,b``; ``()``: none. :func:`make_plan` stamps it.
+    exclude_nodes: tuple[str, ...] = ()
 
     @property
     def lanes(self) -> int:
@@ -285,6 +287,7 @@ def make_plan(
         makespan_minutes=math.ceil(len(shards) / running) * minutes,
         room=now,
         top_minutes=_top(o[3] for o in open_),
+        exclude_nodes=cluster.exclude_nodes,
     )
 
 

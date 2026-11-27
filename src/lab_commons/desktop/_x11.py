@@ -128,11 +128,11 @@ def decode_xwd(dump: bytes) -> bytes:
     fields = struct.unpack('>25I', dump[: 4 * _XWD_FIELDS])
     header_size, _version, form, _depth, width, height = fields[:6]
     byte_order, bits_per_pixel, bytes_per_line = fields[7], fields[11], fields[12]
-    masks, colours = fields[14:17], fields[19]
+    masks, colors = fields[14:17], fields[19]
     if form != _ZPIXMAP or bits_per_pixel != 32 or masks != (0xFF0000, 0xFF00, 0xFF):  # noqa: PLR2004 -- the one format
         msg = f'xwd wrote format {form}, {bits_per_pixel} bpp, masks {[hex(m) for m in masks]}: only 32-bit RGB is read'
         raise UnsupportedError(msg, 'desktop.capture_format')
-    start = header_size + 12 * colours
+    start = header_size + 12 * colors
     bgra = bytearray()
     for y in range(height):
         row = dump[start + y * bytes_per_line : start + y * bytes_per_line + width * 4]

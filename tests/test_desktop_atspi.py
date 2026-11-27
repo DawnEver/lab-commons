@@ -168,7 +168,7 @@ class TestAtspi:
                                 '/org/a11y/bus', '--method', 'org.a11y.Bus.GetAddress']  # fmt: skip
         assert ':1.9' not in [a[a.index('--dest') + 1] for a in bus.argvs], 'a foreign app is never walked'
 
-    def test_press_does_action_zero_of_the_one_labelled_control(self) -> None:
+    def test_press_does_action_zero_of_the_one_labeled_control(self) -> None:
         bus = _Bus()
         _x(bus).press(_WINDOW, 'OK', None)
         assert bus.methods()[-1] == ('/ok', f'{_A11Y}Action.DoAction')
@@ -275,7 +275,7 @@ class TestAtspiOnALiveBus:
         assert controls['OK'].automation_id is None
         assert controls['OK'].actions == ('press',)
 
-    def test_a_nameless_button_is_labelled_by_its_one_named_descendant(self) -> None:
+    def test_a_nameless_button_is_labeled_by_its_one_named_descendant(self) -> None:
         """GTK4 names a button's child label, not the button: zenity's Cancel read ('Cancel', 'label') live."""
         bus = _Bus()
         frame = (':1.7', '/frame', f'{_A11Y}Accessible.GetChildren', ())

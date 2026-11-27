@@ -102,7 +102,7 @@ def probe_command(slurm_account: str = '') -> str:
 
     ``--me`` AS WELL AS ``-A``: the share is of THIS login's per-user quota, and an account like a
     university's free tier carries thousands of other people's jobs that count against nothing of ours.
-    Pending jobs are included -- they are claims the scheduler will honour before a new submission -- and
+    Pending jobs are included -- they are claims the scheduler will honor before a new submission -- and
     listed again on their own (``@@@ pending``): a waiting large task pins the region
     (:func:`lab_commons.hpc.region.region`).
     """

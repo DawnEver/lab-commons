@@ -49,6 +49,7 @@ _SHIPPED: Final = frozenset(
         'REMOTE-WRITE-THROUGH-A-DOOR',  # gained 2026-11-07 with dev-lab #313 (agentpolicy)
         'COMMIT-HOOKS-RUN',  # gained 2026-11-13 with dev-lab 61560e40
         'CONSENT-CODE-FROM-THE-USER',  # renamed 2026-11-08 by dev-lab #325 (user ruling)
+        'ENVIRONMENT-THROUGH-DEP',  # gained 2026-11-26 with dev-lab f7e18361 (retire-units-em relock)
         'REPORTS-LIVE-IN-MEMORY',
         'STATUS-VIA-DOORS',
         'SUBAGENT-NO-PUSH',

@@ -5,7 +5,7 @@ worse copy racing the real one. The two questions Slurm cannot answer for a call
 piece should be and WHICH partition to send it to, and those are the only two this layer decides. It
 reads the cluster once (:mod:`lab_commons.hpc.slurm`), cuts the work into array tasks that fit the
 holes and the caller's own quota (:mod:`lab_commons.hpc.plan`), and hands one job array to ``sbatch``
-with a concurrency throttle. Queueing, backfill and retries of a node failure stay Slurm's.
+with a concurrency throttle. Queuing, backfill and retries of a node failure stay Slurm's.
 
 FOUR LAYERS, EACH IGNORANT OF THE ONE ABOVE IT::
 
@@ -24,7 +24,7 @@ speeds it up (:func:`lab_commons.hpc.plan.allocate` when one is fastest), from w
 :mod:`lab_commons.hpc.run` runs one commit's test suite through the same layers.
 
 STDLIB ONLY, so no extra gates it: ``tomllib`` reads the config and ``json`` carries the manifest. Like
-``lab_commons.em`` and ``lab_commons.viz`` it is an opt-in IMPORT -- ``import lab_commons`` does not
+``lab_commons.viz`` it is an opt-in IMPORT -- ``import lab_commons`` does not
 reach it, and ``tests/test_hpc_gate.py`` pins that against a fresh interpreter.
 """
 

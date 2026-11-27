@@ -128,7 +128,7 @@ SEATS: Final = Dimension(
     Accounting.COUNTED,
     Enforcement.INDEXED,
     conservative=1,
-    note='concurrent jobs, or licence seats. An unmeasured box SERIALISES: one at a time.',
+    note='concurrent jobs, or license seats. An unmeasured box SERIALIZES: one at a time.',
 )
 #: The BOX's seat: one CPU-saturating run at a time, everywhere on this machine.
 #:

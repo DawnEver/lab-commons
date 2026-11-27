@@ -52,7 +52,7 @@ SUPPLY_S = 10.0
 def seat_sizes() -> tuple[dict[str, int], dict[str, str]]:
     """Each ``[capabilities]`` tool's seats as MEASURED: ``(sizes, blind)``.
 
-    A ``supply`` argv prints the TOTAL seats this box may lend (a vendor's licence count, say) as one integer;
+    A ``supply`` argv prints the TOTAL seats this box may lend (a vendor's license count, say) as one integer;
     the ledger subtracts what its claims hold. No probe: the declared ``seats`` are the size. A probe that fails,
     times out or prints no count CANNOT SAY: its tool keeps its declared size but is *blind* -- ``{tool: why}``
     -- and lends none of it (a vacuous green is the family's worst defect). A vendor row with no declared count

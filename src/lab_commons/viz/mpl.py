@@ -45,7 +45,7 @@ __all__ = [
 ]
 
 #: The backends that CANNOT open a window. Lower-case, because ``mpl.get_backend()`` casing varies
-#: while matplotlib normalises its backend names case-insensitively.
+#: while matplotlib normalizes its backend names case-insensitively.
 _NONINTERACTIVE_BACKENDS: Final = frozenset({'agg', 'pdf', 'ps', 'svg', 'cairo', 'template'})
 
 #: This library's own name for each coordinate system the vocabulary declares. ONE row per name in

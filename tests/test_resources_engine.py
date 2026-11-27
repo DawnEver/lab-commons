@@ -102,7 +102,7 @@ def test_a_consumable_without_a_declared_window_is_refused() -> None:
         held.__enter__()
 
 
-def test_engine_rows_of_another_scope_are_not_the_boxs() -> None:
+def test_engine_rows_of_another_scope_are_not_this_box() -> None:
     with Engine({_SCOPE: [_Fake('cpu', 100, 1)]}).claim(_SCOPE, Claim(Resources(cpu=4), wall_s=60, what='x', key='x')):
         assert holdings() == []
 
@@ -119,7 +119,7 @@ def test_a_claims_row_written_before_kinds_existed_reads_as_box_occupancy() -> N
             'INSERT INTO claims (pid, cpu, mem_bytes, seats, deadline, started, what, key)'
             " VALUES (1, 2, 0, '{}', 1, 0, 'old', 'k');"
         )
-    with pytest.raises(LedgerVersionRefused, match='python -m lab_commons.box migrate'):
+    with pytest.raises(LedgerVersionRefused, match=r'python -m lab_commons\.box migrate'):
         connect()
     migrate()
     with closing(connect()) as con:

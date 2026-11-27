@@ -16,6 +16,11 @@ WHICH store is the family's fact (``[storage] runs``, :mod:`lab_commons.storage`
 derives it, with the machine's pinned rclone (:func:`rclone_exe`, under :func:`lab_commons.home.pinned_bin`) and the
 config dev-lab renders (:data:`RCLONE_CONFIG`) -- so a product needs no dev-lab import. Either absent is refused by
 name with its door (:class:`RcloneAbsent`, :class:`ConfigUnrendered`); ``PATH`` is never guessed.
+
+A PACK (v1 ruling D125 F7) carries objects to a place with no store: :func:`pack` zips named files with a
+``manifest.toml`` (:data:`MANIFEST`) naming each member's relative path, sha256 and size, each distinct content
+stored ONCE under ``objects/<sha[:2]>/<sha>``; :func:`unpack` re-hashes every byte and refuses a pack that lies
+(:class:`PackRefused`) before writing anything.
 """
 
 from __future__ import annotations
@@ -26,7 +31,9 @@ import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Collection, Sequence
+import tomllib
+import zipfile
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -35,23 +42,38 @@ from lab_commons import home as _home
 from lab_commons import launch as _door
 from lab_commons import storage as _storage
 from lab_commons.compute.store import ArrivalMismatch, Ref
+from lab_commons.temp import TEMP_PREFIX
 
 __all__ = [
+    'MANIFEST',
     'OBJECTS_PREFIX',
+    'PACK_FORMAT',
+    'PACK_OBJECTS',
     'RCLONE',
     'RCLONE_CONFIG',
     'SCRATCH_PREFIX',
     'ConfigUnrendered',
+    'Member',
     'NotLocked',
     'ObjectRefused',
+    'PackRefused',
     'RcloneAbsent',
     'RcloneObjects',
     'UploadUnverified',
     'declared_objects',
     'file_sha256',
+    'pack',
     'rclone_exe',
+    'read_manifest',
+    'unpack',
 ]
 
+#: A pack's manifest member name.
+MANIFEST: Final = 'manifest.toml'
+#: The manifest format this reader reads and the writer writes.
+PACK_FORMAT: Final = 1
+#: The zip directory a pack's content-addressed objects live under.
+PACK_OBJECTS: Final = 'objects'
 #: The durable key prefix every run's objects live under on the declared store.
 OBJECTS_PREFIX: Final = 'results'
 #: The first key segment a remote may age out (a lifecycle rule deletes it): never a durable object's place.
@@ -69,6 +91,10 @@ _RCLONE_TIMEOUT_S: Final = 3600
 
 class ObjectRefused(ValueError):
     """An object operation refused: a malformed sha256 or prefix, no rclone named, or the remote's own refusal."""
+
+
+class PackRefused(ObjectRefused):
+    """A pack that cannot be written or does not verify; the message names the member and why."""
 
 
 class NotLocked(ObjectRefused):
@@ -214,7 +240,7 @@ class RcloneObjects:
 
     def verify(self, ref: Ref) -> None:
         """Re-hash the stored bytes of *ref*; other bytes raise :class:`ArrivalMismatch`."""
-        with tempfile.TemporaryDirectory(prefix='lab-commons-objects-') as scratch:
+        with tempfile.TemporaryDirectory(prefix=f'{TEMP_PREFIX}objects-') as scratch:
             self._arrived(ref.ref, ref.sha256, Path(scratch) / 'object')
 
     def get(self, ref: Ref, dest: Path) -> Path:
@@ -263,3 +289,125 @@ def declared_objects(
             )
             raise ConfigUnrendered(msg)
     return RcloneObjects(declared.runs, OBJECTS_PREFIX, (*argv, f'--config={config.expanduser()}'))
+
+
+# --- PACK AND UNPACK (v1 ruling D125 F7) -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Member:
+    """One member of a pack: its relative POSIX *name*, the *sha256* of its content and its *size* in bytes."""
+
+    name: str
+    sha256: str
+    size: int
+
+    @property
+    def entry(self) -> str:
+        """The zip entry holding the content: ``objects/<sha[:2]>/<sha>``, shared by every member of that content."""
+        return f'{PACK_OBJECTS}/{self.sha256[:2]}/{self.sha256}'
+
+
+def _safe_name(name: str) -> str:
+    parts = name.split('/')
+    if not name or name.startswith('/') or ':' in name or '\\' in name or any(p in {'', '.', '..'} for p in parts):
+        msg = f'pack member {name!r} is not a relative path inside the pack (POSIX, no "..", no drive)'
+        raise PackRefused(msg)
+    return name
+
+
+def _manifest_text(members: Sequence[Member], meta: Mapping[str, str]) -> str:
+    blocks = [f'[pack]\nformat = {PACK_FORMAT}\n']
+    if meta:
+        blocks.append('[meta]\n' + ''.join(f'{json.dumps(k)} = {json.dumps(v)}\n' for k, v in sorted(meta.items())))
+    blocks += [f'[[member]]\nname = {json.dumps(m.name)}\nsha256 = "{m.sha256}"\nsize = {m.size}\n' for m in members]
+    return '\n'.join(blocks)
+
+
+def pack(files: Mapping[str, Path], archive: Path, *, meta: Mapping[str, str] | None = None) -> Path:
+    """Zip *files* (member name -> source path) into *archive* with :data:`MANIFEST`; each content stored once.
+
+    Raises:
+        PackRefused: a member name is not a relative path inside the pack.
+
+    """
+    members = sorted(
+        (Member(_safe_name(name), file_sha256(path), path.stat().st_size) for name, path in files.items()),
+        key=lambda m: m.name,
+    )
+    sources = {m.entry: files[m.name] for m in members}
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as book:
+        book.writestr(MANIFEST, _manifest_text(members, meta or {}))
+        for entry, source in sorted(sources.items()):
+            book.write(source, entry)
+    return archive
+
+
+def read_manifest(archive: Path) -> tuple[Member, ...]:
+    """The members *archive*'s manifest names, every name checked safe.
+
+    Raises:
+        PackRefused: no manifest, an unknown format, or a member name that escapes the pack.
+
+    """
+    with zipfile.ZipFile(archive) as book:
+        return _members(book, archive)
+
+
+def _members(book: zipfile.ZipFile, archive: Path) -> tuple[Member, ...]:
+    try:
+        manifest = tomllib.loads(book.read(MANIFEST).decode('utf-8'))
+    except KeyError:
+        msg = f'{archive.name} holds no {MANIFEST}: it is not a pack'
+        raise PackRefused(msg) from None
+    found = manifest.get('pack', {}).get('format')
+    if found != PACK_FORMAT:
+        msg = f'{archive.name} is pack format {found!r}; this reader reads format {PACK_FORMAT}'
+        raise PackRefused(msg)
+    return tuple(
+        Member(_safe_name(str(row['name'])), str(row['sha256']), int(row['size'])) for row in manifest.get('member', [])
+    )
+
+
+def _verified(book: zipfile.ZipFile, archive: Path, members: Sequence[Member]) -> dict[str, bytes]:
+    named = {MANIFEST} | {m.entry for m in members}
+    for entry in book.namelist():
+        if entry not in named:
+            msg = f'{archive.name}: its manifest names no {entry!r}'
+            raise PackRefused(msg)
+    contents: dict[str, bytes] = {}
+    for member in members:
+        if member.entry not in contents:
+            try:
+                contents[member.entry] = book.read(member.entry)
+            except KeyError:
+                msg = f'{archive.name}: {member.name} has no content entry {member.entry}'
+                raise PackRefused(msg) from None
+        data = contents[member.entry]
+        if hashlib.sha256(data).hexdigest() != member.sha256 or len(data) != member.size:
+            msg = f'{archive.name}: {member.name} does not hash to its manifest ({member.sha256[:16]})'
+            raise PackRefused(msg)
+    return contents
+
+
+def unpack(archive: Path, dest: Path) -> dict[str, Path]:
+    """Every member of *archive* written under *dest*, each re-hashed first; member name -> written path.
+
+    Nothing is written unless the whole pack verifies.
+
+    Raises:
+        PackRefused: a member name escapes *dest*, the zip holds an entry the manifest does not name or lacks one it
+            does, or a member's bytes do not hash to the manifest.
+
+    """
+    with zipfile.ZipFile(archive) as book:
+        members = _members(book, archive)
+        contents = _verified(book, archive, members)
+    written = {}
+    for member in members:
+        target = dest.joinpath(*member.name.split('/'))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents[member.entry])
+        written[member.name] = target
+    return written

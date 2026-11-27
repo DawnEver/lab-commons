@@ -14,7 +14,7 @@ colormap table — and red on a name either library does not carry, so a row her
 the libraries rather than against the file it lives in.
 
 A NAME THAT IS NOT HERE IS REFUSED BY NAME, never replaced by a default. A silent substitution would
-draw a figure whose colour scale or dash pattern differs from the one the description asked for,
+draw a figure whose color scale or dash pattern differs from the one the description asked for,
 which is the one thing a shared vocabulary must never do.
 """
 
@@ -27,7 +27,7 @@ from bokeh import palettes
 __all__ = ['BASELINES', 'DASHES', 'MARKERS', 'PALETTES', 'given', 'marked', 'palette_for', 'quantized']
 
 #: The colormaps BOTH adapters carry: the vocabulary's name -> bokeh's palette name. A named set
-#: rather than a fallback, because a silent substitution is a colour scale that means something
+#: rather than a fallback, because a silent substitution is a color scale that means something
 #: different from the one the description asked for -- and the key is matplotlib's own spelling,
 #: MEASURED against its registry rather than assumed, because that is the name a
 #: :class:`~lab_commons.viz.Scale` carries and the one the other adapter hands its library. What is
@@ -98,10 +98,10 @@ def marked(name: str) -> str:
 
 
 def quantized(name: str, bands: int) -> list[str]:
-    """*bands* colours sampled at the CENTRES of *name*'s ramp — a discrete bar's palette.
+    """*bands* colors sampled at the CENTERS of *name*'s ramp — a discrete bar's palette.
 
     The sampling positions are ``(index + 0.5) / bands``, which is the same arithmetic the
-    matplotlib adapter hands its own colormap, so "one colour per band" means the same colour on
+    matplotlib adapter hands its own colormap, so "one color per band" means the same color on
     both sides of a figure comparison. Read out of bokeh's registry rather than assumed: the
     palette NAME :func:`palette_for` resolves is ``<family><width>``, and this asks for the width
     the name spells instead of trusting whatever the family's default happens to be.

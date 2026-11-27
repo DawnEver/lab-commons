@@ -58,7 +58,7 @@ def phases(run: Mapping[str, Any]) -> dict[str, float]:
 
     ``wall_s`` is prep plus first submit to last end; ``retry_s`` is what the rounds after the first
     added to it (their walls and the gaps before them); ``gap_s`` the time between a round's end and the
-    next submit -- a gather nobody made. ``utilisation`` is busy over charged core-seconds.
+    next submit -- a gather nobody made. ``utilization`` is busy over charged core-seconds.
     """
     clocks: Sequence[Mapping[str, float]] = [r['clock'] for r in run.get('rounds', []) if 'clock' in r]
     prep = float(sum(run.get('prep', {}).values()))
@@ -76,12 +76,12 @@ def phases(run: Mapping[str, Any]) -> dict[str, float]:
         'gap_s': sum(gaps),
         'core_h': core / _HOUR,
         'busy_h': busy / _HOUR,
-        'utilisation': busy / core if core else 0.0,
+        'utilization': busy / core if core else 0.0,
     }
 
 
 def describe(breakdown: Mapping[str, float]) -> str:
-    """One line: wall and where it went, then core-hours and utilisation."""
+    """One line: wall and where it went, then core-hours and utilization."""
     if 'wall_s' not in breakdown:
         return f'phases: prep {breakdown["prep_s"] / 60:.1f} min, no round finished yet'
     m = {k: v / 60 for k, v in breakdown.items() if k.endswith('_s')}
@@ -89,5 +89,5 @@ def describe(breakdown: Mapping[str, float]) -> str:
         f'phases: wall {m["wall_s"]:.0f} min = prep {m["prep_s"]:.1f} + queue {m["queue_s"]:.1f} + retries '
         f'{m["retry_s"]:.0f} (gaps {m["gap_s"]:.0f}) + the rest; straggler tails {m["tail_s"]:.0f} min; '
         f'{breakdown["core_h"]:.1f} core-h charged, {breakdown["busy_h"]:.1f} busy '
-        f'({breakdown["utilisation"]:.0%})'
+        f'({breakdown["utilization"]:.0%})'
     )

@@ -114,7 +114,7 @@ def test_a_newer_ledger_is_refused_by_open_and_by_migrate(ledger: Path) -> None:
     assert _version(ledger) == SCHEMA_VERSION + 1
 
 
-def test_the_migrate_verb_migrates_this_boxs_ledger(ledger: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_migrate_verb_migrates_this_box_ledger(ledger: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _plant(ledger, _FIRST_SHAPE, 0)
     assert main(['migrate']) == 0
     assert _version(box_path()) == SCHEMA_VERSION

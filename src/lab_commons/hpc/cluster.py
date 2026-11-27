@@ -21,8 +21,8 @@ import functools
 import json
 import shlex
 import shutil
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Sequence
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 import lab_commons.launch as _door
@@ -200,9 +200,14 @@ def runner_for(grant: Grant, timeout: float = _TIMEOUT) -> Runner:
     return failover_runner([(target, ssh_runner(target, timeout)) for target in grant.targets])
 
 
-def probe(run: Runner, account: str = '') -> Snapshot:
-    """Read the cluster once -- see :mod:`lab_commons.hpc.slurm`; a named account also reads its usage."""
-    return parse_snapshot(run(probe_command(account), None), account)
+def probe(run: Runner, account: str = '', *, exclude: Collection[str] = ()) -> Snapshot:
+    """Read the cluster once -- see :mod:`lab_commons.hpc.slurm`; a named account also reads its usage.
+
+    The *exclude* nodes (a grant's ``exclude_nodes``) are dropped: its jobs may not use them, so nothing sized on
+    this snapshot -- free slots, headroom, node widths -- counts them.
+    """
+    snapshot = parse_snapshot(run(probe_command(account), None), account)
+    return replace(snapshot, nodes=tuple(node for node in snapshot.nodes if node.name not in exclude))
 
 
 def _sh_path(path: str) -> str:
@@ -227,6 +232,7 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
         f'--account={plan.account}' if plan.account else '',
         f'--qos={plan.qos}' if plan.qos else '',
         '--nodes=1',
+        f'--exclude={",".join(plan.exclude_nodes)}' if plan.exclude_nodes else '',
         '--exclusive' if plan.exclusive else '',
         '--ntasks=1',
         f'--cpus-per-task={plan.cpus}',

@@ -2,10 +2,11 @@
 
 The family's shared runtime and execution layer. Python package `lab_commons`:
 
-- Runtime: `units`, `paths`, `file_io`, `log`, `structured`, `config`, `credentials`, `outcomes`, `viz`,
+- Runtime: `quantity`, `overrides`, `table`, `retired`, `paths`, `file_io`, `log`, `structured`, `config`, `credentials`, `outcomes`, `viz`,
   `graph_layout` (domain-free box placement and orthogonal wire routing; the domain is the caller's adapter).
-- Execution: `box` (one machine ledger), `compute` (units, results, executors), `hpc` (cluster tier),
-  `supervise` (process supervision), and their helpers (`proc`, `liveness`, `resources`, `envkey`, ...).
+- Execution: `box` (one machine ledger), `compute` (units, results, executors), `hpc` (cluster tier), and their
+  helpers (`proc`, `liveness`, `resources`, `envkey`, ...). Process supervision is not here: it is dev-lab's
+  `dev_lab.supervise`.
 - Desktop: `desktop` -- see and act on a host's GUI windows (`python -m lab_commons.desktop ... --json`).
 - Tools: `tools` -- the one door through which an external tool reaches a machine, managed (installed under the
   managed root) or user-installed (its declared home probed): `python -m lab_commons.tools install|list|check`.
@@ -46,13 +47,14 @@ _Rendered by `dev_lab.dev.agentsection` from `dev_lab.dev.principles`; a hand ed
   detail; no duplication across levels.
 - **Keep every valuable parameter and option** (`keep-valuable-options`): Generality is a requirement: keep every
   parameter and option a real case uses or plausibly needs. A reference match ADDS a selectable option and never
-  replaces or deletes the alternative; numerical method choices are options even with no current caller.
+  replaces or deletes the alternative; numerical method choices are options even with no current caller. Every
+  retirement is classified (renamed, baggage, or capability-dropped) and only a user ruling drops a capability.
 - **Every wall teaches** (`every-wall-teaches`): Every refusal or failure an agent hits names its cause and its door;
   one that does not is a mechanism gap, and closing it (a hook row, a remedy, a test) comes before the task. Never route
-  around a wall or hand the user a command. The loop: docs-src/dev/feedback.md.
+  around a wall or hand the user a command. The loop: docs-src/dev/feedback.md (dev-lab).
 - **Fan out without a barrier** (`no-barrier-fan-out`): Parallel work is independent items, each landed the moment it is
   done; nothing waits for the slowest sibling -- no barrier-style orchestration (e.g. a dynamic workflow that joins all
-  agents) unless a step truly needs every result. How: docs-src/dev/fanout.md.
+  agents) unless a step truly needs every result. How: docs-src/dev/fanout.md (dev-lab).
 - **Deliver an image by its absolute path** (`images-by-absolute-path`): An image handed to the user is named by its
   ABSOLUTE path, never a relative one (IMAGES-BY-ABSOLUTE-PATH).
 - **A worktree is named for its task** (`worktree-names-its-task`): A worktree's name has a physical meaning tied to its
@@ -61,6 +63,10 @@ _Rendered by `dev_lab.dev.agentsection` from `dev_lab.dev.principles`; a hand ed
   Rust from its first line; a Python version of it is only a scratch prototype, never a second implementation;
   acceptance is against references (analytic, the vendor ladder, the previous implementation during a migration), never
   against a Python twin.
+- **Everything in its place** (`everything-in-its-place`): Each thing lives in the one owner responsible for it; a
+  misplaced thing moves, never leaving a pointer or a copy.
+- **No detour** (`no-detour`): Every hop must add something; a rule that forces a detour is the defect. Complexity is
+  measured, not guessed.
 
 ## Family workflow
 

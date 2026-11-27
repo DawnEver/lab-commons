@@ -18,7 +18,12 @@ import pytest
 from lab_commons.compute.toolchecks import CHECKS, LSDYNA_SOLVERS, Unmanaged, VersionUnreadable
 
 #: Every way Python starts another program; each is replaced by the recorder.
-_STARTERS = ('Popen', 'startfile', 'system', 'spawnv', 'spawnve', 'spawnl', 'execv', 'execve', 'posix_spawn')
+_STARTERS = (
+    'Popen',
+    'startfile',
+    'system',
+    *sorted(n for n in dir(os) if n.startswith(('spawn', 'exec', 'posix_spawn'))),
+)
 
 
 @pytest.fixture

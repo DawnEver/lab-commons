@@ -103,7 +103,7 @@ def _answering(grants: tuple[Grant, ...], reach: Reach) -> list[tuple[Grant, Any
     found = []
     for grant in grants:
         try:
-            found.append((grant, probe(reach(grant), grant.slurm_account)))
+            found.append((grant, probe(reach(grant), grant.slurm_account, exclude=grant.exclude_nodes)))
         except Unreachable:
             continue
     return found

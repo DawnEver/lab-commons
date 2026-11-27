@@ -24,7 +24,7 @@ def test_the_module_declares_no_task_set() -> None:
     assert not any('TASKS' in name for name in vars(credentials))
 
 
-def test_an_erased_slot_is_gone_and_its_neighbour_stays(tmp_path, monkeypatch) -> None:
+def test_an_erased_slot_is_gone_and_its_neighbor_stays(tmp_path, monkeypatch) -> None:
     store = tmp_path / 'git-credentials'
     config = tmp_path / 'gitconfig'
     config.write_text(f'[credential]\n\thelper = "store --file={store.as_posix()}"\n', encoding='utf-8')

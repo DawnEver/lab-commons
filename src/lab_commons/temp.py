@@ -1,7 +1,7 @@
 """The family's mark on a shared-temp entry: ONE prefix every repo's ``tempfile`` call carries.
 
 A temp root is shared with every program on the machine, so dev-lab's sweep (``dev_lab.dev.tmpsweep``) removes
-only what is recognisably ours (user ruling 2026-11-11): an entry named with :data:`TEMP_PREFIX`. A ``mkdtemp`` /
+only what is recognizably ours (user ruling 2026-11-11): an entry named with :data:`TEMP_PREFIX`. A ``mkdtemp`` /
 ``mkstemp`` / ``TemporaryDirectory`` / ``NamedTemporaryFile`` call that lands in the shared temp dir passes
 ``prefix=TEMP_PREFIX`` (or an f-string led by it); one with ``dir=`` beside a declared path needs none.
 

@@ -7,10 +7,23 @@ to the base unit of its dimension. Every refusal names the key and the dimension
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from lab_commons import quantity
-from lab_commons.quantity import QuantityRefused, Renamed, form, parse, refuse_renamed
+from lab_commons.quantity import (
+    QuantityRefused,
+    Renamed,
+    display,
+    form,
+    from_si,
+    parse,
+    parse_si,
+    refuse_renamed,
+    registry,
+    to_si,
+)
 
 GIB = 1024**3
 
@@ -108,3 +121,72 @@ def test_a_percentage_is_a_fraction_and_its_sign_is_required() -> None:
             parse('disk_ceiling', bad, 'fraction')
     with pytest.raises(QuantityRefused, match='bare number'):
         parse('disk_ceiling', 90, 'fraction')
+
+
+# --- the family unit door (v1 D126 F1): any dimension to SI, the IR codec contract, display -------------------------
+
+
+def test_any_dimension_parses_to_its_si_unit() -> None:
+    assert parse_si('stack', '0.5 mm', 'm') == pytest.approx(5e-4, abs=1e-15)
+    assert parse_si('torque', '12 kN*m', 'N*m') == pytest.approx(12e3, abs=1e-9)
+    assert parse_si('speed', '3000 rpm', 'rad/s') == pytest.approx(100 * math.pi, abs=1e-9)
+    assert parse_si('ambient', '20 degC', 'K') == pytest.approx(293.15, abs=1e-9)
+
+
+def test_parse_si_refuses_a_bare_number_and_a_wrong_dimension_by_key() -> None:
+    """PLANTED CONTROLS: the two defects the door exists to refuse."""
+    with pytest.raises(QuantityRefused, match=r'stack = 0.5 is a bare number: .*"0.5 m"'):
+        parse_si('stack', 0.5, 'm')
+    with pytest.raises(QuantityRefused, match=r'stack = "0.5 s" does not convert to m'):
+        parse_si('stack', '0.5 s', 'm')
+    with pytest.raises(QuantityRefused, match=r'stack = "0.5 furlongz" does not convert to m'):
+        parse_si('stack', '0.5 furlongz', 'm')
+
+
+def test_affine_units_round_trip_through_the_door() -> None:
+    assert to_si(20.0, 'degC', 'K') == pytest.approx(293.15, abs=1e-9)
+    assert from_si(293.15, 'K', 'degC') == pytest.approx(20.0, abs=1e-9)
+    assert to_si(68.0, 'degF', 'K') == pytest.approx(293.15, abs=1e-9)
+
+
+def test_gauge_adds_the_absolute_reference_in_si() -> None:
+    """A gauge value is relative to an absolute SI reference; the codec passes it as a float."""
+    assert to_si(1.0, 'bar', 'Pa', reference=101325.0) == pytest.approx(201325.0, abs=1e-6)
+    assert from_si(201325.0, 'Pa', 'bar', reference=101325.0) == pytest.approx(1.0, abs=1e-12)
+    # PLANTED CONTROL: without the reference the same value is absolute.
+    assert to_si(1.0, 'bar', 'Pa') == pytest.approx(1e5, abs=1e-6)
+
+
+def test_decibels_convert_against_the_reference_and_scale() -> None:
+    """Decibels are the boundary's arithmetic: level * 10**(dB/scale); the codec passes (level, scale)."""
+    assert to_si(94.0, 'dB', 'Pa', reference=(20e-6, 20)) == pytest.approx(1.0024, abs=1e-4)
+    assert from_si(1.0, 'Pa', 'dB', reference=(20e-6, 20)) == pytest.approx(93.979, abs=1e-3)
+    assert to_si(30.0, 'dBA', 'W', reference=(1e-12, 10)) == pytest.approx(1e-9, abs=1e-21)
+    with pytest.raises(QuantityRefused, match=r'dB.*no dB reference'):
+        to_si(94.0, 'dB', 'Pa')
+
+
+def test_arrays_and_complex_values_convert_elementwise() -> None:
+    import numpy as np  # noqa: PLC0415 -- the units extra's own dependency, used only here
+
+    got = to_si(np.array([1.0, 2.0]), 'mm', 'm')
+    assert np.allclose(got, [1e-3, 2e-3], rtol=0, atol=1e-15)
+    assert to_si(1 + 2j, 'mA', 'A') == pytest.approx(1e-3 + 2e-3j, abs=1e-15)
+
+
+def test_to_si_refuses_a_unit_of_another_dimension() -> None:
+    with pytest.raises(QuantityRefused, match=r'"s" does not convert to m'):
+        to_si(1.0, 's', 'm')
+
+
+def test_display_writes_a_si_value_in_the_chosen_unit() -> None:
+    assert display(5e-4, 'm', 'mm', 3) == '0.5 mm'
+    assert display(293.15, 'K', 'degC', 4) == '20 degC'
+    assert display(1.0, 'Pa', 'dB', 4, reference=(20e-6, 20)) == '93.98 dB'
+
+
+def test_the_registry_is_the_one_application_registry() -> None:
+    import pint  # noqa: PLC0415 -- the one comparison this test makes
+
+    assert registry() is pint.get_application_registry()
+    assert registry().Quantity(1, 'rpm').to('rad/s').magnitude == pytest.approx(2 * math.pi / 60, abs=1e-15)

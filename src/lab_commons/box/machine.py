@@ -47,14 +47,14 @@ RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
 
 _WHERE: Final = 'the machine file'
 
-#: The tools whose seats are VENDOR seats -- a licence or a measured concurrency, never a guess: an undeclared
+#: The tools whose seats are VENDOR seats -- a license or a measured concurrency, never a guess: an undeclared
 #: one is WITHHELD (:func:`withheld`, user ruling 2026-11-18), never lent 1. Every
 #: :data:`~lab_commons.compute.toolchecks.CHECKS` row is here or in :data:`NON_VENDOR_CHECKS`.
 VENDOR_TOOLS: Final = frozenset(
     {'aedt', 'femm', 'fluent', 'jmag', 'lsdyna', 'mapdl', 'matlab', 'maxwell', 'ngspice', 'plecs', 'simba'}
 )
 
-#: Checked tools that are not vendor seats: a runtime on a path, not a counted licence.
+#: Checked tools that are not vendor seats: a runtime on a path, not a counted license.
 NON_VENDOR_CHECKS: Final = frozenset({'node'})
 
 
@@ -165,8 +165,8 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """
     out: dict[str, dict[str, Any]] = {}
     for name, facts in table.items():
-        if (remedy := COMPUTE.get(f'capabilities.{name}')) is not None:
-            msg = f'{_WHERE}: [capabilities.{name}] is retired: {remedy} -- delete the table'
+        if (row := COMPUTE.get(f'capabilities.{name}')) is not None:
+            msg = f'{_WHERE}: [capabilities.{name}] is retired: {row[0]} -- delete the table'
             raise ValueError(msg)
         seats = facts.get('seats', 1) if isinstance(facts, dict) else None
         if not RESOURCE_NAME.match(name) or not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:

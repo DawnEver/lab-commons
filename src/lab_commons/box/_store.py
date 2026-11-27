@@ -106,7 +106,7 @@ def connect() -> sqlite3.Connection:
     return con
 
 
-#: Serialises this process's ledger set-up; a fresh file's WAL switch otherwise races itself.
+#: Serializes this process's ledger set-up; a fresh file's WAL switch otherwise races itself.
 _FIRST_OPEN: Final = threading.Lock()
 
 
@@ -163,8 +163,10 @@ class LedgerVersionRefused(Refused):
 
 
 def _write_current(con: sqlite3.Connection) -> None:
-    """Write the current schema -- :data:`_SCHEMA` plus every :data:`_ADDED` column -- into *con* (inside its
-    transaction) and stamp :data:`SCHEMA_VERSION`. Adding only what is missing makes it :func:`migrate`'s step too.
+    """Write the current schema -- :data:`_SCHEMA` plus every :data:`_ADDED` column -- into *con*.
+
+    Runs inside *con*'s transaction and stamps :data:`SCHEMA_VERSION`. Adding only what is missing makes it
+    :func:`migrate`'s step too.
     """
     for statement in filter(str.strip, _SCHEMA.split(';')):
         con.execute(statement)

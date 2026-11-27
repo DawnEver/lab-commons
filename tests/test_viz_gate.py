@@ -1,18 +1,19 @@
 """``lab_commons.viz`` — the OPT-IN gate, and the constraint that makes each adapter an equal peer.
 
 THREE PROPERTIES, AND ALL THREE DECAY SILENTLY. That importing ``lab_commons`` never pulls the tier
-in (the same discipline that keeps ``lab_commons.em`` optional); that the
+in (the same discipline that keeps every extra optional); that the
 vocabulary module reaches no plotting library at all, so a producer may depend on it on a box where
 none is installed; and that each adapter imports EXACTLY the library its own extra names -- not the
 other's, and not one that happens to be installed on the box reading this.
 
-ASSERTED AGAINST THE REAL ARTEFACTS, not a restatement of them: a fresh interpreter for the first,
+ASSERTED AGAINST THE REAL ARTIFACTS, not a restatement of them: a fresh interpreter for the first,
 the parsed ``pyproject.toml`` and the actual import statements for the rest. Read from the SOURCE
 rather than by importing, because a module that imported cleanly today would import cleanly tomorrow
 off a dependency another layer happened to install -- and the question is what this layer DECLARES.
 """
 
 import ast
+import shutil
 import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError
@@ -185,6 +186,32 @@ def _extras() -> dict[str, frozenset[str]]:
     }
 
 
+def _plotting_libraries_loaded_by_viz(source_root: Path) -> tuple[bool, bool]:
+    """``(matplotlib, bokeh)`` -- which one a FRESH interpreter holds after ``import lab_commons.viz``.
+
+    ``source_root`` is put first on ``sys.path`` so the control can point the same probe at a
+    planted copy of the package; the probe also reports where ``lab_commons`` came from, so a
+    control that silently imported the installed copy instead reds rather than passing.
+    """
+    probe = (
+        f'import sys; sys.path.insert(0, {str(source_root)!r}); import lab_commons.viz; '
+        'print(lab_commons.__file__); '
+        'print("matplotlib" in sys.modules, "bokeh" in sys.modules)'
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', probe],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        check=True,
+    )
+    origin, flags = result.stdout.strip().splitlines()
+    assert Path(origin).resolve().is_relative_to(source_root.resolve()), f'probe imported {origin}'
+    matplotlib, bokeh = (flag == 'True' for flag in flags.split())
+    return matplotlib, bokeh
+
+
 class TestTheVizOptIn:
     def test_importing_lab_commons_does_not_pull_the_viz_tier_or_a_plotting_library(self) -> None:
         """A solver batch must not acquire a plotting library by importing the package.
@@ -207,6 +234,23 @@ class TestTheVizOptIn:
             check=True,
         )
         assert result.stdout.strip() == 'False False False', 'importing lab_commons pulled the viz tier in'
+
+    def test_importing_the_vocabulary_loads_no_plotting_library(self) -> None:
+        """``import lab_commons.viz`` leaves bokeh and matplotlib out of ``sys.modules``.
+
+        The RUNTIME half of the source check below: it sees an import arriving through any path,
+        including a module the vocabulary imports transitively. A fresh interpreter for the reason
+        the test above gives; :meth:`test_the_runtime_probe_sees_a_planted_bokeh_import` is its control.
+        """
+        assert _plotting_libraries_loaded_by_viz(REPO_ROOT / 'src') == (False, False)
+
+    def test_the_runtime_probe_sees_a_planted_bokeh_import(self, tmp_path: Path) -> None:
+        """PLANTED CONTROL: a module-level ``import bokeh`` in ``viz/__init__.py`` reds the probe."""
+        planted = tmp_path / 'lab_commons'
+        shutil.copytree(REPO_ROOT / 'src' / 'lab_commons', planted)
+        init = planted / 'viz' / '__init__.py'
+        init.write_text(init.read_text(encoding='utf-8') + '\nimport bokeh  # planted\n', encoding='utf-8')
+        assert _plotting_libraries_loaded_by_viz(tmp_path) == (False, True)
 
     def test_the_vocabulary_module_reaches_no_plotting_library(self) -> None:
         """The contract half is usable on a box that has neither backend installed.
