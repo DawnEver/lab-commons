@@ -320,7 +320,7 @@ def parse_times(text: str) -> dict[str, int]:
 def build_script(spec: RunSpec) -> str:
     """Add the tree, build (or REUSE) its venv and native build, write its ``.lab-ci/env.sh``. Prints the facts.
 
-    The item runner's source arrives on stdin, so the script's first line is a ``cat``. Declared inputs
+    It runs inside the prep job (:mod:`lab_commons.hpc.prep`), on a compute node, never the login node. Declared inputs
     (:mod:`lab_commons.hpc.builds`) put the venv in ``<root>/envs/<key>`` and the native build in
     ``<root>/native/<key>``, each built once per key under a ``flock``; the tree's ``source_roots`` reach
     them through ``PYTHONPATH``. A FAILED BUILD STOPS THE
@@ -349,7 +349,6 @@ def build_script(spec: RunSpec) -> str:
     activate = 'export VIRTUAL_ENV="$E" PATH="$E/bin:$PATH" UV_PROJECT_ENVIRONMENT="$E"'
     lines = [
         'set -eo pipefail',
-        f'cat > {BIN}/{ITEM_MODULE}.py',
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
         *submodules_script(spec.repo_url),
@@ -466,7 +465,7 @@ def pack(repo: Path, sha: str) -> str:
 _COLLECT_TAIL: Final = 25
 
 
-def nothing_collected(spec: RunSpec, collected: str) -> str:
+def nothing_collected(tree: str, collect: str, collected: str) -> str:
     """The refusal for a collection that yielded no id, CARRYING the collector's own last lines.
 
     An empty collection is almost always a failed one -- an import error in a conftest or a package the
@@ -476,7 +475,7 @@ def nothing_collected(spec: RunSpec, collected: str) -> str:
     said = [line for line in collected.splitlines() if line.strip()][-_COLLECT_TAIL:]
     quoted = '\n'.join(f'  | {line}' for line in said) or '  | (the collector printed nothing)'
     return (
-        f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass. '
+        f'no test was collected in {tree} with {collect!r} -- an empty run is not a pass. '
         f'The collector said:\n{quoted}\n'
         f"Remedy: fix the error above; an ImportError usually means the commit's "
         f'[tool.lab_commons.hpc] install does not install what the tests import.'

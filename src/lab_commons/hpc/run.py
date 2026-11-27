@@ -10,13 +10,15 @@ them::
     <root>/runs/<sha>/tree/            a worktree of the cache; its env is <root>/envs/<key>
     <root>/serve/bin/lab_ci_pytest_item.py   the item runner, shipped from this checkout (pytest_item.py)
 
-THE FLOW. Probe every grant and pick the cluster (:func:`lab_commons.hpc.plan.allocate`); fetch the
-commit (or ship a pack); add the tree; build its venv on the login node with the caller's install
-command; collect node ids there; group them by file and PACK whole files into items of up to
-:func:`item_seconds` measured seconds, so start-up is paid per item, not per file; re-allocate the real item count among
-the grants on that cluster; submit the array and leave the run's state on the cluster
-(:func:`submit_run`, minutes). Then each :func:`lab_commons.hpc.gather.gather_run` is ONE short call: still active is
-pending; a finished round is folded, its unfinished ids re-submitted as the next round, or the record
+THE FLOW. Probe every grant and pick the cluster (:func:`lab_commons.hpc.plan.allocate`); ship the item runner,
+the collector and (for an unpushed commit) a pack as text, and ``sbatch`` the PREP JOB (:mod:`lab_commons.hpc.prep`):
+on a compute node it fetches the commit, adds the tree, builds its env and native build and collects node ids --
+NOTHING IS BUILT OR COLLECTED ON THE LOGIN NODE (user ruling 2026-11-27). The first gather after the prep left
+Slurm (:func:`plan_first_round`) groups the ids by file and PACKS whole files into items of up to
+:func:`item_seconds` measured seconds, so start-up is paid per item, not per file; re-allocates the real item count
+among the grants on that cluster and submits the array; :func:`submit_run` itself returns in seconds. Then each
+:func:`lab_commons.hpc.gather.gather_run` is ONE short call: still active is pending; a finished round is folded,
+its unfinished ids re-submitted as the next round, or the record
 returned. NOTHING RESIDENT RUNS ON THE CALLER'S BOX, and the caller's repository is only READ.
 
 NOT COVERED IS NOT PASSED. A run produces ONE part, its spec's need-set (:mod:`lab_commons.hpc.needsets`):
@@ -78,16 +80,18 @@ from lab_commons.hpc.homedoor import QuotaRefused, guard
 from lab_commons.hpc.layout import RUNS, run_tree
 from lab_commons.hpc.needsets import need_sets
 from lab_commons.hpc.plan import SUBMIT_ROOM_SPENT, Plan, allocate, grantable_gb, spend
+from lab_commons.hpc.prep import PREP_SECONDS, prep_dir, read_prep, submit_prep
 from lab_commons.hpc.records import (
     current_state,
     record_of,
 )
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
+    BUILD_FAILED,
     ENV,
     ITEM_MODULE,
     RunSpec,
-    collect_command,
+    facts,
     group_items,
     nothing_collected,
     parse_collection_errors,
@@ -96,7 +100,7 @@ from lab_commons.hpc.shell import (
 )
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.testcells import TestCell
-from lab_commons.hpc.tree import NotSubmitted, build_run
+from lab_commons.hpc.tree import NotSubmitted
 from lab_commons.outcomes import Cell, Reason, Status
 
 __all__ = [
@@ -107,6 +111,8 @@ __all__ = [
     'cancel_run',
     'item_seconds',
     'load_state',
+    'plan_first_round',
+    'prep_active',
     'save_state',
     'shares_home',
     'submit_round',
@@ -333,47 +339,34 @@ def submit_run(
     policy: Policy,
     stamp: str | None = None,
     history: dict[str, Any] | None = None,
-    carry: Callable[[str], Mapping[str, tuple[str, str, str]]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch, build, collect, plan and submit round 0; leave the run's state ON THE CLUSTER. Returns that state.
+    """Pick the grant, ``sbatch`` the run's PREP JOB and leave the run's state ON THE CLUSTER. Returns that state.
 
-    The state is ``<root>/runs/<sha>/<part>/state.json``; :func:`lab_commons.hpc.gather.gather_run` reads it.
-    *history* is a previous record, read for its measurements only. Nothing here waits for a job.
-
-    *carry*, given the env key the build reported, names the cells earlier runs of THAT env hold for
-    ids whose cell cannot have changed (``{node: (plain cell, origin sha, run sha)}``,
-    :func:`dev_lab.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
-    origin in ``carried`` and never submitted; when nothing is left the record is written at once.
+    The login node only receives text and an ``sbatch`` (:func:`lab_commons.hpc.prep.submit_prep`): the fetch,
+    the env and native builds, the needs probe and the collection run in the prep job on a compute node. Round 0
+    is planned by the first :func:`lab_commons.hpc.gather.gather_run` after that job left Slurm
+    (:func:`plan_first_round`). The state is ``<root>/runs/<sha>/<part>/state.json``; *history* is a previous
+    record, read for its measurements only. Nothing here waits for a job.
     """
     runners = {g.account: connect(g) for g in machine.grants}
     snapshots = [(g, probe(runners[g.account], g.slurm_account, exclude=g.exclude_nodes)) for g in machine.grants]
-    grant, _ = allocate(
-        1, cost, snapshots, session=machine.session, policy=policy, paging=machine.paging, rerun_safe=True
+    grant, plan = allocate(
+        1,
+        cost,
+        snapshots,
+        session=machine.session,
+        policy=policy,
+        seconds=[PREP_SECONDS],
+        paging=machine.paging,
+        rerun_safe=True,
     )
     run = runners[grant.account]
-    host = grant.hosts[0]
     try:
         guard(run, f'run submit {spec.sha[:12]} on {grant.name}', now=time.time())
     except QuotaRefused as full:
         raise NoRoom(str(full)) from full  # the ACCOUNT is full: retryable, never a verdict on the sha
-    told = build_run(spec, run, f'{grant.name} ({host})')
-    collected = run(collect_command(spec), None)
-    ids, errored = parse_ids(collected), parse_collection_errors(collected)
-    if spec.only is not None:
-        ids = [node for node in ids if node in spec.only]
-        errored = [node for node in errored if any(n.split('::')[0] == node for n in spec.only)]
-    if not ids:
-        raise NotSubmitted(nothing_collected(spec, collected))
-    carrying = {name: set(parse_ids(run(collect_command(spec, also=name), None))) for name in spec.vocabulary.resources}
-    handed = {node: owner for node, owner in sorted(need_sets(ids, carrying).items()) if owner != spec.part}
-    broken = TestCell(Cell(Status.REJECTED, reason=Reason('collection', 'the file did not collect'))).to_plain()
-    cells: dict[str, dict[str, Any]] = dict.fromkeys(errored, broken)
-    present = set(ids)
-    offered = carry(told['env']) if carry else {}
-    taken = {
-        node: held for node, held in offered.items() if node in present and node not in cells and node not in handed
-    }
-    cells.update({node: held[0] for node, held in taken.items()})
+    shipping = time.monotonic()
+    prep_job = submit_prep(spec, run, plan, name=job_name(spec.sha, spec.part))
     state: dict[str, Any] = {
         'sha': spec.sha,
         'repo': spec.repo_url,
@@ -382,29 +375,131 @@ def submit_run(
         'timeout_s': spec.timeout_s,
         'item_wall': asdict(spec.builds.item_wall),
         'platform': spec.part,
-        'system': told.get('platform', ''),
-        'env': told['env'],
-        'resolved': json.loads(told.get('resolved') or '[]'),  # every name==version it ran against (envkey)
+        'system': '',
+        'env': '',
+        'resolved': [],
         'builds': {'env': spec.builds.env_key, 'native': spec.builds.native_key},  # <root>/envs, <root>/native keys
-        'cluster': host,
-        'python': told.get('python', ''),
-        'prep': {**told['prep'], **parse_times(collected)},
-        'handed': handed,
-        'cells': cells,
+        'cluster': grant.hosts[0],
+        'python': '',
+        'prep': {'ship': round(time.monotonic() - shipping)},
+        'prep_job': {
+            'job_id': prep_job,
+            'account': list(grant.account),
+            'collect': spec.collect,
+            'only': None if spec.only is None else sorted(spec.only),
+            'resources': list(spec.vocabulary.resources),
+        },
+        'handed': {},
+        'cells': {},
         'measured': Measured.of(history or {}).record(),
         'priced': spec.builds.priced_floors,  # the commit's declared floors; only a plan reads them (planned)
         'rounds': [],
         'grown': {},  # node id -> this run's memory growth after an OOM kill cut it
         'held': {},  # node id -> the ask (MB) the OOM-killed multi-id item it was in ran at: its halves' least
-        'carried': {node: held[1] for node, held in taken.items()},
+        'carried': {},
     }
+    save_state(run, state)
+    return state
+
+
+def prep_active(run: Runner, state: Mapping[str, Any]) -> bool:
+    """Whether the run's prep job is still in Slurm (pending or running); a job Slurm forgot is done."""
+    job = state['prep_job']['job_id']
+    said = run(f'squeue -h -j {job} -o %T 2>/dev/null || true', None).split()
+    return any(word in ACTIVE for word in said)
+
+
+def _prep_refusal(state: Mapping[str, Any], said: Mapping[str, str], where: str) -> str:
+    """Why the prep stopped before collecting, from the first step that says so; :class:`NotSubmitted`'s text."""
+    sha, job = state['sha'], state['prep_job']['job_id']
+    needs = said.get('needs', '').splitlines()
+    lacking = [line.removeprefix('@@@ missing ') for line in needs if line.startswith('@@@ missing ')]
+    if lacking:
+        return f'{where} lacks {", ".join(lacking)} on its compute node (prep job {job}); nothing was fetched or built'
+    if 'fetch' in said and said['fetch'].strip().splitlines()[-1:] != ['have']:
+        return f'commit {sha} is not on {state["repo"]} and no pack of it was shipped (prep job {job})'
+    if BUILD_FAILED in said.get('built', ''):
+        tail = said['built'].split(BUILD_FAILED, 1)[1].strip()
+        return f'the build for {sha[:12]} failed on {where} (prep job {job}), nothing was submitted; {tail}'
+    return (
+        f'the prep job {job} of {sha[:12]} ended before its collection finished, nothing was submitted; '
+        f'its log is {prep_dir(sha, state["platform"])}/prep.log'
+    )
+
+
+def plan_first_round(
+    state: dict[str, Any],
+    runners: dict[tuple[str, ...], Runner],
+    machine: Machine,
+    *,
+    cost: Cost,
+    policy: Policy,
+    carry: Callable[[str], Mapping[str, tuple[str, str, str]]] | None = None,
+) -> None:
+    """Read the finished prep job's outputs, plan round 0 and submit it; or write the record when nothing is left.
+
+    Raises :class:`NotSubmitted` (no test ran) for a missing need, an unfetchable commit, a failed build, an env
+    that names no hash, or an empty collection. *carry*, given the env key the build reported, names the cells
+    earlier runs of THAT env hold for ids whose cell cannot have changed (``{node: (plain cell, origin sha, run
+    sha)}``, :func:`dev_lab.dev.forgecarry.carry_from`). Those of the ids collected here are recorded with their
+    origin in ``carried`` and never submitted. The caller saves the state.
+    """
+    prep = state['prep_job']
+    account = tuple(prep['account'])
+    grant = next(g for g in machine.grants if g.account == account)
+    run = runners[account]
+    where = f'{grant.name} ({state["cluster"]})'
+    said = read_prep(run, state['sha'], state['platform'])
+    if 'collected' not in said:
+        raise NotSubmitted(_prep_refusal(state, said, where))
+    told = facts(said['built'])
+    if not told.get('env'):
+        msg = (
+            f'the venv built for {state["sha"][:12]} on {where} reported no env hash (lab_commons.envkey is not '
+            'importable there), so its part could never be carried; nothing was submitted'
+        )
+        raise NotSubmitted(msg)
+    collected = said['collected']
+    ids, errored = parse_ids(collected), parse_collection_errors(collected)
+    only = prep['only']
+    if only is not None:
+        ids = [node for node in ids if node in only]
+        errored = [node for node in errored if any(n.split('::')[0] == node for n in only)]
+    if not ids:
+        raise NotSubmitted(nothing_collected(run_tree(state['sha']), prep['collect'], collected))
+    carrying = {name: set(parse_ids(said.get(f'also-{i}', ''))) for i, name in enumerate(prep['resources'])}
+    handed = {node: owner for node, owner in sorted(need_sets(ids, carrying).items()) if owner != state['platform']}
+    broken = TestCell(Cell(Status.REJECTED, reason=Reason('collection', 'the file did not collect'))).to_plain()
+    cells: dict[str, dict[str, Any]] = dict.fromkeys(errored, broken)
+    present = set(ids)
+    offered = carry(told['env']) if carry else {}
+    taken = {
+        node: held for node, held in offered.items() if node in present and node not in cells and node not in handed
+    }
+    cells.update({node: held[0] for node, held in taken.items()})
+    state.update(
+        {
+            'system': told.get('platform', ''),
+            'env': told['env'],
+            'resolved': json.loads(told.get('resolved') or '[]'),  # every name==version it ran against (envkey)
+            'python': told.get('python', ''),
+            'prep': {**state['prep'], **parse_times(said['built']), **parse_times(collected)},
+            'handed': handed,
+            'cells': cells,
+            'carried': {node: held[1] for node, held in taken.items()},
+        }
+    )
     files = group_items([node for node in ids if node not in handed and node not in taken])
     measured = planned(state)
 
     def band(ids: list[str]) -> int:
         return memory_band(measured.item_gb(ids, cost, policy))
 
-    same_cluster = [(g, s) for g, s in snapshots if shares_home(g, grant)]
+    same_cluster = [
+        (g, probe(runners[g.account], g.slurm_account, exclude=g.exclude_nodes))
+        for g in machine.grants
+        if shares_home(g, grant)
+    ]
     ceiling_gb = grantable_gb(same_cluster)
     heavy = measured.heavy(files, cost, policy, ceiling_gb=ceiling_gb)
     state['heavy'] = sorted(heavy)  # packed alone, and left out of the peak that prices the part (job_measured)
@@ -413,11 +508,8 @@ def submit_run(
     pending = measured.pack(files, cost, item_seconds(policy), band, alone=heavy)
     if not pending:  # every id was carried or handed: the record needs no job
         state['record'] = record_of(state, grant.slurm_account)
-        save_state(run, state)
-        return state
+        return
     submit_round(state, pending, runners=runners, snapshots=same_cluster, machine=machine, cost=cost, policy=policy)
-    save_state(runners[state['current']['account']], state)
-    return state
 
 
 def cancel_run(
@@ -483,6 +575,7 @@ def _run_jobs(
     try:
         state, _ = load_state(sha, part, machine, {grant.account: connect(grant) for grant in machine.grants})
         recorded = [job for one in state['rounds'] for job in one['job_ids']]
+        recorded += [state['prep_job']['job_id']] if 'prep_job' in state else []
     except Unreachable:
         raise
     except RuntimeError:  # no state.json: only what Slurm holds by name

@@ -30,7 +30,18 @@ from lab_commons.hpc.records import (
     round_losses,
     stream_sources,
 )
-from lab_commons.hpc.run import ACTIVE, OOM_ROUNDS, RETRIES, NoRoom, load_state, save_state, shares_home, submit_round
+from lab_commons.hpc.run import (
+    ACTIVE,
+    OOM_ROUNDS,
+    RETRIES,
+    NoRoom,
+    load_state,
+    plan_first_round,
+    prep_active,
+    save_state,
+    shares_home,
+    submit_round,
+)
 from lab_commons.hpc.sacct import shard_clock
 from lab_commons.hpc.slurm import Snapshot
 from lab_commons.hpc.testcells import TestCell
@@ -48,8 +59,13 @@ def gather_run(
     cost: Cost,
     policy: Policy,
     now: Callable[[], float] = time.time,
+    carry: Callable[[str], Mapping[str, tuple[str, str, str]]] | None = None,
 ) -> dict[str, Any] | None:
     """ONE short call: the record when the run is done, else ``None`` (pending).
+
+    A run whose PREP JOB (:mod:`lab_commons.hpc.prep`) is still in Slurm is pending; the first call after it left
+    plans and submits round 0 from its collection (:func:`~lab_commons.hpc.run.plan_first_round`, which takes
+    *carry*), or raises :class:`~lab_commons.hpc.tree.NotSubmitted` naming the step that stopped it.
 
     A finished round is folded; what a killed shard left unfinished is re-submitted (up to
     :data:`~lab_commons.hpc.run.RETRIES` more rounds) and the call returns pending -- THE RETRIES ARE DRIVEN
@@ -65,8 +81,8 @@ def gather_run(
     """
     runners = {g.account: connect(g) for g in machine.grants}
     state, home = load_state(sha, part, machine, runners)
-    if 'record' in state:
-        return state['record']
+    if 'record' in state or 'current' not in state:  # settled, or no round yet: the prep job's turn
+        return state.get('record') or _after_prep(state, home, runners, machine, cost=cost, policy=policy, carry=carry)
     if 'waiting' in state:
         return _resubmit(state, home, runners, machine, cost=cost, policy=policy, now=now)
     current = state['current']
@@ -144,6 +160,28 @@ def gather_run(
     lost = Cell(Status.INFRA, reason=Reason('lost', f'still unfinished after {len(state["rounds"])} round(s)'))
     state['cells'].update({node: TestCell(lost).to_plain() for group in pending for node in group})
     return _recorded(state, home, account, machine, measured, cost=cost)
+
+
+def _after_prep(
+    state: dict[str, Any],
+    home: Runner,
+    runners: dict[tuple[str, ...], Runner],
+    machine: Machine,
+    *,
+    cost: Cost,
+    policy: Policy,
+    carry: Callable[[str], Mapping[str, tuple[str, str, str]]] | None,
+) -> dict[str, Any] | None:
+    """Pending while the prep job is in Slurm; then round 0 submitted (pending) or the record (all carried).
+
+    No room for round 0 raises :class:`~lab_commons.hpc.run.NoRoom` (capacity: released RETRYABLE, so a host with
+    room takes the part), as a refused submit always did.
+    """
+    if prep_active(home, state):
+        return None
+    plan_first_round(state, runners, machine, cost=cost, policy=policy, carry=carry)
+    save_state(home, state)
+    return state.get('record')
 
 
 def oom_bounded(
