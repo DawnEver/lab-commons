@@ -7,6 +7,7 @@ test array follows on a later advance. These tests read what the LOGIN runner wa
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from test_hpc_run import COST, MACHINE, POLICY, SHA, FakeRunCluster, _gather
@@ -14,7 +15,7 @@ from test_hpc_run import COST, MACHINE, POLICY, SHA, FakeRunCluster, _gather
 from lab_commons.hpc.builds import Builds
 from lab_commons.hpc.needsets import BASE, Vocabulary
 from lab_commons.hpc.plan import Plan
-from lab_commons.hpc.prep import env_ready, prep_dir, prep_needed, prep_script, read_prep
+from lab_commons.hpc.prep import env_ready, prep_dir, prep_needed, prep_script, read_prep, submit_env_prep
 from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import RunSpec, build_script, collect_command
 
@@ -126,3 +127,88 @@ def test_the_prep_asks_the_allocated_plans_partition_and_account() -> None:
     for directive in ('--partition=shortq', '--account=acct', '--qos=q', '--mem=4096M', '--time=60'):
         assert f'#SBATCH {directive}\n' in script
     assert 'module load git\n' in script
+
+
+class _Login:
+    """The account's login shell as the cron tick sees it: Slurm's queue and accounting, and the job files."""
+
+    def __init__(self, *, queued: str = '', last: str = '', state: str = '', log: str | None = None) -> None:
+        self.queued, self.last, self.state, self.log = queued, last, state, log
+        self.probe = FakeRunCluster()
+        self.calls: list[tuple[str, str | None]] = []
+        self.script = ''
+
+    def __call__(self, command: str, stdin: str | None = None) -> str:  # noqa: PLR0911 -- one answer per verb
+        self.calls.append((command, stdin))
+        if command.startswith('squeue -h --me -n '):
+            return self.queued
+        if command.endswith('/job 2>/dev/null || true'):
+            return self.last
+        if command.startswith('sacct '):
+            return self.state
+        if command.startswith('[ -f ') and 'tail -n' in command:
+            return '' if self.log is None else f'{self.log}@@@ log\n'
+        if command.endswith('prep.sbatch') and 'cat >' in command:
+            self.script = stdin or ''
+            return ''
+        if 'sbatch --parsable' in command:
+            return '777\n'
+        if 'cat >' in command:
+            return ''
+        return self.probe(command, stdin)
+
+
+def _env_prep(login: _Login, key: str = 'k' * 40) -> str:
+    return submit_env_prep(
+        Path('/acct/repos/r'),
+        key,
+        python='python3',
+        root='/acct',
+        script='cd /kit && py -m x prep-build r',
+        machine=MACHINE,
+        run=login,
+    )
+
+
+def test_env_prep_submits_one_job_keyed_by_its_key() -> None:
+    login = _Login()
+    assert _env_prep(login) == 'submitted job 777'
+    assert '#SBATCH --job-name=envprep-kkkkkkkkkkkk' in login.script
+    assert '#SBATCH --ntasks=1' in login.script
+    assert '#SBATCH --account=acct-free' in login.script
+    assert '#SBATCH --output=/acct/jobs/envprep/kkkkkkkkkkkk/prep.log' in login.script
+    assert login.script.rstrip().endswith('cd /kit && py -m x prep-build r')
+    assert [c for c, _ in login.calls if 'sbatch ' in c] == [
+        'cd /acct/jobs/envprep/kkkkkkkkkkkk && sbatch --parsable prep.sbatch'
+    ]
+
+
+def test_env_prep_sends_the_login_node_no_build_or_fetch() -> None:
+    login = _Login()
+    _env_prep(login)
+    sent = [c for c, _ in login.calls]
+    assert not [c for c in sent if any(word in c for word in (*_BUILDING, *_FETCHING))]
+    assert not [c for c in sent if 'prep-build' in c], 'the script is shipped as text, never run on the login'
+
+
+def test_planted_control_a_queued_key_is_never_submitted_twice() -> None:
+    login = _Login(queued='555\n')
+    assert _env_prep(login) == f'job 555 already queued for {"k" * 40}'
+    assert not [c for c, _ in login.calls if 'sbatch' in c]
+
+
+def test_a_failed_job_is_reported_with_its_log_tail_and_not_resubmitted() -> None:
+    login = _Login(last='600\n', state='FAILED\n', log='uv: lock mismatch\nexit 2\n')
+    said = _env_prep(login)
+    assert said == 'job 600 failed: /acct/jobs/envprep/kkkkkkkkkkkk/prep.log: FAILED: uv: lock mismatch / exit 2'
+    assert not [c for c, _ in login.calls if 'sbatch' in c]
+
+
+def test_a_failed_job_whose_log_was_removed_or_a_completed_one_is_resubmitted() -> None:
+    assert _env_prep(_Login(last='600\n', state='FAILED\n')) == 'submitted job 777'
+    assert _env_prep(_Login(last='600\n', state='COMPLETED\n', log='ok\n')) == 'submitted job 777'
+
+
+def test_env_prep_refuses_a_broken_invocation() -> None:
+    with pytest.raises(ValueError, match='needs a key and a script'):
+        _env_prep(_Login(), key=' ')

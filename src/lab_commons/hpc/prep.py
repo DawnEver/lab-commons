@@ -16,6 +16,10 @@ earlier run of the same env -- none of which exists before collection. A conserv
 first :func:`lab_commons.hpc.gather.gather_run` after the prep job left Slurm plans and submits round 0.
 
 The dev-lab tick reads the account's build state through :func:`env_ready` and :func:`prep_needed`.
+
+AN ENVIRONMENT PREP JOB (:func:`submit_env_prep`) is the same door for a served repo's own environment: the cron
+tick, ON the login node, ``sbatch``-es a shell line as one job of the account's grant keyed by the environment key,
+and never queues a second one for a key in flight.
 """
 
 from __future__ import annotations
@@ -25,9 +29,11 @@ from pathlib import Path
 from typing import Final
 
 from lab_commons.hpc.builds import Builds
-from lab_commons.hpc.cluster import Runner
+from lab_commons.hpc.cluster import Runner, local_runner, probe
+from lab_commons.hpc.config import Cost, Policy
+from lab_commons.hpc.grants import Machine, load_grants
 from lab_commons.hpc.layout import BIN, ENVS, NATIVE, PACKS, REQUIRE_ROOT, RUNS
-from lab_commons.hpc.plan import Plan
+from lab_commons.hpc.plan import Plan, allocate
 from lab_commons.hpc.shell import (
     COLLECT_MODULE,
     ENTRY_MODULE,
@@ -44,11 +50,14 @@ __all__ = [
     'INSTALLED',
     'PREP_SECONDS',
     'STEPS',
+    'env_prep_dir',
+    'env_prep_name',
     'env_ready',
     'prep_dir',
     'prep_needed',
     'prep_script',
     'read_prep',
+    'submit_env_prep',
     'submit_prep',
 ]
 
@@ -179,3 +188,118 @@ def prep_needed(run: Runner, builds: Builds) -> bool:
     if not env_ready(run, builds.env_key):
         return True
     return bool(builds.native_key) and not _installed(run, f'{NATIVE}/{shlex.quote(builds.native_key)}')
+
+
+#: Slurm states of a job still in flight (``squeue`` answers for it; ``sacct`` may lag behind).
+_LIVE: Final = frozenset({'PENDING', 'RUNNING', 'REQUEUED', 'RESIZING', 'SUSPENDED', 'CONFIGURING', 'COMPLETING'})
+
+#: The lines of a failed job's log its one-line report quotes.
+_TAIL: Final = 5
+
+
+def env_prep_name(key: str) -> str:
+    """The Slurm job name of the environment prep of *key*: ``envprep-<key12>``."""
+    return f'envprep-{key[:12]}'
+
+
+def env_prep_dir(root: str, key: str) -> str:
+    """Where the environment prep of *key* keeps its script, its job id and its log, under the account *root*."""
+    return f'{root}/jobs/envprep/{key[:12]}'
+
+
+def env_prep_script(checkout: Path, root: str, plan: Plan, *, name: str, script: str) -> str:
+    """The ``sbatch`` script running the shell line *script* in *checkout* on *plan*; it exits as *script* does."""
+    where = env_prep_dir(root, name.removeprefix('envprep-'))
+    directives = [
+        f'--job-name={name}',
+        f'--partition={",".join(plan.partitions)}',
+        f'--account={plan.account}' if plan.account else '',
+        f'--qos={plan.qos}' if plan.qos else '',
+        f'--exclude={",".join(plan.exclude_nodes)}' if plan.exclude_nodes else '',
+        '--nodes=1',
+        '--ntasks=1',
+        f'--cpus-per-task={plan.cpus}',
+        f'--mem={plan.mem_mb}M',
+        f'--time={plan.minutes}',
+        f'--output={where}/prep.log',
+        f'--chdir={checkout.as_posix()}',
+    ]
+    lines = ['#!/bin/bash', *(f'#SBATCH {d}' for d in directives if d), 'set -u', *plan.setup]
+    lines += [f'export LAB_ROOT={shlex.quote(root)}', script]
+    return '\n'.join(lines) + '\n'
+
+
+def submit_env_prep(
+    checkout: Path,
+    key: str,
+    *,
+    python: str,
+    root: str,
+    script: str,
+    machine: Machine | None = None,
+    run: Runner = local_runner,
+) -> str:
+    """Submit *script* (a POSIX shell line) as ONE Slurm job keyed by *key*; one line saying what it did.
+
+    Runs ON the account's login node (the cron tick) through *run*, its own shell: only ``squeue``, ``sacct``,
+    ``cat``, ``tail``, ``mkdir`` and ``sbatch`` reach it. The job is the prep job's shape -- one task of the
+    grant :func:`~lab_commons.hpc.plan.allocate` picks among *machine*'s (default: this login's ``[hpc]``),
+    :data:`PREP_SECONDS` of wall -- named :func:`env_prep_name`, its log in :func:`env_prep_dir` under *root*.
+
+    - a job of that name queued or running: ``job <id> already queued for <key>``, nothing submitted;
+    - the last job of *key* ended non-zero (``sacct``) and its log is there: ``job <id> failed: <log>: <tail>``,
+      nothing submitted -- a failure is reported, never retried blind; removing the log (or a new key) re-arms it;
+    - else ``submitted job <id>``.
+
+    *python* is the account's interpreter as the deploy declares it; *script* already names the one it runs.
+    A job's failure never raises; a broken invocation (an empty key or script, no grant, ``sbatch`` answering
+    no id) does.
+    """
+    del python  # the contract carries it; the job runs *script* as given
+    if not key.strip() or not script.strip():
+        msg = f'submit_env_prep needs a key and a script, got key={key!r} script={script!r}'
+        raise ValueError(msg)
+    name, where = env_prep_name(key), env_prep_dir(root, key)
+    queued = run(f'squeue -h --me -n {shlex.quote(name)} -o %i', None).split()
+    if queued:
+        return f'job {queued[0]} already queued for {key}'
+    last = run(f'cat {shlex.quote(where)}/job 2>/dev/null || true', None).strip()
+    if last.isdigit():
+        failed = _failed(run, last, where)
+        if failed is not None:
+            return f'job {last} failed: {where}/prep.log: {failed}'
+    grants = (machine or load_grants()).grants
+    snapshots = [(g, probe(run, g.slurm_account, exclude=g.exclude_nodes)) for g in grants]
+    _, plan = allocate(
+        1,
+        Cost(seconds=PREP_SECONDS),
+        snapshots,
+        session=None,
+        policy=Policy(shard_minutes_max=PREP_SECONDS / 60),
+        seconds=[PREP_SECONDS],
+        rerun_safe=True,
+    )
+    run(
+        f'mkdir -p {shlex.quote(where)} && cat > {shlex.quote(where)}/prep.sbatch',
+        env_prep_script(checkout, root, plan, name=name, script=script),
+    )
+    out = run(f'cd {shlex.quote(where)} && sbatch --parsable prep.sbatch', None)
+    job_id = out.strip().split(';')[0]
+    if not job_id.isdigit():
+        msg = f'sbatch did not return a job id for the environment prep of {key}: {out!r}'
+        raise RuntimeError(msg)
+    run(f'cat > {shlex.quote(where)}/job', f'{job_id}\n')
+    return f'submitted job {job_id}'
+
+
+def _failed(run: Runner, job_id: str, where: str) -> str | None:
+    """The log tail of *job_id* when it ended non-zero and its log is there, else ``None`` (resubmittable)."""
+    states = run(f'sacct -n -X -P -j {job_id} -o State', None).split()
+    if not states or states[0] == 'COMPLETED' or states[0] in _LIVE:
+        return None
+    log = f'{shlex.quote(where)}/prep.log'
+    tail = run(f'[ -f {log} ] && tail -n {_TAIL} {log} && echo @@@ log || true', None)
+    if not tail.rstrip().endswith('@@@ log'):
+        return None
+    lines = [line.strip() for line in tail.rstrip().removesuffix('@@@ log').splitlines() if line.strip()]
+    return f'{states[0]}: ' + (' / '.join(lines) or '(empty log)')
