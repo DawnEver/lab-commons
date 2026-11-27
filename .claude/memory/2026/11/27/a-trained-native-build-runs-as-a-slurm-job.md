@@ -55,3 +55,17 @@ must support it.
   its partitions that need no qos (the grant's setup lines first). The job runs the keyed build (lock + installed
   marker, as the plain build). A trained native with no `PROVENANCE` fails the build; the artifact facts print it.
 - No fallback: a failed trained build fails the submission; it never serves the plain one.
+
+## Proven end to end (2026-11-27)
+
+- Consumer commit 3ab30c0ab (a PGO wheel build declared as `native.trained`, 32 CPUs, 64 GiB, 50 min), submitted from
+  a workstation through `lab_commons.hpc submit -c` at fdb3a45d.
+- The first try failed in the login-node prefetch and said why: the consumer does not track `Cargo.lock`, so
+  `cargo fetch --locked` cannot create it. The consumer's prefetch is now `cargo fetch`. The refusal named the log and
+  the cause, so the wall taught.
+- The second built `<sha>.trained.tar.gz` in one Slurm job and printed its PROVENANCE: `pgo=true`,
+  `profdata_sha256=a4aed483...`, 19 profraw files, `wheel_sha256=0c085446...`.
+- Array job 8498901: 2/2 items ok. Item 0 asserts the loaded extension resolves under the artifact's `native/` and
+  that its PROVENANCE says `pgo=true`; item 1 runs one production CLI cell.
+- The local targeted verify was walled on this base by the pending `[tool.dev_lab.placement]` -> `layout.toml`
+  migration (not this change's), so `tests/test_hpc_trained_native.py` waits for the forge.
