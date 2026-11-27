@@ -60,10 +60,12 @@ __all__ = ['GIB', 'POLL_FLOOR_S', 'Cluster', 'Config', 'Cost', 'JobSpec', 'Limit
 
 @dataclass(frozen=True)
 class Cluster:
-    """Which partitions a plan may ask for and their QOS -- built from a grant (host and account are the grant's)."""
+    """Which partitions a plan may ask for, their QOS and the nodes it avoids -- built from a grant (host, account)."""
 
     partitions: tuple[str, ...] = ()
     qos: dict[str, str] = field(default_factory=dict)
+    #: Nodes no task may use (``#SBATCH --exclude``), declared on the cluster (:mod:`lab_commons.hpc.grants`).
+    exclude_nodes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

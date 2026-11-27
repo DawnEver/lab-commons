@@ -118,6 +118,8 @@ class Plan:
     #: ``()``: one unbound item a task. ``cpus``/``mem_mb``/``gpus`` are all lanes together.
     lane_cpus: tuple[str, ...] = ()
     lane_mems: tuple[str, ...] = ()
+    #: The cluster's nodes no task may start on -- ``--exclude=a,b``; ``()``: none. :func:`make_plan` stamps it.
+    exclude_nodes: tuple[str, ...] = ()
 
     @property
     def lanes(self) -> int:
@@ -285,6 +287,7 @@ def make_plan(
         makespan_minutes=math.ceil(len(shards) / running) * minutes,
         room=now,
         top_minutes=_top(o[3] for o in open_),
+        exclude_nodes=cluster.exclude_nodes,
     )
 
 

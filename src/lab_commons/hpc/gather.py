@@ -76,7 +76,7 @@ def gather_run(
     states = {shard: clock.state for shard, clock in clocks.items()}
     if len(states) < current['shards'] or any(s in ACTIVE for s in states.values()):
         grant = next(g for g in machine.grants if g.account == account)
-        snapshot, qos = probe(run, grant.slurm_account), state['rounds'][-1]['qos']
+        snapshot, qos = probe(run, grant.slurm_account, exclude=grant.exclude_nodes), state['rounds'][-1]['qos']
         if rethrottled(current, states, run, snapshot, cost=cost, qos=qos):
             save_state(home, state)
         return None
@@ -121,7 +121,11 @@ def gather_run(
     )
     if pending and (len(state['rounds']) <= RETRIES or (oom and current['ceiling'])):
         grant = next(g for g in machine.grants if g.account == account)
-        snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
+        snapshots = [
+            (g, probe(runners[g.account], g.slurm_account, exclude=g.exclude_nodes))
+            for g in machine.grants
+            if shares_home(g, grant)
+        ]
         try:
             submit_round(
                 state, pending, runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy
@@ -188,7 +192,11 @@ def _resubmit(
     waiting = state['waiting']
     account = tuple(state['current']['account'])
     grant = next(g for g in machine.grants if g.account == account)
-    snapshots = [(g, probe(runners[g.account], g.slurm_account)) for g in machine.grants if shares_home(g, grant)]
+    snapshots = [
+        (g, probe(runners[g.account], g.slurm_account, exclude=g.exclude_nodes))
+        for g in machine.grants
+        if shares_home(g, grant)
+    ]
     try:
         submit_round(
             state, waiting['pending'], runners=runners, snapshots=snapshots, machine=machine, cost=cost, policy=policy
