@@ -13,7 +13,7 @@ from lab_commons.hpc.layout import ROOT, AccountPaths, RootUndeclared, account_p
 HPC = Path(layout.__file__).parent
 
 #: Modules that legitimately name the LOGIN home: the home quota/census door, a job's own declared workdir (``~``
-#: expanded by :func:`lab_commons.hpc.cluster._sh_path`, its default ``~``), and the slurm probe's home inode row.
+#: expanded by :func:`lab_commons.hpc.cluster.sh_path`, its default ``~``), and the slurm probe's home inode row.
 LOGIN_HOME_MODULES = frozenset({'home.py', 'cluster.py', 'config.py', 'jobs.py', 'slurm.py'})
 
 
