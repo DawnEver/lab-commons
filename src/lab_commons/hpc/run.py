@@ -124,7 +124,7 @@ class NoRoom(NotSubmitted):
 
 
 def item_seconds(policy: Policy) -> float:
-    """An item's budget: the shortest shard, unpadded -- so a padded item never alone passes ``shard_minutes_min``."""
+    """An item's budget: the shortest shard, unpadded, a padded item alone never passes ``[policy] shortest_shard``."""
     return policy.shard_minutes_min * 60 / policy.safety
 
 

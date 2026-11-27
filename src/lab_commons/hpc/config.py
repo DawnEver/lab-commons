@@ -30,7 +30,7 @@ Example::
     grants = ["ada-alice"]                # optional: only these grants (user or <cluster>-<user>) may run it
 
     [task]                                # optional: what ONE array task holds (default: one item, shared node)
-    lane_domains = 2                      # a WHOLE node in lanes of 2 L3 domains, one item each (no [cost] cpus)
+    # lane_domains = 2                    # a WHOLE node in lanes of 2 L3 domains, one item each (no [cost] cpus)
     # or: exclusive = true                # one item on the whole node (``--exclusive``), charged the whole node
 
 A QUANTITY CARRIES ITS UNIT (user ruling 2026-11-25): ``mem``, ``wall`` and the policy's durations are quantity
