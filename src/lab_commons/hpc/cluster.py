@@ -21,6 +21,7 @@ import functools
 import json
 import shlex
 import shutil
+import subprocess
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final
@@ -31,6 +32,7 @@ from lab_commons.hpc.config import Config, JobSpec
 from lab_commons.hpc.grants import Grant
 from lab_commons.hpc.layout import JOBS, ROOT
 from lab_commons.hpc.plan import Plan
+from lab_commons.hpc.reach import require, unreachable
 from lab_commons.hpc.slurm import Snapshot, parse_snapshot, probe_command
 from lab_commons.hpc.sshgate import Gate
 from lab_commons.hpc.worker import ITEM, RESULTS, SHARD
@@ -147,7 +149,10 @@ def ssh_runner(host: str, timeout: float = _TIMEOUT, *, gate: Gate | None = None
 
     *timeout* is per command; a login-node build (a per-tree install) needs far more than a probe. Every
     command passes the host's :class:`~lab_commons.hpc.sshgate.Gate`: one shared connection, a machine-wide rate.
+    A declared cluster's host is checked against this machine's reach FIRST (:func:`lab_commons.hpc.reach.require`:
+    undeclared is refused before any ssh); over a VPN, a silent host's :class:`Unreachable` names the VPN door.
     """
+    reach = require(host)
     held = gate or Gate(host)
 
     def run(command: str, stdin: str | None = None) -> str:
@@ -161,8 +166,15 @@ def ssh_runner(host: str, timeout: float = _TIMEOUT, *, gate: Gate | None = None
             host,
             f'bash -lc {shlex.quote(command)}',
         ]
-        with held.call():
-            return _completed(argv, stdin, timeout)
+        try:
+            with held.call():
+                return _completed(argv, stdin, timeout)
+        except Unreachable as silent:
+            raise Unreachable(unreachable(reach, str(silent))) from silent
+        except subprocess.TimeoutExpired as silent:
+            if reach is None or reach.reach != 'vpn':
+                raise
+            raise Unreachable(unreachable(reach, f'{host} did not answer within {timeout:.0f} s')) from silent
 
     return run
 
