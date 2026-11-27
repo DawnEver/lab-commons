@@ -27,7 +27,7 @@ import lab_commons.launch as _door
 from lab_commons.box._store import connect
 from lab_commons.box._store import read as read_ledger
 from lab_commons.box.demand import GB, Capacity, Holding
-from lab_commons.box.machine import NON_VENDOR_CHECKS, provided, seat_size, withheld
+from lab_commons.box.machine import NON_VENDOR_CHECKS, provided, seat_count, seat_size, withheld
 from lab_commons.box.supply import Reading, room
 from lab_commons.compute.model import Resources, Supply
 from lab_commons.compute.presence import Evidence, Presence
@@ -49,16 +49,17 @@ Read = Callable[[Iterable[int]], Reading]
 SUPPLY_S = 10.0
 
 
-def seat_sizes() -> tuple[dict[str, int], dict[str, str]]:
+def seat_sizes() -> tuple[dict[str, float], dict[str, str]]:
     """Each ``[capabilities]`` tool's seats as MEASURED: ``(sizes, blind)``.
 
     A ``supply`` argv prints the TOTAL seats this box may lend (a vendor's license count, say) as one integer;
-    the ledger subtracts what its claims hold. No probe: the declared ``seats`` are the size. A probe that fails,
+    the ledger subtracts what its claims hold. No probe: the declared ``seats`` are the size (``math.inf`` for
+    ``"unlimited"``, :func:`~lab_commons.box.machine.seat_count`). A probe that fails,
     times out or prints no count CANNOT SAY: its tool keeps its declared size but is *blind* -- ``{tool: why}``
     -- and lends none of it (a vacuous green is the family's worst defect). A vendor row with no declared count
     is :func:`~lab_commons.box.machine.withheld`: no size, blind with that reason; every other tool still sizes.
     """
-    sizes: dict[str, int] = {}
+    sizes: dict[str, float] = {}
     blind: dict[str, str] = {}
     for name, facts in provided(section('capabilities')).items():
         if (why := withheld(name, declared='seats' in facts)) is not None:
@@ -68,7 +69,7 @@ def seat_sizes() -> tuple[dict[str, int], dict[str, str]]:
         count = _counted(probe)
         if probe and count is None:
             blind[name] = f'its supply probe {probe[0]!r} failed, timed out or printed no count'
-        sizes[name] = count if count is not None else int(facts.get('seats', 1))
+        sizes[name] = count if count is not None else seat_count(name, facts.get('seats', 1))
     return sizes, blind
 
 

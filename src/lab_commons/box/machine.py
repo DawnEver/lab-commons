@@ -8,6 +8,7 @@ nowhere else. Each reader validates its table and refuses a malformed row by nam
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -21,12 +22,14 @@ __all__ = [
     'DEFAULT_MEM_MARGIN',
     'NON_VENDOR_CHECKS',
     'RESOURCE_NAME',
+    'UNLIMITED',
     'VENDOR_TOOLS',
     'ReserveTable',
     'UndeclaredSeat',
     'own_reserve',
     'provided',
     'reserve_table',
+    'seat_count',
     'seat_size',
     'watched',
     'withheld',
@@ -46,6 +49,11 @@ DEFAULT_MEM_MARGIN: Final = 0.10
 RESOURCE_NAME: Final = re.compile(r'^[a-z][a-z0-9_]*$')
 
 _WHERE: Final = 'the machine file'
+
+#: The one spelling of a seat count with NO CAP (``seats = "unlimited"``): a tool whose licence admits any number of
+#: concurrent solves (user ruling 2026-11-27: "Maxwell has no seat limit on any machine"). Sized as ``math.inf``, so
+#: no claim is ever refused for lack of its seat; every other string is refused by name.
+UNLIMITED: Final = 'unlimited'
 
 #: The tools whose seats are VENDOR seats -- a license or a measured concurrency, never a guess: an undeclared
 #: one is WITHHELD (:func:`withheld`, user ruling 2026-11-18), never lent 1. Every
@@ -77,6 +85,23 @@ class UndeclaredSeat(LookupError):
         )
 
 
+def seat_count(name: str, value: object) -> float:
+    """Tool *name*'s declared ``seats`` *value* as a size: a positive int, or ``math.inf`` for :data:`UNLIMITED`.
+
+    THE ONE PARSE of a seat count: :func:`provided` validates through it and every seat reader sizes through it.
+
+    Raises:
+        ValueError: *value* is neither a positive int nor :data:`UNLIMITED`; the message names the row and both forms.
+
+    """
+    if value == UNLIMITED:
+        return math.inf
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    msg = f'{_WHERE}: [capabilities.{name}] seats = {value!r}: declare a positive int or "{UNLIMITED}" (no cap)'
+    raise ValueError(msg)
+
+
 def withheld(name: str, *, declared: bool) -> str | None:
     """THE ONE RULE for an undeclared vendor seat: why tool *name* lends nothing, or ``None`` when it may lend.
 
@@ -89,7 +114,7 @@ def withheld(name: str, *, declared: bool) -> str | None:
     return str(UndeclaredSeat(name)) if name in VENDOR_TOOLS and not declared else None
 
 
-def seat_size(seats: Mapping[str, int], name: str) -> int:
+def seat_size(seats: Mapping[str, float], name: str) -> float:
     """The size of seat *name* in *seats*: its declared count; a vendor tool undeclared is 0 (:func:`withheld`).
 
     A name that is no vendor tool -- an exclusion seat such as an environment or an in-flight run -- is one seat.
@@ -158,8 +183,9 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     A retired name (``capabilities.<name>`` in :mod:`lab_commons.hpc._retired_compute`) is never read as a resource:
     no alias, the refusal names what replaced it.
 
-    ``seats`` is the DECLARED count -- a :data:`VENDOR_TOOLS` row without one is kept but :func:`withheld`, 1 for a
-    marker such as ``workstation``; ``supply``, when given, is the argv of the probe that MEASURES it
+    ``seats`` is the DECLARED count (:func:`seat_count`: a positive int, or :data:`UNLIMITED`) -- a :data:`VENDOR_TOOLS`
+    row without one is kept but :func:`withheld`, 1 for a marker such as ``workstation``;
+    ``supply``, when given, is the argv of the probe that MEASURES it
     (:func:`lab_commons.box.providers.seat_sizes`); ``in_use = { process = [images] }``, when given, names the process
     images whose running count is the seats in use NOW (:func:`watched`, :func:`lab_commons.box.supply.observe`).
     """
@@ -168,10 +194,10 @@ def provided(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         if (row := COMPUTE.get(f'capabilities.{name}')) is not None:
             msg = f'{_WHERE}: [capabilities.{name}] is retired: {row[0]} -- delete the table'
             raise ValueError(msg)
-        seats = facts.get('seats', 1) if isinstance(facts, dict) else None
-        if not RESOURCE_NAME.match(name) or not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
-            msg = f'{_WHERE}: [capabilities.{name}] must be a table named {RESOURCE_NAME.pattern}, seats a positive int'
+        if not RESOURCE_NAME.match(name) or not isinstance(facts, dict):
+            msg = f'{_WHERE}: [capabilities.{name}] must be a table named {RESOURCE_NAME.pattern}'
             raise ValueError(msg)
+        seat_count(name, facts.get('seats', 1))
         supply = facts.get('supply', [])
         if not isinstance(supply, list) or not all(isinstance(arg, str) for arg in supply):
             msg = f'{_WHERE}: [capabilities.{name}] supply must be an argv list of strings printing the seat count'
