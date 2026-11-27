@@ -35,9 +35,9 @@
   },
   {
     "name": "MAIN-ONLY-DOOR",
-    "pattern": "(?:\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.family\\s+(?:join(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.sshhold\\s+(?:open(?![\\w-])|run(?![\\w-])|credential(?![\\w-])|close(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.ops\\.consent\\s+(?:grant(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.hpcaccount\\s+(?:deploy\\-fleet(?![\\w-])(?![^\\n;&|]*\\s\\-\\-dry\\-run(?![\\w-]))|forget(?![\\w-])|retention(?![\\w-])|archive(?![\\w-])|archive\\-clean(?![\\w-])|credential(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.opsserver(?![\\w.-]))",
+    "pattern": "(?:\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.cloneremove(?![\\w.-])|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.family\\s+(?:join(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.sshhold\\s+(?:open(?![\\w-])|run(?![\\w-])|credential(?![\\w-])|close(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.ops\\.consent\\s+(?:grant(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.hpcaccount\\s+(?:deploy\\-fleet(?![\\w-])(?![^\\n;&|]*\\s\\-\\-dry\\-run(?![\\w-]))|forget(?![\\w-])|retention(?![\\w-])|archive(?![\\w-])|archive\\-clean(?![\\w-])|credential(?![\\w-]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-m\\s+dev_lab\\.dev\\.opsserver(?![\\w.-])(?!\\s+[\\w.-]+\\s+card(?![\\w-])(?![^\\n;&|]*[^\\s;&|])))",
     "matches": "shell",
-    "reason": "MAIN-ONLY-DOOR: this door is the main session`s alone: it acts on another machine or on shared state under the user`s word.\nHand the exact command back to the main session, which runs it and reads the result. Reading stays yours: {python} -m dev_lab.dev.sshhold status, {python} -m dev_lab.dev.hpcaccount drift-fleet, and hpcaccount deploy-fleet --dry-run.\ndetails: docs-src/dev/refusals.md#main-only-door (dev-lab)",
+    "reason": "MAIN-ONLY-DOOR: this door is the main session`s alone: it acts on another machine or on shared state under the user`s word.\nHand the exact command back to the main session, which runs it and reads the result. Reading stays yours: {python} -m dev_lab.dev.sshhold status, {python} -m dev_lab.dev.hpcaccount drift-fleet, hpcaccount deploy-fleet --dry-run, and {python} -m dev_lab.dev.opsserver <server|all> card.\ndetails: docs-src/dev/refusals.md#main-only-door (dev-lab)",
     "scope": "subagent"
   },
   {
@@ -114,7 +114,7 @@
     "name": "ARCHIVE-IS-NO-STORE",
     "pattern": "\\bgit(?:\\s+-C\\s+\\S+)*\\s+bundle\\s+create\\b",
     "matches": "command",
-    "reason": "ARCHIVE-IS-NO-STORE: a bundle parks unlanded work where nobody reads it again (ONLY-VERSION-TAGS).\nUnlanded work is merged or discarded (MERGE-OR-DELETE): merge it through a PR, or LAND its discard with a declared `git merge -s ours` PR, then `branchprune delete <branch>`\ndetails: docs-src/dev/refusals.md#archive-is-no-store (dev-lab)"
+    "reason": "ARCHIVE-IS-NO-STORE: a bundle parks unlanded work where nobody reads it again (ONLY-VERSION-TAGS).\nUnlanded work is merged or discarded (MERGE-OR-DELETE): merge it through a PR, or on the user words `branchprune discard <branch> --approved \"<their words>\"`; never `git merge -s ours`\ndetails: docs-src/dev/refusals.md#archive-is-no-store (dev-lab)"
   },
   {
     "name": "GIT-RESET",
@@ -138,7 +138,7 @@
     "name": "PUSH-REMOTE-DELETE",
     "pattern": "(?:\"?\\S*python[\\w.]*(?:\\.exe)?\"?\\s+-m\\s+dev_lab\\.dev\\.netverb(?:\\s+--)?\\s+)?(?:(?:\"[^\"]*[/\\\\])?\"?\\S*?\\bgit(?:\\.exe)?\"?(?:\\s+-[Cc]\\s+\\S+)*|(?:sh\\s+)?\\S*with-retry\\.sh)\\s+push\\b[^\\n]*\\s(?:--delete\\b|-d\\b|--prune\\b|--mirror\\b|:\\S)",
     "matches": "command",
-    "reason": "PUSH-REMOTE-DELETE: a raw remote delete can lose commits held nowhere else.\na branch: `{python} -m dev_lab.dev.branchprune delete <branch>` (LOSSLESS-DELETE; one it refuses is MERGED, or LANDED by a `git merge -s ours` PR); a tag: `{python} -m dev_lab.dev.branchprune tag <tag>` (a contained one).\ndetails: docs-src/dev/refusals.md#push-remote-delete (dev-lab)"
+    "reason": "PUSH-REMOTE-DELETE: a raw remote delete can lose commits held nowhere else.\na branch: `{python} -m dev_lab.dev.branchprune delete <branch>` (LOSSLESS-DELETE; one it refuses is MERGED, or discarded on the user words, never `-s ours`); a tag: `{python} -m dev_lab.dev.branchprune tag <tag>` (a contained one).\ndetails: docs-src/dev/refusals.md#push-remote-delete (dev-lab)"
   },
   {
     "name": "PUSH-NO-VERIFY",
@@ -146,6 +146,12 @@
     "matches": "command",
     "reason": "PUSH-NO-VERIFY: `--no-verify` skips the pre-push hooks (admission, the trunk proof), so the push publishes what no hook checked.\nPush without the flag (no hook runs a test; the forge produces the part after the push), and to check a change first measure what you touched: {python} -m dev_lab.dev.verify\ndetails: docs-src/dev/refusals.md#push-no-verify (dev-lab)",
     "needs": "verdict-entry-point"
+  },
+  {
+    "name": "ENVIRONMENT-THROUGH-DEP",
+    "pattern": "(?:\\S*python[\\w.]*\\s+-m\\s+dev_lab\\.dev\\.netverb\\b[^;&|\\n]*?\\s--\\s+)?(?:\\S*[/\\\\])?uv(?:\\.exe)?(?:\\s+-\\S+(?:\\s+[^-\\s]\\S*)?)*?\\s+sync\\b",
+    "matches": "command",
+    "reason": "ENVIRONMENT-THROUGH-DEP: a bare uv sync builds a checkout environment with no declared extras and no published prefix.\nBuild the environment through its door: {python} -m dev_lab.dev.dep --bootstrap <checkout> (a new tree), or {python} -m dev_lab.dev.dep --root <checkout> --sync [--extra X].\ndetails: docs-src/dev/refusals.md#environment-through-dep (dev-lab)"
   },
   {
     "name": "WORKTREE-BASE-IS-EXPLICIT",
@@ -204,7 +210,7 @@
     "name": "RECURSIVE-DELETE",
     "pattern": "(?:(?:[cC][mM][dD](?:\\.[eE][xX][eE])?\\s+/[cCkK]\\s+[\"']?|xargs(?:\\s+-\\S+)*\\s+|find\\b[^\\n;&|]*?\\s-exec(?:dir)?\\s+)?(?:[rR][eE][mM][oO][vV][eE]-[iI][tT][eE][mM]|[rR][mM][dD][iI][rR]|[eE][rR][aA][sS][eE]|[rR][mM]|[rR][iI]|[rR][dD]|[dD][eE][lL])(?:\\.exe)?(?=(?:\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*?\\s+(?:-[fvidI]*[rR][fvidI]*|--recursive|-[rR](?:[eE](?:[cC](?:[uU](?:[rR](?:[sS][eE]?)?)?)?)?)?|/[sS])(?=\\s|$|:))(?!(?=(?:\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*?\\s+(?![^\\s;&|()]*\\.\\.)[\"']?(?:/tmp/|\\$\\{?(?:TEMP|TMP|TMPDIR)\\}?[\\\\/]|%(?:TEMP|TMP)%[\\\\/]|\\$env:(?:TEMP|TMP)[\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?[aA][pP][pP][dD][aA][tT][aA][\\\\/][lL][oO][cC][aA][lL][\\\\/][tT][eE][mM][pP][\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?output[\\\\/])[^\\s\"'\\\\/;&|()][^\\s\"';&|()]*[\"']?(?=\\s|$))(?:\\s+(?:(?:-[^\\s\"';&|()]*|/[a-zA-Z])(?=\\s|$)|(?![^\\s;&|()]*\\.\\.)[\"']?(?:/tmp/|\\$\\{?(?:TEMP|TMP|TMPDIR)\\}?[\\\\/]|%(?:TEMP|TMP)%[\\\\/]|\\$env:(?:TEMP|TMP)[\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?[aA][pP][pP][dD][aA][tT][aA][\\\\/][lL][oO][cC][aA][lL][\\\\/][tT][eE][mM][pP][\\\\/]|(?:[^\\s\"';&|()]*[\\\\/])?output[\\\\/])[^\\s\"'\\\\/;&|()][^\\s\"';&|()]*[\"']?(?=\\s|$)))+\\s*[\"']?\\s*$)|git(?:\\.exe)?(?:\\s+-[Cc]\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*\\s+worktree\\s+remove\\b|git(?:\\.exe)?(?:\\s+-[Cc]\\s+(?:\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s\"';&|()]+))*\\s+clean\\b(?=[^\\n;&|]*\\s(?:-[a-zA-Z]*[xXd][a-zA-Z]*|--directory)(?=\\s|$|[;&|]))(?![^\\n;&|]*\\s(?:-[a-zA-Z]*n[a-zA-Z]*|--dry-run)(?=\\s|$|[;&|]))|\\S*python[\\w.]*(?:\\.exe)?\\s+-c\\s+[^\\n]*?\\bshutil\\.rmtree\\b|(?:[^;\\n'\"]*;\\s*)*(?:shutil\\.)?rmtree\\s*\\()",
     "matches": "command",
-    "reason": "RECURSIVE-DELETE: a raw recursive delete judges deletability by hand; on 2026-10-27 one took a MAIN checkout.\n{door} -m dev_lab.dev.scratch clear <NAME> --yes|{door} -m dev_lab.dev.branchset --apply|{door} -m dev_lab.dev.branchset --discard <branch> --approved <why>|detached {door} -m dev_lab.dev.worktrees --remove <name>|{door} -m dev_lab.dev.venvprune --apply; never a worktree? ask the user\ndetails: docs-src/dev/refusals.md#recursive-delete (dev-lab)"
+    "reason": "RECURSIVE-DELETE: a raw recursive delete judges deletability by hand; on 2026-10-27 one took a MAIN checkout.\n{door} -m dev_lab.dev.scratch clear <NAME> --yes|{door} -m dev_lab.dev.branchset --apply|--discard <branch> --approved <why>|{door} -m dev_lab.dev.worktrees --remove <name>|{door} -m dev_lab.dev.venvprune --apply|{door} -m dev_lab.dev.cloneremove <path> --approved <why>; else ask\ndetails: docs-src/dev/refusals.md#recursive-delete (dev-lab)"
   },
   {
     "name": "REPORTS-LIVE-IN-MEMORY",
