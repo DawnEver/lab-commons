@@ -15,7 +15,8 @@ A tool is PRESENT on a host only when all four agree:
    door and a newer one too, so the declaration moves deliberately. No pin unless a reason requires it
    (user ruling 2026-10-17 -- record, don't pin); the family's FEMM is such a reason (2026-11-25: only the
    newest FEMM 5). A tool with no declaration is present at any version that reads, and the version read is
-   RECORDED in every run record (:func:`measured`). An install that states no version is absent, its
+   RECORDED in every run record (:func:`measured`), beside where it was found
+   (:func:`located`). An install that states no version is absent, its
    refusal naming the door (:class:`~lab_commons.compute.toolchecks.VersionUnreadable`);
 3. a SMOKE check passes -- the install is there and whole, read without launching it
    (:data:`~lab_commons.compute.toolchecks.CHECKS`);
@@ -61,6 +62,7 @@ __all__ = [
     'cached',
     'declared_versions',
     'demote',
+    'located',
     'measured',
     'probe',
     'refresh',
@@ -108,6 +110,17 @@ class Presence:
         """The version the probe READ, when the tool is present -- the one source a record states."""
         read = [e.value for e in self.evidence if e.source.startswith('version: ')]
         return read[-1] if self.present and read else None
+
+    @property
+    def location(self) -> Path | None:
+        """Where the probe FOUND the tool's executable, when the tool is present -- the one source of its path."""
+        found = [e.value for e in self.evidence if e.source.startswith('find: ')]
+        return Path(found[-1]) if self.present and found else None
+
+
+def located(presence: Mapping[str, Presence]) -> dict[str, Path]:
+    """``{tool: where it was found}`` over every present tool: the one door a consumer reads an install path through."""
+    return {tool: one.location for tool, one in sorted(presence.items()) if one.location is not None}
 
 
 def measured(presence: Mapping[str, Presence]) -> dict[str, str]:

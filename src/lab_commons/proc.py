@@ -12,7 +12,7 @@ must reckon with first".)
 
 TIER 1, and the test is the package's own: this module imports ``ctypes``, ``os``, ``signal``,
 ``subprocess`` and ``pathlib`` -- stdlib only. It names no solver, winding, optimizer or vendor
-tool, and it never pulls ``lab_commons.em`` in. A lab doing chemistry could use it unchanged.
+tool, and it pulls no domain vocabulary in. A lab doing chemistry could use it unchanged.
 
 NOT ``psutil``, and the reason is a property rather than a preference: ``psutil`` is an optional
 extra in every consumer here, so a ``psutil``-only reader answers on the boxes that happen to have

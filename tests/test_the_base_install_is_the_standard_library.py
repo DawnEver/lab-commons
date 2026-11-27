@@ -21,11 +21,9 @@ _PKG: Final = _ROOT / 'src' / 'lab_commons'
 #: The modules that need an extra, and which one. Two-sided: a gated module that imports cleanly
 #: without its extra is a stale gate and reds as surely as an ungated one that does not.
 GATED: Final[dict[str, str]] = {
-    'em': 'units',
     'file_io': 'io',
     'paths': 'paths',
     'structured': 'structured',
-    'units': 'units',
     'viz': 'viz',
 }
 
@@ -84,4 +82,4 @@ def test_every_gate_still_needs_its_extra() -> None:
 
 def test_the_blocker_refuses_a_planted_third_party_import() -> None:
     """THE PLANTED CONTROL: the same blocker, on a module that is gated for a reason."""
-    assert _imports_bare('units').returncode != 0
+    assert _imports_bare('structured').returncode != 0
