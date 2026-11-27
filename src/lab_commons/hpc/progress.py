@@ -157,6 +157,25 @@ def where(sha: str, part: str, machine: Machine, connect: Callable[[Grant], Runn
     if 'record' in state:
         last = state['rounds'][-1]
         return Progress(sha=sha, job_id=','.join(last['job_ids']), shards=len(last['shards']), finished=True)
+    if 'current' not in state:  # the prep job (lab_commons.hpc.prep): one task; round 0 waits for it
+        job_id = state['prep_job']['job_id']
+        try:
+            queue = home(_QUEUE.format(job=job_id), None)
+        except RuntimeError as exc:
+            if _FORGOTTEN not in str(exc):
+                raise
+            queue = ''  # the prep left Slurm: the next gather plans round 0
+        pending, running, reasons, partitions, minutes = parse_queue(queue)
+        return Progress(
+            sha=sha,
+            job_id=f'{job_id} (prep)',
+            shards=1,
+            pending=pending,
+            running=running,
+            reasons=reasons,
+            partitions=partitions,
+            pending_minutes=minutes,
+        )
     current = state['current']
     job_id = ','.join(current['job_ids'])  # one array per memory class of the round (lab_commons.hpc.run)
     try:

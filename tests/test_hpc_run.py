@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -76,7 +77,6 @@ from lab_commons.hpc.shell import (
 )
 from lab_commons.hpc.slurm import parse_snapshot
 from lab_commons.hpc.testcells import TestCell
-from lab_commons.hpc.tree import build_run
 from lab_commons.hpc.watch import PENDING
 
 FIXTURE = (Path(__file__).parent / '_hpc_fixtures' / 'cluster-2026-10-08.txt').read_text(encoding='utf-8')
@@ -571,6 +571,10 @@ def test_a_killed_multi_file_item_teaches_no_file_a_peak() -> None:
 RESOLVED: Final = json.dumps(['cpython-3.13.1-linux', 'lab-commons==0.3.0+g1234567', 'numpy==2.3.0'])
 
 
+#: One step of a prep script: its name and the script written verbatim before it runs.
+_PREP_STEP: Final = re.compile(r'cat > "\$P/([\w-]+)\.sh" <<\'LAB_CI_PREP_STEP\'\n(.*?)\nLAB_CI_PREP_STEP\n', re.DOTALL)
+
+
 class FakeRunCluster:
     """A cluster answering the run flow; an item of a file in *dies* is killed in its first *kills* rounds.
 
@@ -611,9 +615,45 @@ class FakeRunCluster:
         self.calls: list[tuple[str, str | None]] = []
         self.manifests: list[dict] = []
         self.scripts: list[str] = []
+        self.prep = ''  # the prep job's script, as shipped
+        self.packed = False  # a pack of the commit was shipped
+        self.steps: list[str] = []  # the prep steps that ran
+        self.queue_prep = ''  # what squeue says of the prep job ('' once it left Slurm)
 
-    def __call__(self, command: str, stdin: str | None = None) -> str:  # noqa: C901, PLR0911, PLR0912 -- one answer per verb
+    def __call__(self, command: str, stdin: str | None = None) -> str:
         self.calls.append((command, stdin))
+        return self._answer(command, stdin)
+
+    def _prep(self) -> str:
+        """What the prep job's steps left, as :func:`lab_commons.hpc.prep.read_prep` reads it.
+
+        Each step's script is answered as the cluster answers it, stopping where the job stops (``self.steps``
+        names those that ran).
+        """
+        out: list[str] = []
+        for name, script in _PREP_STEP.findall(self.prep):
+            said = self._answer(script, None)
+            if name == 'fetch' and self.packed:
+                said = 'have\n'
+            self.steps.append(name)
+            out += [f'@@@ prep-file {name}', said.rstrip('\n')]
+            if (name == 'needs' and '@@@ missing' in said) or (name == 'fetch' and said.split()[-1:] != ['have']):
+                break
+            if name == 'built' and '@@@ build-failed' in said:
+                break
+        return '\n'.join(out) + '\n'
+
+    def _answer(self, command: str, stdin: str | None) -> str:  # noqa: C901, PLR0911, PLR0912 -- one answer per verb
+        if command.endswith('prep.sbatch') and 'cat >' in command:
+            self.prep = stdin or ''
+            return ''
+        if command.endswith('.pack') and 'base64 -d' in command:
+            self.packed = True
+            return ''
+        if '@@@ prep-file' in command:
+            return self._prep()
+        if command.startswith('squeue -h -j '):
+            return self.queue_prep
         if command.endswith('state.json') and 'cat >' in command:
             self.state = self.states[command.rsplit('cat > ', maxsplit=1)[-1]] = stdin or ''
             return ''
@@ -696,14 +736,29 @@ MACHINE = Machine(session=Session(name='ws-a', tasks=1000, cpus=100_000, mem_gb=
 COST, POLICY = Cost(seconds=600), Policy(shard_minutes_min=1, shard_minutes_max=15)
 
 
-def _submit(fake: FakeRunCluster, **kw: object) -> str:
+def _launch(
+    spec: RunSpec,
+    machine: Machine,
+    connect: Callable[[Grant], Callable[..., str]],
+    *,
+    carry: Callable[[str], dict] | None = None,
+    **kw: object,
+) -> dict:
+    """``submit_run`` (the prep job), then the ONE gather that plans round 0 once the prep left Slurm."""
+    submit_run(spec, machine, connect, **kw)
+    cost, policy = kw['cost'], kw['policy']
+    gather_run(spec.sha, spec.part, machine, connect, cost=cost, policy=policy, carry=carry)
+    return load_state(spec.sha, spec.part, machine, {g.account: connect(g) for g in machine.grants})[0]
+
+
+def _submit(fake: FakeRunCluster, **kw: object) -> dict:
     spec = RunSpec(
         sha=SHA,
         repo_url='https://g/r.git',
         builds=Builds(install='true', env_key='k1'),
         vocabulary=Vocabulary(('win',)),
     )
-    return submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0', **kw)
+    return _launch(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0', **kw)
 
 
 def _gather(fake: FakeRunCluster) -> dict | None:
@@ -868,7 +923,8 @@ def _asks(state: dict) -> dict[tuple[str, ...], int]:
 
 
 def _sbatched(fake: FakeRunCluster) -> list[str]:
-    return [command for command, _ in fake.calls if 'sbatch' in command]
+    """The test arrays' ``sbatch`` lines; the prep job's own (``prep.sbatch``) is not a round."""
+    return [command for command, _ in fake.calls if 'sbatch' in command and 'prep.sbatch' not in command]
 
 
 def test_each_memory_class_is_its_own_array_at_its_own_files_peak() -> None:
@@ -908,7 +964,7 @@ def test_a_declared_floor_sizes_round_0_and_never_reaches_the_record() -> None:
         ),
         vocabulary=Vocabulary(('win',)),
     )
-    state = submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
+    state = _launch(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
     asks = _asks(state)
     assert asks[('tests/a.py::t1', 'tests/a.py::t2')] == 30720
     assert asks[('tests/b.py::t3', 'tests/b.py::t4', 'tests/b.py::t5')] == 1024
@@ -1041,7 +1097,7 @@ def test_a_missing_prerequisite_is_named_before_anything_is_fetched() -> None:
     fake = FakeRunCluster(lacking=('cargo',))
     with pytest.raises(RuntimeError, match='lacks cargo'):
         _submit(fake)
-    assert not any('cat-file' in c for c, _ in fake.calls)
+    assert fake.steps == ['needs'], 'the prep stops at the probe: nothing was fetched or built'
 
 
 def test_the_build_runs_in_its_own_errexit_shell_and_checks_the_venv() -> None:
@@ -1075,8 +1131,8 @@ def test_every_round_runs_as_the_user_whose_home_holds_the_built_tree() -> None:
     connect = {GRANT.account: mine, other.account: theirs}
 
     spec = RunSpec(sha=SHA, repo_url='https://g/r.git', builds=Builds(install='true', env_key='k1'))
-    submit_run(spec, machine, lambda g: connect[g.account], cost=COST, policy=POLICY, stamp='t0')
-    builder = mine if any('@@@ facts' in c for c, _ in mine.calls) else theirs
+    _launch(spec, machine, lambda g: connect[g.account], cost=COST, policy=POLICY, stamp='t0')
+    builder = mine if any('prep.sbatch' in c for c, _ in mine.calls) else theirs
     for _ in range(2 + RETRIES):
         if gather_run(SHA, BASE, machine, lambda g: connect[g.account], cost=COST, policy=POLICY) is not None:
             break
@@ -1090,7 +1146,7 @@ def test_only_runs_the_ids_the_caller_selected() -> None:
     spec = RunSpec(
         sha=SHA, repo_url='u', builds=Builds(install='true', env_key='k1'), only=frozenset({'tests/b.py::t4'})
     )
-    submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
+    _launch(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, stamp='t0')
     assert [i['ids'] for i in fake.manifests[0]['items']] == [['tests/b.py::t4']]
     assert (
         RunSpec(sha=SHA, repo_url='u', builds=Builds(install='true', env_key='k1'), only=frozenset({'x'})).scope
@@ -1246,11 +1302,12 @@ def test_declared_inputs_share_one_env_and_native_build_and_put_the_source_on_py
 
 
 def test_a_commit_off_the_remote_without_a_pack_source_is_refused() -> None:
+    fake = FakeRunCluster(have=False)
     with pytest.raises(RuntimeError, match=r'not on https://g/r\.git'):
-        submit_run(
+        _launch(
             RunSpec(sha=SHA, repo_url='https://g/r.git', builds=Builds(install='true', env_key='k1')),
             Machine(session=None, grants=(GRANT,)),
-            lambda _g: FakeRunCluster(have=False),
+            lambda _g: fake,
             cost=Cost(),
             policy=Policy(),
         )
@@ -1782,9 +1839,9 @@ def test_every_item_carries_the_timeout_its_scope_declares() -> None:
     timeouts = {'incremental': 300, 'full': 3000}
     builds = Builds(install='true', env_key='k1', timeout_s=timeouts)
     full, incremental = FakeRunCluster(), FakeRunCluster()
-    submit_run(RunSpec(sha=SHA, repo_url='u', builds=builds), MACHINE, lambda _g: full, cost=COST, policy=POLICY)
+    _launch(RunSpec(sha=SHA, repo_url='u', builds=builds), MACHINE, lambda _g: full, cost=COST, policy=POLICY)
     narrowed = RunSpec(sha=SHA, repo_url='u', builds=builds, only=frozenset({'tests/b.py::t4'}))
-    submit_run(narrowed, MACHINE, lambda _g: incremental, cost=COST, policy=POLICY)
+    _launch(narrowed, MACHINE, lambda _g: incremental, cost=COST, policy=POLICY)
     assert {i['timeout_s'] for i in full.manifests[0]['items']} == {3000}
     assert {i['timeout_s'] for i in incremental.manifests[0]['items']} == {300}
 
@@ -1794,7 +1851,7 @@ def test_every_id_carries_a_wall_derived_from_its_measured_duration() -> None:
     history = {'durations': {'tests/a.py::t1': 30.0, 'tests/a.py::t2': 0.1}}
     fake = FakeRunCluster()
     spec = RunSpec(sha=SHA, repo_url='u', builds=builds)
-    submit_run(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, history=history)
+    _launch(spec, MACHINE, lambda _g: fake, cost=COST, policy=POLICY, history=history)
     walls = {n: s for i in fake.manifests[0]['items'] for n, s in i['walls'].items()}
     assert walls['tests/a.py::t1'] == 300, 'ten times its measured 30 s'
     assert walls['tests/a.py::t2'] == 60, 'never under the floor'
@@ -1804,9 +1861,8 @@ def test_every_id_carries_a_wall_derived_from_its_measured_duration() -> None:
 def test_the_run_state_names_the_build_directories_it_runs_in() -> None:
     """Retention ties ``<root>/envs/<key>`` and ``<root>/native/<key>`` to a run only through these keys."""
     builds = Builds(install='true', env_key='k1', native_key='n1')
-    state = submit_run(
-        RunSpec(sha=SHA, repo_url='u', builds=builds), MACHINE, lambda _g: FakeRunCluster(), cost=COST, policy=POLICY
-    )
+    fake = FakeRunCluster()
+    state = _launch(RunSpec(sha=SHA, repo_url='u', builds=builds), MACHINE, lambda _g: fake, cost=COST, policy=POLICY)
     assert state['builds'] == {'env': 'k1', 'native': 'n1'}
 
 
@@ -1840,19 +1896,8 @@ def test_two_out_of_memory_rounds_then_a_completed_one_is_gathered_from_the_late
     assert all(_words(record['cells'])[f'tests/b.py::t{n}'] == 'ok' for n in (3, 4, 5)), 'r2 results gathered'
     asked = [c.split(' -j ')[1].split()[0] for c, _ in fake.calls if c.startswith('sacct ')]
     assert list(dict.fromkeys(asked)) == ['4243', '4244', '4245'], 'each gather asks sacct about the current round only'
-    assert not any(' -j ' in c for c, _ in fake.calls if 'squeue' in c), 'squeue decides no job in a gather'
-
-
-def test_build_prepares_the_tree_and_its_env_and_submits_nothing() -> None:
-    """``run build`` is ``run submit`` up to the facts, so a job-mode entry can run in the built tree (2026-10-13)."""
-    fake = FakeRunCluster()
-    spec = RunSpec(sha=SHA, repo_url='u', builds=Builds(install='true', env_key='k1'))
-    built = build_run(spec, fake, 'login.example')
-    assert built['env'] == fake.env
-    assert 'env' in built['prep'], 'the prep wall times come back with the facts'
-    assert not fake.manifests, 'nothing was submitted'
-    assert not fake.state, 'no run state: a build is not a run'
-    assert not any('--collect-only' in c or 'lab_ci_collect.py --cache' in c for c, _ in fake.calls), 'no collection'
+    rounds = [c for c, _ in fake.calls if 'squeue' in c and ' -j 4242 ' not in c]  # 4242: the prep job
+    assert not any(' -j ' in c for c in rounds), 'squeue decides no round in a gather'
 
 
 def _build_cli(monkeypatch: pytest.MonkeyPatch, fake: FakeRunCluster) -> None:

@@ -352,7 +352,8 @@ def _run_submit(args: argparse.Namespace, machine: Machine, config: Config) -> i
         emit(f'run submit inconclusive: {why}', err=True)
         return _NOT_SUBMITTED
     _out(
-        f'submitted run {spec.sha} ({spec.scope}) as round 0 of {len(state["rounds"])}; '
+        f'submitted the prep job {state["prep_job"]["job_id"]} of run {spec.sha} ({spec.scope}); round 0 follows '
+        'it from the next gather; '
         f'wait for it: python -m lab_commons.hpc run gather --sha {spec.sha} -o <dir> [--wait]'
     )
     return 0

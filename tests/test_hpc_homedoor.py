@@ -136,7 +136,7 @@ def test_at_names_the_target_and_needs_no_machine_file() -> None:
 
 
 def test_run_submit_at_hard_is_no_room(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``run submit`` passes the same guard: past hard, nothing is built or queued, and it is NO ROOM.
+    """``run submit`` passes the same guard: past hard, no prep job is queued, and it is NO ROOM.
 
     A full home is a fact about the ACCOUNT, never a result about the sha: it is released RETRYABLE like any
     host without room. Read as INCONCLUSIVE it settled ``error`` and was never re-claimed (Ada 2026-11-11:
@@ -146,7 +146,7 @@ def test_run_submit_at_hard_is_no_room(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_module, 'probe', lambda *_a, **_k: None)
     monkeypatch.setattr(run_module, 'allocate', lambda *_a, **_k: (_grant(), None))
     built: list[str] = []
-    monkeypatch.setattr(run_module, 'build_run', lambda *_a: built.append('built'))
+    monkeypatch.setattr(run_module, 'submit_prep', lambda *_a, **_k: built.append('prep'))
     machine = Machine(session=None, grants=(_grant(),))
     with pytest.raises(run_module.NoRoom, match='HOME-QUOTA-HARD: run submit'):
         run_module.submit_run(RunSpec(sha='a' * 40, repo_url='u'), machine, lambda _g: home, cost=None, policy=None)

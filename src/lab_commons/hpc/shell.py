@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import shlex
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import lab_commons.launch as _door
 from lab_commons.hpc.builds import FULL, INCREMENTAL, Builds, cargo_target
@@ -36,6 +37,7 @@ from lab_commons.hpc.needsets import BASE, Vocabulary
 __all__ = [
     'BUILD_FAILED',
     'COLLECT_MODULE',
+    'ENTRY_MODULE',
     'ENV',
     'FULL',
     'INCREMENTAL',
@@ -56,6 +58,7 @@ __all__ = [
     'nothing_collected',
     'pack',
     'parse_collection_errors',
+    'parse_entry_items',
     'parse_ids',
     'parse_times',
     'submodules_script',
@@ -63,6 +66,9 @@ __all__ = [
 
 #: The item runner's name on the cluster -- unique, so it can shadow nothing in the tested project.
 ITEM_MODULE: Final = 'lab_ci_pytest_item'
+
+#: The runner of a part that declares its own entry (:mod:`lab_commons.hpc.entry_item`), by its shipped name.
+ENTRY_MODULE: Final = 'lab_ci_entry_item'
 
 
 def cache_dir(repo_url: str) -> str:
@@ -138,9 +144,16 @@ class RunSpec:
     pack_from: Path | None = None
     builds: Builds = field(default_factory=Builds)
     only: frozenset[str] | None = None
+    #: ``module:function`` running ONE item of a part whose items are not pytest ids (``{'exit': code}``);
+    #: :attr:`items` (``module:function``, ``items(tree, sha)``) lists them in the prep. Empty: pytest.
+    entry: str = ''
+    items: str = ''
 
     def __post_init__(self) -> None:
         """A run is bound to a full commit id, never to a branch name that moves under it."""
+        if bool(self.entry) != bool(self.items):
+            msg = f'a part declares entry and items together, got entry={self.entry!r} items={self.items!r}'
+            raise ValueError(msg)
         if len(self.sha) != _SHA_HEX or any(c not in '0123456789abcdef' for c in self.sha):
             msg = f'a run needs the full 40-hex commit id, got {self.sha!r}'
             raise ValueError(msg)
@@ -320,7 +333,7 @@ def parse_times(text: str) -> dict[str, int]:
 def build_script(spec: RunSpec) -> str:
     """Add the tree, build (or REUSE) its venv and native build, write its ``.lab-ci/env.sh``. Prints the facts.
 
-    The item runner's source arrives on stdin, so the script's first line is a ``cat``. Declared inputs
+    It runs inside the prep job (:mod:`lab_commons.hpc.prep`), on a compute node, never the login node. Declared inputs
     (:mod:`lab_commons.hpc.builds`) put the venv in ``<root>/envs/<key>`` and the native build in
     ``<root>/native/<key>``, each built once per key under a ``flock``; the tree's ``source_roots`` reach
     them through ``PYTHONPATH``. A FAILED BUILD STOPS THE
@@ -349,7 +362,6 @@ def build_script(spec: RunSpec) -> str:
     activate = 'export VIRTUAL_ENV="$E" PATH="$E/bin:$PATH" UV_PROJECT_ENVIRONMENT="$E"'
     lines = [
         'set -eo pipefail',
-        f'cat > {BIN}/{ITEM_MODULE}.py',
         f'[ -d {tree} ] || git -C {cache} worktree add -q --detach {tree} {spec.sha}',
         f'cd {tree}',
         *submodules_script(spec.repo_url),
@@ -388,15 +400,20 @@ def build_script(spec: RunSpec) -> str:
 def collect_command(spec: RunSpec, *, also: str = '') -> str:
     """Collect in the tree; ONE ``-m`` joins ``select`` and the marker expression *also*.
 
+    A part with an entry collects through its ``items`` callable instead (:mod:`lab_commons.hpc.entry_item`).
+
     One expression, because pytest keeps only the last ``-m`` -- a second one would silently drop the first.
     When ``collect`` is paths only, the per-file cache (:mod:`lab_commons.hpc.collect`) recollects only the
     files whose content changed; any option in it falls back to one plain ``pytest --collect-only``.
     """
+    head = f'cd {run_tree(spec.sha)} && {ENV} && '
+    if spec.entry:
+        body = f'python {BIN}/{ENTRY_MODULE}.py {shlex.quote(spec.items)} {spec.sha}'
+        return head + '; '.join(_timed('collect', [f'{{ {body}; }}']))
     parts = [f'({spec.select})'] if spec.select else []
     if also:
         parts.append(f'({also})')
     select = f' -m {shlex.quote(" and ".join(parts))}' if parts else ''
-    head = f'cd {run_tree(spec.sha)} && {ENV} && '
     if any(token.startswith('-') for token in shlex.split(spec.collect)):
         body = (
             f'python -m pytest --collect-only -q -p no:cacheprovider --color=no'
@@ -414,6 +431,13 @@ def collect_command(spec: RunSpec, *, also: str = '') -> str:
 def parse_ids(text: str) -> list[str]:
     """Node ids from ``pytest --collect-only -q`` -- the lines that carry ``::``, in collection order."""
     return [line.strip() for line in text.splitlines() if '::' in line and not line.startswith((' ', 'ERROR '))]
+
+
+def parse_entry_items(text: str) -> dict[str, dict[str, Any]]:
+    """``{node: item}`` from an entry collection's ``@@@ item <json>`` lines, in collection order."""
+    head = '@@@ item '
+    items = [json.loads(line[len(head) :]) for line in text.splitlines() if line.startswith(head)]
+    return {str(item['node']): item for item in items}
 
 
 def parse_collection_errors(text: str) -> list[str]:
@@ -466,7 +490,7 @@ def pack(repo: Path, sha: str) -> str:
 _COLLECT_TAIL: Final = 25
 
 
-def nothing_collected(spec: RunSpec, collected: str) -> str:
+def nothing_collected(tree: str, collect: str, collected: str) -> str:
     """The refusal for a collection that yielded no id, CARRYING the collector's own last lines.
 
     An empty collection is almost always a failed one -- an import error in a conftest or a package the
@@ -476,7 +500,7 @@ def nothing_collected(spec: RunSpec, collected: str) -> str:
     said = [line for line in collected.splitlines() if line.strip()][-_COLLECT_TAIL:]
     quoted = '\n'.join(f'  | {line}' for line in said) or '  | (the collector printed nothing)'
     return (
-        f'no test was collected in {spec.tree} with {spec.collect!r} -- an empty run is not a pass. '
+        f'no test was collected in {tree} with {collect!r} -- an empty run is not a pass. '
         f'The collector said:\n{quoted}\n'
         f"Remedy: fix the error above; an ImportError usually means the commit's "
         f'[tool.lab_commons.hpc] install does not install what the tests import.'
