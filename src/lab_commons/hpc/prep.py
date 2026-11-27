@@ -30,6 +30,7 @@ from lab_commons.hpc.layout import BIN, ENVS, NATIVE, PACKS, REQUIRE_ROOT, RUNS
 from lab_commons.hpc.plan import Plan
 from lab_commons.hpc.shell import (
     COLLECT_MODULE,
+    ENTRY_MODULE,
     ITEM_MODULE,
     RunSpec,
     build_script,
@@ -107,7 +108,7 @@ def prep_script(spec: RunSpec, plan: Plan, *, name: str) -> str:
     lines += [*_step('fetch', fetch_script(spec)), '[ "$(tail -n 1 "$P/fetch.txt")" = have ] || exit 1']
     lines += [*_step('built', build_script(spec)), 'grep -q "^@@@ build-failed" "$P/built.txt" && exit 1']
     lines += _step('collected', collect_command(spec))
-    for index, marker in enumerate(spec.vocabulary.resources):
+    for index, marker in enumerate(() if spec.entry else spec.vocabulary.resources):
         lines += _step(f'also-{index}', collect_command(spec, also=marker))
     lines += ['echo ok > "$P/done.txt"']
     return '\n'.join(lines) + '\n'
@@ -126,6 +127,7 @@ def submit_prep(spec: RunSpec, run: Runner, plan: Plan, *, name: str) -> str:
         _source(here, 'pytest_item'),
     )
     run(f'cat > {BIN}/{COLLECT_MODULE}.py', _source(here, 'collect'))
+    run(f'cat > {BIN}/{ENTRY_MODULE}.py', _source(here, 'entry_item'))
     if spec.pack_from is not None:  # indexed by the prep's fetch only when origin lacks the commit
         run(f'base64 -d > {PACKS}/{spec.sha}.pack', pack(spec.pack_from, spec.sha))
     run(f'cat > {where}/prep.sbatch', prep_script(spec, plan, name=name))

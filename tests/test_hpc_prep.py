@@ -19,7 +19,16 @@ from lab_commons.hpc.run import submit_run
 from lab_commons.hpc.shell import RunSpec, build_script, collect_command
 
 #: What only a build or a collection runs; the login node must never be sent one.
-_BUILDING = ('uv venv', 'uv sync', 'uv cache', 'python -m pytest', 'lab_ci_collect.py --cache', 'cargo', 'worktree add')
+_BUILDING = (
+    'lab_ci_entry_item.py ',
+    'uv venv',
+    'uv sync',
+    'uv cache',
+    'python -m pytest',
+    'lab_ci_collect.py --cache',
+    'cargo',
+    'worktree add',
+)
 _FETCHING = ('git -C', 'git init', 'index-pack')
 
 

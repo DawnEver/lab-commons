@@ -88,6 +88,7 @@ from lab_commons.hpc.records import (
 from lab_commons.hpc.shards import balance
 from lab_commons.hpc.shell import (
     BUILD_FAILED,
+    ENTRY_MODULE,
     ENV,
     ITEM_MODULE,
     RunSpec,
@@ -95,6 +96,7 @@ from lab_commons.hpc.shell import (
     group_items,
     nothing_collected,
     parse_collection_errors,
+    parse_entry_items,
     parse_ids,
     parse_times,
 )
@@ -285,13 +287,18 @@ def submit_round(
         raise ValueError(msg)
     pending = [pending[i] for i in order]
     ceiling = {'timeout_s': state['timeout_s']} if state.get('timeout_s') else {}
+    entry = state['prep_job'].get('entry', '')
     items = [
         {'ids': group, 'stream': f'.lab-ci/{tag}.jsonl', 'item': i, 'walls': item_walls(group, state), **ceiling}
+        | ({'entry': entry, 'payloads': {node: state['payloads'][node] for node in group}} if entry else {})
         for i, group in enumerate(pending)
     ]
     sha = state['sha']
     job = JobSpec(
-        name=job_name(sha, state['platform']), workdir=run_tree(sha), setup=(ENV,), entry=f'{ITEM_MODULE}:run'
+        name=job_name(sha, state['platform']),
+        workdir=run_tree(sha),
+        setup=(ENV,),
+        entry=f'{ENTRY_MODULE if entry else ITEM_MODULE}:run',
     )
     config = Config(job=job, cost=cost, policy=policy)
     charge(runners[chosen.account], chosen, sum(ask_of(plan) for plan in plans))
@@ -388,6 +395,7 @@ def submit_run(
             'collect': spec.collect,
             'only': None if spec.only is None else sorted(spec.only),
             'resources': list(spec.vocabulary.resources),
+            'entry': spec.entry,
         },
         'handed': {},
         'cells': {},
@@ -460,7 +468,12 @@ def plan_first_round(
         )
         raise NotSubmitted(msg)
     collected = said['collected']
-    ids, errored = parse_ids(collected), parse_collection_errors(collected)
+    entry = prep.get('entry', '')
+    if entry:  # its own items: each a node with a payload, no pytest errors and no resource markers
+        state['payloads'] = parse_entry_items(collected)
+        ids, errored = list(state['payloads']), []
+    else:
+        ids, errored = parse_ids(collected), parse_collection_errors(collected)
     only = prep['only']
     if only is not None:
         ids = [node for node in ids if node in only]
@@ -468,7 +481,8 @@ def plan_first_round(
     if not ids:
         raise NotSubmitted(nothing_collected(run_tree(state['sha']), prep['collect'], collected))
     carrying = {name: set(parse_ids(said.get(f'also-{i}', ''))) for i, name in enumerate(prep['resources'])}
-    handed = {node: owner for node, owner in sorted(need_sets(ids, carrying).items()) if owner != state['platform']}
+    owners = {} if entry else need_sets(ids, carrying)
+    handed = {node: owner for node, owner in sorted(owners.items()) if owner != state['platform']}
     broken = TestCell(Cell(Status.REJECTED, reason=Reason('collection', 'the file did not collect'))).to_plain()
     cells: dict[str, dict[str, Any]] = dict.fromkeys(errored, broken)
     present = set(ids)
