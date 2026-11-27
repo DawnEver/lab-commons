@@ -150,9 +150,9 @@ def _cell(status: Status, kind: str, text: str) -> dict[str, Any]:
     return TestCell(Cell(status, reason=Reason(kind, text))).to_plain()
 
 
-#: The share of its memory limit under which a signalled item's peak says the signal was NOT memory: a cgroup
+#: The share of its memory limit under which a signaled item's peak says the signal was NOT memory: a cgroup
 #: OOM kill lands at the limit, so a peak at 0.8 of it or below is the test's own crash (a native fault, a kill
-#: it sent itself). Measured 2026-11-23: two crash-probe tests died by their own signal at ~375 MB, were labelled
+#: it sent itself). Measured 2026-11-23: two crash-probe tests died by their own signal at ~375 MB, were labeled
 #: out_of_memory and bisected over four retry rounds.
 _OOM_PEAK_SHARE: Final = 0.8
 
@@ -207,7 +207,7 @@ def fold(
 
     WHAT A KILL COST IS MEASURED TOO. A shard (*shards*: item ranges) runs its items back to back for
     the seconds Slurm says it ran (*walls*, one per shard), so the first item of a shard that never closed
-    was killed after that minus what the items before it took; a signalled item says its own wall.
+    was killed after that minus what the items before it took; a signaled item says its own wall.
     Measured 2026-10-11: a shard killed after 7 s was charged its whole 216-min PLANNED wall, so one id
     carried a 12960 s floor it never ran. That time goes to
     :meth:`Measured.killed`, so the id the kill interrupted is never re-priced below it.
@@ -241,8 +241,8 @@ def fold(
         cells.update({node: _plain(line) for node, line in folded['cells'].items()})
         measured.learn(group, folded, allowed_mb=limits.get(index))
         rest = [n for n in group if n not in folded['cells']]
-        signalled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
-        if folded['done'] is not None and not signalled:
+        signaled = folded['done'] is not None and int(folded['done'].get('done', 0)) < 0
+        if folded['done'] is not None and not signaled:
             hit = folded['started']
             if hit not in rest:
                 exited = f'the item exited {folded["done"]["done"]} without reporting it'
@@ -261,7 +261,7 @@ def fold(
             after = [n for n in rest if n != hit]
             pending += [after] if after else []
             continue
-        killed = killed or signalled
+        killed = killed or signaled
         top = (tops or {}).get(shard) if shard is not None else None
         measured.killed(group, folded, spent.get(index, 0.0), timed_out=shard in cut, top=top)
         if shard in cut and top is not None and walls[shard] >= top - _KILL_SLACK_S:
@@ -357,7 +357,7 @@ def round_losses(
 def _killed_after(
     folds: list[dict[str, Any]], shards: Sequence[Sequence[int]], walls: Sequence[float]
 ) -> dict[int, float]:
-    """Seconds each killed item ran: its own ``done`` wall when signalled, else what its shard's wall had left."""
+    """Seconds each killed item ran: its own ``done`` wall when signaled, else what its shard's wall had left."""
     spent: dict[int, float] = {}
     for (start, stop), wall in zip(shards, walls, strict=True):
         left = wall

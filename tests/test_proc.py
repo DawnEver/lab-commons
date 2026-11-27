@@ -152,7 +152,7 @@ class TestKill:
         monkeypatch.setattr('lab_commons.proc.pid_alive', lambda pid: pid == 11)
         started = time.monotonic()
         assert kill_process_tree(10, ceiling_s=0.2) == frozenset({10, 12})
-        assert time.monotonic() - started < 5, 'the wait must honour its ceiling'
+        assert time.monotonic() - started < 5, 'the wait must honor its ceiling'
 
     def test_every_returned_pid_is_gone_on_return(self) -> None:
         # A SIGKILL is asynchronous: measured on Ada, the grandchild was still running right after

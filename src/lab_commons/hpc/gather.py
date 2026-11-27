@@ -287,7 +287,7 @@ def held_after(
     """``{id: MB}`` -- the ask each unfinished id of an OOM-killed MULTI-ID item ran at, its retry's least ask.
 
     ISOLATE BEFORE GROWING: the halves of a killed item re-run at the SAME ask, never grown and never below it --
-    a half's modelled ask is smaller (fewer files accumulate), but the item died at this one. An id that got a
+    a half's modeled ask is smaller (fewer files accumulate), but the item died at this one. An id that got a
     cell drops out.
     """
     after = {node: mb for node, mb in held.items() if node not in cells}

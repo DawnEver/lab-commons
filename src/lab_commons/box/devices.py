@@ -14,14 +14,14 @@ has none; an NPU does f16 and int8 only), its memory, and its OBSERVED use.
 
 SUPPLY IS MEASURED, like cores (:mod:`lab_commons.box.supply`). A GPU's share is its memory less the larger of what
 is in use now -- every process, admitted or not -- and what its claims declared (:func:`free_gib`). A device is
-taken WHOLE only when no claim is on it, no process runs on it and its utilisation is KNOWN and below
+taken WHOLE only when no claim is on it, no process runs on it and its utilization is KNOWN and below
 :data:`BUSY_UTIL_PCT`: a job the box never admitted takes the device it runs on, listed by the driver or not.
 Each vendor is one probe (:data:`PROBES`):
 
-* ``nvidia`` -- two read-only ``nvidia-smi`` queries (Linux and Windows): utilisation, memory, compute processes.
-* ``intel`` -- the OS inventory (Windows: CIM ``Win32_VideoController`` and PnP class ``ComputeAccelerator``;
+* ``nvidia`` -- two read-only ``nvidia-smi`` queries (Linux and Windows): utilization, memory, compute processes.
+* ``intel`` -- the OS inventory (Windows: CIM ``Win32_VideoController`` and plug-and-play class ``ComputeAccelerator``;
   Linux: ``/sys/class/drm`` and ``/sys/class/accel``, vendor ``0x8086``). It FINDS the devices but no portable
-  reader says how busy they are, so their utilisation is unknown and they are inventoried, never lent, until one does.
+  reader says how busy they are, so their utilization is unknown and they are inventoried, never lent, until one does.
 
 A probe that is missing, fails or times out is BLIND (:attr:`Devices.blind`, naming why); a kind none of whose
 devices was found while a probe was blind is blind in :class:`~lab_commons.box.Capacity` and a demand for it is
@@ -82,7 +82,7 @@ NATIVE: Final[Mapping[tuple[str, str], frozenset[str]]] = {
     (NPU, 'intel'): frozenset({'f16', 'int8'}),
 }
 
-#: Utilisation (percent) at or above which a device no claim holds is in use by someone else.
+#: Utilization (percent) at or above which a device no claim holds is in use by someone else.
 BUSY_UTIL_PCT: Final = 5
 
 #: Seconds one probe may take before it is blind.
@@ -130,7 +130,7 @@ class Device:
 
     @property
     def idle(self) -> bool:
-        """No process on it and its utilisation known and below :data:`BUSY_UTIL_PCT`."""
+        """No process on it and its utilization known and below :data:`BUSY_UTIL_PCT`."""
         return not self.pids and self.utilization_pct is not None and self.utilization_pct < BUSY_UTIL_PCT
 
     @property

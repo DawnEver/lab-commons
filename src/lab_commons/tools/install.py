@@ -46,7 +46,7 @@ from lab_commons.tools.catalogue import CATALOGUE, Release
 __all__ = [
     'DOWNLOAD_TIMEOUT',
     'MODES',
-    'Outcome',
+    'ToolReport',
     'command',
     'download',
     'install',
@@ -88,7 +88,7 @@ _MSI_EXITS: Final = {
 
 
 @dataclass(frozen=True)
-class Outcome:
+class ToolReport:
     """What the door did: ``installed``, ``skipped`` (already there, verified) or ``refused``, and why."""
 
     state: str
@@ -197,7 +197,7 @@ def install(
     run: Callable[[list[str]], int] | None = None,
     checks: Mapping[str, Check] = CHECKS,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> Outcome:
+) -> ToolReport:
     """Install *release* under the managed root (the module docstring's steps); *installer*: a local copy to use.
 
     *fetch* and *run* default to :func:`download` and :func:`launch_installer`, read when called.
@@ -212,7 +212,7 @@ def install(
     if before is not None and before.version == version:
         reading = verify(release, before.binary, checks=checks, now=now())
         if reading.present:
-            return Outcome('skipped', f'{tool} {version} is already installed at {before.binary} and verifies')
+            return ToolReport('skipped', f'{tool} {version} is already installed at {before.binary} and verifies')
         note = f' (the recorded {tool} {version} failed its probe -- {_evidence(reading)} -- and is reinstalled)'
     try:
         if release.kind == 'source-build':
@@ -224,12 +224,12 @@ def install(
             )
         _probed(release, binary, before, verify(release, binary, checks=checks, now=now()))
     except _Refused as refused:
-        return Outcome('refused', str(refused) + note)
+        return ToolReport('refused', str(refused) + note)
     managed.record(managed.Installed(tool, version, release.binary, source, sha256, now().isoformat()))
     if before is not None and before.version != version:
         shutil.rmtree(before.root, ignore_errors=True)
     replaced = f'; {tool} {before.version} removed' if before is not None and before.version != version else ''
-    return Outcome('installed', f'{tool} {version} installed at {binary}, verified and recorded{replaced}{note}')
+    return ToolReport('installed', f'{tool} {version} installed at {binary}, verified and recorded{replaced}{note}')
 
 
 def _probed(release: Release, binary: Path, before: managed.Installed | None, reading: Presence) -> None:

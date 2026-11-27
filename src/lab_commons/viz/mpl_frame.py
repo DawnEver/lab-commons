@@ -73,12 +73,12 @@ def _next_color(drawn: Iterator[int], style: Style, explicit: str | None) -> str
 
     THE CURSOR IS THE CANVAS'S, shared with every other frame of it — one of them a 3D frame, which
     is why this is a FUNCTION here rather than a method of either frame class: a series on a second
-    panel, on a twin axis or in space therefore takes the NEXT colour rather than the same one, and
-    two copies of this arithmetic would be a colour rule that holds until one of them is edited.
+    panel, on a twin axis or in space therefore takes the NEXT color rather than the same one, and
+    two copies of this arithmetic would be a color rule that holds until one of them is edited.
 
-    The cursor advances whether or not the caller named a colour, so the n-th artist's palette
+    The cursor advances whether or not the caller named a color, so the n-th artist's palette
     position does not depend on which of its predecessors happened to name one: the same figure
-    drawn twice takes the same colours.
+    drawn twice takes the same colors.
     """
     index = next(drawn)
     return explicit if explicit is not None else style.color(index)
@@ -143,7 +143,7 @@ class MplFrame:
         self.axes.set_ylabel(text)
 
     def set_limits(self, *, x: tuple[float, float] | None = None, y: tuple[float, float] | None = None) -> None:
-        """Fix the axis limits; a pair given high-to-low inverts that axis, which matplotlib honours."""
+        """Fix the axis limits; a pair given high-to-low inverts that axis, which matplotlib honors."""
         if x is not None:
             self.axes.set_xlim(x)
         if y is not None:
@@ -153,7 +153,7 @@ class MplFrame:
         """Place the ticks of either axis at the positions a :class:`Ticks` names.
 
         THE LABELS ARE READ ON PRESENCE, NOT ON TRUTH: an empty sequence means "these positions and
-        no text", which is what an under-labelled index axis asks for, and ``None`` means "number
+        no text", which is what an under-labeled index axis asks for, and ``None`` means "number
         them". ``labels or None`` here would collapse the first into the second.
         """
         if x is not None:
@@ -181,7 +181,7 @@ class MplFrame:
         self.axes.grid(on)
 
     def legend(self, *, on: bool = True) -> None:
-        """Show the legend of everything labelled on this frame, or remove it."""
+        """Show the legend of everything labeled on this frame, or remove it."""
         existing = self.axes.get_legend()
         if on:
             self.axes.legend()
@@ -189,7 +189,7 @@ class MplFrame:
             existing.remove()
 
     def draw_line(self, series: Series) -> None:
-        """Draw *series* as a line, taking the next palette colour when it names none."""
+        """Draw *series* as a line, taking the next palette color when it names none."""
         _plane(series)
         self.axes.plot(
             series.x,
@@ -227,15 +227,15 @@ class MplFrame:
         )
 
     def draw_patches(self, parts: Sequence[Patch], scale: Scale | None = None) -> None:
-        """Draw filled regions; *scale* colours them by value when the patches carry one.
+        """Draw filled regions; *scale* colors them by value when the patches carry one.
 
-        VALUE-COLOURED AND NAME-COLOURED ARE DIFFERENT FIGURES, not two spellings of one: a region
-        carrying a ``value`` gets a colormap and a colour bar (the region map), and a region carrying
-        a ``color`` gets that colour and a legend entry (the identity map).
+        VALUE-COLORED AND NAME-COLORED ARE DIFFERENT FIGURES, not two spellings of one: a region
+        carrying a ``value`` gets a colormap and a color bar (the region map), and a region carrying
+        a ``color`` gets that color and a legend entry (the identity map).
 
         THE VALUE PATH TAKES ONE TRANSPARENCY FOR THE WHOLE MAP, which is what a region map has: the
-        patches of one scale are one surface, and matplotlib colours them from the COLLECTION. A
-        figure whose regions each need their own alpha is drawn with colours and not with values --
+        patches of one scale are one surface, and matplotlib colors them from the COLLECTION. A
+        figure whose regions each need their own alpha is drawn with colors and not with values --
         and a description that asks for both at once is refused rather than silently flattened.
         """
         polygons = [PathPatch(_compound_path(part.rings())) for part in parts]
@@ -243,7 +243,7 @@ class MplFrame:
         if scale is not None and any(value is not None for value in values):
             alphas = {part.alpha for part in parts}
             if len(alphas) != 1:
-                msg = f'a value-coloured region map carries one transparency for its regions, not {sorted(alphas)}'
+                msg = f'a value-colored region map carries one transparency for its regions, not {sorted(alphas)}'
                 raise ValueError(msg)
             collection = PatchCollection(
                 polygons,
@@ -323,13 +323,13 @@ class MplFrame:
             )
 
     def draw_field(self, field: Field) -> None:
-        """Draw a scalar over a CONTINUUM and its colour scale — the field map.
+        """Draw a scalar over a CONTINUUM and its color scale — the field map.
 
         The samples go to a FILLED CONTOUR OVER A TRIANGULATION, which is the primitive that accepts
         a point set with no structure: a structured chart, a skewed one and an unstructured mesh all
         arrive here as coordinates and values, and nothing has to be reshaped to a rectangle the
         samples never had. THE SURFACE IS WHAT THE SHAPE ASKS FOR, and the other drawing of the same
-        data — marks at the samples, coloured by their values — is :class:`Samples`, which a
+        data — marks at the samples, colored by their values — is :class:`Samples`, which a
         producer asks for by name rather than getting it because a backend could not contour.
         """
         scale = Scale() if field.scale is None else field.scale
@@ -344,7 +344,7 @@ class MplFrame:
         self.axes.figure.colorbar(artist, ax=self.axes, label=scale.label)
 
     def draw_grid(self, grid: Grid) -> None:
-        """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
+        """Draw a scalar on a rectilinear grid and its color scale — the maskable map.
 
         THE VOIDS ARE DRAWN AS NOTHING, which is the shape's subject rather than a detail: the cells
         arrive at the image masked (a masked array stays masked, a NaN is masked by the primitive),
@@ -368,7 +368,7 @@ class MplFrame:
         self.axes.figure.colorbar(artist, ax=self.axes, label=scale.label)
 
     def draw_samples(self, samples: Samples) -> None:
-        """Draw points coloured by the values they carry — the point cloud and its colour scale.
+        """Draw points colored by the values they carry — the point cloud and its color scale.
 
         ``size`` IS A LENGTH HERE AND AN AREA THERE: this library's ``scatter(s=...)`` is a marker's
         area in points squared, so a size given is squared. The vocabulary states a length because a
@@ -393,7 +393,7 @@ class MplFrame:
 
         THE SAME POINT SET :meth:`draw_field` TAKES, drawn the other way: this library computes
         isolines over a Delaunay triangulation of the samples, so a scattered set and a mesh's nodes
-        both arrive here unchanged. A colour given is used for EVERY level rather than cycled -- the
+        both arrive here unchanged. A color given is used for EVERY level rather than cycled -- the
         caller is drawing a set of lines that mean one thing, which is what an overlay is.
         """
         self.axes.tricontour(
@@ -411,7 +411,7 @@ class MplFrame:
 
         ``angles='xy', scale_units='xy'`` pins the arrow to the data coordinates and ``scale`` to the
         vocabulary's meaning (``|(u, v)| / scale`` data units long) instead of matplotlib's own
-        default of normalising to the axes. A direction that reads as a number in the description has
+        default of normalizing to the axes. A direction that reads as a number in the description has
         to read as the same number on the page.
         """
         self.axes.quiver(
@@ -435,9 +435,9 @@ class MplFrame:
         one, and the alternative to this refusal is a legend of unknown extent drawn as if it had
         one -- the declaration-that-lies shape, on the axis a reader trusts most.
 
-        A DISCRETE BAR SAMPLES ITS COLOURS AT THE BAND CENTRES, which mirrors the region maps the
-        family draws: the palette is quantised to one colour per tick and the boundaries sit half a
-        step outside the outermost ticks, so a tick's label names the band it is centred in.
+        A DISCRETE BAR SAMPLES ITS COLORS AT THE BAND CENTERS, which mirrors the region maps the
+        family draws: the palette is quantized to one color per tick and the boundaries sit half a
+        step outside the outermost ticks, so a tick's label names the band it is centered in.
         """
         scale = bar.scale
         if scale.vmin is None or scale.vmax is None:

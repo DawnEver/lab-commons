@@ -467,7 +467,7 @@ def test_shards_are_cut_by_measured_time_and_the_wall_is_the_slowest() -> None:
     sums = [sum(padded[a:b]) for a, b in plan.shards]
     assert plan.minutes == max(1, -(-int(max(sums)) // 60))
     assert all(s <= 60 * 60 or b - a == 1 for s, (a, b) in zip(sums, plan.shards, strict=True))
-    assert (6, 7) in plan.shards, 'the 75-min item sits alone rather than dragging neighbours over the window'
+    assert (6, 7) in plan.shards, 'the 75-min item sits alone rather than dragging neighbors over the window'
 
 
 def test_measured_estimates_fall_back_only_for_files_never_measured() -> None:
@@ -1703,14 +1703,14 @@ def test_every_round_keeps_slurms_clock_and_the_record_breaks_its_wall_down() ->
     assert record['prep']['ship'] >= 0
     breakdown = phases(record)
     assert breakdown['retry_s'] == second['wall_s'] + (second['submit'] - first['end'])
-    assert breakdown['utilisation'] == pytest.approx(
+    assert breakdown['utilization'] == pytest.approx(
         (first['busy_s'] + second['busy_s']) / (first['core_s'] + second['core_s']), rel=1e-12, abs=0.0
     )
     assert describe(breakdown).startswith('phases: wall ')
     assert describe(phases({'prep': {'env': 60}})) == 'phases: prep 1.0 min, no round finished yet'
 
 
-def test_lpt_refills_the_same_shards_so_the_heavy_items_are_not_neighbours() -> None:
+def test_lpt_refills_the_same_shards_so_the_heavy_items_are_not_neighbors() -> None:
     seconds = [100.0, 90.0, 80.0, 1.0, 1.0, 1.0]
     order, shards = balance(seconds, ((0, 3), (3, 6)))
     loads = [sum(seconds[order[i]] for i in range(a, b)) for a, b in shards]

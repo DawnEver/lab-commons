@@ -4,7 +4,7 @@ THE THREE MODULES ARE A CONCEPT, and the first two are it. ``bokeh.py`` is the c
 objects, the layout they are arranged into, the palette cursor and the lifecycle) and this is the
 coordinate system (one ``bokeh.plotting.figure`` and every verb that draws on it) -- the two things
 the tier was rebuilt around. ``_bokeh_glyphs.py`` is the third: the verbs whose body BUILDS DATA
-rather than calling a glyph (a patch set, a grid raster, a point cloud, a quiver, a colour bar),
+rather than calling a glyph (a patch set, a grid raster, a point cloud, a quiver, a color bar),
 which is what put this module past the band the repo holds its files to.
 
 A BOKEH FIGURE IS ONE COORDINATE SYSTEM, which is why the canvas above the frames is a layout and not
@@ -15,7 +15,7 @@ to that range by name. Everything else about the twin (its title, its grid, its 
 axes are drawn at all) belongs to the shared figure, because in this library that is where those
 live.
 
-ONE PLACEMENT THIS LIBRARY CANNOT HONOUR, AND IT REFUSES RATHER THAN MISDRAWING IT. An ARROWED
+ONE PLACEMENT THIS LIBRARY CANNOT HONOR, AND IT REFUSES RATHER THAN MISDRAWING IT. An ARROWED
 ``Segment`` is drawn here as a bokeh ``Arrow`` ANNOTATION, and an annotation is positioned in the
 figure's default ranges — a twin frame's y scale is a different one, so the arrow would land on the
 base frame's scale. There is no range binding on an annotation, so the verb is refused by name on a
@@ -111,7 +111,7 @@ class BokehFrame:
         self._y_axis.axis_label = text
 
     def set_limits(self, *, x: tuple[float, float] | None = None, y: tuple[float, float] | None = None) -> None:
-        """Fix the axis limits; a pair given high-to-low inverts that axis, which bokeh honours."""
+        """Fix the axis limits; a pair given high-to-low inverts that axis, which bokeh honors."""
         if x is not None:
             self.figure.x_range.start, self.figure.x_range.end = x
         if y is not None:
@@ -158,7 +158,7 @@ class BokehFrame:
         self.figure.grid.visible = on
 
     def legend(self, *, on: bool = True) -> None:
-        """Show or hide the legend of everything labelled on this panel."""
+        """Show or hide the legend of everything labeled on this panel."""
         self.figure.legend.visible = on
 
     def draw_line(self, series: Series) -> None:
@@ -214,11 +214,11 @@ class BokehFrame:
         )
 
     def draw_patches(self, parts: Sequence[Patch], scale: Scale | None = None) -> None:
-        """Draw filled regions; *scale* colours them by value when the patches carry one.
+        """Draw filled regions; *scale* colors them by value when the patches carry one.
 
         THE FOUR ROWS OF THIS CLASS THAT BUILD DATA RATHER THAN CALLING A GLYPH are implemented in
         :mod:`lab_commons.viz._bokeh_glyphs`, and this is one of them: a region map is a data source
-        and a colour mapper here, not a primitive this library has -- see that module for the seam.
+        and a color mapper here, not a primitive this library has -- see that module for the seam.
         """
         glyphs.patches(self.figure, parts, scale, y_range_name=self._y_range_name)
 
@@ -316,21 +316,21 @@ class BokehFrame:
         whose levels happened to miss.
 
         Both remedies are named, and they are different figures: send a :class:`Samples` if a
-        colour-mapped cloud is what the data is, or draw the field with
+        color-mapped cloud is what the data is, or draw the field with
         ``lab_commons.viz.mpl.MplRenderer``, which contours it. The refusal is per-CALL rather than
         per-import, so the rest of the figure is drawn either way.
         """
         msg = (
             'BokehFrame cannot draw Field: a field is a continuum and bokeh has no filled-contour glyph over '
             'a point set (contourpy is not declared by the viz-bokeh extra). Send lab_commons.viz.Samples if a '
-            'colour-mapped point cloud is the drawing you want, or use lab_commons.viz.mpl.MplRenderer'
+            'color-mapped point cloud is the drawing you want, or use lab_commons.viz.mpl.MplRenderer'
         )
         raise NotImplementedError(msg)
 
     def draw_grid(self, grid: Grid) -> None:
-        """Draw a scalar on a rectilinear grid and its colour scale — the maskable map.
+        """Draw a scalar on a rectilinear grid and its color scale — the maskable map.
 
-        AN IMAGE WITH A COLOUR MAPPER, this library's own raster primitive: the grid's rectangle
+        AN IMAGE WITH A COLOR MAPPER, this library's own raster primitive: the grid's rectangle
         becomes the glyph's ``x``/``y``/``dw``/``dh`` in data units and its voids go through the
         mapper's ``nan_color``. Built in :mod:`lab_commons.viz._bokeh_glyphs`, beside the mappers it
         is made of.
@@ -338,9 +338,9 @@ class BokehFrame:
         glyphs.grid(self.figure, grid, y_range_name=self._y_range_name)
 
     def draw_samples(self, samples: Samples) -> None:
-        """Draw points coloured by the values they carry — the point cloud and its colour scale.
+        """Draw points colored by the values they carry — the point cloud and its color scale.
 
-        A colour-mapped scatter over a mapper whose range comes from the samples, built in
+        A color-mapped scatter over a mapper whose range comes from the samples, built in
         :mod:`lab_commons.viz._bokeh_glyphs` beside the grid's own machinery.
         """
         glyphs.samples(self.figure, samples, y_range_name=self._y_range_name)
@@ -357,7 +357,7 @@ class BokehFrame:
         msg = (
             'BokehFrame cannot draw Contours: bokeh contours a regular 2-D grid and interpolates it with '
             'contourpy, which neither the viz-bokeh extra nor this package declares, so a point set cannot be '
-            'honoured. Use lab_commons.viz.mpl.MplRenderer for this figure, or bring a gridded field'
+            'honored. Use lab_commons.viz.mpl.MplRenderer for this figure, or bring a gridded field'
         )
         raise NotImplementedError(msg)
 
@@ -365,9 +365,9 @@ class BokehFrame:
         """Draw *vectors* as arrows — the SHAFT as one vectorized glyph, the HEAD as another.
 
         BOKEH HAS NO QUIVER, so the two glyphs are composed in
-        :mod:`lab_commons.viz._bokeh_glyphs` rather than one Arrow annotation per sample. The colour
+        :mod:`lab_commons.viz._bokeh_glyphs` rather than one Arrow annotation per sample. The color
         is taken HERE, before the call, because the palette cursor is the canvas's: a glyph builder
-        that reached for a colour would be a second source for the figure's sequence.
+        that reached for a color would be a second source for the figure's sequence.
         """
         glyphs.vectors(self.figure, vectors, self._next_color(vectors.color), y_range_name=self._y_range_name)
 
@@ -385,8 +385,8 @@ class BokehFrame:
         """*explicit* when it is given, else the next palette entry — one slot per drawn artist.
 
         THE CURSOR IS THE CANVAS'S, shared with every other frame of it: on a twin axis the two
-        frames' series occupy the same pixels, where a shared colour is not a repeated colour but an
-        unreadable one. The cursor advances whether or not the caller named a colour, so the n-th
+        frames' series occupy the same pixels, where a shared color is not a repeated color but an
+        unreadable one. The cursor advances whether or not the caller named a color, so the n-th
         artist's palette position does not depend on which of its predecessors named one.
         """
         index = next(self._drawn)

@@ -15,7 +15,7 @@ from lab_commons.desktop._core import (
     NotOwnedError,
     UnsupportedError,
     Window,
-    labelled,
+    labeled,
     one_target,
 )
 
@@ -64,7 +64,7 @@ def capture(window: Window, *, timeout_s: float = 5.0, backend: Backend | None =
 
 def controls(window: Window, *, backend: Backend | None = None) -> list[Control]:
     """*window*'s accessibility tree, flattened: reads a dialog's text without OCR."""
-    return labelled(_resolve(backend).controls(window))
+    return labeled(_resolve(backend).controls(window))
 
 
 def press(
@@ -75,7 +75,7 @@ def press(
     owned: Collection[int],
     backend: Backend | None = None,
 ) -> None:
-    """Press the ONE control labelled exactly *label*, or with ``Control.id`` *id*, once, never retried.
+    """Press the ONE control labeled exactly *label*, or with ``Control.id`` *id*, once, never retried.
 
     Exactly one of *label* and *id*; *owned* are the pids it may touch. An id not in the window's tree now is
     :class:`~lab_commons.desktop.ControlGoneError`.

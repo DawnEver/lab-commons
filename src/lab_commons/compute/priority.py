@@ -1,6 +1,6 @@
 """PRIORITY IS ORDERING -- whom a host claims first, declared in its machine file, never a capacity claim.
 
-A serving host's machine file (:mod:`lab_commons.config`) may name the subjects it favours::
+A serving host's machine file (:mod:`lab_commons.config`) may name the subjects it favors::
 
     [priority]
     logins = ["YongxuanWu"]   # the forge login a job came from (Candidate.origin)

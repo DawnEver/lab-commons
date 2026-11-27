@@ -200,7 +200,7 @@ def _darwin() -> tuple[Process, ...]:
     table = _proc_darwin._tool('ps', '-ww', '-A', '-o', 'pid=,ppid=,etime=,args=')  # noqa: SLF001 -- the one tool runner
     if table is None:
         return ()
-    cwds = _lsof_cwds(_proc_darwin._tool('lsof', '-a', '-d', 'cwd', '-F', 'pn') or '')  # noqa: SLF001
+    cwds = _lsof_cwds(_proc_darwin._tool('lsof', '-a', '-d', 'cwd', '-Fpn') or '')  # noqa: SLF001
     out = []
     for line in table.splitlines():
         pid, ppid, elapsed, args = [*line.split(None, 3), '', '', ''][:4]
@@ -229,7 +229,7 @@ def _launchers(text: str) -> dict[int, str]:
 
 
 def _lsof_cwds(text: str) -> dict[int, str]:
-    """``lsof -F pn`` field lines (``p<pid>`` then ``n<path>``) -> ``{pid: cwd}``."""
+    """``lsof -Fpn`` field lines (``p<pid>`` then ``n<path>``) -> ``{pid: cwd}``."""
     cwds: dict[int, str] = {}
     pid = None
     for line in text.splitlines():

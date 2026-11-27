@@ -6,6 +6,7 @@ The entries are this module's own functions, named ``<module>:<function>`` exact
 from __future__ import annotations
 
 import importlib
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -150,7 +151,7 @@ def test_a_graph_runs_in_order_under_the_ledger_and_a_rerun_is_a_cache_hit(tmp_p
     assert changed['b'].result.output('out').read_text(encoding='utf-8') == '44'
 
 
-def test_a_failure_is_named_and_its_dependants_do_not_run(tmp_path: Path) -> None:
+def test_a_failure_is_named_and_its_dependents_do_not_run(tmp_path: Path) -> None:
     graph = Graph(
         {'a': unit('boom'), 'b': unit('double', x=Output('a', 'out')), 'c': unit('write', n=1), 'd': unit('nothing')}
     )
@@ -264,8 +265,22 @@ def nap(inputs: Mapping[str, Any], work: Path) -> None:
     (work / 'out').write_text(inputs['tag'], encoding='utf-8')
 
 
+#: The interrupt's handshake with its sibling: no sleep decides who is running when run() returns.
+SIBLING_HOLDS = threading.Event()
+SIBLING_MAY_END = threading.Event()
+
+
+def held(inputs: Mapping[str, Any], work: Path) -> None:
+    """Holds its claim until the test lets it end, recording when it ran."""
+    start = time.monotonic()
+    SIBLING_HOLDS.set()
+    SIBLING_MAY_END.wait(timeout=120)
+    SPANS[inputs['tag']] = (start, time.monotonic())
+    (work / 'out').write_text(inputs['tag'], encoding='utf-8')
+
+
 def interrupted(_inputs: Mapping[str, Any], _work: Path) -> None:
-    time.sleep(0.2)  # long enough for the napping sibling to hold its claim
+    SIBLING_HOLDS.wait(timeout=120)  # the sibling holds its claim before the interrupt lands
     raise KeyboardInterrupt
 
 
@@ -292,11 +307,11 @@ def test_ready_units_the_ledger_admits_run_at_once(tmp_path: Path, monkeypatch: 
     assert {o.state for o in got.values()} == {RAN}
     assert list(got) == ['a', 'b', 'c']  # outcomes in graph order, whatever order they finished in
     assert _overlap('a', 'b')  # THE CHECK: two independent admissible units overlap in time
-    assert SPANS['c'][0] >= SPANS['a'][1]  # PLANTED: a dependant waits for its input
+    assert SPANS['c'][0] >= SPANS['a'][1]  # PLANTED: a dependent waits for its input
     assert holdings() == []
 
 
-def test_one_seat_serialises_two_seat_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_one_seat_serializes_two_seat_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     SPANS.clear()
     seat = Demand({'jmag': 1, 'cpu': 1, 'mem_gb': 0.1})
     graph = Graph({'a': unit('nap', demand=seat, tag='a'), 'b': unit('nap', demand=seat, tag='b')})
@@ -330,11 +345,16 @@ def test_two_units_of_one_hash_run_once(tmp_path: Path) -> None:
 
 def test_an_interrupt_releases_every_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     SPANS.clear()
+    SIBLING_HOLDS.clear()
+    SIBLING_MAY_END.clear()
     ex = ledger_executor(tmp_path, monkeypatch, {})
-    with pytest.raises(KeyboardInterrupt):
-        ex.run(Graph({'i': unit('interrupted'), 'n': unit('nap', tag='n')}))
-    assert 'n' not in SPANS  # PLANTED: the sibling was still running when run() returned
-    assert holdings() == []  # THE CHECK: its claim is released anyway
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            ex.run(Graph({'i': unit('interrupted'), 'n': unit('held', tag='n')}))
+        assert 'n' not in SPANS  # PLANTED: the sibling was still running when run() returned
+        assert holdings() == []  # THE CHECK: its claim is released anyway
+    finally:
+        SIBLING_MAY_END.set()
 
 
 def test_what_became_of_a_unit_is_named_settled_and_the_generic_name_is_gone() -> None:

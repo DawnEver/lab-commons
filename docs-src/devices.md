@@ -21,7 +21,7 @@ a double-precision solve `{'cpu': 8, 'mem_gb': 32, 'gpu': 1, 'exclusive': 1, 'f6
 ## Admitted or not
 
 - A GPU is shared by memory: its share free is its memory less the larger of what is resident now (any process,
-  admitted or not) and what its claims declared. `exclusive` needs an idle device: no process, utilisation known
+  admitted or not) and what its claims declared. `exclusive` needs an idle device: no process, utilization known
   and below `BUSY_UTIL_PCT`.
 - A device lacking a demanded precision is never taken (an f64 demand never lands on an NPU or an Intel iGPU).
 - A device whose use cannot be observed (today: Intel GPU/NPU, inventoried by the OS) is listed, never lent.

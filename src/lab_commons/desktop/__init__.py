@@ -1,4 +1,4 @@
-"""One door to a host's windows: list them, capture them, read their controls, press a labelled one.
+"""One door to a host's windows: list them, capture them, read their controls, press a labeled one.
 
 Facts and semantic acts only, vendor- and agent-blind: which window means a stall, and which button a
 dialog needs, is the CALLER's policy. Every act names the pids it may touch (:class:`NotOwnedError`

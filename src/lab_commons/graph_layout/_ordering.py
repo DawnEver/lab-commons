@@ -41,10 +41,10 @@ def connected_islands(keys: Iterable[str], adjacency: Mapping[str, set[str]]) ->
         remaining.remove(seed)
         group, queue = {seed}, deque([seed])
         while queue:
-            for neighbour in sorted(adjacency[queue.popleft()] & remaining):
-                remaining.remove(neighbour)
-                group.add(neighbour)
-                queue.append(neighbour)
+            for neighbor in sorted(adjacency[queue.popleft()] & remaining):
+                remaining.remove(neighbor)
+                group.add(neighbor)
+                queue.append(neighbor)
         yield group
 
 
@@ -55,33 +55,33 @@ def physical_ranks(group: set[str], adjacency: Mapping[str, set[str]], items: Ma
     queue = deque(seeds)
     while queue:
         key = queue.popleft()
-        for neighbour in sorted(adjacency[key]):
-            if neighbour not in ranks:
-                ranks[neighbour] = ranks[key] + 1
-                queue.append(neighbour)
+        for neighbor in sorted(adjacency[key]):
+            if neighbor not in ranks:
+                ranks[neighbor] = ranks[key] + 1
+                queue.append(neighbor)
     return ranks
 
 
 def _back_edges(roots: Sequence[str], forward: Mapping[str, set[str]]) -> set[tuple[str, str]]:
     """Deterministic iterative DFS from ``roots`` in order: every edge into a node still on the stack."""
-    colour: dict[str, int] = {}
+    color: dict[str, int] = {}
     feedback = set()
     for root in roots:
-        if root in colour:
+        if root in color:
             continue
-        colour[root] = 1
+        color[root] = 1
         stack = [(root, iter(sorted(forward[root])))]
         while stack:
-            key, neighbours = stack[-1]
-            neighbour = next(neighbours, None)
-            if neighbour is None:
-                colour[key] = 2
+            key, neighbors = stack[-1]
+            neighbor = next(neighbors, None)
+            if neighbor is None:
+                color[key] = 2
                 stack.pop()
-            elif colour.get(neighbour) == 1:
-                feedback.add((key, neighbour))
-            elif neighbour not in colour:
-                colour[neighbour] = 1
-                stack.append((neighbour, iter(sorted(forward[neighbour]))))
+            elif color.get(neighbor) == 1:
+                feedback.add((key, neighbor))
+            elif neighbor not in color:
+                color[neighbor] = 1
+                stack.append((neighbor, iter(sorted(forward[neighbor]))))
     return feedback
 
 
@@ -129,7 +129,7 @@ def causal_ranks(
 
 
 def _stack(columns: _Columns, items: Mapping[str, _Sized], gap: float) -> tuple[_Positions, float, float]:
-    """Centre each column's nodes vertically: ``(positions, width, height)`` of the island."""
+    """Center each column's nodes vertically: ``(positions, width, height)`` of the island."""
     heights = {column: sum(items[k].height for k in keys) + gap * (len(keys) - 1) for column, keys in columns.items()}
     height = max(heights.values())
     positions, x = {}, 0.0
@@ -150,7 +150,7 @@ def _at(x: float, line: tuple[float, float, float, float]) -> float:
 
 
 def straight_crossings(positions: _Positions, edges: Iterable[tuple[str, str]]) -> int:
-    """Crossings of the island's edges drawn as straight centre-to-centre lines: the ordering's objective."""
+    """Crossings of the island's edges drawn as straight center-to-center lines: the ordering's objective."""
     lines = []
     for a, b in edges:
         (xa, ya), (xb, yb) = positions[a], positions[b]
@@ -171,8 +171,8 @@ def _sweep_column(
     columns: _Columns, column: int, rows: dict[str, int], adjacency: Mapping[str, set[str]], ranks: Mapping[str, int]
 ) -> None:
     def score(key: str) -> tuple[float, str]:
-        neighbours = [rows[k] for k in adjacency[key] if ranks[k] != column]
-        return (median(neighbours) if neighbours else rows[key], key)
+        neighbors = [rows[k] for k in adjacency[key] if ranks[k] != column]
+        return (median(neighbors) if neighbors else rows[key], key)
 
     columns[column].sort(key=score)
     rows.update({key: row for row, key in enumerate(columns[column])})
@@ -213,7 +213,7 @@ def arrange_island(
 def _transposed(
     crossings: int, columns: _Columns, edges: Sequence[tuple[str, str]], items: Mapping[str, _Sized], gap: float
 ) -> _Columns:
-    """Swap vertical neighbours while a swap strictly lowers the estimate (deterministic left-to-right order)."""
+    """Swap vertical neighbors while a swap strictly lowers the estimate (deterministic left-to-right order)."""
     improved = True
     while improved and crossings:
         improved = False

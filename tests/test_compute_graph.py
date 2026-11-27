@@ -1,4 +1,4 @@
-"""D16: a graph's edges are its units' Output inputs; it orders, finds dependants, and refuses what cannot run."""
+"""D16: a graph's edges are its units' Output inputs; it orders, finds dependents, and refuses what cannot run."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ def test_order_runs_upstream_first() -> None:
     assert tuple(chain()) == chain().order()
 
 
-def test_dependants_are_transitive() -> None:
-    assert chain().dependants('a') == {'b', 'c'}
-    assert chain().dependants('z') == frozenset()
+def test_dependents_are_transitive() -> None:
+    assert chain().dependents('a') == {'b', 'c'}
+    assert chain().dependents('z') == frozenset()
 
 
 def test_a_cycle_is_refused() -> None:

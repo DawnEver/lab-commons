@@ -149,7 +149,7 @@ class Atspi:
             found.append((control, node))
             # depth first, in the tree's own order
             pending[:0] = [(child, control.id) for child in self._children(window, bus, path)]
-        return _labelled(found)
+        return _labeled(found)
 
     def _control(self, window: Window, node: _Node, parent: str | None) -> Control:
         call = lambda method, *args: self._call(window, node.bus, node.path, method, *args)[0]  # noqa: E731
@@ -242,7 +242,7 @@ class Atspi:
         return self._run(argv, _CALL_S)
 
 
-def _labelled(found: list[tuple[Control, _Node]]) -> list[tuple[Control, _Node]]:
+def _labeled(found: list[tuple[Control, _Node]]) -> list[tuple[Control, _Node]]:
     """A nameless pressable control takes the ONE name its descendants carry (GTK4 names a button's child label).
 
     Measured on ubuntu-latest: zenity's Cancel button read ('', 'push button') beside a ('Cancel', 'label') child, so a

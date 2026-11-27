@@ -18,7 +18,7 @@ imports them. Every constraint below follows from that one fact.
 - **No `_legacy`/`_compat` alias, no deprecation shim, no dual entry point.** A caller that is not
   made to move does not move; two spellings of one idea then drift in four trees at once. The
   rename breaks, deliberately, at a point somebody chooses — and the consumers move WITH it.
-- **A behaviour a consumer's guard rests on is load-bearing even when it is private.**
+- **A behavior a consumer's guard rests on is load-bearing even when it is private.**
   `_detect_repo_root` is imported by name across the family: change what it returns and four
   architecture suites change verdict, so the change is a breaking one whatever its underscore says.
 

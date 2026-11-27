@@ -150,7 +150,7 @@ def test_an_account_counts_its_pending_tasks_memory_as_held_like_their_cpus() ->
     snapshot = dataclasses.replace(_snapshot(cpus=8, mem_mb=4096, submit=None), pending=(Held(1, 1.0, 1024.0),))
     supply = SlurmAccount([(snapshot, 'normal')]).measure('slurm:me')
     assert supply.resources['mem_gb'] == pytest.approx(3.0, abs=1e-12), (
-        'a pending task is a claim the scheduler honours before a new submission -- its memory as well as its cpus'
+        'a pending task is a claim the scheduler honors before a new submission -- its memory as well as its cpus'
     )
 
 

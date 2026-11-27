@@ -1,6 +1,6 @@
 """Every family project file here is a RENDERING of dev-lab's bases plus :mod:`_famconfig_delta`.
 
-The cut-over to dev-lab hand-edited the rendered stamps; this pins that every artefact still equals
+The cut-over to dev-lab hand-edited the rendered stamps; this pins that every artifact still equals
 what `python -m dev_lab.dev.famfiles --deltas tests/_famconfig_delta.py` writes, so a hand edit reds.
 """
 
@@ -19,7 +19,7 @@ DELTAS = load_deltas(ROOT / 'tests' / '_famconfig_delta.py')
 
 def test_every_family_file_is_current_against_its_delta() -> None:
     lines = render_all(ROOT, DELTAS, write=False)
-    assert lines, 'no artefact was inspected'
+    assert lines, 'no artifact was inspected'
     assert [line for line in lines if not line.endswith(': current')] == []
 
 

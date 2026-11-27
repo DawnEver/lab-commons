@@ -66,7 +66,7 @@ def _plan(config: Config, n_items: int, grant: Grant = NODE96) -> Plan:
 
 def test_the_task_section_loads_a_topology_shape(tmp_path: Path) -> None:
     path = tmp_path / 'job.toml'
-    path.write_text('[cost]\nmem_gb = 40\n[task]\nlane_domains = 2\n', encoding='utf-8')
+    path.write_text('[cost]\nmem = "40 GiB"\n[task]\nlane_domains = 2\n', encoding='utf-8')
     assert load_config(path).task == SHAPE
     assert SHAPE.whole_node, 'lanes cut a whole node: lane_domains implies exclusive'
     assert Task(exclusive=True).whole_node

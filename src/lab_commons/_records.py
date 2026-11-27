@@ -69,7 +69,7 @@ def _insist(operation: Callable[[], object]) -> bool:
     different answers to the same question about the same directory.
 
     BOUNDED, AND A RETRY RATHER THAN A LEASE. It gives up after ``_INSIST_ATTEMPTS`` and says so;
-    it never decides a holder is stale, which is the one judgement this package refuses to make
+    it never decides a holder is stale, which is the one judgment this package refuses to make
     from a clock. It does not sleep before the first try, so an UNCONTESTED operation -- every
     operation on an idle box -- costs exactly what it did before.
 

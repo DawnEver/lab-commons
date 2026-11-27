@@ -28,7 +28,7 @@ from lab_commons.desktop import (
     png_bytes,
 )
 from lab_commons.desktop.__main__ import main
-from lab_commons.desktop._core import labelled, pick
+from lab_commons.desktop._core import labeled, pick
 
 
 def _window(
@@ -254,11 +254,11 @@ class TestLabels:
         ]
 
     def test_a_type_name_label_falls_back_to_its_first_visible_text_child(self) -> None:
-        assert [c.name for c in labelled(self._simba())] == ['SETTINGS', '', 'SETTINGS', 'Open...', 'Open...']
+        assert [c.name for c in labeled(self._simba())] == ['SETTINGS', '', 'SETTINGS', 'Open...', 'Open...']
 
     def test_a_name_equal_to_its_class_name_is_a_type_name(self) -> None:
         found = [self._c('button', 'Button', '1', class_name='Button'), self._c('text', 'Apply', '1.1', '1')]
-        assert labelled(found)[0].name == 'Apply'
+        assert labeled(found)[0].name == 'Apply'
 
     def test_planted_a_real_label_and_a_dotted_file_name_are_untouched(self) -> None:
         found = [
@@ -267,18 +267,18 @@ class TestLabels:
             self._c('button', 'run.jsimba', '2', class_name='Button'),
             self._c('text', 'inner', '2.1', '2'),
         ]
-        assert [c.name for c in labelled(found)] == ['Save', 'inner', 'run.jsimba', 'inner']
+        assert [c.name for c in labeled(found)] == ['Save', 'inner', 'run.jsimba', 'inner']
 
     def test_a_type_name_without_a_text_child_keeps_its_name(self) -> None:
         found = [self._c('button', 'Avalonia.Controls.StackPanel', '1', class_name='Button')]
-        assert labelled(found)[0].name == 'Avalonia.Controls.StackPanel'
+        assert labeled(found)[0].name == 'Avalonia.Controls.StackPanel'
 
     def test_qt_rich_text_reads_as_its_text(self) -> None:
         found = [self._c('treeitem', '<span>Electrical</span>', '1'), self._c('text', '<b>R&amp;D</b> <br/>x', '2')]
-        assert [c.name for c in labelled(found)] == ['Electrical', 'R&D x']
+        assert [c.name for c in labeled(found)] == ['Electrical', 'R&D x']
 
     def test_planted_a_name_with_angle_brackets_but_no_markup_is_untouched(self) -> None:
-        assert labelled([self._c('text', 'a < b > c', '1')])[0].name == 'a < b > c'
+        assert labeled([self._c('text', 'a < b > c', '1')])[0].name == 'a < b > c'
 
     def test_pick_resolves_the_cleaned_label(self) -> None:
         found = [(c, c.id) for c in self._simba()]
@@ -310,8 +310,8 @@ def _decode_png(data: bytes) -> tuple[int, int, bytes]:
         assert crc == zlib.crc32(kind + body) & 0xFFFFFFFF
         chunks[kind] = chunks.get(kind, b'') + body
         at += 12 + length
-    width, height, depth, colour = struct.unpack('>IIBB', chunks[b'IHDR'][:10])
-    assert (depth, colour) == (8, 2), 'RGB, 8 bits per channel'
+    width, height, depth, color = struct.unpack('>IIBB', chunks[b'IHDR'][:10])
+    assert (depth, color) == (8, 2), 'RGB, 8 bits per channel'
     return width, height, zlib.decompress(chunks[b'IDAT'])
 
 

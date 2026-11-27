@@ -58,7 +58,7 @@ from lab_commons.viz import (
     panel_rects,
 )
 
-#: A scalar over a CONTINUUM, with a scale, so the surface it is drawn as has a colour bar too.
+#: A scalar over a CONTINUUM, with a scale, so the surface it is drawn as has a color bar too.
 _FIELD = Field(
     x=[0.0, 1.0, 0.0, 1.0],
     y=[0.0, 0.0, 1.0, 1.0],
@@ -69,7 +69,7 @@ _FIELD = Field(
 #: A 2 x 3 grid WITH A VOID, which is the whole subject of this shape: the masked cell must reach
 #: the artist masked, because a grid rendered without its mask draws a value it never had. The
 #: extent is stated in data coordinates (a mesh's bounding box, which is where these come from), and
-#: the scale is pinned so the two adapters' colour bars are comparable.
+#: the scale is pinned so the two adapters' color bars are comparable.
 _GRID = Grid(
     values=np.ma.masked_array(
         [[0.0, 0.5, 1.0], [1.5, 2.0, 2.5]],
@@ -80,7 +80,7 @@ _GRID = Grid(
 )
 
 #: FOUR POINTS THAT CARRY A VALUE, one of them off a line so the cloud is not a curve, with a stated
-#: mark size: the colour-mapped point cloud, which is not a ``Field`` and not a coloured ``Series``.
+#: mark size: the color-mapped point cloud, which is not a ``Field`` and not a colored ``Series``.
 _SAMPLES = Samples(
     x=[0.0, 1.0, 2.0, 3.0],
     y=[0.0, 1.0, 0.5, 1.5],
@@ -89,7 +89,7 @@ _SAMPLES = Samples(
     size=6.0,
 )
 
-#: Two coil sides, one by phase name and one outlined -- the winding layout's two colouring modes.
+#: Two coil sides, one by phase name and one outlined -- the winding layout's two coloring modes.
 _SLOTS = (
     Patch(vertices=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], color='#1f77b4', label='phase A'),
     Patch(vertices=[[2.0, 0.0], [3.0, 0.0], [3.0, 1.0], [2.0, 1.0]], edgecolor='black'),
@@ -124,14 +124,14 @@ def draw_everything(frame: Frame) -> None:
     frame.draw_line(Series(x=[0.0, 1.0], y=[0.0, 1.0], label='trend'))
     frame.draw_markers(Series(x=[5.0], y=[5.0], marker='s', label='samples', alpha=0.8))
 
-    # A WAVEFORM: two traces over one axis, distinguished by colour, dash and legend.
+    # A WAVEFORM: two traces over one axis, distinguished by color, dash and legend.
     frame.draw_line(Series(x=[0.0, 1.0, 2.0], y=[0.0, 1.0, 0.0], label='phase A'))
     frame.draw_line(Series(x=[0.0, 1.0, 2.0], y=[1.0, 0.0, 1.0], style='--', label='phase B'))
 
     # A GRID MAP: a scalar on a rectilinear grid, with a VOID that must be drawn as nothing.
     frame.draw_grid(_GRID)
 
-    # A POINT CLOUD: marks that carry a value, coloured by it, with the scale that makes it readable.
+    # A POINT CLOUD: marks that carry a value, colored by it, with the scale that makes it readable.
     frame.draw_samples(_SAMPLES)
 
     # A BAR FOR A SCALE THE FIGURE SET ITSELF, once continuous and once banded on its ticks.
@@ -256,14 +256,14 @@ def draw_continuum(figure: Figure) -> None:
 #: TWO GROUPS OF CONDUCTORS IN SPACE, each trace the consumer's own data shape: a centreline's points,
 #: one per sample, with the third coordinate that makes it a trace IN SPACE rather than one in the
 #: plane. THE GROUPS ARE THE CALLS — a set of traces drawn as one artist is one legend row, so the
-#: two phases are two calls rather than one call of three differently-labelled traces.
+#: two phases are two calls rather than one call of three differently-labeled traces.
 _PHASE_U: Final = (
     Series(x=[0.0, 1.0, 2.0, 3.0], y=[0.0, 1.0, 1.0, 0.0], z=[0.0, 0.0, 1.0, 1.0], label='phase U'),
     Series(x=[0.0, 1.0, 2.0, 3.0], y=[2.0, 1.0, 1.0, 2.0], z=[1.0, 1.0, 0.0, 0.0], label='phase U'),
 )
 _PHASE_V: Final = (Series(x=[0.0, 1.0, 2.0, 3.0], y=[4.0, 3.0, 3.0, 4.0], z=[0.0, 1.0, 0.0, 1.0], label='phase V'),)
 
-#: The weld nodes, as marks that carry no value of their own — a coloured ``Series`` in space, which is
+#: The weld nodes, as marks that carry no value of their own — a colored ``Series`` in space, which is
 #: the same statement ``draw_markers`` makes in the plane.
 _NODES_3D: Final = Series(x=[0.5, 2.5], y=[0.5, 3.5], z=[0.5, 0.5], marker='s', size=6.0, label='weld node')
 

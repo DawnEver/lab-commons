@@ -84,7 +84,7 @@ class MplFrame3D:
         y: tuple[float, float] | None = None,
         z: tuple[float, float] | None = None,
     ) -> None:
-        """Fix the axis limits; a pair given high-to-low inverts that axis, which matplotlib honours."""
+        """Fix the axis limits; a pair given high-to-low inverts that axis, which matplotlib honors."""
         if x is not None:
             self.axes.set_xlim(x)
         if y is not None:
@@ -101,7 +101,7 @@ class MplFrame3D:
         self.axes.set_box_aspect(aspect)
 
     def legend(self, *, on: bool = True) -> None:
-        """Show the legend of everything labelled on this frame, or remove it."""
+        """Show the legend of everything labeled on this frame, or remove it."""
         existing = self.axes.get_legend()
         if on:
             self.axes.legend()
@@ -109,7 +109,7 @@ class MplFrame3D:
             existing.remove()
 
     def draw_lines(self, lines: Sequence[Series]) -> None:
-        """Draw *lines* as ONE collection — one artist, one legend row, the traces coloured apart.
+        """Draw *lines* as ONE collection — one artist, one legend row, the traces colored apart.
 
         THE LABEL IS THE GROUP'S, WHICH IS WHY THE CALL AGREES ON ONE: a collection carries a single
         legend entry, so two labels in one call could only be drawn by dropping one -- refused here
@@ -159,13 +159,13 @@ class MplFrame3D:
     def draw_meshes(self, meshes: Sequence[Mesh]) -> None:
         """Draw *meshes* as surfaces — a body each, its faces resolved by the primitive.
 
-        EACH MESH IS ITS OWN ARTIST, because each has its own vertex set and its own colour, and this
+        EACH MESH IS ITS OWN ARTIST, because each has its own vertex set and its own color, and this
         library sorts a collection's faces by depth within it: merging two bodies into one collection
         would let the sort decide which of them is in front.
 
-        AN UNCOLOURED MESH IS AN UNFILLED ONE, the same statement :class:`~lab_commons.viz.Patch`
-        makes: this library reads a ``None`` face colour as "no fill", so a mesh with neither a colour
-        nor an edge colour is a wireframe with no wires — state one of the two.
+        AN UNCOLORED MESH IS AN UNFILLED ONE, the same statement :class:`~lab_commons.viz.Patch`
+        makes: this library reads a ``None`` face color as "no fill", so a mesh with neither a color
+        nor an edge color is a wireframe with no wires — state one of the two.
         """
         for mesh in meshes:
             collection = Poly3DCollection(

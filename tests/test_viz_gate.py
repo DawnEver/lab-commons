@@ -6,7 +6,7 @@ vocabulary module reaches no plotting library at all, so a producer may depend o
 none is installed; and that each adapter imports EXACTLY the library its own extra names -- not the
 other's, and not one that happens to be installed on the box reading this.
 
-ASSERTED AGAINST THE REAL ARTEFACTS, not a restatement of them: a fresh interpreter for the first,
+ASSERTED AGAINST THE REAL ARTIFACTS, not a restatement of them: a fresh interpreter for the first,
 the parsed ``pyproject.toml`` and the actual import statements for the rest. Read from the SOURCE
 rather than by importing, because a module that imported cleanly today would import cleanly tomorrow
 off a dependency another layer happened to install -- and the question is what this layer DECLARES.

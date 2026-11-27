@@ -118,7 +118,7 @@ class TestOneTomlWriter:
             save_toml(tmp_path / 'n.toml', {'n': None})
 
     def test_a_refused_value_leaves_an_existing_file_untouched(self, tmp_path) -> None:
-        # The value is serialised BEFORE the target is opened: a refusal must not truncate a good file.
+        # The value is serialized BEFORE the target is opened: a refusal must not truncate a good file.
         path = tmp_path / 'keep.toml'
         save_toml(path, {'a': 1})
         with pytest.raises(TypeError):

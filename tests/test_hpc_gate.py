@@ -1,6 +1,6 @@
 """``lab_commons.hpc`` is an opt-in import and reaches nothing outside the standard library and tier 1.
 
-Two properties, asserted against the real artefacts: a fresh interpreter importing ``lab_commons`` does
+Two properties, asserted against the real artifacts: a fresh interpreter importing ``lab_commons`` does
 not load the tier, and no module in it imports a third-party root -- so it needs no extra, on a
 workstation or on a login node whose venv carries nothing but this package.
 """
@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 
 #: What hpc may import from its own package: itself and the stdlib-only tier-1 modules -- never an opt-in tier.
+#: ``quantity`` (the family unit door) and ``retired`` (the retired-name registry) joined 2026-11-26: both are
+#: stdlib-only family layers hpc reads its config durations and retired names through.
 TIER_ONE = (
     'lab_commons.box.machine',
     'lab_commons.compute',
@@ -24,7 +26,9 @@ TIER_ONE = (
     'lab_commons.launch',
     'lab_commons.log',
     'lab_commons.outcomes',
+    'lab_commons.quantity',
     'lab_commons.resources',
+    'lab_commons.retired',
     'lab_commons.width',
 )
 
