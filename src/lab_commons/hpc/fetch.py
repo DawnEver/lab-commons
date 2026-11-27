@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
-from lab_commons.hpc.cluster import RUN_DIR, Runner, Unreachable, bind, runner_for
+from lab_commons.hpc.cluster import RUN_DIR, Runner, Unreachable, bind, runner_for, sh_path
 from lab_commons.hpc.config import load_config
 from lab_commons.hpc.grants import Grant, load_grants
 from lab_commons.hpc.jobs import grant_of
@@ -67,7 +67,7 @@ def _placed(record: dict[str, Any], item: int) -> dict[str, Any]:
 
 
 def _list(out: str, glob: str) -> str:
-    root = shlex.quote(out)
+    root = sh_path(out)
     return (
         f'cd {root} && R=$(pwd -P) && find . -type f -path {shlex.quote("./" + glob)} -print0 | '
         f'while IFS= read -r -d "" f; do p=$(realpath -e -- "$f"); case "$p" in "$R"/*) '
@@ -76,7 +76,7 @@ def _list(out: str, glob: str) -> str:
 
 
 def _read(out: str, relative: str) -> str:
-    return f'cd {shlex.quote(out)} && base64 -w0 -- {shlex.quote(relative)}'
+    return f'cd {sh_path(out)} && base64 -w0 -- {shlex.quote(relative)}'
 
 
 def fetch(run: Runner, out: str, glob: str, dest: Path, budget: int) -> list[str]:

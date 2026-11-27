@@ -56,6 +56,7 @@ __all__ = [
     'render_script',
     'run_home',
     'runner_for',
+    'sh_path',
     'ssh_runner',
     'submit',
     'submit_bands',
@@ -210,8 +211,8 @@ def probe(run: Runner, account: str = '', *, exclude: Collection[str] = ()) -> S
     return replace(snapshot, nodes=tuple(node for node in snapshot.nodes if node.name not in exclude))
 
 
-def _sh_path(path: str) -> str:
-    """Quote a path for the shell while keeping a leading ``~`` expandable."""
+def sh_path(path: str) -> str:
+    """Quote a path for the shell while keeping a leading account root (:data:`ROOT`) or ``~`` expandable."""
     if path == ROOT or path.startswith(f'{ROOT}/'):
         return ROOT + shlex.quote(path[len(ROOT) :]) if len(path) > len(ROOT) else ROOT
     if path == '~' or path.startswith('~/'):
@@ -246,11 +247,11 @@ def render_script(plan: Plan, config: Config, run_dir: str) -> str:
     worker = f'{config.job.python} -m lab_commons.hpc.worker'
     lane = plan.cpus // plan.lanes
     lines = ['#!/bin/bash', *(f'#SBATCH {d}' for d in directives if d), 'set -eo pipefail']
-    lines += [*plan.setup, f'cd {_sh_path(config.job.workdir)}', *config.job.setup]
+    lines += [*plan.setup, f'cd {sh_path(config.job.workdir)}', *config.job.setup]
     lines += [
         # Each of the task's lanes runs one item on its own lane's CPUs.
         f'export OMP_NUM_THREADS={lane} OPENBLAS_NUM_THREADS={lane} MKL_NUM_THREADS={lane}',
-        f'M={_sh_path(run_dir)}/manifest.json',
+        f'M={sh_path(run_dir)}/manifest.json',
         'LOG="${TMPDIR:-/tmp}/lab-hpc-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}.log"',
         'code=0',
         f'{worker} "$M" "$SLURM_ARRAY_TASK_ID" > "$LOG" 2>&1 || code=$?',
@@ -297,6 +298,22 @@ def bind(value: Any, run_dir: str) -> Any:  # noqa: ANN401 -- an item is any JSO
     return value
 
 
+def _bound(run: Runner, quoted: str, items: list[Any]) -> list[Any]:
+    """*items* bound to the run directory AS THE CLUSTER RESOLVES IT (``mkdir -p``, ``cd``, ``pwd -P``).
+
+    The run directory is spelled from the account root, a SHELL expression (``"$LAB_ROOT"/jobs/...``, ``~/...``);
+    an item is read by the entry in Python, which expands neither, so binding the spelling handed every ``out`` a
+    path that does not exist. No item naming :data:`RUN_DIR`, no remote call.
+    """
+    if RUN_DIR not in json.dumps(items):
+        return items
+    resolved = run(f'mkdir -p {quoted} && cd {quoted} && pwd -P', None).strip()
+    if not resolved.startswith('/'):
+        msg = f'the cluster did not resolve the run directory {quoted}: {resolved!r}'
+        raise RuntimeError(msg)
+    return bind(items, resolved)
+
+
 def _array_spec(indices: Sequence[int], throttle: int) -> str:
     """Sorted shard indices as Slurm ranges -- ``0-99,104%24`` -- so a large array stays one short argument."""
     runs: list[list[int]] = []
@@ -324,11 +341,11 @@ def submit(
     written, so a retry runs exactly what the first attempt ran.
     """
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
-    quoted = _sh_path(run_dir)
+    quoted = sh_path(run_dir)
     if only is None:
         manifest = {
             'entry': config.job.entry,
-            'items': bind(items, run_dir),
+            'items': _bound(run, quoted, items),
             'shards': [list(s) for s in plan.shards],
             'lanes': lanes_of(plan),
         }
@@ -358,9 +375,14 @@ def submit_bands(
     A band refused on :data:`SUBMIT_LIMIT` cancels the bands already queued and raises :class:`SubmitLimit`.
     """
     run_dir = f'{run_home(config.job)}/{config.job.name}-{stamp}'
-    quoted = _sh_path(run_dir)
+    quoted = sh_path(run_dir)
     shards = [list(s) for plan in plans for s in plan.shards]
-    manifest = {'entry': config.job.entry, 'items': bind(items, run_dir), 'shards': shards, 'lanes': lanes_of(plans[0])}
+    manifest = {
+        'entry': config.job.entry,
+        'items': _bound(run, quoted, items),
+        'shards': shards,
+        'lanes': lanes_of(plans[0]),
+    }
     run(f'mkdir -p {quoted} && cat > {quoted}/manifest.json', json.dumps(manifest))
     run(f'cat > {quoted}/job.sh', render_script(plans[0], config, run_dir))
     job_ids, first = [], 0
@@ -434,7 +456,7 @@ def gather(run: Runner, run_dir: str) -> dict[int, list[dict[str, Any]]]:
     A run an earlier worker wrote holds one ``results/<shard>.json`` per shard instead; it is read the same
     way (OLD-SHAPE-READER: jobs still running across the change must gather), never written.
     """
-    quoted = _sh_path(run_dir)
+    quoted = sh_path(run_dir)
     out = run(
         f'cat {quoted}/{RESULTS} 2>/dev/null; printf "\\n{_EARLIER}\\n"; '
         f'for f in {quoted}/results/*.json; do [ -e "$f" ] && cat "$f" && echo; done; true',
@@ -487,6 +509,6 @@ def _upgraded(text: str) -> dict[int, list[dict[str, Any]]]:
 
 def files_of(run: Runner, run_dir: str) -> tuple[int, bool]:
     """How many files *run_dir* holds, and whether an earlier worker wrote it (a ``results/`` directory)."""
-    quoted = _sh_path(run_dir)
+    quoted = sh_path(run_dir)
     out = run(f'find {quoted} -type f | wc -l; [ -d {quoted}/results ] && echo earlier; true', None).split()
     return (int(out[0]) if out else 0), 'earlier' in out[1:]

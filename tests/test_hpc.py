@@ -255,12 +255,36 @@ def test_submit_binds_run_dir_in_every_item_string_and_leaves_the_rest(tmp_path:
     plan = make_plan(
         2, Cost(seconds=60), parse_snapshot(IDLE_CALLER), cluster=CLUSTER, policy=Policy(), limits=Limits()
     )
-    fake = FakeCluster({'sbatch': '5\n'})
+    real = '/gpfs/home/u/proj/.lab-hpc/sweep-t1'
+    fake = FakeCluster({'pwd -P': f'{real}\n', 'sbatch': '5\n'})
     items = [{'out': '{run_dir}/0', 'args': ['{run_dir}', 3]}, {'out': '/fixed/1'}]
     sub = submit(fake, plan, _config(tmp_path), items, stamp='t1')
-    manifest = json.loads(fake.calls[0][1] or '')
-    assert manifest['items'] == [{'out': f'{sub.run_dir}/0', 'args': [sub.run_dir, 3]}, {'out': '/fixed/1'}]
+    assert fake.calls[0][0].startswith('mkdir -p "$HOME"/proj/.lab-hpc/sweep-t1 && cd ')
+    manifest = json.loads(fake.calls[1][1] or '')
+    assert manifest['items'] == [{'out': f'{real}/0', 'args': [real, 3]}, {'out': '/fixed/1'}], (
+        'bound to the path the cluster resolved: an item is read by Python, which expands no shell root'
+    )
+    assert sub.run_dir == '~/proj/.lab-hpc/sweep-t1', 'the record keeps the root-relative spelling'
     assert items[0]['out'] == '{run_dir}/0', 'the caller items are not mutated'
+
+
+def test_submit_resolves_nothing_when_no_item_names_the_run_dir(tmp_path: Path) -> None:
+    plan = make_plan(
+        2, Cost(seconds=60), parse_snapshot(IDLE_CALLER), cluster=CLUSTER, policy=Policy(), limits=Limits()
+    )
+    fake = FakeCluster({'sbatch': '5\n'})
+    submit(fake, plan, _config(tmp_path), [{'out': '/fixed/0'}, 1], stamp='t2')
+    assert not any('pwd -P' in command for command, _ in fake.calls)
+
+
+def test_submit_refuses_a_run_dir_the_cluster_did_not_resolve(tmp_path: Path) -> None:
+    plan = make_plan(
+        1, Cost(seconds=60), parse_snapshot(IDLE_CALLER), cluster=CLUSTER, policy=Policy(), limits=Limits()
+    )
+    fake = FakeCluster({'sbatch': '5\n'})
+    with pytest.raises(RuntimeError, match='did not resolve the run directory'):
+        submit(fake, plan, _config(tmp_path), [{'out': '{run_dir}/0'}], stamp='t3')
+    assert not any('sbatch' in command for command, _ in fake.calls), 'nothing submitted'
 
 
 def test_config_round_trip_and_typos_are_refused(tmp_path: Path) -> None:
