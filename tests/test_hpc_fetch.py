@@ -110,3 +110,22 @@ def test_an_only_submission_maps_the_item_to_its_batch_place_and_binds_its_run_d
     assert reached == ['u1']
     assert 'cd /r/b/2' in seen[0]
     assert door.main(['-c', str(job), '--item', '3', '--path', 'x'], reach=reach) == 2, 'item 3 was not submitted'
+
+
+def test_a_run_dir_under_the_account_root_keeps_the_root_expandable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recorded ``"$LAB_ROOT"/jobs/...`` quoted whole made ``cd`` look for a literal ``"$LAB_ROOT"`` directory."""
+    job = tmp_path / 'j.toml'
+    job.write_text('[job]\nentry = "m:f"\nitems = "items.json"\n', encoding='utf-8')
+    (tmp_path / 'items.json').write_text(json.dumps([{'out': '{run_dir}/set'}]), encoding='utf-8')
+    placements = [{'items': [0, 1], 'account': ['u0', 'a'], 'targets': ['u0@h0'], 'run_dir': '"$LAB_ROOT"/jobs/s/j-0'}]
+    (tmp_path / 'j.submission.json').write_text(json.dumps({'placements': placements}), encoding='utf-8')
+    monkeypatch.setattr(door, 'load_grants', lambda: Machine(session=None, grants=()))
+    seen: list[str] = []
+
+    def reach(_grant: Grant) -> door.Runner:
+        return lambda command, _stdin=None: seen.append(command) or ''
+
+    assert door.main(['-c', str(job), '--item', '0', '--path', 'x'], reach=reach) == 0
+    assert seen[0].startswith('cd "$LAB_ROOT"/jobs/s/j-0/set && ')
