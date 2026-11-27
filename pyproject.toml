@@ -71,15 +71,6 @@ viz-bokeh = [
     "bokeh>=3",
 ]
 
-# THE FAMILY PLACEMENT MAP (`dev_lab.dev.codeplace.FAMILY_HOMES`) plus this repo's delta: none.
-[tool.dev_lab.placement]
-code_roots = []
-# A worktree is a real second tree with its own src/, judged by the run inside it.
-pruned_paths = ['.claude/worktrees']
-# SCRATCH-IS-NEVER-COMMITTED: the one-off sink, and when the SessionStart notice starts naming a one-off.
-scratch = 'scratch/'
-max_age_days = 3.0
-
 # ENV-IS-READ-ONCE (family policy 2026-11-25, dev_lab.dev.envreads): host facts are read in the one entry and passed
 # down as a typed record. `pending` is the census at adoption; it only shrinks.
 [tool.dev_lab.env]
@@ -308,32 +299,3 @@ judge_app = 5619495
 
 # D42 (2026-11-17) adoption ledger, read by dev_lab.dev.famtests.treechecks: findings not yet fixed; shrink-only (a fixed one reds until deleted).
 # The verify remedy is relative because allow_adoption derives the allow entry from it; a {python} slot needs that derivation first.
-
-# DECLARED-LAYOUT (dev_lab.dev.layout): the WHOLE tree as an allow-list -- each directory pattern (one glob per
-# segment; the deepest matching row judges) and the formats a file there may be ('.suffix', an exact name, "" for
-# none, "*" for anything). Undeclared is refused. NO-BACKUP-COPIES: nothing under output/ or scratch/ is ever a
-# clone, worktree, exported tree, bundle or patch, whatever a row says. Formats (R3): TOML declarations, JSONL
-# machine records, CSV tables, NPZ arrays, Markdown reports, PNG figures; vendor-native only at an adapter boundary.
-[tool.dev_lab.placement.layout]
-'.' = ['.md', '.toml', '.lock', '.gitattributes', '.gitignore', 'license', 'makefile']
-'.claude' = ['.json']
-'.claude/hooks' = ['.js', '.json']
-'.claude/memory' = ['.md']
-'.claude/rules' = ['.md']
-'.claude/tasks' = ['.md']
-'.codex' = []
-'.codex/rules' = ['.rules']
-'.github' = []
-'.github/workflows' = ['.yml']
-'docs-src' = ['.md']
-'output' = []
-'output/forge' = []
-'output/forge/*' = ['.json', '.tmp']
-'output/logs' = []
-'output/logs/[0-9][0-9]/[0-9][0-9]/[0-9][0-9]/*' = ['.log', '.jsonl', '.json', '.gz', '.coverage', '.txt', '.csv', '.md', '.npz', '.png']
-'output/runcache' = ['.jsonl']
-'scratch' = ['*']
-'scripts' = ['.py']
-'src' = ['.py', '.js']
-'tests' = ['.py']
-'tests/_hpc_fixtures' = ['.txt', '.json']
