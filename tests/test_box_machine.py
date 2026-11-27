@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
 import pytest
 
-from lab_commons.box import Capacity
+from lab_commons.box import GB, Capacity, Holding
 from lab_commons.box.machine import (
     DEFAULT_CPU_MARGIN,
     DEFAULT_CPU_MARGIN_SHARE,
     DEFAULT_MEM_MARGIN,
+    UNLIMITED,
     own_reserve,
     provided,
     reserve_table,
+    seat_count,
 )
 from lab_commons.box.providers import seat_sizes
+from lab_commons.box.supply import Reading, room
 
 
 def test_the_own_reserve_is_the_declared_margin_capped_at_the_box() -> None:
@@ -122,3 +126,36 @@ def test_a_malformed_supply_is_refused_by_name(tmp_path: Path, monkeypatch: pyte
     _capabilities(tmp_path, monkeypatch, '[capabilities.jmag]\nseats = 1\nsupply = "lmstat"\n')
     with pytest.raises(ValueError, match=r'capabilities\.jmag.*supply'):
         seat_sizes()
+
+
+def test_an_unlimited_seat_count_is_no_cap_and_a_count_still_caps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``seats = "unlimited"`` (Maxwell, user ruling 2026-11-27) sizes as no cap: no claim is refused for its seat.
+
+    PLANTED CONTROL: an integer count beside it still caps -- the same holdings leave it none.
+    """
+    _capabilities(
+        tmp_path, monkeypatch, f'[capabilities.maxwell]\nseats = "{UNLIMITED}"\n[capabilities.jmag]\nseats = 2\n'
+    )
+    sizes, blind = seat_sizes()
+    assert sizes == {'maxwell': math.inf, 'jmag': 2}
+    assert blind == {}
+    held = [
+        Holding(what=f'run {pid}', pid=pid, cpu=0, mem_bytes=0, seats={'maxwell': 50, 'jmag': 1}, deadline=0.0)
+        for pid in (1, 2)
+    ]
+    idle = Reading(cores=8.0, idle_cores=8.0, total_bytes=16 * GB, available_bytes=16 * GB, usage={})
+    free = room(Capacity(cpu=8.0, mem_bytes=16 * GB, seats=sizes), held, idle)
+    assert free['maxwell'] == math.inf
+    assert free['jmag'] == 0
+
+
+@pytest.mark.parametrize('typo', ['unlimted', 'Unlimited', 'inf', ''])
+def test_a_seat_string_other_than_unlimited_is_refused_by_name(typo: str) -> None:
+    with pytest.raises(
+        ValueError, match=rf'\[capabilities\.maxwell\] seats = {typo!r}: declare a positive int or "unlimited"'
+    ):
+        provided({'maxwell': {'seats': typo}})
+    assert seat_count('maxwell', UNLIMITED) == math.inf
+    assert seat_count('maxwell', 3) == 3
