@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import re
 import sys
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import lab_commons.hpc.config as config_module
 from lab_commons.hpc.cluster import _completed, render_script, submit, throttle
 from lab_commons.hpc.config import Cluster, Config, Cost, JobSpec, Limits, Policy, load_config
 from lab_commons.hpc.plan import free_slots, make_plan, quota_slots
@@ -366,4 +368,26 @@ def test_a_bare_job_quantity_is_refused_naming_its_key(tmp_path: Path) -> None:
     path = tmp_path / 'hpc.toml'
     path.write_text('[cost]\nmem = 4\n', encoding='utf-8')
     with pytest.raises(ValueError, match=r'\[cost\] mem = 4 is a bare number'):
+        load_config(path)
+
+
+def test_every_job_file_example_the_package_documents_loads(tmp_path: Path) -> None:
+    """The ``Example::`` job file in :mod:`lab_commons.hpc.config` is the one the package documents; it must load.
+
+    PLANTED: the same example with a retired ``mem_gb`` line is refused, so this test can say no.
+    """
+    doc = config_module.__doc__ or ''
+    block = doc.split('Example::', 1)[1].split('\n\nA QUANTITY', 1)[0]
+    example = textwrap.dedent(block)
+    assert '[cost]' in example
+    assert '[policy]' in example
+    path = tmp_path / 'hpc.toml'
+    path.write_text(example, encoding='utf-8')
+    config = load_config(path)
+    assert config.cost.mem_gb == pytest.approx(2.0, abs=1e-9)  # GiB
+    assert config.cost.seconds == pytest.approx(90.0, abs=1e-9)  # s
+    assert config.policy.shard_minutes_max == pytest.approx(30.0, abs=1e-9)  # min
+
+    path.write_text(example.replace('mem = "2 GiB"', 'mem_gb = 2'), encoding='utf-8')
+    with pytest.raises(ValueError, match=re.escape('write mem = "2 GiB"')):
         load_config(path)
