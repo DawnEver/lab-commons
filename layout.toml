@@ -1,0 +1,45 @@
+# THE PLACEMENT (dev_lab.dev.codeplace) and DECLARED-LAYOUT (dev_lab.dev.layout) of this checkout: the one file
+# dev-lab reads them from (user ruling 2026-11-24).
+# THE FAMILY PLACEMENT MAP (`dev_lab.dev.codeplace.FAMILY_HOMES`) plus this repo's delta: none.
+code_roots = []
+# A worktree is a real second tree with its own src/, judged by the run inside it.
+pruned_paths = ['.claude/worktrees']
+# SCRATCH-IS-NEVER-COMMITTED: the one-off sink, and when the SessionStart notice starts naming a one-off.
+scratch = 'scratch/'
+max_age = "3 d"
+
+# DECLARED-LAYOUT (dev_lab.dev.layout): the WHOLE tree as an allow-list -- each directory pattern (one glob per
+# segment; EVERY directory matches a row of its own, no inheritance) and the formats a file there may be ('.suffix', an exact name, "" for
+# none, "*" for anything). Undeclared is refused. NO-BACKUP-COPIES: nothing under output/ or scratch/ is ever a
+# clone, worktree, exported tree, bundle or patch, whatever a row says. Formats (R3): TOML declarations, JSONL
+# machine records, CSV tables, NPZ arrays, Markdown reports, PNG figures; vendor-native only at an adapter boundary.
+[layout]
+'.' = ['.md', '.toml', '.lock', '.gitattributes', '.gitignore', 'license', 'makefile']
+'.claude' = ['.json']
+'.claude/hooks' = ['.js', '.json']
+'.claude/memory' = ['.md']
+'.claude/memory/[0-9][0-9][0-9][0-9]' = ['.md']
+'.claude/memory/[0-9][0-9][0-9][0-9]/[0-9][0-9]' = ['.md']
+'.claude/memory/[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]' = ['.md']
+'.claude/rules' = ['.md']
+'.claude/tasks' = ['.md']
+'.codex' = []
+'.codex/rules' = ['.rules']
+'.github' = []
+'.github/workflows' = ['.yml']
+'docs-src' = ['.md']
+'output' = []
+'output/forge' = []
+'output/forge/*' = ['.json', '.tmp']
+'output/logs' = []
+'output/logs/[0-9][0-9]/[0-9][0-9]/[0-9][0-9]/*' = ['.log', '.jsonl', '.json', '.gz', '.coverage', '.txt', '.csv', '.md', '.npz', '.png']
+'output/runcache' = ['.jsonl']
+'scratch' = ['*']
+'scripts' = ['.py']
+'src' = []
+'src/lab_commons' = ['.py']
+'src/lab_commons/*' = ['.py']
+'src/lab_commons/html_assets' = ['.css', '.js']
+'src/lab_commons/tools' = ['.py', '.toml']
+'tests' = ['.py']
+'tests/_hpc_fixtures' = ['.txt', '.json']
