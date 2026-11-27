@@ -34,6 +34,10 @@ The ``[hpc]`` table (:mod:`lab_commons.config`; the declarations usually come fr
     [hpc]
     reach = ["research"]                 # the roles THIS machine may use; [] reaches nothing
 
+    [hpc.cluster_reach.<name>]           # how THIS machine's network reaches it (lab_commons.hpc.reach)
+    reach = "vpn"                        # "direct" | "vpn"; undeclared, no ssh to its hosts is attempted
+    direct = ["host-a"]                  # the machines that reach it directly
+
     [hpc.clusters.<name>]
     hosts = ["login1.cluster.example", "login2.cluster.example"]   # tried in order, >= 1
     partitions = ["shortq", "defq"]      # optional: candidates, in preference order
@@ -383,7 +387,7 @@ _PAGING_RENAMED: Final = {'page_mem_gb': Renamed('page_mem', 'GiB'), 'movable_mi
 _GIB: Final = 1024**3
 #: The keys of ``[hpc]``.
 _HPC_KEYS: Final = frozenset(
-    {'reach', 'session_reach', 'session_verifier', 'clusters', 'grant', 'paging', 'roles', 'ssh'}
+    {'reach', 'session_reach', 'session_verifier', 'clusters', 'cluster_reach', 'grant', 'paging', 'roles', 'ssh'}
 )
 
 

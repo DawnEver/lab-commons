@@ -8,6 +8,7 @@ import pytest
 
 from lab_commons.hpc import __main__ as cli
 from lab_commons.hpc.cluster import Unreachable
+from lab_commons.hpc.reach import ReachRefused
 
 
 def _door(outcome: Exception | None) -> Callable[[list[str]], int]:
@@ -19,17 +20,25 @@ def _door(outcome: Exception | None) -> Callable[[list[str]], int]:
     return door
 
 
-def test_an_unreachable_cluster_refuses_in_one_line_naming_the_network_door(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    'refused',
+    [
+        Unreachable(
+            'no login host answered -- this machine reaches ada only over VPN: connect the VPN, or run on a '
+            'direct host (WS1)'
+        ),
+        ReachRefused('a login host of ada and this machine declares no reach for it: declare [dev] hpc_reach'),
+    ],
+)
+def test_an_unreachable_cluster_refuses_in_one_line_naming_its_door(
+    refused: Exception, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(cli.clean, 'main', _door(Unreachable('no login host answered: port 22 timed out')))
+    """The door is the runner's (lab_commons.hpc.reach): the CLI says it as it is, in one line."""
+    monkeypatch.setattr(cli.clean, 'main', _door(refused))
     code = cli.main(['clean', '--root', '/x', 'a'])
     err = capsys.readouterr().err.strip()
-    assert code != 0
-    assert len(err.splitlines()) == 1
-    assert 'no login host answered' in err
-    assert 'VPN' in err
-    assert 're-run' in err
+    assert code == cli.UNREACHABLE_EXIT
+    assert err == f'hpc refused: {refused}'
 
 
 def test_a_reachable_cluster_runs_its_verb(monkeypatch: pytest.MonkeyPatch) -> None:
