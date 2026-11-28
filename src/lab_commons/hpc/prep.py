@@ -236,6 +236,8 @@ def submit_env_prep(
     python: str,
     root: str,
     script: str,
+    kit: str,
+    retry: bool = False,
     machine: Machine | None = None,
     run: Runner = local_runner,
 ) -> str:
@@ -247,9 +249,13 @@ def submit_env_prep(
     :data:`PREP_SECONDS` of wall -- named :func:`env_prep_name`, its log in :func:`env_prep_dir` under *root*.
 
     - a job of that name queued or running: ``job <id> already queued for <key>``, nothing submitted;
-    - the last job of *key* ended non-zero (``sacct``) and its log is there: ``job <id> failed: <log>: <tail>``,
-      nothing submitted -- a failure is reported, never retried blind; removing the log (or a new key) re-arms it;
-    - else ``submitted job <id>``.
+    - the last job of *key* ended non-zero (``sacct``) and its log is there, under the same *kit*:
+      ``job <id> failed: <log>: <tail>``, nothing submitted -- a failure is reported, never retried blind;
+    - such a failure recorded under ANOTHER kit (*kit* names what builds the env -- the caller's kit commit, written
+      beside the job id at submit; none recorded counts as another) is stale, the kit that failed is not the one
+      asking: ``job <id> failed under kit <old>, not <kit>: submitted job <new>``, once (the new job records *kit*);
+    - *retry* (the caller's explicit door) resubmits over a failure: ``job <id> failed; retry asked: submitted ...``;
+    - else ``submitted job <id>``. Removing the log, or a new key, also re-arms it.
 
     *python* is the account's interpreter as the deploy declares it; *script* already names the one it runs.
     A job's failure never raises; a broken invocation (an empty key or script, no grant, ``sbatch`` answering
@@ -263,10 +269,18 @@ def submit_env_prep(
     queued = run(f'squeue -h --me -n {shlex.quote(name)} -o %i', None).split()
     if queued:
         return f'job {queued[0]} already queued for {key}'
+    if not kit.strip():
+        msg = f'submit_env_prep needs the kit that builds {key}, got kit={kit!r}'
+        raise ValueError(msg)
+    why = ''
     last = run(f'cat {shlex.quote(where)}/job 2>/dev/null || true', None).strip()
-    if last.isdigit():
-        failed = _failed(run, last, where)
-        if failed is not None:
+    if last.isdigit() and (failed := _failed(run, last, where)) is not None:
+        under = run(f'cat {shlex.quote(where)}/kit 2>/dev/null || true', None).strip()
+        if retry:
+            why = f'job {last} failed; retry asked: '
+        elif under != kit:
+            why = f'job {last} failed under kit {under or "(unrecorded)"}, not {kit}: '
+        else:
             return f'job {last} failed: {where}/prep.log: {failed}'
     grants = (machine or load_grants()).grants
     snapshots = [(g, probe(run, g.slurm_account, exclude=g.exclude_nodes)) for g in grants]
@@ -289,7 +303,8 @@ def submit_env_prep(
         msg = f'sbatch did not return a job id for the environment prep of {key}: {out!r}'
         raise RuntimeError(msg)
     run(f'cat > {shlex.quote(where)}/job', f'{job_id}\n')
-    return f'submitted job {job_id}'
+    run(f'cat > {shlex.quote(where)}/kit', f'{kit}\n')
+    return f'{why}submitted job {job_id}'
 
 
 def _failed(run: Runner, job_id: str, where: str) -> str | None:

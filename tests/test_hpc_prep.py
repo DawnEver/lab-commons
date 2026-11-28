@@ -132,8 +132,10 @@ def test_the_prep_asks_the_allocated_plans_partition_and_account() -> None:
 class _Login:
     """The account's login shell as the cron tick sees it: Slurm's queue and accounting, and the job files."""
 
-    def __init__(self, *, queued: str = '', last: str = '', state: str = '', log: str | None = None) -> None:
-        self.queued, self.last, self.state, self.log = queued, last, state, log
+    def __init__(
+        self, *, queued: str = '', last: str = '', state: str = '', log: str | None = None, kit: str = 'kit1\n'
+    ) -> None:
+        self.queued, self.last, self.state, self.log, self.kit = queued, last, state, log, kit
         self.probe = FakeRunCluster()
         self.calls: list[tuple[str, str | None]] = []
         self.script = ''
@@ -144,6 +146,8 @@ class _Login:
             return self.queued
         if command.endswith('/job 2>/dev/null || true'):
             return self.last
+        if command.endswith('/kit 2>/dev/null || true'):
+            return self.kit
         if command.startswith('sacct '):
             return self.state
         if command.startswith('[ -f ') and 'tail -n' in command:
@@ -158,13 +162,15 @@ class _Login:
         return self.probe(command, stdin)
 
 
-def _env_prep(login: _Login, key: str = 'k' * 40) -> str:
+def _env_prep(login: _Login, key: str = 'k' * 40, *, kit: str = 'kit1', retry: bool = False) -> str:
     return submit_env_prep(
         Path('/acct/repos/r'),
         key,
         python='python3',
         root='/acct',
         script='cd /kit && py -m x prep-build r',
+        kit=kit,
+        retry=retry,
         machine=MACHINE,
         run=login,
     )
@@ -204,6 +210,26 @@ def test_a_failed_job_is_reported_with_its_log_tail_and_not_resubmitted() -> Non
     assert not [c for c, _ in login.calls if 'sbatch' in c]
 
 
+def test_a_failure_under_an_older_kit_is_resubmitted_once_naming_why() -> None:
+    """Ada 2026-11-28: envprep jobs failed before the kit installed cargo, and nothing could ever retry them.
+
+    PLANTED CONTROL: the same failure under the asking kit stays reported (the test above); here the kit moved.
+    """
+    login = _Login(last='600\n', state='FAILED\n', log='no cargo\n', kit='kit0\n')
+    assert _env_prep(login) == 'job 600 failed under kit kit0, not kit1: submitted job 777'
+    assert ('cat > /acct/jobs/envprep/kkkkkkkkkkkk/kit', 'kit1\n') in login.calls, 'the new job records its kit'
+    login.kit, login.last = 'kit1\n', '777\n'
+    assert _env_prep(login).startswith('job 777 failed: '), 'once: a failure under its own kit is reported'
+    unrecorded = _Login(last='600\n', state='FAILED\n', log='no cargo\n', kit='')
+    assert _env_prep(unrecorded) == 'job 600 failed under kit (unrecorded), not kit1: submitted job 777'
+
+
+def test_the_retry_door_resubmits_over_a_failure_under_the_same_kit() -> None:
+    login = _Login(last='600\n', state='FAILED\n', log='flaky\n')
+    assert _env_prep(login, retry=True) == 'job 600 failed; retry asked: submitted job 777'
+    assert _env_prep(_Login(), retry=True) == 'submitted job 777', 'nothing failed: a plain submit'
+
+
 def test_a_failed_job_whose_log_was_removed_or_a_completed_one_is_resubmitted() -> None:
     assert _env_prep(_Login(last='600\n', state='FAILED\n')) == 'submitted job 777'
     assert _env_prep(_Login(last='600\n', state='COMPLETED\n', log='ok\n')) == 'submitted job 777'
@@ -212,3 +238,5 @@ def test_a_failed_job_whose_log_was_removed_or_a_completed_one_is_resubmitted() 
 def test_env_prep_refuses_a_broken_invocation() -> None:
     with pytest.raises(ValueError, match='needs a key and a script'):
         _env_prep(_Login(), key=' ')
+    with pytest.raises(ValueError, match='needs the kit'):
+        _env_prep(_Login(), kit=' ')
