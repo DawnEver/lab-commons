@@ -15,7 +15,9 @@ dependencies = []
 # (`tests/test_arch_the_staying_side_never_imports_dev.py`). dev-lab's own lab-commons requirement is met by
 # this checkout, the workspace project.
 [dependency-groups]
-dev = ["dev-lab[test]"]
+# The family toolchain runs on the family Python only (dev-lab requires 3.14); the shipped wheel keeps its
+# `>=3.12` runtime support, so the dev group is marked rather than requires-python narrowed (2026-11-28).
+dev = ["dev-lab[test]; python_version >= '3.14'"]
 
 [tool.uv.sources]
 dev-lab = { git = "https://github.com/DawnEver/dev-lab.git", branch = "integrate/main" }
