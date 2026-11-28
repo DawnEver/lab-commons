@@ -19,6 +19,8 @@ Example::
     setup = ["source .venv/bin/activate"]
     entry = "project.module:evaluate"     # called once per item; must return JSON-serialisable data
     items = "items.json"                  # a JSON list, path relative to this file
+    # with sha + repo_url (no workdir): native = "trained" runs the commit's declared trained (e.g. PGO) native
+    # build, built in a Slurm job (lab_commons.hpc.artifact); the default "plain" is its release build
 
     [cost]                                # ONE item
     cpus = 1
@@ -47,6 +49,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from lab_commons.dimensions import CPU, GPU, MEMORY
+from lab_commons.hpc.builds import NATIVES, PLAIN
 from lab_commons.quantity import Renamed, parse, refuse_renamed
 
 #: Bytes per GiB -- a :class:`Cost` holds GiB (Slurm memory), :data:`~lab_commons.dimensions.MEMORY` counts bytes.
@@ -183,11 +186,17 @@ class JobSpec:
     #: The needs the job's environment serves (the tests' need vocabulary): their extras, and only theirs, are
     #: installed (:func:`lab_commons.extras.sync_command`) -- a job needing no heavy extra builds none.
     needs: tuple[str, ...] = ()
+    #: Which native build the artifact carries (:data:`lab_commons.hpc.builds.NATIVES`): the declared plain release
+    #: build, or the declared trained one (e.g. profile-guided), built in a Slurm job (:mod:`lab_commons.hpc.artifact`).
+    native: str = PLAIN
 
     def __post_init__(self) -> None:
-        """A commit names its remote."""
+        """A commit names its remote; the native is one the kit builds."""
         if bool(self.sha) != bool(self.repo_url):
             msg = f'[job] sha and repo_url come together, got sha={self.sha!r} repo_url={self.repo_url!r}'
+            raise ValueError(msg)
+        if self.native not in NATIVES:
+            msg = f'[job] native = {self.native!r} is not one of {list(NATIVES)}'
             raise ValueError(msg)
 
 
